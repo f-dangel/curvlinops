@@ -29,11 +29,8 @@ sub-sampling, Monte-Carlo approximation, and block-diagonal approximation.
 	:maxdepth: 2
 	:caption: Getting started
 
-	usage
-
 .. toctree::
 	:maxdepth: 2
 	:caption: ViViT
 
-	computations
 	basic_usage/index
