@@ -1,1 +1,1 @@
-"""Tests for ``vivit`` library."""
+"""Tests for ``curvlinops`` library."""

@@ -1,4 +1,4 @@
-"""Tests for ``vivit.hessianfree.__init__``."""
+"""Tests for ``curvlinops.hessianfree.__init__``."""
 
 from test.utils import classification_targets, get_available_devices
 
@@ -13,7 +13,7 @@ from torch.nn.modules.batchnorm import BatchNorm1d
 from torch.nn.utils.convert_parameters import parameters_to_vector
 from torch.utils.data import DataLoader, TensorDataset
 
-from vivit.hessianfree import GGNLinearOperator, HessianLinearOperator
+from curvlinops import GGNLinearOperator, HessianLinearOperator
 
 DEVICES = get_available_devices()
 DEVICES_IDS = [f"dev={d}" for d in DEVICES]
