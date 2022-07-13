@@ -2,21 +2,21 @@
 
 help:
 	@echo "install"
-	@echo "        Install vivit and dependencies"
+	@echo "        Install curvlinops and dependencies"
 	@echo "uninstall"
-	@echo "        Unstall vivit"
+	@echo "        Unstall curvlinops"
 	@echo "docs"
 	@echo "        Build the documentation"
 	@echo "install-dev"
-	@echo "        Install vivit and development tools"
+	@echo "        Install curvlinops and development tools"
 	@echo "install-docs"
-	@echo "        Install vivit and documentation tools"
+	@echo "        Install curvlinops and documentation tools"
 	@echo "install-test"
-	@echo "        Install vivit and testing tools"
+	@echo "        Install curvlinops and testing tools"
 	@echo "test"
 	@echo "        Run pytest on test and report coverage"
 	@echo "install-lint"
-	@echo "        Install vivit and the linter tools"
+	@echo "        Install curvlinops and the linter tools"
 	@echo "isort"
 	@echo "        Run isort (sort imports) on the project"
 	@echo "isort-check"
@@ -28,7 +28,7 @@ help:
 	@echo "flake8"
 	@echo "        Run flake8 on the project"
 	@echo "conda-env"
-	@echo "        Create conda environment 'vivit' with dev setup"
+	@echo "        Create conda environment 'curvlinops' with dev setup"
 	@echo "darglint-check"
 	@echo "        Run darglint (docstring check) on the project"
 	@echo "pydocstyle-check"
@@ -42,7 +42,7 @@ install:
 .PHONY: uninstall
 
 uninstall:
-	@pip uninstall vivit
+	@pip uninstall curvlinops-for-pytorch
 
 .PHONY: docs
 
@@ -67,7 +67,7 @@ install-test:
 .PHONY: test test-light
 
 test:
-	@pytest -vx --cov=vivit test
+	@pytest -vx --cov=curvlinops test
 
 .PHONY: install-lint
 
@@ -98,7 +98,7 @@ flake8:
 .PHONY: darglint-check
 
 darglint-check:
-	@darglint --verbosity 2 vivit
+	@darglint --verbosity 2 curvlinops
 
 .PHONY: pydocstyle-check
 

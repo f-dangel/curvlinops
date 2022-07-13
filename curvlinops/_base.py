@@ -2,8 +2,6 @@
 
 from typing import Iterable, List, Tuple
 
-from backpack.hessianfree.ggnvp import ggn_vector_product_from_plist
-from backpack.hessianfree.hvp import hessian_vector_product
 from backpack.utils.convert_parameters import vector_to_parameter_list
 from numpy import allclose, argwhere, float32, isclose, logical_not, ndarray
 from numpy.random import rand
@@ -275,44 +273,3 @@ class _LinearOperator(LinearOperator):
             return X.shape[0] / self._N_data
         else:
             raise ValueError("Loss must have reduction 'mean' or 'sum'.")
-
-
-class HessianLinearOperator(_LinearOperator):
-    """Hessian as SciPy linear operator."""
-
-    def _matvec_batch(
-        self, X: Tensor, y: Tensor, x_list: List[Tensor]
-    ) -> Tuple[Tensor, ...]:
-        """Apply the mini-batch Hessian to a vector.
-
-        Args:
-            X: Input to the DNN.
-            y: Ground truth.
-            x_list: Vector in list format (same shape as trainable model parameters).
-
-        Returns:
-            Result of Hessian-multiplication in list format.
-        """
-        loss = self._loss_func(self._model(X), y)
-        return hessian_vector_product(loss, self._params, x_list)
-
-
-class GGNLinearOperator(_LinearOperator):
-    """GGN as SciPy linear operator."""
-
-    def _matvec_batch(
-        self, X: Tensor, y: Tensor, x_list: List[Tensor]
-    ) -> Tuple[Tensor, ...]:
-        """Apply the mini-batch GGN to a vector.
-
-        Args:
-            X: Input to the DNN.
-            y: Ground truth.
-            x_list: Vector in list format (same shape as trainable model parameters).
-
-        Returns:
-            Result of GGN-multiplication in list format.
-        """
-        output = self._model(X)
-        loss = self._loss_func(output, y)
-        return ggn_vector_product_from_plist(loss, output, self._params, x_list)

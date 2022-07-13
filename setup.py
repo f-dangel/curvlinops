@@ -1,4 +1,4 @@
-"""Setup file for ViViT.
+"""Setup file for CurvLinOps.
 
 Use ``setup.cfg`` for configuration.
 """

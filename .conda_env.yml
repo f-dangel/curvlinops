@@ -1,4 +1,4 @@
-name: vivit
+name: curvlinops
 channels:
   - pytorch
   - defaults
