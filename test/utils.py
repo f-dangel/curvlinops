@@ -1,6 +1,6 @@
 """Utility functions to test `curvlinops`."""
 
-from torch import cuda, device, rand_like, randint
+from torch import cuda, device, randint
 
 
 def get_available_devices():
