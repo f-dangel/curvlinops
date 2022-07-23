@@ -34,7 +34,7 @@ that lets you compute a subset of eigenpairs.
 Currently, there is no PyPI release. You would need to install from GitHub via
 
 ```bash
-pip install curvlinops-for-pytorch@git+https://github.com/f-dangel/curvature-linear-operators.git#egg=curvlinops-for-pytorch
+pip install curvlinops-for-pytorch@git+https://github.com/f-dangel/curvlinops.git#egg=curvlinops-for-pytorch
 ```
 
 ## TODO Examples
@@ -50,7 +50,8 @@ Other features that could be supported in the future include:
 
   - the un-centered gradient covariance (aka empirical Fisher)
   - the centered gradient covariance
-  - terms of the [hierarchical GGN decomposition](https://arxiv.org/abs/2008.11865)
+  - terms of the [hierarchical GGN
+    decomposition](https://arxiv.org/abs/2008.11865)
 
 - Block-diagonal approximations
 
@@ -60,3 +61,9 @@ Other features that could be supported in the future include:
   - This could allow computing generalization metrics like the Takeuchi
     Information Criterion (TIC), using inverse matrix-vector products in
     combination with Hutchinson trace estimation
+
+###### Logo mage credits
+- SciPy logo: Unknown, [CC BY-SA
+  4.0](https://creativecommons.org/licenses/by-sa/4.0), via Wikimedia Commons
+- PyTorch logo: https://github.com/soumith, [CC BY-SA
+  4.0](https://creativecommons.org/licenses/by-sa/4.0), via Wikimedia Commons
