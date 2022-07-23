@@ -58,11 +58,16 @@
 \begin{document}
 
 \begin{tikzpicture}
-  \node [inner sep=1pt] (A) {\cube{$\bm{A}$}};
-  \node [anchor=south east, xshift=-0cm, yshift=-0.2cm] (v) at (A.north west) {$\bm{v}$};
-  \node (Av) [anchor=north west, xshift=-1ex, yshift=0.2cm] at (A.south east) {$\bm{Av}$};
+  \node [inner sep=1pt] (A) {\cube{$\bm{A}_{\includegraphics[height=0.15cm]{torch.pdf}}$}};
+
+  \node [anchor=south east, xshift=-0cm, yshift=-0.2cm] (v) at (A.north west)
+  {$\bm{v}_{\includegraphics[height=0.15cm]{scipy.pdf}}$};
+
+  \node (Av) [anchor=north west, xshift=-1ex, yshift=0.2cm] at (A.south east)
+  {$\bm{Av}_{\includegraphics[height=0.15cm]{scipy.pdf}}$};
 
   \draw [->, >=stealth, thick] (v.south) |- (A.west);
+
   \draw [->, >=stealth, thick] (A.east) -| (Av.north);
 \end{tikzpicture}
 
