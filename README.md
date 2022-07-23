@@ -1,6 +1,6 @@
 [👷🏗👷🏗 **Under development. Stay tuned. Feel free to open feature requests or contribute!** 👷🏗👷🏗]
 
-# <img alt="Logo" src="./docs/rtd/assets/vivit_logo.svg" height="90"> scipy linear operators of deep learning matrices in PyTorch
+# <img alt="Logo" src="./docs/rtd/assets/logo.svg" height="90"> scipy linear operators of deep learning matrices in PyTorch
 
 [![Python
 3.7+](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/release/python-370/)
