@@ -1,6 +1,6 @@
 """Contains functionality to analyze Hessian & GGN via matrix-free multiplication."""
 
-from typing import Iterable, List, Tuple
+from typing import Callable, Iterable, List, Tuple
 
 from backpack.utils.convert_parameters import vector_to_parameter_list
 from numpy import (
@@ -31,17 +31,26 @@ class _LinearOperator(LinearOperator):
 
     def __init__(
         self,
-        model: Module,
-        loss_func: Module,
+        model_func: Callable[[Tensor], Tensor],
+        loss_func: Callable[[Tensor, Tensor], Tensor],
+        params: List[Tensor],
         data: Iterable[Tuple[Tensor, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
     ):
         """Linear operator for DNN curvature matrices.
 
+        Note:
+            f(X; θ) denotes a neural network, parameterized by θ, that maps a mini-batch
+            input X to predictions p. ℓ(p, y) maps the prediction to a loss, using the
+            mini-batch labels y.
+
         Args:
-            model: Neural network.
-            loss_func: Loss function criterion.
+            model_func: A function that maps the mini-batch input X to predictions.
+                Could be a PyTorch module representing a neural network.
+            loss_func: Loss function criterion. Maps predictions and mini-batch labels
+                to a scalar value.
+            params: List of differentiable parameters used by the prediction function.
             data: Source from which mini-batches can be drawn, for instance a list of
                 mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
             progressbar: Show a progressbar during matrix-multiplication.
@@ -55,18 +64,15 @@ class _LinearOperator(LinearOperator):
         Raises:
             Exception: If the check for deterministic behavior fails.
         """
-        self._params = [p for p in model.parameters() if p.requires_grad]
-        dim = sum(p.numel() for p in self._params)
-
+        dim = sum(p.numel() for p in params)
         super().__init__(shape=(dim, dim), dtype=float32)
 
-        self._model = model
+        self._params = params
+        self._model_func = model_func
         self._loss_func = loss_func
         self._data = data
         self._device = self._infer_device(self._params)
         self._progressbar = progressbar
-
-        self.to_device(self._device)
 
         self._N_data = sum(X.shape[0] for (X, _) in self._loop_over_data())
 
@@ -75,7 +81,7 @@ class _LinearOperator(LinearOperator):
             self.to_device(torch_device("cpu"))
             try:
                 self._check_deterministic()
-            except Exception as e:
+            except RuntimeError as e:
                 raise e
             finally:
                 self.to_device(old_device)
@@ -105,8 +111,13 @@ class _LinearOperator(LinearOperator):
             device: Target device.
         """
         self._device = device
-        self._model = self._model.to(self._device)
-        self._loss_func = self._loss_func.to(self._device)
+
+        if isinstance(self._model_func, Module):
+            self._model_func = self._model_func.to(self._device)
+        self._params = [p.to(device) for p in self._params]
+
+        if isinstance(self._loss_func, Module):
+            self._loss_func = self._loss_func.to(self._device)
 
     def _check_deterministic(self):
         """Check that the Linear operator is deterministic.
@@ -273,7 +284,7 @@ class _LinearOperator(LinearOperator):
         total_grad = [zeros_like(p) for p in self._params]
 
         for (X, y) in self._loop_over_data():
-            loss = self._loss_func(self._model(X), y)
+            loss = self._loss_func(self._model_func(X), y)
             normalization_factor = self._get_normalization_factor(X, y)
 
             for grad_param, current in zip(total_grad, grad(loss, self._params)):

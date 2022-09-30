@@ -24,5 +24,5 @@ class HessianLinearOperator(_LinearOperator):
         Returns:
             Result of Hessian-multiplication in list format.
         """
-        loss = self._loss_func(self._model(X), y)
+        loss = self._loss_func(self._model_func(X), y)
         return hessian_vector_product(loss, self._params, x_list)

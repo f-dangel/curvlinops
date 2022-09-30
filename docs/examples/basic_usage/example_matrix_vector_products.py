@@ -45,6 +45,7 @@ model = nn.Sequential(
     nn.Sigmoid(),
     nn.Linear(D_hidden, D_out),
 ).to(DEVICE)
+params = [p for p in model.parameters() if p.requires_grad]
 
 loss_function = nn.MSELoss(reduction="mean").to(DEVICE)
 
@@ -56,7 +57,7 @@ loss_function = nn.MSELoss(reduction="mean").to(DEVICE)
 # Setting up a linear operator for the Hessian is straightforward.
 
 data = [(X, y)]
-H = HessianLinearOperator(model, loss_function, data)
+H = HessianLinearOperator(model, loss_function, params, data)
 
 # %%
 #
@@ -173,7 +174,7 @@ plt.colorbar()
 #
 # Setting up a linear operator for the Fisher/GGN is identical to the Hessian.
 
-GGN = GGNLinearOperator(model, loss_function, data)
+GGN = GGNLinearOperator(model, loss_function, params, data)
 
 # %%
 #

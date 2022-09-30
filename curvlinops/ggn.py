@@ -24,6 +24,6 @@ class GGNLinearOperator(_LinearOperator):
         Returns:
             Result of GGN-multiplication in list format.
         """
-        output = self._model(X)
+        output = self._model_func(X)
         loss = self._loss_func(output, y)
         return ggn_vector_product_from_plist(loss, output, self._params, x_list)
