@@ -56,7 +56,7 @@ loss_function = nn.MSELoss(reduction="mean").to(DEVICE)
 # Setting up a linear operator for the Hessian is straightforward.
 
 data = [(X, y)]
-H = HessianLinearOperator(model, loss_function, data, DEVICE)
+H = HessianLinearOperator(model, loss_function, data)
 
 # %%
 #
@@ -173,7 +173,7 @@ plt.colorbar()
 #
 # Setting up a linear operator for the Fisher/GGN is identical to the Hessian.
 
-GGN = GGNLinearOperator(model, loss_function, data, DEVICE)
+GGN = GGNLinearOperator(model, loss_function, data)
 
 # %%
 #
@@ -297,4 +297,3 @@ ax[0].set_title("Hessian")
 ax[0].imshow(H_mat, vmin=min_value, vmax=max_value)
 ax[1].set_title("GGN")
 ax[1].imshow(GGN_mat, vmin=min_value, vmax=max_value)
-plt.show()

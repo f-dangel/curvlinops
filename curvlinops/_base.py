@@ -35,7 +35,6 @@ class _LinearOperator(LinearOperator):
         model: Module,
         loss_func: Module,
         data: Iterable[Tuple[Tensor, Tensor]],
-        device: torch_device,
         dtype: DTypeLike = float32,
         progressbar: bool = False,
         check_deterministic: bool = True,
@@ -47,7 +46,6 @@ class _LinearOperator(LinearOperator):
             loss_func: Loss function criterion.
             data: Source from which mini-batches can be drawn, for instance a list of
                 mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
-            device: Device on which matrix multiplications are carried out.
             dtype: Matrix data type (for SciPy operations).
             progressbar: Show a progressbar during matrix-multiplication.
                 Default: ``False``.
@@ -67,7 +65,7 @@ class _LinearOperator(LinearOperator):
         self._model = model
         self._loss_func = loss_func
         self._data = data
-        self._device = device
+        self._device = self._infer_device(self._params)
         self._progressbar = progressbar
 
         self.to_device(self._device)
@@ -83,6 +81,24 @@ class _LinearOperator(LinearOperator):
                 raise e
             finally:
                 self.to_device(old_device)
+
+    @staticmethod
+    def _infer_device(params: List[Tensor]) -> torch_device:
+        """Infer the device on which to carry out matvecs.
+
+        Args:
+            params: DNN parameters that define the linear operators.
+
+        Returns:
+            Inferred device.
+
+        Raises:
+            RuntimeError: If the device cannot be inferred.
+        """
+        devices = {p.device for p in params}
+        if len(devices) != 1:
+            raise RuntimeError(f"Could not infer device. Parameters live on {devices}.")
+        return devices.pop()
 
     def to_device(self, device: torch_device):
         """Load linear operator to a device (inplace).

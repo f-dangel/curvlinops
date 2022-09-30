@@ -55,8 +55,8 @@ def test_HessianLinearOperator_and_GGNLinearOperator(reduction: str, dev: device
 
     # Hessian
     # check correct normalization when looping over data
-    H1v = HessianLinearOperator(model, loss_func, data, dev) @ v
-    H2v = HessianLinearOperator(model, loss_func, data_merged, dev) @ v
+    H1v = HessianLinearOperator(model, loss_func, data) @ v
+    H2v = HessianLinearOperator(model, loss_func, data_merged) @ v
 
     assert allclose(H1v, H2v)
 
@@ -72,8 +72,8 @@ def test_HessianLinearOperator_and_GGNLinearOperator(reduction: str, dev: device
 
     # GGN
     # check correct normalization when looping over data
-    G1v = GGNLinearOperator(model, loss_func, data, dev) @ v
-    G2v = GGNLinearOperator(model, loss_func, data_merged, dev) @ v
+    G1v = GGNLinearOperator(model, loss_func, data) @ v
+    G2v = GGNLinearOperator(model, loss_func, data_merged) @ v
 
     assert allclose(G1v, G2v)
 
@@ -117,7 +117,7 @@ def test_check_deterministic(dev: device):
     model = Sequential(Linear(D_in, H), Dropout(), ReLU(), Linear(H, C)).to(dev)
     with raises(RuntimeError):
         HessianLinearOperator(
-            model, loss_func, deterministic_data, dev, check_deterministic=True
+            model, loss_func, deterministic_data, check_deterministic=True
         )
 
     # BatchNorm → non-deterministic model if data is presented in different order
@@ -128,9 +128,7 @@ def test_check_deterministic(dev: device):
     bn.weight.data = rand_like(bn.weight.data)
     bn.bias.data = rand_like(bn.bias.data)
     with raises(RuntimeError):
-        HessianLinearOperator(
-            model, loss_func, shuffled_data, dev, check_deterministic=True
-        )
+        HessianLinearOperator(model, loss_func, shuffled_data, check_deterministic=True)
 
     # deterministic model, but non-deterministic data (drop last)
     N_nondivisible = 5
@@ -141,5 +139,5 @@ def test_check_deterministic(dev: device):
     model = Sequential(Linear(D_in, H), ReLU(), Linear(H, C)).to(dev)
     with raises(RuntimeError):
         HessianLinearOperator(
-            model, loss_func, nondeterministic_data, dev, check_deterministic=True
+            model, loss_func, nondeterministic_data, check_deterministic=True
         )
