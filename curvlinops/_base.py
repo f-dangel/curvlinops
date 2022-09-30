@@ -62,7 +62,7 @@ class _LinearOperator(LinearOperator):
                 safeguard, only turn it off if you know what you are doing.
 
         Raises:
-            Exception: If the check for deterministic behavior fails.
+            RuntimeError: If the check for deterministic behavior fails.
         """
         dim = sum(p.numel() for p in params)
         super().__init__(shape=(dim, dim), dtype=float32)
