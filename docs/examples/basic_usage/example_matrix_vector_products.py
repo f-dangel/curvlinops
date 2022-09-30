@@ -139,11 +139,24 @@ if numpy.allclose(Hv, Hv_functorch):
 else:
     raise ValueError("Hessian-vector products don't match.")
 
+
+# %%
+# Hessian-matrix products
+# -----------------------
+#
+# We can also compute the Hessian's matrix representation with the linear
+# operator, simply by multiplying it onto the identity matrix. (Of course, this
+# only works if the Hessian is small enough.)
+H_mat_from_linop = H @ numpy.eye(D)
+
 # %%
 #
-# TODO We can also compute the matrix representation from the linear operator,
-# and compare both matrices.
+# This should yield the same matrix as with :code:`functorch`.
 
+if numpy.allclose(H_mat, H_mat_from_linop):
+    print("Hessians match.")
+else:
+    raise ValueError("Hessians don't match.")
 
 # %%
 #
@@ -153,4 +166,3 @@ plt.figure()
 plt.title("Hessian")
 plt.imshow(H_mat)
 plt.colorbar()
-plt.show()
