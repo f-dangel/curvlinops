@@ -3,7 +3,15 @@
 from typing import Iterable, List, Tuple
 
 from backpack.utils.convert_parameters import vector_to_parameter_list
-from numpy import allclose, argwhere, float32, isclose, logical_not, ndarray
+from numpy import (
+    allclose,
+    argwhere,
+    column_stack,
+    float32,
+    isclose,
+    logical_not,
+    ndarray,
+)
 from numpy.random import rand
 from numpy.typing import DTypeLike
 from scipy.sparse.linalg import LinearOperator
@@ -170,6 +178,17 @@ class _LinearOperator(LinearOperator):
                 mat_x.add_(current, alpha=normalization_factor)
 
         return self._postprocess(out_list)
+
+    def _matmat(self, X: ndarray) -> ndarray:
+        """Matrix-matrix multiplication.
+
+        Args:
+            X: Matrix for multiplication.
+
+        Returns:
+            Matrix-multiplication result ``mat @ X``.
+        """
+        return column_stack([self @ col for col in X.T])
 
     def _matvec_batch(
         self, X: Tensor, y: Tensor, x_list: List[Tensor]
