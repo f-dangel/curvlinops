@@ -10,5 +10,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release
 
-[Unreleased]: https://github.com/f-dangel/curvlinops/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/f-dangel/curvlinops/compare/1.0.0...HEAD
 [1.0.0]: https://github.com/f-dangel/curvlinops/releases/tag/1.0.0
