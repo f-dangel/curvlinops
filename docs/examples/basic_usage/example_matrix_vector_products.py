@@ -76,8 +76,6 @@ Hv = H @ v
 # the function that produces the loss. Then, we can take the Hessian of that
 # function w.r.t. to the neural network parameters:
 
-from functorch import hessian
-
 # convert modules to functions
 model_fn, model_params = functorch.make_functional(model)
 loss_function_fn, loss_function_fn_params = functorch.make_functional(loss_function)
@@ -90,7 +88,7 @@ def loss(X: torch.Tensor, y: torch.Tensor, params: Tuple[torch.Tensor]) -> torch
 
 
 params_argnum = 2
-H_functorch = hessian(loss, argnums=params_argnum)
+H_functorch = functorch.hessian(loss, argnums=params_argnum)
 
 # %%
 #
