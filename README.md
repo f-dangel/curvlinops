@@ -6,7 +6,7 @@
 [![Coveralls](https://coveralls.io/repos/github/f-dangel/curvlinops/badge.svg?branch=master)](https://coveralls.io/github/f-dangel/curvlinops)
 
 This library implements
-[`scipy.sparse.linalg.LinearOperator`](https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.linalg.LinearOperator.html)'s
+[`scipy.sparse.linalg.LinearOperator`](https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.linalg.LinearOperator.html)s
 for deep learning matrices, such as
 
 - the Hessian
@@ -38,7 +38,7 @@ pip install curvlinops-for-pytorch
 - [Basic
   usage](https://curvlinops.readthedocs.io/en/latest/basic_usage/example_matrix_vector_products.html#sphx-glr-basic-usage-example-matrix-vector-products-py)
 
-## Additional ideas
+## Future ideas
 
 Other features that could be supported in the future include:
 
@@ -49,7 +49,7 @@ Other features that could be supported in the future include:
   - terms of the [hierarchical GGN
     decomposition](https://arxiv.org/abs/2008.11865)
 
-- Block-diagonal approximations
+- Block-diagonal approximations (via `param_groups`)
 
 - Inverse matrix-vector products by solving a linear system via conjugate
   gradients
