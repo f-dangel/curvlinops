@@ -17,7 +17,7 @@ import numpy
 import torch
 from torch import nn
 
-from curvlinops import HessianLinearOperator
+from curvlinops import GGNLinearOperator, HessianLinearOperator
 
 # make deterministic
 torch.manual_seed(0)
@@ -42,7 +42,7 @@ model = nn.Sequential(
     nn.Linear(D_in, D_hidden),
     nn.ReLU(),
     nn.Linear(D_hidden, D_hidden),
-    nn.ReLU(),
+    nn.Sigmoid(),
     nn.Linear(D_hidden, D_out),
 ).to(DEVICE)
 
@@ -166,3 +166,135 @@ plt.figure()
 plt.title("Hessian")
 plt.imshow(H_mat)
 plt.colorbar()
+
+# %%
+# GGN-vector products
+# -------------------
+#
+# Setting up a linear operator for the Fisher/GGN is identical to the Hessian.
+
+GGN = GGNLinearOperator(model, loss_function, data, DEVICE)
+
+# %%
+#
+# Let's compute a GGN-vector product.
+
+D = H.shape[0]
+v = numpy.random.rand(D)
+
+GGNv = GGN @ v
+
+# %%
+#
+# To verify the result, we will use ``functorch`` to compute the GGN. For that,
+# we use that the GGN corresponds to the Hessian if we replace the neural
+# network by its linearization.
+#
+# As above, we first convert the PyTorch layers into functions, then linearize
+# the model, and use it to construct the function that produces the loss. Then,
+# we can take the Hessian of that function w.r.t. to the linearized neural
+# network's parameters:
+
+# convert modules to functions
+model_fn, model_params = functorch.make_functional(model)
+loss_function_fn, loss_function_fn_params = functorch.make_functional(loss_function)
+
+
+def linearized_model(
+    anchor: Tuple[torch.Tensor], params: Tuple[torch.Tensor], X: torch.Tensor
+) -> torch.Tensor:
+    """Evaluate the model at params, using its linearization around anchor."""
+
+    def model_fn_params_only(params: Tuple[torch.Tensor]) -> torch.Tensor:
+        return model_fn(params, X)
+
+    diff = tuple(p - a for p, a in zip(params, anchor))
+    model_at_anchor, jvp = functorch.jvp(model_fn_params_only, (anchor,), (diff,))
+
+    return model_at_anchor + jvp
+
+
+def linearized_loss(
+    X: torch.Tensor,
+    y: torch.Tensor,
+    anchor: Tuple[torch.Tensor],
+    params: Tuple[torch.Tensor],
+) -> torch.Tensor:
+    """Compute the loss given a mini-batch (X, y) under a linearized NN around anchor.
+
+    Returns:
+        f(X, θ₀) + (J_θ₀ f(X, θ₀)) @ (θ - θ₀) with f the neural network, θ₀ the anchor
+        point of the linearization, and θ the evaluation point.
+    """
+    output = linearized_model(anchor, params, X)
+    return loss_function_fn(loss_function_fn_params, output, y)
+
+
+params_argnum = 3
+GGN_functorch = functorch.hessian(linearized_loss, argnums=params_argnum)
+
+# %%
+#
+# This yields a function that computes the GGN:
+
+anchor = tuple(p.clone() for p in model_params)
+GGN_mat = GGN_functorch(X, y, anchor, model_params)
+
+# %%
+#
+# ``functorch``'s output is a nested tuple that contains the GGN blocks of
+# :code:`(params[i], params[j])` at position :code:`[i, j]`. Let's convert the
+# block representation into a matrix, and check that the multiplication onto
+# ``v`` leads to the same result:
+
+GGN_mat = blocks_to_matrix(GGN_mat).detach().cpu().numpy()
+
+GGNv_functorch = GGN_mat @ v
+
+if numpy.allclose(GGNv, GGNv_functorch):
+    print("GGN-vector products match.")
+else:
+    raise ValueError("GGN-vector products don't match.")
+
+# %%
+# GGN-matrix products
+# -------------------
+#
+# We can also compute the GGN matrix representation with the linear operator,
+# simply by multiplying it onto the identity matrix. (Of course, this only
+# works if the GGN is small enough.)
+GGN_mat_from_linop = GGN @ numpy.eye(D)
+
+# %%
+#
+# This should yield the same matrix as with :code:`functorch`.
+
+if numpy.allclose(GGN_mat, GGN_mat_from_linop):
+    print("GGNs match.")
+else:
+    raise ValueError("GGNs don't match.")
+
+# %%
+#
+# Last, here's a visualization of the GGN.
+
+plt.figure()
+plt.title("GGN")
+plt.imshow(GGN_mat)
+plt.colorbar()
+
+# %%
+# Visual comparison: Hessian and GGN
+# ----------------------------------
+#
+# To conclude, let's plot both the Hessian and GGN using the same limits
+
+min_value = min(GGN_mat.min(), H_mat.min())
+max_value = max(GGN_mat.max(), H_mat.max())
+
+fig, ax = plt.subplots(ncols=2)
+ax[0].set_title("Hessian")
+ax[0].imshow(H_mat, vmin=min_value, vmax=max_value)
+ax[1].set_title("GGN")
+ax[1].imshow(GGN_mat, vmin=min_value, vmax=max_value)
+plt.show()
