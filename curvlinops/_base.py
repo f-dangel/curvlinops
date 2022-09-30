@@ -13,7 +13,6 @@ from numpy import (
     ndarray,
 )
 from numpy.random import rand
-from numpy.typing import DTypeLike
 from scipy.sparse.linalg import LinearOperator
 from torch import Tensor
 from torch import device as torch_device
@@ -35,7 +34,6 @@ class _LinearOperator(LinearOperator):
         model: Module,
         loss_func: Module,
         data: Iterable[Tuple[Tensor, Tensor]],
-        dtype: DTypeLike = float32,
         progressbar: bool = False,
         check_deterministic: bool = True,
     ):
@@ -46,7 +44,6 @@ class _LinearOperator(LinearOperator):
             loss_func: Loss function criterion.
             data: Source from which mini-batches can be drawn, for instance a list of
                 mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
-            dtype: Matrix data type (for SciPy operations).
             progressbar: Show a progressbar during matrix-multiplication.
                 Default: ``False``.
             check_deterministic: Probe that model and data are deterministic, i.e.
@@ -60,7 +57,8 @@ class _LinearOperator(LinearOperator):
         """
         self._params = [p for p in model.parameters() if p.requires_grad]
         dim = sum(p.numel() for p in self._params)
-        super().__init__(shape=(dim, dim), dtype=dtype)
+
+        super().__init__(shape=(dim, dim), dtype=float32)
 
         self._model = model
         self._loss_func = loss_func
