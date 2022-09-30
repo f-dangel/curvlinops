@@ -1,11 +1,18 @@
 """Contains functionality to analyze Hessian & GGN via matrix-free multiplication."""
 
-from typing import Iterable, List, Tuple
+from typing import Callable, Iterable, List, Tuple
 
 from backpack.utils.convert_parameters import vector_to_parameter_list
-from numpy import allclose, argwhere, float32, isclose, logical_not, ndarray
+from numpy import (
+    allclose,
+    argwhere,
+    column_stack,
+    float32,
+    isclose,
+    logical_not,
+    ndarray,
+)
 from numpy.random import rand
-from numpy.typing import DTypeLike
 from scipy.sparse.linalg import LinearOperator
 from torch import Tensor
 from torch import device as torch_device
@@ -24,23 +31,28 @@ class _LinearOperator(LinearOperator):
 
     def __init__(
         self,
-        model: Module,
-        loss_func: Module,
+        model_func: Callable[[Tensor], Tensor],
+        loss_func: Callable[[Tensor, Tensor], Tensor],
+        params: List[Tensor],
         data: Iterable[Tuple[Tensor, Tensor]],
-        device: torch_device,
-        dtype: DTypeLike = float32,
         progressbar: bool = False,
         check_deterministic: bool = True,
     ):
         """Linear operator for DNN curvature matrices.
 
+        Note:
+            f(X; θ) denotes a neural network, parameterized by θ, that maps a mini-batch
+            input X to predictions p. ℓ(p, y) maps the prediction to a loss, using the
+            mini-batch labels y.
+
         Args:
-            model: Neural network.
-            loss_func: Loss function criterion.
+            model_func: A function that maps the mini-batch input X to predictions.
+                Could be a PyTorch module representing a neural network.
+            loss_func: Loss function criterion. Maps predictions and mini-batch labels
+                to a scalar value.
+            params: List of differentiable parameters used by the prediction function.
             data: Source from which mini-batches can be drawn, for instance a list of
                 mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
-            device: Device on which matrix multiplications are carried out.
-            dtype: Matrix data type (for SciPy operations).
             progressbar: Show a progressbar during matrix-multiplication.
                 Default: ``False``.
             check_deterministic: Probe that model and data are deterministic, i.e.
@@ -50,19 +62,17 @@ class _LinearOperator(LinearOperator):
                 safeguard, only turn it off if you know what you are doing.
 
         Raises:
-            Exception: If the check for deterministic behavior fails.
+            RuntimeError: If the check for deterministic behavior fails.
         """
-        self._params = [p for p in model.parameters() if p.requires_grad]
-        dim = sum(p.numel() for p in self._params)
-        super().__init__(shape=(dim, dim), dtype=dtype)
+        dim = sum(p.numel() for p in params)
+        super().__init__(shape=(dim, dim), dtype=float32)
 
-        self._model = model
+        self._params = params
+        self._model_func = model_func
         self._loss_func = loss_func
         self._data = data
-        self._device = device
+        self._device = self._infer_device(self._params)
         self._progressbar = progressbar
-
-        self.to_device(self._device)
 
         self._N_data = sum(X.shape[0] for (X, _) in self._loop_over_data())
 
@@ -71,10 +81,28 @@ class _LinearOperator(LinearOperator):
             self.to_device(torch_device("cpu"))
             try:
                 self._check_deterministic()
-            except Exception as e:
+            except RuntimeError as e:
                 raise e
             finally:
                 self.to_device(old_device)
+
+    @staticmethod
+    def _infer_device(params: List[Tensor]) -> torch_device:
+        """Infer the device on which to carry out matvecs.
+
+        Args:
+            params: DNN parameters that define the linear operators.
+
+        Returns:
+            Inferred device.
+
+        Raises:
+            RuntimeError: If the device cannot be inferred.
+        """
+        devices = {p.device for p in params}
+        if len(devices) != 1:
+            raise RuntimeError(f"Could not infer device. Parameters live on {devices}.")
+        return devices.pop()
 
     def to_device(self, device: torch_device):
         """Load linear operator to a device (inplace).
@@ -83,8 +111,13 @@ class _LinearOperator(LinearOperator):
             device: Target device.
         """
         self._device = device
-        self._model = self._model.to(self._device)
-        self._loss_func = self._loss_func.to(self._device)
+
+        if isinstance(self._model_func, Module):
+            self._model_func = self._model_func.to(self._device)
+        self._params = [p.to(device) for p in self._params]
+
+        if isinstance(self._loss_func, Module):
+            self._loss_func = self._loss_func.to(self._device)
 
     def _check_deterministic(self):
         """Check that the Linear operator is deterministic.
@@ -171,6 +204,17 @@ class _LinearOperator(LinearOperator):
 
         return self._postprocess(out_list)
 
+    def _matmat(self, X: ndarray) -> ndarray:
+        """Matrix-matrix multiplication.
+
+        Args:
+            X: Matrix for multiplication.
+
+        Returns:
+            Matrix-multiplication result ``mat @ X``.
+        """
+        return column_stack([self @ col for col in X.T])
+
     def _matvec_batch(
         self, X: Tensor, y: Tensor, x_list: List[Tensor]
     ) -> Tuple[Tensor]:
@@ -240,7 +284,7 @@ class _LinearOperator(LinearOperator):
         total_grad = [zeros_like(p) for p in self._params]
 
         for (X, y) in self._loop_over_data():
-            loss = self._loss_func(self._model(X), y)
+            loss = self._loss_func(self._model_func(X), y)
             normalization_factor = self._get_normalization_factor(X, y)
 
             for grad_param, current in zip(total_grad, grad(loss, self._params)):
