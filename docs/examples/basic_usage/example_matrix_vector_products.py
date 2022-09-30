@@ -143,6 +143,12 @@ else:
 #
 # TODO We can also compute the matrix representation from the linear operator,
 # and compare both matrices.
+
+
+# %%
+#
+# Last, here's a visualization of the Hessian.
+
 plt.figure()
 plt.title("Hessian")
 plt.imshow(H_mat)
