@@ -11,7 +11,9 @@ class CGInverseLinearOperator(LinearOperator):
         """Store the linear operator whose inverse should be represented.
 
         Args:
-             A: Linear operator whose inverse is formed.
+            A: Linear operator whose inverse is formed. Must be symmetric and
+                positive-definite
+
         """
         super().__init__(A.dtype, A.shape)
         self._A = A
