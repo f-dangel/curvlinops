@@ -49,7 +49,8 @@ class CGInverseLinearOperator(LinearOperator):
         Returns:
              Result of inverse matrix-vector multiplication, ``A⁻¹ @ x``.
         """
-        return cg(self._A, x, **self._cg_hyperparameters)
+        result, _ = cg(self._A, x, **self._cg_hyperparameters)
+        return result
 
     def _matmat(self, X: ndarray) -> ndarray:
         """Matrix-matrix multiplication.
