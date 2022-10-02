@@ -17,10 +17,6 @@ and cross-entropy loss.
 As always, let's first import the required functionality.
 """
 
-import math
-from typing import Tuple
-
-import functorch
 import matplotlib.pyplot as plt
 import numpy
 import torch
@@ -29,6 +25,7 @@ from scipy.sparse.linalg import aslinearoperator
 from torch import nn
 
 from curvlinops import CGInverseLinearOperator, GGNLinearOperator
+from curvlinops.examples.functorch import functorch_ggn, functorch_gradient
 from curvlinops.examples.utils import report_nonclose
 
 # make deterministic
@@ -125,94 +122,12 @@ report_nonclose(approx_gradient, gradient, rtol=1e-4, atol=1e-5)
 # -----------------
 #
 # To check if the code works, let's compute the GGN with :code:`functorch`,
-# damp it, invert it, and multiply it onto the gradient.
+# using a utility function of :code:`curvlinops.examples`; then damp it, invert
+# it, and multiply it onto the gradient.
 
-# TODO Refactor: Remove code duplication in other example.
-
-# convert modules to functions
-model_fn, model_params = functorch.make_functional(model)
-loss_function_fn, loss_function_fn_params = functorch.make_functional(loss_function)
-
-
-def linearized_model(
-    anchor: Tuple[torch.Tensor], params: Tuple[torch.Tensor], X: torch.Tensor
-) -> torch.Tensor:
-    """Evaluate the model at params, using its linearization around anchor."""
-
-    def model_fn_params_only(params: Tuple[torch.Tensor]) -> torch.Tensor:
-        return model_fn(params, X)
-
-    diff = tuple(p - a for p, a in zip(params, anchor))
-    model_at_anchor, jvp = functorch.jvp(model_fn_params_only, (anchor,), (diff,))
-
-    return model_at_anchor + jvp
-
-
-X = torch.cat([X for (X, _) in data])
-y = torch.cat([y for (_, y) in data])
-
-
-def linearized_loss(
-    X: torch.Tensor,
-    y: torch.Tensor,
-    anchor: Tuple[torch.Tensor],
-    params: Tuple[torch.Tensor],
-) -> torch.Tensor:
-    """Compute the loss given a mini-batch (X, y) under a linearized NN around anchor.
-
-    Returns:
-        f(X, θ₀) + (J_θ₀ f(X, θ₀)) @ (θ - θ₀) with f the neural network, θ₀ the anchor
-        point of the linearization, and θ the evaluation point.
-    """
-    output = linearized_model(anchor, params, X)
-    return loss_function_fn(loss_function_fn_params, output, y)
-
-
-params_argnum = 3
-GGN_functorch = functorch.hessian(linearized_loss, argnums=params_argnum)
-
-# %%
-#
-# This yields a function that computes the GGN:
-
-anchor = tuple(p.clone() for p in model_params)
-GGN_mat_functorch = GGN_functorch(X, y, anchor, model_params)
-
-# %%
-#
-# ``functorch``'s output is a nested tuple that contains the GGN blocks of
-# :code:`(params[i], params[j])` at position :code:`[i, j]`. The following
-# function flattens and concatenates this block structure into a matrix:
-
-
-def blocks_to_matrix(blocks: Tuple[Tuple[torch.Tensor]]) -> torch.Tensor:
-    """Convert a block representation into a matrix.
-
-    Assumes the diagonal blocks to be quadratic to automatically detect their dimension.
-
-    Args:
-        blocks: Nested tuple of tensors that contains the ``(i, j)``th matrix
-            block at index ``[i, j]``.
-
-    Returns:
-        Two-dimensional matrix with concatenated and flattened blocks.
-    """
-    num_blocks = len(blocks)
-    row_blocks = []
-
-    for idx in range(num_blocks):
-        block_num_rows = int(math.sqrt(blocks[idx][idx].numel()))
-        col_blocks = [b.reshape(block_num_rows, -1) for b in blocks[idx]]
-        row_blocks.append(torch.cat(col_blocks, dim=1))
-
-    return torch.cat(row_blocks)
-
-
-# %%
-#
-#  Let's convert the block representation into a matrix,
-
-GGN_mat_functorch = blocks_to_matrix(GGN_mat_functorch).detach().cpu().numpy()
+GGN_mat_functorch = (
+    functorch_ggn(model, loss_function, params, data).detach().cpu().numpy()
+)
 
 # %%
 #
@@ -225,19 +140,9 @@ inv_damped_GGN_mat = numpy.linalg.inv(damped_GGN_mat)
 
 # %%
 #
-#  Next, let's compute the gradient with :code:`functorch`:
+#  Next, let's compute the gradient with :code:`functorch`, using a utility function from :code:`curvlinops.examples`:
 
-
-def loss(X: torch.Tensor, y: torch.Tensor, params: Tuple[torch.Tensor]) -> torch.Tensor:
-    """Compute the loss given a mini-batch (X, y) and the neural network parameters."""
-    output = model_fn(params, X)
-    return loss_function_fn(loss_function_fn_params, output, y)
-
-
-params_argnum = 2
-H_functorch = functorch.hessian(loss, argnums=params_argnum)
-
-gradient_functorch = functorch.grad(loss, argnums=params_argnum)(X, y, params)
+gradient_functorch = functorch_gradient(model, loss_function, params, data)
 # convert to numpy (vector) format
 gradient_functorch = (
     nn.utils.parameters_to_vector(gradient_functorch).detach().cpu().numpy()
