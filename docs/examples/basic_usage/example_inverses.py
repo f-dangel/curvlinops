@@ -160,7 +160,44 @@ report_nonclose(gradient, gradient_functorch)
 natural_gradient_functorch = inv_damped_GGN_mat @ gradient_functorch
 
 print("Comparing natural gradient with functorch's natural gradient.")
-report_nonclose(natural_gradient, natural_gradient_functorch, rtol=5e-3, atol=1e-5)
+rtol, atol = 5e-3, 1e-5
+report_nonclose(natural_gradient, natural_gradient_functorch, rtol=rtol, atol=atol)
+
+# %%
+#
+#  You might have noticed the rather small tolerances required to achieve
+#  approximate equality. We can use stricter convergence hyperparameters for CG
+#  to achieve a more accurate inversion
+
+inverse_damped_GGN.set_cg_hyperparameters(tol=1e-7)  # default is 1e-5
+natural_gradient_more_accurate = inverse_damped_GGN @ gradient
+
+smaller_rtol, smaller_atol = rtol / 10, atol / 10
+print("Comparing more accurate natural gradient with functorch's natural gradient.")
+report_nonclose(
+    natural_gradient_more_accurate,
+    natural_gradient_functorch,
+    rtol=smaller_rtol,
+    atol=smaller_atol,
+)
+
+# %%
+#
+#  whereas the less accurate inversion does not pass this check:
+
+print(
+    "Comparing natural gradient with functorch's natural gradient (smaller tolerances)."
+)
+try:
+    report_nonclose(
+        natural_gradient,
+        natural_gradient_functorch,
+        rtol=smaller_rtol,
+        atol=smaller_atol,
+    )
+    raise RuntimeError("This comparison should not pass")
+except ValueError as e:
+    print(e)
 
 # %%
 #

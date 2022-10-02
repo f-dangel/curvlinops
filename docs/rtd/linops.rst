@@ -13,3 +13,10 @@ Generalized Gauss-Newton
 
 .. autoclass:: curvlinops.GGNLinearOperator
    :members: __init__
+
+
+Inverses
+--------
+
+.. autoclass:: curvlinops.CGInverseLinearOperator
+   :members: __init__, set_cg_hyperparameters
