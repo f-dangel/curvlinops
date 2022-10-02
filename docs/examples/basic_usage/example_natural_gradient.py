@@ -115,7 +115,7 @@ if numpy.allclose(approx_gradient, gradient, rtol=rtol, atol=atol):
     print("Fisher applied onto the natural gradient matches gradient.")
 else:
     for approx_g, g in zip(approx_gradient, gradient):
-        if not numpy.isclose(approx_g, g, atol=atol, rtol=atol):
+        if not numpy.isclose(approx_g, g, atol=atol, rtol=rtol):
             print(f"{approx_g} ≠ {g}")
     raise ValueError(
         "Fisher applied onto the natural gradient does not match the gradient."
