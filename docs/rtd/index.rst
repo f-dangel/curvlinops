@@ -1,8 +1,9 @@
 CurvLinOps
 =================================
 
-This library implements :class:`scipy.sparse.linalg.LinearOperator` s for deep
-learning matrices, such as
+This library implements :code:`scipy`
+:class:`LinearOperator<scipy.sparse.linalg.LinearOperator>` s for deep learning
+matrices, such as
 
 - the Hessian
 
