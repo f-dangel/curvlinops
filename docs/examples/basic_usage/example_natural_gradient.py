@@ -42,7 +42,7 @@ numpy.random.seed(0)
 # Let's create some toy data, consisting of two mini-batches, a small MLP, and
 # use mean-squared error as loss function.
 
-N = 8
+N = 20
 D_in = 7
 D_hidden = 5
 D_out = 3
@@ -74,7 +74,7 @@ loss_function = nn.MSELoss(reduction="mean").to(DEVICE)
 data = [(X1, y1), (X2, y2)]
 GGN = GGNLinearOperator(model, loss_function, params, data)
 
-delta = 1e-5
+delta = 1e-2
 damping = aslinearoperator(delta * sparse.eye(GGN.shape[0]))
 
 damped_GGN = GGN + damping
@@ -149,8 +149,9 @@ def linearized_model(
     return model_at_anchor + jvp
 
 
-# TODO Stack X1, X2 into X
-# TODO Stack y1, y2 into y
+X = torch.cat([X for (X, _) in data])
+y = torch.cat([y for (_, y) in data])
+
 # TODO Refactor: Remove code duplication in other example.
 
 
@@ -221,8 +222,68 @@ GGN_mat = blocks_to_matrix(GGN_mat).detach().cpu().numpy()
 #  then damp it and invert it.
 
 damping_mat = delta * numpy.eye(GGN_mat.shape[0])
-inv_damped_GGN_mat = numpy.linalg.inv(GGN_mat + damping_mat)
+damped_GGN_mat = GGN_mat + damping_mat
+inv_damped_GGN_mat = numpy.linalg.inv(damped_GGN_mat)
 
-# TODO Compute the gradient
-# TODO Compute the natural gradient
-# TODO Compare the results
+
+# %%
+#
+#  Next, let's compute the gradient with :code:`functorch`:
+
+
+def loss(X: torch.Tensor, y: torch.Tensor, params: Tuple[torch.Tensor]) -> torch.Tensor:
+    """Compute the loss given a mini-batch (X, y) and the neural network parameters."""
+    output = model_fn(params, X)
+    return loss_function_fn(loss_function_fn_params, output, y)
+
+
+params_argnum = 2
+H_functorch = functorch.hessian(loss, argnums=params_argnum)
+
+gradient_functorch = functorch.grad(loss, argnums=params_argnum)(X, y, params)
+# flatten, concatenate into a vector, and convert to scipy
+gradient_functorch = numpy.concatenate(
+    [g.flatten().detach().cpu().numpy() for g in gradient_functorch]
+)
+
+if numpy.allclose(gradient, gradient_functorch):
+    print("Gradient of functorch matches.")
+else:
+    raise ValueError("Gradient of functorch does not match.")
+
+# %%
+#
+#  We can now compute the natural gradient from the quantities we obtained via
+#  :code:`functorch`. This should yield approximately the same result:
+
+natural_gradient_functorch = inv_damped_GGN_mat @ gradient_functorch
+
+rtol, atol = 5e-3, 1e-5
+if numpy.allclose(natural_gradient, natural_gradient_functorch, rtol=rtol, atol=atol):
+    print("Natural gradient of functorch matches.")
+else:
+    for ng1, ng2 in zip(natural_gradient, natural_gradient_functorch):
+        if not numpy.isclose(ng1, ng2, atol=atol, rtol=rtol):
+            print(f"{ng1} ≠ {ng2}")
+    raise ValueError("Natural gradient of functorch does not match.")
+
+# %%
+#
+# Visual comparison
+# -----------------
+#
+# Finally, let's visualize the Fisher/GGN. For improved visibility, we take the
+# logarithm of the absolute value of each element (blank pixels correspond to
+# zeros).
+
+fig, ax = plt.subplots(ncols=2)
+plt.suptitle("Logarithm of absolute values")
+ax[0].set_title("Damped GGN/Fisher")
+image = ax[0].imshow(numpy.log10(numpy.abs(damped_GGN_mat)))
+# image = ax[0].imshow(damped_GGN_mat)
+plt.colorbar(image, ax=ax[0], shrink=0.5)
+ax[1].set_title("Inv. damped GGN/Fisher")
+image = ax[1].imshow(numpy.log10(numpy.abs(inv_damped_GGN_mat)))
+# image = ax[1].imshow(inv_damped_GGN_mat)
+plt.colorbar(image, ax=ax[1], shrink=0.5)
+plt.show()
