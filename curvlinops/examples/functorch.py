@@ -37,7 +37,20 @@ def functorch_hessian(
     params: List[Tensor],
     data: Iterable[Tuple[Tensor, Tensor]],
 ) -> Tensor:
-    """Compute the Hessian with functorch."""
+    """Compute the Hessian with functorch.
+
+    Args:
+        model_func: A function that maps the mini-batch input X to predictions.
+            Could be a PyTorch module representing a neural network.
+        loss_func: Loss function criterion. Maps predictions and mini-batch labels
+            to a scalar value.
+        params: List of differentiable parameters used by the prediction function.
+        data: Source from which mini-batches can be drawn, for instance a list of
+            mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
+
+    Returns:
+        Square matrix containing the Hessian.
+    """
     # convert modules to functions
     model_fn, _ = make_functional(model_func)
     loss_fn, loss_fn_params = make_functional(loss_func)
@@ -47,7 +60,11 @@ def functorch_hessian(
     X, y = cat(X), cat(y)
 
     def loss(X: Tensor, y: Tensor, params: Tuple[Tensor]) -> Tensor:
-        """Compute the loss given a mini-batch and the neural network parameters."""
+        """Compute the loss given a mini-batch and the neural network parameters.
+
+        # noqa: DAR101
+        # noqa: DAR201
+        """
         output = model_fn(params, X)
         return loss_fn(loss_fn_params, output, y)
 
@@ -63,7 +80,22 @@ def functorch_ggn(
     params: List[Tensor],
     data: Iterable[Tuple[Tensor, Tensor]],
 ) -> Tensor:
-    """Compute the GGN with functorch."""
+    """Compute the GGN with functorch.
+
+    The GGN is the Hessian when the model is replaced by its linearization.
+
+    Args:
+        model_func: A function that maps the mini-batch input X to predictions.
+            Could be a PyTorch module representing a neural network.
+        loss_func: Loss function criterion. Maps predictions and mini-batch labels
+            to a scalar value.
+        params: List of differentiable parameters used by the prediction function.
+        data: Source from which mini-batches can be drawn, for instance a list of
+            mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
+
+    Returns:
+        Square matrix containing the GGN.
+    """
     # convert modules to functions
     model_fn, _ = make_functional(model_func)
     loss_fn, loss_fn_params = make_functional(loss_func)
@@ -75,7 +107,11 @@ def functorch_ggn(
     def linearized_model(
         anchor: Tuple[Tensor], params: Tuple[Tensor], X: Tensor
     ) -> Tensor:
-        """Evaluate the model at params, using its linearization around anchor."""
+        """Evaluate the model at params, using its linearization around anchor.
+
+        # noqa: DAR101
+        # noqa: DAR201
+        """
 
         def model_fn_params_only(params: Tuple[Tensor]) -> Tensor:
             return model_fn(params, X)
@@ -89,6 +125,8 @@ def functorch_ggn(
         X: Tensor, y: Tensor, anchor: Tuple[Tensor], params: Tuple[Tensor]
     ) -> Tensor:
         """Compute the loss given a mini-batch under a linearized NN around anchor.
+
+        # noqa: DAR101
 
         Returns:
             f(X, θ₀) + (J_θ₀ f(X, θ₀)) @ (θ - θ₀) with f the neural network, θ₀ the anchor
@@ -111,7 +149,20 @@ def functorch_gradient(
     params: List[Tensor],
     data: Iterable[Tuple[Tensor, Tensor]],
 ) -> Tuple[Tensor]:
-    """Compute the gradient with functorch."""
+    """Compute the gradient with functorch.
+
+    Args:
+        model_func: A function that maps the mini-batch input X to predictions.
+            Could be a PyTorch module representing a neural network.
+        loss_func: Loss function criterion. Maps predictions and mini-batch labels
+            to a scalar value.
+        params: List of differentiable parameters used by the prediction function.
+        data: Source from which mini-batches can be drawn, for instance a list of
+            mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
+
+    Returns:
+        Gradient in same format as the parameters.
+    """
     # convert modules to functions
     model_fn, _ = make_functional(model_func)
     loss_fn, loss_fn_params = make_functional(loss_func)
@@ -121,7 +172,11 @@ def functorch_gradient(
     X, y = cat(X), cat(y)
 
     def loss(X: Tensor, y: Tensor, params: Tuple[Tensor]) -> Tensor:
-        """Compute the loss given a mini-batch and the neural network parameters."""
+        """Compute the loss given a mini-batch and the neural network parameters.
+
+        # noqa: DAR101
+        # noqa: DAR201
+        """
         output = model_fn(params, X)
         return loss_fn(loss_fn_params, output, y)
 
