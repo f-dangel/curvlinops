@@ -1,17 +1,18 @@
-r"""Inverse linear operators (natural gradient)
-===============================================
+r"""Inverses (natural gradient)
+===============================
 
 This example demonstrates how to work with inverses of linear operators.
 
 Concretely, we will compute the natural gradient :math:`\mathbf{\tilde{g}} =
-\mathbf{F}^{-1} \mathbf{g}` that is defined by the inverse Fisher information
-matrix :math:`\mathbf{F}^{-1}` and the gradient :math:`\mathbf{g}`. We can do
-that with the GGN inverse, as it corresponds to the Fisher for common loss
-functions like square and cross-entropy.
+\mathbf{F}^{-1} \mathbf{g}`,  defined by the inverse Fisher information
+matrix :math:`\mathbf{F}^{-1}` and the gradient :math:`\mathbf{g}`. We can use
+the GGN, as it corresponds to the Fisher for common loss functions like square
+and cross-entropy loss.
 
-(The GGN is positive semi-definite, i.e. not full-rank. but we need a full-rank
-matrix for the inverse. This is why we will add a damping term :math:`\delta
-\mathvf{I}` to it before inverting.)
+.. note::
+    The GGN is positive semi-definite, i.e. not full-rank. But we need a
+    full-rank matrix to form the inverse. This is why we will add a damping term
+    :math:`\delta \mathbf{I}` before inverting.
 
 As always, let's first import the required functionality.
 """
@@ -33,14 +34,13 @@ from curvlinops import CGInverseLinearOperator, GGNLinearOperator
 torch.manual_seed(0)
 numpy.random.seed(0)
 
-
 # %%
 #
 # Setup
 # -----
 #
-# Let's create some toy data, consisting of two mini-batches, a small MLP, and
-# use mean-squared error as loss function.
+# We will use synthetic data, consisting of two mini-batches, a small MLP, and
+# mean-squared error as loss function.
 
 N = 20
 D_in = 7
@@ -63,13 +63,15 @@ params = [p for p in model.parameters() if p.requires_grad]
 
 loss_function = nn.MSELoss(reduction="mean").to(DEVICE)
 
-# %%
+
+# %
+#
+# Next, let's compute the ingredients for the natural gradient.
 #
 # Inverse GGN/Fisher
 # ------------------
 #
-# Next, we set up the linear operator for the damped GGN/Fisher, and the linear
-# operator of its inverse.
+# First,  we set up a linear operator for the damped GGN/Fisher
 
 data = [(X1, y1), (X2, y2)]
 GGN = GGNLinearOperator(model, loss_function, params, data)
@@ -79,6 +81,10 @@ damping = aslinearoperator(delta * sparse.eye(GGN.shape[0]))
 
 damped_GGN = GGN + damping
 
+# %%
+#
+# and the linear operator of its inverse:
+
 inverse_damped_GGN = CGInverseLinearOperator(damped_GGN)
 
 # %%
@@ -86,12 +92,11 @@ inverse_damped_GGN = CGInverseLinearOperator(damped_GGN)
 # Gradient
 # --------
 #
-# To compute the gradient, we can use a convenience function from the
-# :code:`GGNLinearOperator`:
+# We can obtain the gradient via a convenience function of :code:`GGNLinearOperator`:
 
 gradient, _ = GGN.gradient_and_loss()
-# flatten, concatenate into a vector, and convert to scipy
-gradient = numpy.concatenate([g.flatten().cpu().numpy() for g in gradient])
+# convert to numpy (vector) format
+gradient = nn.utils.parameters_to_vector(gradient).cpu().detach()
 
 # %%
 #
@@ -121,14 +126,15 @@ else:
         "Fisher applied onto the natural gradient does not match the gradient."
     )
 
-
 # %%
 #
-# Double-check
-# ------------
+# Verifying results
+# -----------------
 #
-# Finally, let's compute the GGN with :code:`functorch`, damp it, invert it,
-# and multiply it onto the gradient to check if the code works.
+# To check if the code works, let's compute the GGN with :code:`functorch`,
+# damp it, invert it, and multiply it onto the gradient.
+
+# TODO Refactor: Remove code duplication in other example.
 
 # convert modules to functions
 model_fn, model_params = functorch.make_functional(model)
@@ -151,8 +157,6 @@ def linearized_model(
 
 X = torch.cat([X for (X, _) in data])
 y = torch.cat([y for (_, y) in data])
-
-# TODO Refactor: Remove code duplication in other example.
 
 
 def linearized_loss(
@@ -179,11 +183,11 @@ GGN_functorch = functorch.hessian(linearized_loss, argnums=params_argnum)
 # This yields a function that computes the GGN:
 
 anchor = tuple(p.clone() for p in model_params)
-GGN_mat = GGN_functorch(X, y, anchor, model_params)
+GGN_mat_functorch = GGN_functorch(X, y, anchor, model_params)
 
 # %%
 #
-# ``functorch``'s output is a nested tuple that contains the Hessian blocks of
+# ``functorch``'s output is a nested tuple that contains the GGN blocks of
 # :code:`(params[i], params[j])` at position :code:`[i, j]`. The following
 # function flattens and concatenates this block structure into a matrix:
 
@@ -215,14 +219,14 @@ def blocks_to_matrix(blocks: Tuple[Tuple[torch.Tensor]]) -> torch.Tensor:
 #
 #  Let's convert the block representation into a matrix,
 
-GGN_mat = blocks_to_matrix(GGN_mat).detach().cpu().numpy()
+GGN_mat_functorch = blocks_to_matrix(GGN_mat_functorch).detach().cpu().numpy()
 
 # %%
 #
 #  then damp it and invert it.
 
-damping_mat = delta * numpy.eye(GGN_mat.shape[0])
-damped_GGN_mat = GGN_mat + damping_mat
+damping_mat = delta * numpy.eye(GGN_mat_functorch.shape[0])
+damped_GGN_mat = GGN_mat_functorch + damping_mat
 inv_damped_GGN_mat = numpy.linalg.inv(damped_GGN_mat)
 
 
@@ -241,11 +245,10 @@ params_argnum = 2
 H_functorch = functorch.hessian(loss, argnums=params_argnum)
 
 gradient_functorch = functorch.grad(loss, argnums=params_argnum)(X, y, params)
-# flatten, concatenate into a vector, and convert to scipy
-gradient_functorch = numpy.concatenate(
-    [g.flatten().detach().cpu().numpy() for g in gradient_functorch]
+# convert to numpy (vector) format
+gradient_functorch = (
+    nn.utils.parameters_to_vector(gradient_functorch).detach().cpu().numpy()
 )
-
 if numpy.allclose(gradient, gradient_functorch):
     print("Gradient of functorch matches.")
 else:
@@ -253,8 +256,8 @@ else:
 
 # %%
 #
-#  We can now compute the natural gradient from the quantities we obtained via
-#  :code:`functorch`. This should yield approximately the same result:
+#  We can now compute the natural gradient from the :code:`functorch
+#  `quantities. This should yield approximately the same result:
 
 natural_gradient_functorch = inv_damped_GGN_mat @ gradient_functorch
 
@@ -272,18 +275,18 @@ else:
 # Visual comparison
 # -----------------
 #
-# Finally, let's visualize the Fisher/GGN. For improved visibility, we take the
-# logarithm of the absolute value of each element (blank pixels correspond to
-# zeros).
+# Finally, let's visualize the damped Fisher/GGN and its inverse. For improved
+# visibility, we take the logarithm of the absolute value of each element
+# (blank pixels correspond to zeros).
 
 fig, ax = plt.subplots(ncols=2)
 plt.suptitle("Logarithm of absolute values")
+
 ax[0].set_title("Damped GGN/Fisher")
 image = ax[0].imshow(numpy.log10(numpy.abs(damped_GGN_mat)))
-# image = ax[0].imshow(damped_GGN_mat)
 plt.colorbar(image, ax=ax[0], shrink=0.5)
+
 ax[1].set_title("Inv. damped GGN/Fisher")
 image = ax[1].imshow(numpy.log10(numpy.abs(inv_damped_GGN_mat)))
-# image = ax[1].imshow(inv_damped_GGN_mat)
 plt.colorbar(image, ax=ax[1], shrink=0.5)
 plt.show()
