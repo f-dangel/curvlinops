@@ -16,7 +16,7 @@ data sets (looping over batches during a :meth:`matvec
 
 You can plug these linear operators into :code:`scipy`, while carrying out the
 heavy lifting (matrix-vector multiplies) in PyTorch on GPU. My favorite example
-for such a routine is :meth:`eigsh <scipy.sparse.linalg.eigsh>` that lets you
+for such a routine is :func:`eigsh <scipy.sparse.linalg.eigsh>` that lets you
 compute a subset of eigenpairs.
 
 Installation
