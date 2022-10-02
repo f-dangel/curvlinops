@@ -1,6 +1,6 @@
 """Contains pytest fixtures that are visible by other files."""
 
-from test.cases import CASES
+from test.cases import CASES, NON_DETERMINISTIC_CASES
 from typing import Callable, Dict, Iterable, List, Tuple
 
 from numpy import random
@@ -29,6 +29,19 @@ def initialize_case(
 
 @fixture(params=CASES)
 def case(
+    request,
+) -> Tuple[
+    Callable[[Tensor], Tensor],
+    Callable[[Tensor, Tensor], Tensor],
+    List[Tensor],
+    Iterable[Tuple[Tensor, Tensor]],
+]:
+    case = request.param
+    yield initialize_case(case)
+
+
+@fixture(params=NON_DETERMINISTIC_CASES)
+def non_deterministic_case(
     request,
 ) -> Tuple[
     Callable[[Tensor], Tensor],
