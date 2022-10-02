@@ -10,7 +10,8 @@ learning matrices, such as
 
 Matrix-vector products are carried out in PyTorch, i.e. potentially on a GPU.
 The library supports defining these matrices not only on a mini-batch, but on
-data sets (looping over batches during a :meth:`matvec <scipy.sparse.linalg.LinearOperator.matvec>` operation).
+data sets (looping over batches during a :meth:`matvec
+<scipy.sparse.linalg.LinearOperator.matvec>` operation).
 
 You can plug these linear operators into :code:`scipy`, while carrying out the
 heavy lifting (matrix-vector multiplies) in PyTorch on GPU. My favorite example
