@@ -1,10 +1,8 @@
 """Contains test cases for linear operators."""
 
 from test.utils import classification_targets, get_available_devices
-from typing import Callable, Dict, Iterable, List, Tuple
 
-from numpy import random
-from torch import Tensor, manual_seed, rand
+from torch import rand
 from torch.nn import CrossEntropyLoss, Linear, ReLU, Sequential
 
 DEVICES = get_available_devices()
@@ -24,26 +22,6 @@ CASES_NO_DEVICE = [
         "seed": 0,
     }
 ]
-
-
-def initialize_case(
-    case: Dict,
-) -> Tuple[
-    Callable[[Tensor], Tensor],
-    Callable[[Tensor, Tensor], Tensor],
-    List[Tensor],
-    Iterable[Tuple[Tensor, Tensor]],
-]:
-    random.seed(case["seed"])
-    manual_seed(case["seed"])
-
-    model_func = case["model_func"]().to(case["device"])
-    loss_func = case["loss_func"]().to(case["device"])
-    params = [p for p in model_func.parameters() if p.requires_grad]
-    data = case["data"]()
-
-    return model_func, loss_func, params, data
-
 
 CASES = []
 for case in CASES_NO_DEVICE:
