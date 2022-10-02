@@ -29,6 +29,7 @@ from scipy.sparse.linalg import aslinearoperator
 from torch import nn
 
 from curvlinops import CGInverseLinearOperator, GGNLinearOperator
+from curvlinops.examples.utils import report_nonclose
 
 # make deterministic
 torch.manual_seed(0)
@@ -115,16 +116,8 @@ natural_gradient = inverse_damped_GGN @ gradient
 
 approx_gradient = damped_GGN @ natural_gradient
 
-rtol, atol = 1e-4, 1e-5
-if numpy.allclose(approx_gradient, gradient, rtol=rtol, atol=atol):
-    print("Fisher applied onto the natural gradient matches gradient.")
-else:
-    for approx_g, g in zip(approx_gradient, gradient):
-        if not numpy.isclose(approx_g, g, atol=atol, rtol=rtol):
-            print(f"{approx_g} ≠ {g}")
-    raise ValueError(
-        "Fisher applied onto the natural gradient does not match the gradient."
-    )
+print("Comparing gradient with Fisher @ natural gradient.")
+report_nonclose(approx_gradient, gradient, rtol=1e-4, atol=1e-5)
 
 # %%
 #
@@ -249,10 +242,9 @@ gradient_functorch = functorch.grad(loss, argnums=params_argnum)(X, y, params)
 gradient_functorch = (
     nn.utils.parameters_to_vector(gradient_functorch).detach().cpu().numpy()
 )
-if numpy.allclose(gradient, gradient_functorch):
-    print("Gradient of functorch matches.")
-else:
-    raise ValueError("Gradient of functorch does not match.")
+
+print("Comparing gradient with functorch's gradient.")
+report_nonclose(gradient, gradient_functorch)
 
 # %%
 #
@@ -261,14 +253,8 @@ else:
 
 natural_gradient_functorch = inv_damped_GGN_mat @ gradient_functorch
 
-rtol, atol = 5e-3, 1e-5
-if numpy.allclose(natural_gradient, natural_gradient_functorch, rtol=rtol, atol=atol):
-    print("Natural gradient of functorch matches.")
-else:
-    for ng1, ng2 in zip(natural_gradient, natural_gradient_functorch):
-        if not numpy.isclose(ng1, ng2, atol=atol, rtol=rtol):
-            print(f"{ng1} ≠ {ng2}")
-    raise ValueError("Natural gradient of functorch does not match.")
+print("Comparing natural gradient with functorch's natural gradient.")
+report_nonclose(natural_gradient, natural_gradient_functorch, rtol=5e-3, atol=1e-5)
 
 # %%
 #
@@ -289,4 +275,3 @@ plt.colorbar(image, ax=ax[0], shrink=0.5)
 ax[1].set_title("Inv. damped GGN/Fisher")
 image = ax[1].imshow(numpy.log10(numpy.abs(inv_damped_GGN_mat)))
 plt.colorbar(image, ax=ax[1], shrink=0.5)
-plt.show()

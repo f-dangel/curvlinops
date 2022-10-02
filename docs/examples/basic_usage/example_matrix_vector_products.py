@@ -18,6 +18,7 @@ import torch
 from torch import nn
 
 from curvlinops import GGNLinearOperator, HessianLinearOperator
+from curvlinops.examples.utils import report_nonclose
 
 # make deterministic
 torch.manual_seed(0)
@@ -135,10 +136,8 @@ def blocks_to_matrix(blocks: Tuple[Tuple[torch.Tensor]]) -> torch.Tensor:
 H_mat = blocks_to_matrix(H_mat).detach().cpu().numpy()
 Hv_functorch = H_mat @ v
 
-if numpy.allclose(Hv, Hv_functorch):
-    print("Hessian-vector products match.")
-else:
-    raise ValueError("Hessian-vector products don't match.")
+print("Comparing Hessian-vector product with functorch's Hessian-vector product.")
+report_nonclose(Hv, Hv_functorch)
 
 
 # %%
@@ -154,10 +153,8 @@ H_mat_from_linop = H @ numpy.eye(D)
 #
 # This should yield the same matrix as with :code:`functorch`.
 
-if numpy.allclose(H_mat, H_mat_from_linop):
-    print("Hessians match.")
-else:
-    raise ValueError("Hessians don't match.")
+print("Comparing Hessian with functorch's Hessian.")
+report_nonclose(H_mat, H_mat_from_linop)
 
 # %%
 #
@@ -252,10 +249,8 @@ GGN_mat = blocks_to_matrix(GGN_mat).detach().cpu().numpy()
 
 GGNv_functorch = GGN_mat @ v
 
-if numpy.allclose(GGNv, GGNv_functorch):
-    print("GGN-vector products match.")
-else:
-    raise ValueError("GGN-vector products don't match.")
+print("Comparing GGN-vector product with functorch's GGN-vector product.")
+report_nonclose(GGNv, GGNv_functorch)
 
 # %%
 # GGN-matrix products
@@ -270,10 +265,8 @@ GGN_mat_from_linop = GGN @ numpy.eye(D)
 #
 # This should yield the same matrix as with :code:`functorch`.
 
-if numpy.allclose(GGN_mat, GGN_mat_from_linop):
-    print("GGNs match.")
-else:
-    raise ValueError("GGNs don't match.")
+print("Comparing GGN with functorch's GGN.")
+report_nonclose(GGN_mat, GGN_mat_from_linop)
 
 # %%
 #
