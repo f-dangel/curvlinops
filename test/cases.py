@@ -80,13 +80,11 @@ def _non_deterministic_case_batchnorm():
     num_samples = N * num_batches
 
     def model_func():
-        _model = Sequential(Linear(D_in, H), BatchNorm1d(H), ReLU(), Linear(H, C))
-        # by default, BN weight=1, bias=0
-        bn = _model[1]
+        bn = BatchNorm1d(H)
         bn.weight.data = rand_like(bn.weight.data)
         bn.bias.data = rand_like(bn.bias.data)
 
-        return _model
+        return Sequential(Linear(D_in, H), bn, ReLU(), Linear(H, C))
 
     def data():
         X = rand(num_samples, D_in)
