@@ -30,6 +30,8 @@ class CGInverseLinearOperator(LinearOperator):
 
         For more detail, see
         https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.linalg.cg.html
+
+        # noqa: DAR101
         """
         self._cg_hyperparameters = {
             "x0": x0,
