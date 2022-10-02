@@ -70,7 +70,8 @@ Hv = H @ v
 
 # %%
 #
-# To verify the result, we compute the Hessian using ``functorch``, using a utility function from ``curvlinops.examples``:
+# To verify the result, we compute the Hessian using ``functorch``, using a
+# utility function from ``curvlinops.examples``:
 
 H_mat = functorch_hessian(model, loss_function, params, data).detach().cpu().numpy()
 
@@ -130,7 +131,8 @@ GGNv = GGN @ v
 #
 # To verify the result, we will use ``functorch`` to compute the GGN. For that,
 # we use that the GGN corresponds to the Hessian if we replace the neural
-# network by its linearization. This is implemented in a utility function of :code:`curvlinops.examples`:
+# network by its linearization. This is implemented in a utility function of
+# :code:`curvlinops.examples`:
 
 GGN_mat = functorch_ggn(model, loss_function, params, data).detach().cpu().numpy()
 

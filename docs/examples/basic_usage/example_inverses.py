@@ -140,7 +140,8 @@ inv_damped_GGN_mat = numpy.linalg.inv(damped_GGN_mat)
 
 # %%
 #
-#  Next, let's compute the gradient with :code:`functorch`, using a utility function from :code:`curvlinops.examples`:
+#  Next, let's compute the gradient with :code:`functorch`, using a utility
+#  function from :code:`curvlinops.examples`:
 
 gradient_functorch = functorch_gradient(model, loss_function, params, data)
 # convert to numpy (vector) format
