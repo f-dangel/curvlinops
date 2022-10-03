@@ -12,6 +12,6 @@ __all__ = [
     "HessianLinearOperator",
     "GGNLinearOperator",
     "CGInverseLinearOperator",
-    "lanzcos_approximate_spectrum",
-    "lanzcos_approximate_log_spectrum",
+    "lanczos_approximate_spectrum",
+    "lanczos_approximate_log_spectrum",
 ]
