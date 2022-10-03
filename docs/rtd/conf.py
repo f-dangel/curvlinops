@@ -45,6 +45,7 @@ intersphinx_mapping = {
     "torch": ("https://pytorch.org/docs/stable/", None),
     "backpack": ("https://docs.backpack.pt/en/master", None),
     "scipy": ("http://docs.scipy.org/doc/scipy/reference/", None),
+    "numpy": ("http://docs.scipy.org/doc/numpy/", None),
 }
 
 # -- Sphinx Gallery config ---------------------------------------------------
