@@ -59,7 +59,7 @@ sphinx_gallery_conf = {
         "basic_usage",
         # "use_cases",
     ],  # path to where to save gallery generated output
-    "default_thumb_file": "assets/vivit_logo.png",
+    "default_thumb_file": "assets/logo.png",
     "filename_pattern": "example",
 }
 # Add any paths that contain templates here, relative to this directory.
@@ -77,7 +77,6 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 # a list of builtin themes.
 #
 html_theme = "sphinx_rtd_theme"
-# TODO Design logo and add it here
 html_logo = "assets/logo.svg"
 
 # Add any paths that contain custom static files (such as style sheets) here,
