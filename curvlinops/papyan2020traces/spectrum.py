@@ -476,7 +476,7 @@ def approximate_boundaries_abs(
     Returns:
         Estimates of λₘᵢₙ and λₘₐₓ of |A|.
     """
-    eval_max, eval_min = (None, None) if boundaries is None else boundaries
+    eval_min, eval_max = (None, None) if boundaries is None else boundaries
 
     if eval_max is None:
         (eval_max,) = eigsh(A, k=1, which="LM", tol=tol, return_eigenvectors=False)
