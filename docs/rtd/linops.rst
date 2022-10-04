@@ -27,3 +27,6 @@ Spectral density approximation
 .. autofunction:: curvlinops.lanczos_approximate_spectrum
 
 .. autofunction:: curvlinops.lanczos_approximate_log_spectrum
+
+.. autoclass:: curvlinops.LanczosApproximateSpectrumCached
+   :members: __init__, approximate_spectrum

@@ -6,7 +6,7 @@ From Papyan, 2020:
   of Machine Learning Research (JMLR), https://jmlr.org/papers/v21/20-933.html
 """
 
-from typing import Tuple
+from typing import List, Tuple
 
 from numpy import exp, inner, linspace, log, ndarray, pi, sqrt, zeros, zeros_like
 from numpy.linalg import norm
@@ -57,11 +57,30 @@ def lanczos_approximate_spectrum(
     """
     if boundaries is None:
         boundaries = approximate_boundaries(A, tol=boundaries_tol)
-    eval_min, eval_max = boundaries
 
+    average_density = zeros(num_points)
+
+    for n in range(num_repeats):
+        lanczos_iter = fast_lanczos(A, ncv)
+        grid, density = lanczos_approximate_spectrum_from_iter(
+            lanczos_iter, boundaries, num_points, kappa, margin
+        )
+
+        average_density = (1 - 1 / (n + 1)) * average_density + density / (n + 1)
+
+    return grid, average_density
+
+
+def lanczos_approximate_spectrum_from_iter(
+    lanczos_iter: Tuple[ndarray, ndarray],
+    boundaries: Tuple[float, float],
+    num_points: int,
+    kappa: float,
+    margin: float,
+) -> Tuple[ndarray, ndarray]:
+    eval_min, eval_max = boundaries
     _width = eval_max - eval_min
     _padding = margin * _width
-
     eval_min, eval_max = eval_min - _padding, eval_max + _padding
 
     # use normalized operator ``(A - c I) / d`` whose spectrum lies in [-1; 1]
@@ -70,24 +89,112 @@ def lanczos_approximate_spectrum(
 
     # estimate on grid [-1; 1]
     grid_norm = linspace(-1, 1, num_points, endpoint=True)
-    grid_out = grid_norm * d + c
     density = zeros_like(grid_norm)
+
+    evals, evecs = lanczos_iter
+    ncv = evals.shape[0]
+    nodes = (evals - c) / d
+    # Repeat as ``(ncv, num_points)`` arrays to avoid broadcasting
+    grid = grid_norm.reshape((1, num_points)).repeat(ncv, axis=0)
+    nodes = nodes.reshape((ncv, 1)).repeat(num_points, axis=1)
+    weights = (evecs[0, :] ** 2 / d).reshape((ncv, 1)).repeat(num_points, axis=1)
 
     # width of Gaussian bump in [-1; 1]
     sigma = 2 / (ncv - 1) / sqrt(8 * log(kappa))
+    density = (weights * _gaussian(grid, nodes, sigma)).sum(0)
 
-    for _ in range(num_repeats):
-        evals, evecs = fast_lanczos(A, ncv)
-        nodes = (evals - c) / d
+    return linspace(eval_min, eval_max, num_points, endpoint=True), density
 
-        # Repeat as ``(ncv, num_points)`` arrays to avoid broadcasting
-        grid = grid_norm.reshape((1, num_points)).repeat(ncv, axis=0)
-        nodes = nodes.reshape((ncv, 1)).repeat(num_points, axis=1)
-        weights = (evecs[0, :] ** 2 / d).reshape((ncv, 1)).repeat(num_points, axis=1)
 
-        density += (weights * _gaussian(grid, nodes, sigma)).sum(0) / num_repeats
+class _LanczosSpectrumCached:
+    """Base class for approximating spectra with Lanczos iterations.
 
-    return grid_out, density
+    Caches the Lanczos iterations to efficiently produce approximations with different
+    hyperparameters.
+    """
+
+    def __init__(self, A: LinearOperator, ncv: int):
+        """Initialize.
+
+        Args:
+            A: Symmetric linear operator.
+            ncv: Number of Lanczos vectors (number of nodes/weights for the quadrature).
+        """
+        self._A = A
+        self._ncv = ncv
+
+        self._lanczos_iters: List[Tuple[ndarray, ndarray]] = []
+
+    def _get_lanczos_iters(self, num_iters: int) -> List[Tuple[ndarray, ndarray]]:
+        while len(self._lanczos_iters) < num_iters:
+            self._lanczos_iters.append(fast_lanczos(self._A, self._ncv))
+
+        return self._lanczos_iters[:num_iters]
+
+
+class LanczosApproximateSpectrumCached(_LanczosSpectrumCached):
+    """Class to approximate the spectral density of p(λ) = 1/d ∑ᵢ δ(λ - λᵢ) of A ∈ Rᵈˣᵈ.
+
+    Caches Lanczos iterations to efficiently produce spectral density approximations with
+    different hyperparameters.
+    """
+
+    def __init__(
+        self,
+        A: LinearOperator,
+        ncv: int,
+        boundaries: Tuple[float, float] = None,
+        boundaries_tol: float = 1e-2,
+    ):
+        """Initialize.
+
+        Args:
+            A: Symmetric linear operator.
+            ncv: Number of Lanczos vectors (number of nodes/weights for the quadrature).
+            boundaries: Estimates of the minimum and maximum eigenvalues of ``A``. If
+                left unspecified, they will be estimated internally.
+            boundaries_tol: (Only relevant if ``boundaries`` are not specified).
+                Relative accuracy used to estimate the spectral boundary. ``0`` implies
+                machine precision. Default: ``1e-2``, from
+                https://docs.scipy.org/doc/scipy/reference/tutorial/arpack.html#examples.
+        """
+        super().__init__(A, ncv)
+
+        if boundaries is None:
+            boundaries = approximate_boundaries(A, tol=boundaries_tol)
+        self._boundaries = boundaries
+
+    def approximate_spectrum(
+        self,
+        num_repeats: int = 1,
+        num_points: int = 1024,
+        kappa: float = 3.0,
+        margin: float = 0.05,
+    ) -> Tuple[ndarray, ndarray]:
+        """Approximate the spectal density of A.
+
+        Args:
+            num_repeats: Number of Lanczos quadratures to average the density over.
+                Default: ``1``. Taken from papyan2020traces, Section D.2.
+            num_points: Resolution. Default: ``1024``.
+            kappa: Width of the Gaussian used to approximate delta peaks in [-1; 1]. Must
+                be greater than 1. Default: ``3``. From papyan2020traces, Section D.2.
+            margin: Relative margin added around the spectral boundary.
+                Default: ``0.05``. Taken from papyan2020traces, Section D.2.
+
+        Returns:
+            Grid points λ and approximated spectral density p(λ) of A.
+        """
+        spectra = [
+            lanczos_approximate_spectrum_from_iter(
+                lanczos_iter, self._boundaries, num_points, kappa, margin
+            )
+            for lanczos_iter in self._get_lanczos_iters(num_repeats)
+        ]
+        grid = spectra[0][0]
+        spectrum = sum(spectrum[1] for spectrum in spectra) / num_repeats
+
+        return grid, spectrum
 
 
 def lanczos_approximate_log_spectrum(
@@ -134,16 +241,34 @@ def lanczos_approximate_log_spectrum(
 
     Returns:
         Grid points λ and approximated spectral density p(λ) of log(|A| + εI).
-
     """
     if boundaries is None:
         boundaries = approximate_boundaries_abs(A, tol=boundaries_tol)
 
-    log_eval_min, log_eval_max = (log(boundary + epsilon) for boundary in boundaries)
+    average_density = zeros(num_points)
 
+    for n in range(num_repeats):
+        lanczos_iter = fast_lanczos(A, ncv)
+        grid, density = lanczos_approximate_log_spectrum_from_iter(
+            lanczos_iter, boundaries, num_points, kappa, margin, epsilon
+        )
+
+        average_density = (1 - 1 / (n + 1)) * average_density + density / (n + 1)
+
+    return grid, average_density
+
+
+def lanczos_approximate_log_spectrum_from_iter(
+    lanczos_iter: Tuple[ndarray, ndarray],
+    boundaries: Tuple[float, float],
+    num_points: int,
+    kappa: float,
+    margin: float,
+    epsilon: float,
+) -> Tuple[ndarray, ndarray]:
+    log_eval_min, log_eval_max = (log(boundary + epsilon) for boundary in boundaries)
     _width = log_eval_max - log_eval_min
     _padding = margin * _width
-
     log_eval_min, log_eval_max = log_eval_min - _padding, log_eval_max + _padding
 
     # use normalized operator ``(log(|A| + εI) - c I) / d`` with spectrum in [-1; 1]
@@ -153,27 +278,92 @@ def lanczos_approximate_log_spectrum(
     # estimate on grid [-1; 1]
     grid_norm = linspace(-1, 1, num_points, endpoint=True)
     grid_out = exp(grid_norm * d + c)
-    density = zeros_like(grid_norm)
+
+    evals, evecs = lanczos_iter
+
+    abs_evals = abs(evals) + epsilon
+    log_evals = log(abs_evals)
+    nodes = (log_evals - c) / d
+
+    # Repeat as ``(ncv, num_points)`` arrays to avoid broadcasting
+    ncv = evals.shape[0]
+    grid = grid_norm.reshape((1, num_points)).repeat(ncv, axis=0)
+    nodes = nodes.reshape((ncv, 1)).repeat(num_points, axis=1)
+    weights = (evecs[0, :] ** 2).reshape((ncv, 1)).repeat(num_points, axis=1)
 
     # width of Gaussian bump in [-1; 1]
     sigma = 2 / (ncv - 1) / sqrt(8 * log(kappa))
-
-    for _ in range(num_repeats):
-        evals, evecs = fast_lanczos(A, ncv)
-        abs_evals = abs(evals) + epsilon
-        log_evals = log(abs_evals)
-        nodes = (log_evals - c) / d
-
-        # Repeat as ``(ncv, num_points)`` arrays to avoid broadcasting
-        grid = grid_norm.reshape((1, num_points)).repeat(ncv, axis=0)
-        nodes = nodes.reshape((ncv, 1)).repeat(num_points, axis=1)
-        weights = (evecs[0, :] ** 2).reshape((ncv, 1)).repeat(num_points, axis=1)
-
-        density += (weights * _gaussian(grid, nodes, sigma)).sum(0) / num_repeats
-
-    density /= d * grid_out
+    density = (weights * _gaussian(grid, nodes, sigma)).sum(0) / (d * grid_out)
 
     return grid_out, density
+
+
+class LanczosApproximateLogSpectrumCached(_LanczosSpectrumCached):
+    """Class to approximate p(λ) = 1/d ∑ᵢ δ(λ - λᵢ) of log(|A| + εI) ∈ Rᵈˣᵈ.
+
+    Caches Lanczos iterations to efficiently produce spectral density approximations with
+    different hyperparameters.
+    """
+
+    def __init__(
+        self,
+        A: LinearOperator,
+        ncv: int,
+        boundaries: Tuple[float, float] = None,
+        boundaries_tol: float = 1e-2,
+    ):
+        """Initialize.
+
+        Args:
+            A: Symmetric linear operator.
+            ncv: Number of Lanczos vectors (number of nodes/weights for the quadrature).
+            boundaries: Estimates of the minimum and maximum eigenvalues of ``|A|``. If
+                left unspecified, they will be estimated internally.
+            boundaries_tol: (Only relevant if ``boundaries`` are not specified).
+                Relative accuracy used to estimate the spectral boundary. ``0`` implies
+                machine precision. Default: ``1e-2``, from
+                https://docs.scipy.org/doc/scipy/reference/tutorial/arpack.html#examples.
+        """
+        super().__init__(A, ncv)
+
+        if boundaries is None:
+            boundaries = approximate_boundaries_abs(A, tol=boundaries_tol)
+        self._boundaries = boundaries
+
+    def approximate_log_spectrum(
+        self,
+        num_repeats: int = 1,
+        num_points: int = 1024,
+        kappa: float = 3.0,
+        margin: float = 0.05,
+        epsilon: float = 1e-5,
+    ) -> Tuple[ndarray, ndarray]:
+        """Approximate the spectal density of A.
+
+        Args:
+            num_repeats: Number of Lanczos quadratures to average the density over.
+                Default: ``1``. Taken from papyan2020traces, Section D.2.
+            num_points: Resolution. Default: ``1024``.
+            kappa: Width of the Gaussian used to approximate delta peaks in [-1; 1]. Must
+                be greater than 1. Default: ``3``. From papyan2020traces, Section D.2.
+            margin: Relative margin added around the spectral boundary.
+                Default: ``0.05``. Taken from papyan2020traces, Section D.2.
+            epsilon: Shift to increase numerical stability. Default: ``1e-5``. Taken from
+                papyan2020traces, Section D.2.
+
+        Returns:
+            Grid points λ and approximated spectral density p(λ) of log(|A| + εI).
+        """
+        spectra = [
+            lanczos_approximate_log_spectrum_from_iter(
+                lanczos_iter, self._boundaries, num_points, kappa, margin, epsilon
+            )
+            for lanczos_iter in self._get_lanczos_iters(num_repeats)
+        ]
+        grid = spectra[0][0]
+        spectrum = sum(spectrum[1] for spectrum in spectra) / num_repeats
+
+        return grid, spectrum
 
 
 def fast_lanczos(
