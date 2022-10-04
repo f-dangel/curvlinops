@@ -17,6 +17,7 @@ from scipy.sparse.linalg import aslinearoperator, eigsh
 
 from curvlinops.outer import OuterProductLinearOperator
 from curvlinops.papyan2020traces.spectrum import (
+    LanczosApproximateLogSpectrumCached,
     LanczosApproximateSpectrumCached,
     lanczos_approximate_log_spectrum,
     lanczos_approximate_spectrum,
@@ -341,3 +342,39 @@ plt.plot(grid, density, label="Approximate")
 # use same ylimits as in the paper
 plt.ylim(bottom=1e-14, top=1e-2)
 plt.legend()
+
+# %%
+#
+# For multiple hyperparameters
+# ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+#
+# To efficiently produce such plots for multiple hyperparameters, there exists
+# a class :class:`LanczosApproximateLogSpectrumCached
+# <curvlinops.LanczosApproximateLogSpectrumCached>` that computes and caches
+# Lanczos iterations as we need them.
+#
+# Let's try out different values for :code:`kappa`:
+
+plt.close()
+
+kappas = [1.01, 1.1, 3]
+fig, ax = plt.subplots(ncols=len(kappas), figsize=(12, 3), sharex=True, sharey=True)
+
+cache = LanczosApproximateLogSpectrumCached(Y_linop, ncv, boundaries)
+
+for idx, kappa in enumerate(kappas):
+    grid, density = cache.approximate_log_spectrum(
+        num_repeats=num_repeats,
+        num_points=num_points,
+        kappa=kappa,
+        margin=margin,
+        epsilon=epsilon,
+    )
+
+    ax[idx].hist(exp(Y_log_abs_evals), bins=bins, log=True, density=True, label="Exact")
+    ax[idx].loglog(grid, density, label=rf"$\kappa = {kappa}$")
+    ax[idx].legend()
+
+    ax[idx].set_xlabel("Eigenvalue")
+    ax[idx].set_ylabel("Spectral density")
+    ax[idx].set_ylim(bottom=1e-14, top=1e-2)

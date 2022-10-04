@@ -106,7 +106,33 @@ def lanczos_approximate_spectrum_from_iter(
     return linspace(eval_min, eval_max, num_points, endpoint=True), density
 
 
-class LanczosApproximateSpectrumCached:
+class _LanczosSpectrumCached:
+    """Base class for approximating spectra with Lanczos iterations.
+
+    Caches the Lanczos iterations to efficiently produce approximations with different
+    hyperparameters.
+    """
+
+    def __init__(self, A: LinearOperator, ncv: int):
+        """Initialize.
+
+        Args:
+            A: Symmetric linear operator.
+            ncv: Number of Lanczos vectors (number of nodes/weights for the quadrature).
+        """
+        self._A = A
+        self._ncv = ncv
+
+        self._lanczos_iters: List[Tuple[ndarray, ndarray]] = []
+
+    def _get_lanczos_iters(self, num_iters: int) -> List[Tuple[ndarray, ndarray]]:
+        while len(self._lanczos_iters) < num_iters:
+            self._lanczos_iters.append(fast_lanczos(self._A, self._ncv))
+
+        return self._lanczos_iters[:num_iters]
+
+
+class LanczosApproximateSpectrumCached(_LanczosSpectrumCached):
     """Class to approximate the spectral density of p(λ) = 1/d ∑ᵢ δ(λ - λᵢ) of A ∈ Rᵈˣᵈ.
 
     Caches Lanczos iterations to efficiently produce spectral density approximations with
@@ -132,19 +158,11 @@ class LanczosApproximateSpectrumCached:
                 machine precision. Default: ``1e-2``, from
                 https://docs.scipy.org/doc/scipy/reference/tutorial/arpack.html#examples.
         """
-        self._A = A
-        self._ncv = ncv
+        super().__init__(A, ncv)
+
         if boundaries is None:
             boundaries = approximate_boundaries(A, tol=boundaries_tol)
         self._boundaries = boundaries
-
-        self._lanczos_iters: List[Tuple[ndarray, ndarray]] = []
-
-    def _get_lanczos_iters(self, num_iters: int) -> List[Tuple[ndarray, ndarray]]:
-        while len(self._lanczos_iters) < num_iters:
-            self._lanczos_iters.append(fast_lanczos(self._A, self._ncv))
-
-        return self._lanczos_iters[:num_iters]
 
     def approximate_spectrum(
         self,
@@ -223,7 +241,6 @@ def lanczos_approximate_log_spectrum(
 
     Returns:
         Grid points λ and approximated spectral density p(λ) of log(|A| + εI).
-
     """
     if boundaries is None:
         boundaries = approximate_boundaries_abs(A, tol=boundaries_tol)
@@ -279,6 +296,74 @@ def lanczos_approximate_log_spectrum_from_iter(
     density = (weights * _gaussian(grid, nodes, sigma)).sum(0) / (d * grid_out)
 
     return grid_out, density
+
+
+class LanczosApproximateLogSpectrumCached(_LanczosSpectrumCached):
+    """Class to approximate p(λ) = 1/d ∑ᵢ δ(λ - λᵢ) of log(|A| + εI) ∈ Rᵈˣᵈ.
+
+    Caches Lanczos iterations to efficiently produce spectral density approximations with
+    different hyperparameters.
+    """
+
+    def __init__(
+        self,
+        A: LinearOperator,
+        ncv: int,
+        boundaries: Tuple[float, float] = None,
+        boundaries_tol: float = 1e-2,
+    ):
+        """Initialize.
+
+        Args:
+            A: Symmetric linear operator.
+            ncv: Number of Lanczos vectors (number of nodes/weights for the quadrature).
+            boundaries: Estimates of the minimum and maximum eigenvalues of ``|A|``. If
+                left unspecified, they will be estimated internally.
+            boundaries_tol: (Only relevant if ``boundaries`` are not specified).
+                Relative accuracy used to estimate the spectral boundary. ``0`` implies
+                machine precision. Default: ``1e-2``, from
+                https://docs.scipy.org/doc/scipy/reference/tutorial/arpack.html#examples.
+        """
+        super().__init__(A, ncv)
+
+        if boundaries is None:
+            boundaries = approximate_boundaries_abs(A, tol=boundaries_tol)
+        self._boundaries = boundaries
+
+    def approximate_log_spectrum(
+        self,
+        num_repeats: int = 1,
+        num_points: int = 1024,
+        kappa: float = 3.0,
+        margin: float = 0.05,
+        epsilon: float = 1e-5,
+    ) -> Tuple[ndarray, ndarray]:
+        """Approximate the spectal density of A.
+
+        Args:
+            num_repeats: Number of Lanczos quadratures to average the density over.
+                Default: ``1``. Taken from papyan2020traces, Section D.2.
+        num_points: Resolution. Default: ``1024``.
+            kappa: Width of the Gaussian used to approximate delta peaks in [-1; 1]. Must
+                be greater than 1. Default: ``3``. From papyan2020traces, Section D.2.
+            margin: Relative margin added around the spectral boundary.
+                Default: ``0.05``. Taken from papyan2020traces, Section D.2.
+            epsilon: Shift to increase numerical stability. Default: ``1e-5``. Taken from
+                papyan2020traces, Section D.2.
+
+        Returns:
+            Grid points λ and approximated spectral density p(λ) of log(|A| + εI).
+        """
+        spectra = [
+            lanczos_approximate_log_spectrum_from_iter(
+                lanczos_iter, self._boundaries, num_points, kappa, margin, epsilon
+            )
+            for lanczos_iter in self._get_lanczos_iters(num_repeats)
+        ]
+        grid = spectra[0][0]
+        spectrum = sum(spectrum[1] for spectrum in spectra) / num_repeats
+
+        return grid, spectrum
 
 
 def fast_lanczos(
