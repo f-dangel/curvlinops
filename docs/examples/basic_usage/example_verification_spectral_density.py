@@ -157,7 +157,9 @@ fig, ax = plt.subplots(ncols=len(kappas), figsize=(12, 3), sharex=True, sharey=T
 cache = LanczosApproximateSpectrumCached(Y_linop, ncv, boundaries)
 
 for idx, kappa in enumerate(kappas):
-    grid, density = cache.approximate_spectrum(num_repeats, num_points, kappa, margin)
+    grid, density = cache.approximate_spectrum(
+        num_repeats=num_repeats, num_points=num_points, kappa=kappa, margin=margin
+    )
 
     ax[idx].hist(Y_evals, bins=bins, log=True, density=True, label="Exact")
     ax[idx].plot(grid, density, label=rf"$\kappa = {kappa}$")
