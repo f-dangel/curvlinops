@@ -17,6 +17,7 @@ from scipy.sparse.linalg import aslinearoperator, eigsh
 
 from curvlinops.outer import OuterProductLinearOperator
 from curvlinops.papyan2020traces.spectrum import (
+    LanczosApproximateSpectrumCached,
     lanczos_approximate_log_spectrum,
     lanczos_approximate_spectrum,
 )
@@ -126,11 +127,45 @@ bins = linspace(left, right, num_bins, endpoint=True)
 plt.hist(Y_evals, bins=bins, log=True, density=True, label="Exact")
 
 plt.plot(grid, density, label="Approximate")
+plt.legend()
 
 # same ylimits as in the paper
 plt.ylim(bottom=1e-5, top=1e1)
-plt.legend()
 
+# %%
+#
+# For multiple hyperparameters
+# ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+#
+# You may have noticed that there are multiple hyperparameters in the spectra
+# estimation method. For instance, the :code:`kappa` parameter, which
+# determines the width of the superimposed Gaussian bumps. In practice, this
+# parameter requires tuning. But trying out another value with the above
+# approach needs to re-evaluate the Lanczos iterations. This quickly becomes
+# expensive, especially for larger matrices.
+#
+# As a solution, there exists a class :class:`LanczosApproximateSpectrumCached
+# <curvlinops.LanczosApproximateSpectrumCached>` that computes and caches
+# Lanczos iterations as we need them. This allows to quickly try out multiple
+# hyperparameters.
+#
+# Let's try out different values for :code:`kappa`:
+
+kappas = [1.1, 3, 10.0]
+fig, ax = plt.subplots(ncols=len(kappas), figsize=(12, 3), sharex=True, sharey=True)
+
+cache = LanczosApproximateSpectrumCached(Y_linop, ncv, boundaries)
+
+for idx, kappa in enumerate(kappas):
+    grid, density = cache.approximate_spectrum(num_repeats, num_points, kappa, margin)
+
+    ax[idx].hist(Y_evals, bins=bins, log=True, density=True, label="Exact")
+    ax[idx].plot(grid, density, label=rf"$\kappa = {kappa}$")
+    ax[idx].legend()
+
+    ax[idx].set_xlabel("Eigenvalue")
+    ax[idx].set_ylabel("Spectral density")
+    ax[idx].set_ylim(bottom=1e-5, top=1e1)
 
 # %%
 #
@@ -188,7 +223,6 @@ plt.plot(
 # same ylimits as in the paper
 plt.ylim(bottom=1e-5, top=1e1)
 plt.legend()
-
 
 # %%
 #

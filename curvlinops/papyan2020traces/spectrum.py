@@ -70,6 +70,45 @@ def lanczos_approximate_spectrum(
 
     return grid, average_density
 
+
+class LanczosApproximateSpectrumCached:
+    """Caches Lanczos iterations to efficiently producte spectra for different kappas."""
+
+    def __init__(
+        self,
+        A: LinearOperator,
+        ncv: int,
+        boundaries: Tuple[float, float] = None,
+        boundaries_tol: float = 1e-2,
+    ):
+        self._A = A
+        self._ncv = ncv
+        if boundaries is None:
+            boundaries = approximate_boundaries(A, tol=boundaries_tol)
+        self._boundaries = boundaries
+
+        self._lanczos_iters = []
+
+    def _get_lanczos_iters(self, num_iters: int):
+        while len(self._lanczos_iters) < num_iters:
+            self._lanczos_iters.append(fast_lanczos(self._A, self._ncv))
+
+        return self._lanczos_iters[:num_iters]
+
+    def approximate_spectrum(self, num_repeats, num_points, kappa, margin):
+        """Approximate the spectrum."""
+        spectra = [
+            lanczos_approximate_spectrum_from_iter(
+                lanczos_iter, self._boundaries, num_points, kappa, margin
+            )
+            for lanczos_iter in self._get_lanczos_iters(num_repeats)
+        ]
+        grid = spectra[0][0]
+        spectrum = sum(spectrum[1] for spectrum in spectra) / num_repeats
+
+        return grid, spectrum
+
+
 def lanczos_approximate_spectrum_from_iter(
     lanczos_iter: Tuple[ndarray, ndarray],
     boundaries: Tuple[float, float],
