@@ -57,11 +57,29 @@ def lanczos_approximate_spectrum(
     """
     if boundaries is None:
         boundaries = approximate_boundaries(A, tol=boundaries_tol)
-    eval_min, eval_max = boundaries
 
+    average_density = zeros(num_points)
+
+    for n in range(num_repeats):
+        lanczos_iter = fast_lanczos(A, ncv)
+        grid, density = lanczos_approximate_spectrum_from_iter(
+            lanczos_iter, boundaries, num_points, kappa, margin
+        )
+
+        average_density = (1 - 1 / (n + 1)) * average_density + density / (n + 1)
+
+    return grid, average_density
+
+def lanczos_approximate_spectrum_from_iter(
+    lanczos_iter: Tuple[ndarray, ndarray],
+    boundaries: Tuple[float, float],
+    num_points: int,
+    kappa: float,
+    margin: float,
+) -> Tuple[ndarray, ndarray]:
+    eval_min, eval_max = boundaries
     _width = eval_max - eval_min
     _padding = margin * _width
-
     eval_min, eval_max = eval_min - _padding, eval_max + _padding
 
     # use normalized operator ``(A - c I) / d`` whose spectrum lies in [-1; 1]
@@ -70,24 +88,21 @@ def lanczos_approximate_spectrum(
 
     # estimate on grid [-1; 1]
     grid_norm = linspace(-1, 1, num_points, endpoint=True)
-    grid_out = grid_norm * d + c
     density = zeros_like(grid_norm)
+
+    evals, evecs = lanczos_iter
+    ncv = evals.shape[0]
+    nodes = (evals - c) / d
+    # Repeat as ``(ncv, num_points)`` arrays to avoid broadcasting
+    grid = grid_norm.reshape((1, num_points)).repeat(ncv, axis=0)
+    nodes = nodes.reshape((ncv, 1)).repeat(num_points, axis=1)
+    weights = (evecs[0, :] ** 2 / d).reshape((ncv, 1)).repeat(num_points, axis=1)
 
     # width of Gaussian bump in [-1; 1]
     sigma = 2 / (ncv - 1) / sqrt(8 * log(kappa))
+    density = (weights * _gaussian(grid, nodes, sigma)).sum(0)
 
-    for _ in range(num_repeats):
-        evals, evecs = fast_lanczos(A, ncv)
-        nodes = (evals - c) / d
-
-        # Repeat as ``(ncv, num_points)`` arrays to avoid broadcasting
-        grid = grid_norm.reshape((1, num_points)).repeat(ncv, axis=0)
-        nodes = nodes.reshape((ncv, 1)).repeat(num_points, axis=1)
-        weights = (evecs[0, :] ** 2 / d).reshape((ncv, 1)).repeat(num_points, axis=1)
-
-        density += (weights * _gaussian(grid, nodes, sigma)).sum(0) / num_repeats
-
-    return grid_out, density
+    return linspace(eval_min, eval_max, num_points, endpoint=True), density
 
 
 def lanczos_approximate_log_spectrum(
