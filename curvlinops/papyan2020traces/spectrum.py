@@ -6,7 +6,7 @@ From Papyan, 2020:
   of Machine Learning Research (JMLR), https://jmlr.org/papers/v21/20-933.html
 """
 
-from typing import List, Tuple
+from typing import List, Tuple, Union
 
 from numpy import exp, inner, linspace, log, ndarray, pi, sqrt, zeros, zeros_like
 from numpy.linalg import norm
@@ -22,7 +22,9 @@ def lanczos_approximate_spectrum(
     num_points: int = 1024,
     num_repeats: int = 1,
     kappa: float = 3.0,
-    boundaries: Tuple[float, float] = None,
+    boundaries: Union[
+        Tuple[float, float], Tuple[float, None], Tuple[None, float], None
+    ] = None,
     margin: float = 0.05,
     boundaries_tol: float = 1e-2,
 ) -> Tuple[ndarray, ndarray]:
@@ -55,8 +57,7 @@ def lanczos_approximate_spectrum(
     Returns:
         Grid points λ and approximated spectral density p(λ) of A.
     """
-    if boundaries is None:
-        boundaries = approximate_boundaries(A, tol=boundaries_tol)
+    boundaries = approximate_boundaries(A, tol=boundaries_tol, boundaries=boundaries)
 
     average_density = zeros(num_points)
 
@@ -122,7 +123,6 @@ class _LanczosSpectrumCached:
         """
         self._A = A
         self._ncv = ncv
-
         self._lanczos_iters: List[Tuple[ndarray, ndarray]] = []
 
     def _get_lanczos_iters(self, num_iters: int) -> List[Tuple[ndarray, ndarray]]:
@@ -143,7 +143,9 @@ class LanczosApproximateSpectrumCached(_LanczosSpectrumCached):
         self,
         A: LinearOperator,
         ncv: int,
-        boundaries: Tuple[float, float] = None,
+        boundaries: Union[
+            Tuple[float, float], Tuple[float, None], Tuple[None, float], None
+        ] = None,
         boundaries_tol: float = 1e-2,
     ):
         """Initialize.
@@ -159,10 +161,9 @@ class LanczosApproximateSpectrumCached(_LanczosSpectrumCached):
                 https://docs.scipy.org/doc/scipy/reference/tutorial/arpack.html#examples.
         """
         super().__init__(A, ncv)
-
-        if boundaries is None:
-            boundaries = approximate_boundaries(A, tol=boundaries_tol)
-        self._boundaries = boundaries
+        self._boundaries = approximate_boundaries(
+            A, tol=boundaries_tol, boundaries=boundaries
+        )
 
     def approximate_spectrum(
         self,
@@ -203,7 +204,9 @@ def lanczos_approximate_log_spectrum(
     num_points: int = 1024,
     num_repeats: int = 1,
     kappa: float = 1.04,
-    boundaries: Tuple[float, float] = None,
+    boundaries: Union[
+        Tuple[float, float], Tuple[float, None], Tuple[None, float], None
+    ] = None,
     margin: float = 0.05,
     boundaries_tol: float = 1e-2,
     epsilon: float = 1e-5,
@@ -242,8 +245,9 @@ def lanczos_approximate_log_spectrum(
     Returns:
         Grid points λ and approximated spectral density p(λ) of log(|A| + εI).
     """
-    if boundaries is None:
-        boundaries = approximate_boundaries_abs(A, tol=boundaries_tol)
+    boundaries = approximate_boundaries_abs(
+        A, tol=boundaries_tol, boundaries=boundaries
+    )
 
     average_density = zeros(num_points)
 
@@ -309,7 +313,9 @@ class LanczosApproximateLogSpectrumCached(_LanczosSpectrumCached):
         self,
         A: LinearOperator,
         ncv: int,
-        boundaries: Tuple[float, float] = None,
+        boundaries: Union[
+            Tuple[float, float], Tuple[float, None], Tuple[None, float], None
+        ] = None,
         boundaries_tol: float = 1e-2,
     ):
         """Initialize.
@@ -325,10 +331,9 @@ class LanczosApproximateLogSpectrumCached(_LanczosSpectrumCached):
                 https://docs.scipy.org/doc/scipy/reference/tutorial/arpack.html#examples.
         """
         super().__init__(A, ncv)
-
-        if boundaries is None:
-            boundaries = approximate_boundaries_abs(A, tol=boundaries_tol)
-        self._boundaries = boundaries
+        self._boundaries = approximate_boundaries_abs(
+            A, tol=boundaries_tol, boundaries=boundaries
+        )
 
     def approximate_log_spectrum(
         self,
@@ -418,7 +423,13 @@ def fast_lanczos(
     return evals, evecs
 
 
-def approximate_boundaries(A: LinearOperator, tol: float = 1e-2) -> Tuple[float, float]:
+def approximate_boundaries(
+    A: LinearOperator,
+    tol: float = 1e-2,
+    boundaries: Union[
+        Tuple[float, float], Tuple[float, None], Tuple[None, float], None
+    ] = None,
+) -> Tuple[float, float]:
     """Approximate λₘᵢₙ(A) and λₘₐₓ(A) using SciPy's ``eigsh``.
 
     Args:
@@ -426,17 +437,31 @@ def approximate_boundaries(A: LinearOperator, tol: float = 1e-2) -> Tuple[float,
         tol: Relative accuracy used by ``eigsh``. ``0`` implies machine precision.
             Default: ``1e-2``, from
             https://docs.scipy.org/doc/scipy/reference/tutorial/arpack.html#examples.
+        boundaries: A tuple of floats that specifies known parts of the boundaries
+            which consequently won't be recomputed. Default: ``None``.
 
     Returns:
         Estimates of λₘᵢₙ and λₘₐₓ.
     """
-    eval_min, eval_max = eigsh(A, k=2, which="BE", tol=tol, return_eigenvectors=False)
+    eval_min, eval_max = (
+        boundaries
+        if boundaries is not None
+        else eigsh(A, k=2, which="BE", tol=tol, return_eigenvectors=False)
+    )
+    if eval_min is None:
+        eval_min = eigsh(A, k=1, which="SA", tol=tol, return_eigenvectors=False)
+    if eval_max is None:
+        eval_max = eigsh(A, k=1, which="LA", tol=tol, return_eigenvectors=False)
 
     return eval_min, eval_max
 
 
 def approximate_boundaries_abs(
-    A: LinearOperator, tol: float = 1e-2
+    A: LinearOperator,
+    tol: float = 1e-2,
+    boundaries: Union[
+        Tuple[float, float], Tuple[float, None], Tuple[None, float], None
+    ] = None,
 ) -> Tuple[float, float]:
     """Approximate λₘᵢₙ(|A|) and λₘₐₓ(|A|) using SciPy's ``eigsh``.
 
@@ -445,12 +470,18 @@ def approximate_boundaries_abs(
         tol: Relative accuracy used by ``eigsh``. ``0`` implies machine precision.
             Default: ``1e-2``, from
             https://docs.scipy.org/doc/scipy/reference/tutorial/arpack.html#examples.
+        boundaries: A tuple of floats that specifies known parts of the boundaries
+            which consequently won't be recomputed. Default: ``None``.
 
     Returns:
         Estimates of λₘᵢₙ and λₘₐₓ of |A|.
     """
-    (eval_max,) = eigsh(A, k=1, which="LM", tol=tol, return_eigenvectors=False)
-    (eval_min,) = eigsh(A, k=1, which="SM", tol=tol, return_eigenvectors=False)
+    eval_max, eval_min = (None, None) if boundaries is None else boundaries
+
+    if eval_max is None:
+        (eval_max,) = eigsh(A, k=1, which="LM", tol=tol, return_eigenvectors=False)
+    if eval_min is None:
+        (eval_min,) = eigsh(A, k=1, which="SM", tol=tol, return_eigenvectors=False)
 
     return abs(eval_min), abs(eval_max)
 
