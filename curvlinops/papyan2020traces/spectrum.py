@@ -176,7 +176,7 @@ class LanczosApproximateSpectrumCached(_LanczosSpectrumCached):
         Args:
             num_repeats: Number of Lanczos quadratures to average the density over.
                 Default: ``1``. Taken from papyan2020traces, Section D.2.
-        num_points: Resolution. Default: ``1024``.
+            num_points: Resolution. Default: ``1024``.
             kappa: Width of the Gaussian used to approximate delta peaks in [-1; 1]. Must
                 be greater than 1. Default: ``3``. From papyan2020traces, Section D.2.
             margin: Relative margin added around the spectral boundary.
@@ -343,7 +343,7 @@ class LanczosApproximateLogSpectrumCached(_LanczosSpectrumCached):
         Args:
             num_repeats: Number of Lanczos quadratures to average the density over.
                 Default: ``1``. Taken from papyan2020traces, Section D.2.
-        num_points: Resolution. Default: ``1024``.
+            num_points: Resolution. Default: ``1024``.
             kappa: Width of the Gaussian used to approximate delta peaks in [-1; 1]. Must
                 be greater than 1. Default: ``3``. From papyan2020traces, Section D.2.
             margin: Relative margin added around the spectral boundary.
