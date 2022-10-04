@@ -228,11 +228,30 @@ def lanczos_approximate_log_spectrum(
     if boundaries is None:
         boundaries = approximate_boundaries_abs(A, tol=boundaries_tol)
 
-    log_eval_min, log_eval_max = (log(boundary + epsilon) for boundary in boundaries)
+    average_density = zeros(num_points)
 
+    for n in range(num_repeats):
+        lanczos_iter = fast_lanczos(A, ncv)
+        grid, density = lanczos_approximate_log_spectrum_from_iter(
+            lanczos_iter, boundaries, num_points, kappa, margin, epsilon
+        )
+
+        average_density = (1 - 1 / (n + 1)) * average_density + density / (n + 1)
+
+    return grid, average_density
+
+
+def lanczos_approximate_log_spectrum_from_iter(
+    lanczos_iter: Tuple[ndarray, ndarray],
+    boundaries: Tuple[float, float],
+    num_points: int,
+    kappa: float,
+    margin: float,
+    epsilon: float,
+) -> Tuple[ndarray, ndarray]:
+    log_eval_min, log_eval_max = (log(boundary + epsilon) for boundary in boundaries)
     _width = log_eval_max - log_eval_min
     _padding = margin * _width
-
     log_eval_min, log_eval_max = log_eval_min - _padding, log_eval_max + _padding
 
     # use normalized operator ``(log(|A| + εI) - c I) / d`` with spectrum in [-1; 1]
@@ -242,25 +261,22 @@ def lanczos_approximate_log_spectrum(
     # estimate on grid [-1; 1]
     grid_norm = linspace(-1, 1, num_points, endpoint=True)
     grid_out = exp(grid_norm * d + c)
-    density = zeros_like(grid_norm)
+
+    evals, evecs = lanczos_iter
+
+    abs_evals = abs(evals) + epsilon
+    log_evals = log(abs_evals)
+    nodes = (log_evals - c) / d
+
+    # Repeat as ``(ncv, num_points)`` arrays to avoid broadcasting
+    ncv = evals.shape[0]
+    grid = grid_norm.reshape((1, num_points)).repeat(ncv, axis=0)
+    nodes = nodes.reshape((ncv, 1)).repeat(num_points, axis=1)
+    weights = (evecs[0, :] ** 2).reshape((ncv, 1)).repeat(num_points, axis=1)
 
     # width of Gaussian bump in [-1; 1]
     sigma = 2 / (ncv - 1) / sqrt(8 * log(kappa))
-
-    for _ in range(num_repeats):
-        evals, evecs = fast_lanczos(A, ncv)
-        abs_evals = abs(evals) + epsilon
-        log_evals = log(abs_evals)
-        nodes = (log_evals - c) / d
-
-        # Repeat as ``(ncv, num_points)`` arrays to avoid broadcasting
-        grid = grid_norm.reshape((1, num_points)).repeat(ncv, axis=0)
-        nodes = nodes.reshape((ncv, 1)).repeat(num_points, axis=1)
-        weights = (evecs[0, :] ** 2).reshape((ncv, 1)).repeat(num_points, axis=1)
-
-        density += (weights * _gaussian(grid, nodes, sigma)).sum(0) / num_repeats
-
-    density /= d * grid_out
+    density = (weights * _gaussian(grid, nodes, sigma)).sum(0) / (d * grid_out)
 
     return grid_out, density
 
