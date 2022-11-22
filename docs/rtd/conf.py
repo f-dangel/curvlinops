@@ -46,6 +46,7 @@ intersphinx_mapping = {
     "backpack": ("https://docs.backpack.pt/en/master", None),
     "scipy": ("http://docs.scipy.org/doc/scipy/reference/", None),
     "numpy": ("http://docs.scipy.org/doc/numpy/", None),
+    "matplotlib": ("https://matplotlib.org/stable/", None),
 }
 
 # -- Sphinx Gallery config ---------------------------------------------------
