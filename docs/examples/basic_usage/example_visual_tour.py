@@ -149,16 +149,17 @@ def plot(
 # We will show their logarithmic absolute value:
 
 epsilon = 1e-5
-plot(
-    lambda mat: numpy.log10(numpy.abs(mat) + epsilon),
-    transform_title="Logarithmic absolute entries",
-)
+transform = lambda mat: numpy.log10(numpy.abs(mat) + epsilon)
+
+plot(transform, transform_title="Logarithmic absolute entries")
 
 # %%
 #
 # That's because it is hard to recognize structure in the unaltered entries:
 
-plot(lambda mat: mat, transform_title="Unaltered matrix entries")
+transform = lambda mat: mat
+
+plot(transform, transform_title="Unaltered matrix entries")
 
 # %%
 #
