@@ -51,6 +51,9 @@ class EFLinearOperator(_LinearOperator):
 
         Returns:
             Result of GGN-multiplication in list format.
+
+        Raises:
+            ValueError: If the loss function's reduction cannot be determined.
         """
         result_list = [zeros_like(x) for x in x_list]
 

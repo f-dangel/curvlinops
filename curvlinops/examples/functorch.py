@@ -192,7 +192,23 @@ def functorch_empirical_fisher(
     params: List[Tensor],
     data: Iterable[Tuple[Tensor, Tensor]],
 ) -> Tensor:
-    """Compute the empirical Fisher with functorch."""
+    """Compute the empirical Fisher with functorch.
+
+    Args:
+        model_func: A function that maps the mini-batch input X to predictions.
+            Could be a PyTorch module representing a neural network.
+        loss_func: Loss function criterion. Maps predictions and mini-batch labels
+            to a scalar value.
+        params: List of differentiable parameters used by the prediction function.
+        data: Source from which mini-batches can be drawn, for instance a list of
+            mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
+
+    Returns:
+        Square matrix containing the empirical Fisher.
+
+    Raises:
+        ValueError: If the loss function's reduction cannot be determined.
+    """
     # convert modules to functions
     model_fn, _ = make_functional(model_func)
     loss_fn, loss_fn_params = make_functional(loss_func)
