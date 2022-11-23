@@ -54,8 +54,6 @@ class EFLinearOperator(_LinearOperator):
         """
         result_list = [zeros_like(x) for x in x_list]
 
-        # TODO To improve performance, this for-loop should be replaced by
-        # autograd.grad(..., is_grads_batched=True) if possible
         for n in range(X.shape[0]):
             X_n, y_n = X[n].unsqueeze(0), y[n].unsqueeze(0)
             loss_n = self._loss_func(self._model_func(X_n), y_n)
