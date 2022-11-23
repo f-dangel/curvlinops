@@ -220,21 +220,11 @@ def functorch_empirical_fisher(
     batch_grad = batch_grad_fn(X, y, params_replicated)
     batch_grad = cat([bg.flatten(start_dim=1) for bg in batch_grad], dim=1)
 
-    loss = loss_func(model_func(X), y)
-    avg_grad = cat([g.flatten() for g in autograd.grad(loss, params)])
-
-    # TODO Remove double-check
-    from torch import allclose
-
     if loss_func.reduction == "sum":
-        assert allclose(batch_grad.sum(0), avg_grad)
         normalization = 1
     elif loss_func.reduction == "mean":
         normalization = N
-        assert allclose(batch_grad.mean(0), avg_grad)
     else:
         raise ValueError("Cannot detect reduction method from loss function.")
-
-    print("Equality check passed")
 
     return 1 / normalization * einsum("ni,nj->ij", batch_grad, batch_grad)
