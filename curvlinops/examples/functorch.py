@@ -4,7 +4,7 @@ from math import sqrt
 from typing import Iterable, List, Tuple
 
 from functorch import grad, hessian, jvp, make_functional, vmap
-from torch import Tensor, autograd, cat, einsum
+from torch import Tensor, cat, einsum
 from torch.nn import Module
 
 
