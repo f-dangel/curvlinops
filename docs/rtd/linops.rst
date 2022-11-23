@@ -14,6 +14,11 @@ Generalized Gauss-Newton
 .. autoclass:: curvlinops.GGNLinearOperator
    :members: __init__
 
+Uncentered gradient covariance (empirical Fisher)
+-------------------------------------------------
+
+.. autoclass:: curvlinops.EFLinearOperator
+   :members: __init__
 
 Inverses
 --------

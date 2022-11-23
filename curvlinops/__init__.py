@@ -1,6 +1,7 @@
 """``curvlinops`` library API."""
 
 from curvlinops.ggn import GGNLinearOperator
+from curvlinops.gradient_moments import EFLinearOperator
 from curvlinops.hessian import HessianLinearOperator
 from curvlinops.inverse import CGInverseLinearOperator
 from curvlinops.papyan2020traces.spectrum import (
@@ -13,6 +14,7 @@ from curvlinops.papyan2020traces.spectrum import (
 __all__ = [
     "HessianLinearOperator",
     "GGNLinearOperator",
+    "EFLinearOperator",
     "CGInverseLinearOperator",
     "lanczos_approximate_spectrum",
     "lanczos_approximate_log_spectrum",

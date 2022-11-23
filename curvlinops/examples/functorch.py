@@ -3,8 +3,8 @@
 from math import sqrt
 from typing import Iterable, List, Tuple
 
-from functorch import grad, hessian, jvp, make_functional
-from torch import Tensor, cat
+from functorch import grad, hessian, jvp, make_functional, vmap
+from torch import Tensor, autograd, cat, einsum
 from torch.nn import Module
 
 
@@ -184,3 +184,57 @@ def functorch_gradient(
     grad_fn = grad(loss, argnums=params_argnum)
 
     return grad_fn(X, y, params)
+
+
+def functorch_empirical_fisher(
+    model_func: Module,
+    loss_func: Module,
+    params: List[Tensor],
+    data: Iterable[Tuple[Tensor, Tensor]],
+) -> Tensor:
+    """Compute the empirical Fisher with functorch."""
+    # convert modules to functions
+    model_fn, _ = make_functional(model_func)
+    loss_fn, loss_fn_params = make_functional(loss_func)
+
+    # concatenate batches
+    X, y = list(zip(*list(data)))
+    X, y = cat(X), cat(y)
+
+    # compute batched gradients
+    def loss_n(X_n: Tensor, y_n: Tensor, params: List[Tensor]) -> Tensor:
+        """Compute the gradient for a single sample.
+
+        # noqa: DAR101
+        # noqa: DAR201
+        """
+        output = model_fn(params, X_n)
+        return loss_fn(loss_fn_params, output, y_n)
+
+    params_argnum = 2
+    batch_grad_fn = vmap(grad(loss_n, argnums=params_argnum))
+
+    N = X.shape[0]
+    params_replicated = [p.unsqueeze(0).expand(N, *(p.dim() * [-1])) for p in params]
+
+    batch_grad = batch_grad_fn(X, y, params_replicated)
+    batch_grad = cat([bg.flatten(start_dim=1) for bg in batch_grad], dim=1)
+
+    loss = loss_func(model_func(X), y)
+    avg_grad = cat([g.flatten() for g in autograd.grad(loss, params)])
+
+    # TODO Remove double-check
+    from torch import allclose
+
+    if loss_func.reduction == "sum":
+        assert allclose(batch_grad.sum(0), avg_grad)
+        normalization = 1
+    elif loss_func.reduction == "mean":
+        normalization = N
+        assert allclose(batch_grad.mean(0), avg_grad)
+    else:
+        raise ValueError("Cannot detect reduction method from loss function.")
+
+    print("Equality check passed")
+
+    return 1 / normalization * einsum("ni,nj->ij", batch_grad, batch_grad)
