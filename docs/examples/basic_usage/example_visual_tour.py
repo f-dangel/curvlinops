@@ -17,7 +17,7 @@ from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from torch import nn
 
-from curvlinops import GGNLinearOperator, HessianLinearOperator
+from curvlinops import EFLinearOperator, GGNLinearOperator, HessianLinearOperator
 
 # make deterministic
 torch.manual_seed(0)
@@ -79,15 +79,17 @@ print(f"Layer parameters: {num_params_layer}")
 
 Hessian_linop = HessianLinearOperator(model, loss_function, params, dataloader)
 GGN_linop = GGNLinearOperator(model, loss_function, params, dataloader)
+EF_linop = EFLinearOperator(model, loss_function, params, dataloader)
 
 # %%
 #
 # Then, compute the matrices
 
-identity = numpy.eye(num_params)
+identity = numpy.eye(num_params).astype(Hessian_linop.dtype)
 
 Hessian_mat = Hessian_linop @ identity
 GGN_mat = GGN_linop @ identity
+EF_mat = EF_linop @ identity
 
 # %%
 # Visualization
@@ -95,10 +97,10 @@ GGN_mat = GGN_linop @ identity
 #
 # We will show the matrix entries on a shared domain for better comparability.
 
-matrices = [Hessian_mat, GGN_mat]
-titles = ["Hessian", "GGN"]
+matrices = [Hessian_mat, GGN_mat, EF_mat]
+titles = ["Hessian", "GGN", "Empirical Fisher"]
 
-rows, columns = 1, 2
+rows, columns = 1, 3
 img_width = 7
 
 

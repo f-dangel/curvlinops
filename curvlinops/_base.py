@@ -154,7 +154,7 @@ class _LinearOperator(LinearOperator):
             self.print_nonclose(grad1, grad2, rtol, atol)
             raise RuntimeError("Check for deterministic gradient failed.")
 
-        v = rand(self.shape[0])
+        v = rand(self.shape[0]).astype(self.dtype)
         mat_v1 = self @ v
         mat_v2 = self @ v
 

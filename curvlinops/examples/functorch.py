@@ -3,8 +3,8 @@
 from math import sqrt
 from typing import Iterable, List, Tuple
 
-from functorch import grad, hessian, jvp, make_functional
-from torch import Tensor, cat
+from functorch import grad, hessian, jvp, make_functional, vmap
+from torch import Tensor, cat, einsum
 from torch.nn import Module
 
 
@@ -184,3 +184,63 @@ def functorch_gradient(
     grad_fn = grad(loss, argnums=params_argnum)
 
     return grad_fn(X, y, params)
+
+
+def functorch_empirical_fisher(
+    model_func: Module,
+    loss_func: Module,
+    params: List[Tensor],
+    data: Iterable[Tuple[Tensor, Tensor]],
+) -> Tensor:
+    """Compute the empirical Fisher with functorch.
+
+    Args:
+        model_func: A function that maps the mini-batch input X to predictions.
+            Could be a PyTorch module representing a neural network.
+        loss_func: Loss function criterion. Maps predictions and mini-batch labels
+            to a scalar value.
+        params: List of differentiable parameters used by the prediction function.
+        data: Source from which mini-batches can be drawn, for instance a list of
+            mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
+
+    Returns:
+        Square matrix containing the empirical Fisher.
+
+    Raises:
+        ValueError: If the loss function's reduction cannot be determined.
+    """
+    # convert modules to functions
+    model_fn, _ = make_functional(model_func)
+    loss_fn, loss_fn_params = make_functional(loss_func)
+
+    # concatenate batches
+    X, y = list(zip(*list(data)))
+    X, y = cat(X), cat(y)
+
+    # compute batched gradients
+    def loss_n(X_n: Tensor, y_n: Tensor, params: List[Tensor]) -> Tensor:
+        """Compute the gradient for a single sample.
+
+        # noqa: DAR101
+        # noqa: DAR201
+        """
+        output = model_fn(params, X_n)
+        return loss_fn(loss_fn_params, output, y_n)
+
+    params_argnum = 2
+    batch_grad_fn = vmap(grad(loss_n, argnums=params_argnum))
+
+    N = X.shape[0]
+    params_replicated = [p.unsqueeze(0).expand(N, *(p.dim() * [-1])) for p in params]
+
+    batch_grad = batch_grad_fn(X, y, params_replicated)
+    batch_grad = cat([bg.flatten(start_dim=1) for bg in batch_grad], dim=1)
+
+    if loss_func.reduction == "sum":
+        normalization = 1
+    elif loss_func.reduction == "mean":
+        normalization = N
+    else:
+        raise ValueError("Cannot detect reduction method from loss function.")
+
+    return 1 / normalization * einsum("ni,nj->ij", batch_grad, batch_grad)

@@ -9,7 +9,26 @@ from curvlinops._base import _LinearOperator
 
 
 class HessianLinearOperator(_LinearOperator):
-    """Hessian as SciPy linear operator."""
+    r"""Hessian as SciPy linear operator.
+
+    Consider the empirical risk
+
+    .. math::
+        \mathcal{L}(\mathbf{\theta})
+        =
+        c \sum_{n=1}^{N}
+        \ell(f_{\mathbf{\theta}}(\mathbf{x}_n), \mathbf{y}_n)
+
+    with :math:`c = \frac{1}{N}` for ``reduction='mean'`` and :math:`c=1` for
+    ``reduction='sum'``. The Hessian matrix is
+
+    .. math::
+        \nabla^2_{\mathbf{\theta}} \mathcal{L}
+        =
+        c \sum_{n=1}^{N}
+        \nabla_{\mathbf{\theta}}^2
+        \ell(f_{\mathbf{\theta}}(\mathbf{x}_n), \mathbf{y}_n)\,.
+    """
 
     def _matvec_batch(
         self, X: Tensor, y: Tensor, x_list: List[Tensor]
