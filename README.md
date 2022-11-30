@@ -11,6 +11,8 @@ for deep learning matrices, such as
 
 - the Hessian
 - the Fisher/generalized Gauss-Newton (GGN)
+- the Monte-Carlo approximated Fisher
+- the uncentered gradient covariance (aka empirical Fisher)
 
 Matrix-vector products are carried out in PyTorch, i.e. potentially on a GPU.
 The library supports defining these matrices not only on a mini-batch, but
@@ -44,7 +46,6 @@ Other features that could be supported in the future include:
 
 - Other matrices
 
-  - the un-centered gradient covariance (aka empirical Fisher)
   - the centered gradient covariance
   - terms of the [hierarchical GGN
     decomposition](https://arxiv.org/abs/2008.11865)
