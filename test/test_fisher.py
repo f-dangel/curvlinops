@@ -27,7 +27,7 @@ def test_LinearOperator_matvec_expectation(case, max_repeats: int, mc_samples: i
     Gx = G_functorch @ x
 
     Fx = zeros_like(x)
-    atol, rtol = 1e-5, 5e-2
+    atol, rtol = 1e-5, 1e-1
 
     for m in range(max_repeats):
         Fx += F @ x
@@ -55,7 +55,7 @@ def test_LinearOperator_matmat_expectation(
     GX = G_functorch @ X
 
     FX = zeros_like(X)
-    atol, rtol = 1e-5, 5e-2
+    atol, rtol = 1e-5, 1e-1
 
     for m in range(max_repeats):
         FX += F @ X
