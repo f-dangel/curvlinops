@@ -151,7 +151,6 @@ class FisherMCLinearOperator(_LinearOperator):
         Raises:
             NotImplementedError: If the loss function differs from ``MSELoss`` or
                 ``CrossEntropyLoss``.
-            RuntimeError: If the check for deterministic behavior fails.
         """
         if not isinstance(loss_func, self.supported_losses):
             raise NotImplementedError(
@@ -253,20 +252,26 @@ class FisherMCLinearOperator(_LinearOperator):
 
         Raises:
             NotImplementedError: For unsupported loss functions.
+            NotImplementedError: If the prediction does not satisfy batch size 1
+                and two total dimensions.
         """
-        assert output.dim() == 2 and output.shape[0] == 1
+        if output.dim() != 2 or output.shape[0] != 1:
+            raise NotImplementedError(
+                f"Only 2d outputs with shape (1, C) supported. Got {output.shape}"
+            )
+
+        C = output.shape[1]
 
         if isinstance(self._loss_func, MSELoss):
             grad = 2 * normal(
                 zeros_like(output), tensor(sqrt(0.5)), generator=self._generator
             )
             if self._loss_func.reduction == "mean":
-                grad /= sqrt(output[0, :].numel())
+                grad /= sqrt(C)
             return grad
 
         elif isinstance(self._loss_func, CrossEntropyLoss):
             prob = softmax(output, dim=1).squeeze(0)
-            C = output.shape[1]
             sample = multinomial(
                 prob, num_samples=1, replacement=True, generator=self._generator
             )
