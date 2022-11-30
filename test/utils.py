@@ -1,6 +1,6 @@
 """Utility functions to test `curvlinops`."""
 
-from torch import cuda, device, randint
+from torch import cuda, device, rand, randint
 
 
 def get_available_devices():
@@ -20,3 +20,8 @@ def get_available_devices():
 def classification_targets(size, num_classes):
     """Create random targets for classes 0, ..., `num_classes - 1`."""
     return randint(size=size, low=0, high=num_classes)
+
+
+def regression_targets(size):
+    """Create random targets for regression."""
+    return rand(*size)
