@@ -197,22 +197,13 @@ class FisherMCLinearOperator(_LinearOperator):
 
         Returns:
             Result of MC-Fisher-multiplication in list format.
-
-        Raises:
-            ValueError: If the loss function's reduction is neither ``'sum'`` nor
-                ``'mean'``.
         """
-        reduction = self._loss_func.reduction
-        if reduction == "mean":
-            normalization = X.shape[0]
-        elif reduction == "sum":
-            normalization = 1.0
-        else:
-            raise ValueError("Loss must have reduction 'mean' or 'sum'.")
+        N = X.shape[0]
+        normalization = {"mean": N, "sum": 1.0}[self._loss_func.reduction]
 
         result_list = [zeros_like(x) for x in x_list]
 
-        for n in range(X.shape[0]):
+        for n in range(N):
             X_n = X[n].unsqueeze(0)
             output_n = self._model_func(X_n)
 
