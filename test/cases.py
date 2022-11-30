@@ -1,9 +1,17 @@
 """Contains test cases for linear operators."""
 
-from test.utils import classification_targets, get_available_devices
+from test.utils import classification_targets, get_available_devices, regression_targets
 
 from torch import rand, rand_like
-from torch.nn import BatchNorm1d, CrossEntropyLoss, Dropout, Linear, ReLU, Sequential
+from torch.nn import (
+    BatchNorm1d,
+    CrossEntropyLoss,
+    Dropout,
+    Linear,
+    MSELoss,
+    ReLU,
+    Sequential,
+)
 from torch.utils.data import DataLoader, TensorDataset
 
 DEVICES = get_available_devices()
@@ -13,6 +21,9 @@ LINOPS = []
 
 # Add test cases here
 CASES_NO_DEVICE = [
+    ###############################################################################
+    #                                CLASSIFICATION                               #
+    ###############################################################################
     {
         "model_func": lambda: Sequential(Linear(10, 5), ReLU(), Linear(5, 2)),
         "loss_func": lambda: CrossEntropyLoss(reduction="mean"),
@@ -29,6 +40,28 @@ CASES_NO_DEVICE = [
         "data": lambda: [
             (rand(3, 10), classification_targets((3,), 2)),
             (rand(4, 10), classification_targets((4,), 2)),
+        ],
+        "seed": 0,
+    },
+    ###############################################################################
+    #                                  REGRESSION                                 #
+    ###############################################################################
+    {
+        "model_func": lambda: Sequential(Linear(8, 5), ReLU(), Linear(5, 3)),
+        "loss_func": lambda: MSELoss(reduction="mean"),
+        "data": lambda: [
+            (rand(2, 8), regression_targets((2, 3))),
+            (rand(6, 8), regression_targets((6, 3))),
+        ],
+        "seed": 0,
+    },
+    # same as above, but uses reduction='sum'
+    {
+        "model_func": lambda: Sequential(Linear(8, 5), ReLU(), Linear(5, 3)),
+        "loss_func": lambda: MSELoss(reduction="sum"),
+        "data": lambda: [
+            (rand(2, 8), regression_targets((2, 3))),
+            (rand(6, 8), regression_targets((6, 3))),
         ],
         "seed": 0,
     },

@@ -20,4 +20,4 @@ def test_EFLinearOperator_matmat(case, num_vecs: int = 3):
     EF_functorch = functorch_empirical_fisher(*case).detach().cpu().numpy()
 
     X = random.rand(EF.shape[1], num_vecs).astype(EF.dtype)
-    report_nonclose(EF @ X, EF_functorch @ X)
+    report_nonclose(EF @ X, EF_functorch @ X, atol=1e-7, rtol=1e-4)

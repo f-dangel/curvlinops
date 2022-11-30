@@ -18,7 +18,7 @@ from torch import Tensor
 from torch import device as torch_device
 from torch import from_numpy, tensor, zeros_like
 from torch.autograd import grad
-from torch.nn import Module
+from torch.nn import Module, Parameter
 from torch.nn.utils import parameters_to_vector
 from tqdm import tqdm
 
@@ -33,7 +33,7 @@ class _LinearOperator(LinearOperator):
         self,
         model_func: Callable[[Tensor], Tensor],
         loss_func: Callable[[Tensor, Tensor], Tensor],
-        params: List[Tensor],
+        params: List[Parameter],
         data: Iterable[Tuple[Tensor, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
@@ -87,7 +87,7 @@ class _LinearOperator(LinearOperator):
                 self.to_device(old_device)
 
     @staticmethod
-    def _infer_device(params: List[Tensor]) -> torch_device:
+    def _infer_device(params: List[Parameter]) -> torch_device:
         """Infer the device on which to carry out matvecs.
 
         Args:

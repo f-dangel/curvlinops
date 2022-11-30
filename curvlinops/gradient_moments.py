@@ -42,7 +42,7 @@ class EFLinearOperator(_LinearOperator):
     def _matvec_batch(
         self, X: Tensor, y: Tensor, x_list: List[Tensor]
     ) -> Tuple[Tensor, ...]:
-        """Apply the mini-batch GGN to a vector.
+        """Apply the mini-batch uncentered gradient covariance to a vector.
 
         Args:
             X: Input to the DNN.
@@ -50,7 +50,7 @@ class EFLinearOperator(_LinearOperator):
             x_list: Vector in list format (same shape as trainable model parameters).
 
         Returns:
-            Result of GGN-multiplication in list format.
+            Result of uncentered gradient covariance-multiplication in list format.
 
         Raises:
             ValueError: If the loss function's reduction cannot be determined.
