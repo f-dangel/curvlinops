@@ -13,7 +13,7 @@ MAX_REPEATS_MC_SAMPLES = [(1_000_000, 1), (10_000, 100)]
 MAX_REPEATS_MC_SAMPLES_IDS = [
     f"max_repeats={n}-mc_samples={m}" for (n, m) in MAX_REPEATS_MC_SAMPLES
 ]
-CHECK_EVERY = 1000
+CHECK_EVERY = 1_000
 
 
 @mark.montecarlo
@@ -28,13 +28,14 @@ def test_LinearOperator_matvec_expectation(case, max_repeats: int, mc_samples: i
     Gx = G_functorch @ x
 
     Fx = zeros_like(x)
-    atol, rtol = 1e-5, 1e-1
+    atol, rtol = 1e-5, 5e-2
 
     for m in range(max_repeats):
         Fx += F @ x
         F._seed += 1
 
-        if m > 0 and m % CHECK_EVERY == 0:
+        total_samples = (m + 1) * mc_samples
+        if total_samples % CHECK_EVERY == 0:
             with suppress(ValueError):
                 report_nonclose(Fx / (m + 1), Gx, rtol=rtol, atol=atol)
                 print(f"Converged after {m} iterations")
@@ -57,13 +58,14 @@ def test_LinearOperator_matmat_expectation(
     GX = G_functorch @ X
 
     FX = zeros_like(X)
-    atol, rtol = 1e-5, 1e-1
+    atol, rtol = 1e-5, 5e-2
 
     for m in range(max_repeats):
         FX += F @ X
         F._seed += 1
 
-        if m > 0 and m % CHECK_EVERY == 0:
+        total_samples = (m + 1) * mc_samples
+        if total_samples % CHECK_EVERY == 0:
             with suppress(ValueError):
                 report_nonclose(FX / (m + 1), GX, rtol=rtol, atol=atol)
                 print(f"Converged after {m} iterations")
