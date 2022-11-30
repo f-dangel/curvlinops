@@ -28,7 +28,7 @@ def test_LinearOperator_matvec_expectation(case, max_repeats: int, mc_samples: i
     Gx = G_functorch @ x
 
     Fx = zeros_like(x)
-    atol, rtol = 1e-5, 5e-2
+    atol, rtol = 1e-5, 1e-1
 
     for m in range(max_repeats):
         Fx += F @ x
@@ -49,7 +49,7 @@ def test_LinearOperator_matvec_expectation(case, max_repeats: int, mc_samples: i
     "max_repeats,mc_samples", MAX_REPEATS_MC_SAMPLES, ids=MAX_REPEATS_MC_SAMPLES_IDS
 )
 def test_LinearOperator_matmat_expectation(
-    case, max_repeats: int, mc_samples: int, num_vecs: int = 3
+    case, max_repeats: int, mc_samples: int, num_vecs: int = 2
 ):
     F = FisherMCLinearOperator(*case, mc_samples=mc_samples)
     X = random.rand(F.shape[1], num_vecs).astype(F.dtype)
@@ -58,7 +58,7 @@ def test_LinearOperator_matmat_expectation(
     GX = G_functorch @ X
 
     FX = zeros_like(X)
-    atol, rtol = 1e-5, 5e-2
+    atol, rtol = 1e-5, 1e-1
 
     for m in range(max_repeats):
         FX += F @ X
