@@ -13,6 +13,8 @@ help:
 	@echo "        Install curvlinops and documentation tools"
 	@echo "install-test"
 	@echo "        Install curvlinops and testing tools"
+	@echo "test-light"
+	@echo "        Run pytest on the light part of project and report coverage"
 	@echo "test"
 	@echo "        Run pytest on test and report coverage"
 	@echo "install-lint"
@@ -67,6 +69,9 @@ install-test:
 .PHONY: test test-light
 
 test:
+	@pytest -vx --run-optional-tests=montecarlo --cov=curvlinops test
+
+test-light:
 	@pytest -vx --cov=curvlinops test
 
 .PHONY: install-lint

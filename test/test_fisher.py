@@ -16,6 +16,7 @@ MAX_REPEATS_MC_SAMPLES_IDS = [
 CHECK_EVERY = 1000
 
 
+@mark.montecarlo
 @mark.parametrize(
     "max_repeats,mc_samples", MAX_REPEATS_MC_SAMPLES, ids=MAX_REPEATS_MC_SAMPLES_IDS
 )
@@ -42,6 +43,7 @@ def test_LinearOperator_matvec_expectation(case, max_repeats: int, mc_samples: i
     report_nonclose(Fx / max_repeats, Gx, rtol=rtol, atol=atol)
 
 
+@mark.montecarlo
 @mark.parametrize(
     "max_repeats,mc_samples", MAX_REPEATS_MC_SAMPLES, ids=MAX_REPEATS_MC_SAMPLES_IDS
 )
