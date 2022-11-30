@@ -263,12 +263,10 @@ class FisherMCLinearOperator(_LinearOperator):
         C = output.shape[1]
 
         if isinstance(self._loss_func, MSELoss):
-            grad = 2 * normal(
-                zeros_like(output), tensor(sqrt(0.5)), generator=self._generator
+            std = tensor(
+                sqrt(0.5 / C) if self._loss_func.reduction == "mean" else sqrt(0.5)
             )
-            if self._loss_func.reduction == "mean":
-                grad /= sqrt(C)
-            return grad
+            return 2 * normal(zeros_like(output), std, generator=self._generator)
 
         elif isinstance(self._loss_func, CrossEntropyLoss):
             prob = softmax(output, dim=1).squeeze(0)
