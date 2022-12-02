@@ -62,6 +62,7 @@ sphinx_gallery_conf = {
     ],  # path to where to save gallery generated output
     "default_thumb_file": "assets/logo.png",
     "filename_pattern": "example",
+    "matplotlib_animations": True,
 }
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ["_templates"]
