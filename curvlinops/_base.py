@@ -196,7 +196,7 @@ class _LinearOperator(LinearOperator):
         x_list = self._preprocess(x)
         out_list = [zeros_like(x) for x in x_list]
 
-        for (X, y) in self._loop_over_data():
+        for X, y in self._loop_over_data():
             normalization_factor = self._get_normalization_factor(X, y)
 
             for mat_x, current in zip(out_list, self._matvec_batch(X, y, x_list)):
@@ -268,7 +268,7 @@ class _LinearOperator(LinearOperator):
         if self._progressbar:
             data_iter = tqdm(data_iter, desc="matvec")
 
-        for (X, y) in data_iter:
+        for X, y in data_iter:
             X, y = X.to(self._device), y.to(self._device)
             yield (X, y)
 
@@ -283,7 +283,7 @@ class _LinearOperator(LinearOperator):
         total_loss = tensor([0.0], device=self._device)
         total_grad = [zeros_like(p) for p in self._params]
 
-        for (X, y) in self._loop_over_data():
+        for X, y in self._loop_over_data():
             loss = self._loss_func(self._model_func(X), y)
             normalization_factor = self._get_normalization_factor(X, y)
 
