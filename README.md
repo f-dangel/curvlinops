@@ -52,13 +52,6 @@ Other features that could be supported in the future include:
 
 - Block-diagonal approximations (via `param_groups`)
 
-- Inverse matrix-vector products by solving a linear system via conjugate
-  gradients
-
-  - This could allow computing generalization metrics like the Takeuchi
-    Information Criterion (TIC), using inverse matrix-vector products in
-    combination with Hutchinson trace estimation
-
 ###### Logo mage credits
 - SciPy logo: Unknown, [CC BY-SA
   4.0](https://creativecommons.org/licenses/by-sa/4.0), via Wikimedia Commons
