@@ -44,6 +44,9 @@ extensions = [
 intersphinx_mapping = {
     "torch": ("https://pytorch.org/docs/stable/", None),
     "backpack": ("https://docs.backpack.pt/en/master", None),
+    "scipy": ("http://docs.scipy.org/doc/scipy/reference/", None),
+    "numpy": ("http://docs.scipy.org/doc/numpy/", None),
+    "matplotlib": ("https://matplotlib.org/stable/", None),
 }
 
 # -- Sphinx Gallery config ---------------------------------------------------
@@ -57,8 +60,9 @@ sphinx_gallery_conf = {
         "basic_usage",
         # "use_cases",
     ],  # path to where to save gallery generated output
-    "default_thumb_file": "assets/vivit_logo.png",
+    "default_thumb_file": "assets/logo.png",
     "filename_pattern": "example",
+    "matplotlib_animations": True,
 }
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ["_templates"]
@@ -75,7 +79,6 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 # a list of builtin themes.
 #
 html_theme = "sphinx_rtd_theme"
-# TODO Design logo and add it here
 html_logo = "assets/logo.svg"
 
 # Add any paths that contain custom static files (such as style sheets) here,

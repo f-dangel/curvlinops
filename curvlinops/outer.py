@@ -4,7 +4,7 @@ from numpy import einsum, einsum_path, ndarray, ones
 from scipy.sparse.linalg import LinearOperator
 
 
-class LowRank(LinearOperator):
+class OuterProductLinearOperator(LinearOperator):
     """Linear operator for low-rank matrices of the form ``∑ᵢ cᵢ aᵢ aᵢᵀ``.
 
     ``cᵢ`` is the coefficient for the vector ``aᵢ``.
@@ -43,7 +43,7 @@ class LowRank(LinearOperator):
         return einsum(self._equation, *self._operands, x, optimize=self._path)
 
 
-class Projector(LowRank):
+class Projector(OuterProductLinearOperator):
     """Linear operator for the projector onto the orthonormal basis ``{ aᵢ }``."""
 
     def __init__(self, A: ndarray):
