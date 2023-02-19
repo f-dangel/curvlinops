@@ -390,7 +390,6 @@ def fast_lanczos(
     v, v_prev = None, None
 
     for m in range(ncv):
-
         if m == 0:
             v = randn(dim)
             v /= norm(v)
