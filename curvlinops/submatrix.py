@@ -51,13 +51,13 @@ class SubmatrixLinearOperator(LinearOperator):
         self._col_idxs = col_idxs
 
     def _matvec(self, x: ndarray) -> ndarray:
-        """Multiply x by the submatrix of A.
+        """Multiply x by the sub-matrix of A.
 
         Args:
              x: Vector for multiplication. Has shape ``[len(col_idxs)]``.
 
         Returns:
-             Result of the sub-matrix-vector multiplication,
+             Result of the (sub-matrix)-vector-multiplication,
              ``A[row_idxs, :][:, col_idxs] @ x``. Has shape ``[len(row_idxs)]``.
         """
         v = zeros((self._A.shape[1],), dtype=self._A.dtype)
@@ -67,14 +67,14 @@ class SubmatrixLinearOperator(LinearOperator):
         return Av[self._row_idxs]
 
     def _matmat(self, X: ndarray) -> ndarray:
-        """Multiply each column of X by the submatrix of A.
+        """Multiply each column of X by the sub-matrix of A.
 
         Args:
             X: Matrix for multiplication. Has shape ``[len(col_idxs), N]`` with
                 abitrary ``N``.
 
         Returns:
-            Matrix-multiplication result ``A[row_idxs, :][:, col_idxs] @ x``.
-            Has shape ``[len(row_idxs), N]``.
+            Result of the (sub-matrix)-matrix-multiplication,
+            ``A[row_idxs, :][:, col_idxs] @ x``. Has shape ``[len(row_idxs), N]``.
         """
         return column_stack([self @ col for col in X.T])
