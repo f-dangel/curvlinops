@@ -2,8 +2,8 @@
 
 from typing import List, Tuple
 
-from numpy import ndarray, random
-from pytest import fixture
+from numpy import eye, ndarray, random
+from pytest import fixture, raises
 from scipy.sparse.linalg import aslinearoperator
 
 from curvlinops.examples.utils import report_nonclose
@@ -58,3 +58,20 @@ def test_SubmatrixLinearOperator__matmat(submatrix_case, num_vecs: int = 3):
 
     assert A_sub_linop_X.shape == (len(row_idxs), num_vecs)
     report_nonclose(A_sub @ X, A_sub_linop_X)
+
+
+def test_SubmatrixLinearOperator_set_submatrix():
+    A = aslinearoperator(eye(10))
+
+    invalid_idxs = [
+        [[0.0], [0]],  # wrong type in row_idxs
+        [[0], [0.0]],  # wrong type in col_idxs
+        [[2, 1, 2], [3]],  # duplicate entries in row_idxs
+        [[3], [2, 1, 2]],  # duplicate entries in col_idxs
+        [[10, 5], [2]],  # out-of-bounds in row_idxs
+        [[6, 5], [-1]],  # out-of-bounds in col_idxs
+    ]
+
+    for row_idxs, col_idxs in invalid_idxs:
+        with raises(ValueError):
+            SubmatrixLinearOperator(A, row_idxs, col_idxs)
