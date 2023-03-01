@@ -10,7 +10,9 @@ class SubmatrixLinearOperator(LinearOperator):
     """Class for sub-matrices of linear operators."""
 
     def __init__(self, A: LinearOperator, row_idxs: List[int], col_idxs: List[int]):
-        """Store the linear operator whose inverse should be represented.
+        """Store the linear operator and indices of its sub-matrix.
+
+        Represents the sub-matrix ``A[row_idxs, :][col_idxs, :]``.
 
         Args:
             A: A linear operator.
