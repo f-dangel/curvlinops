@@ -32,6 +32,12 @@ Inverses
 .. autoclass:: curvlinops.CGInverseLinearOperator
    :members: __init__, set_cg_hyperparameters
 
+Sub-matrices
+------------
+
+.. autoclass:: curvlinops.SubmatrixLinearOperator
+   :members: __init__, set_submatrix
+
 Spectral density approximation
 ==============================
 
