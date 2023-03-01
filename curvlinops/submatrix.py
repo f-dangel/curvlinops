@@ -58,7 +58,7 @@ class SubmatrixLinearOperator(LinearOperator):
 
         Returns:
              Result of the sub-matrix-vector multiplication,
-            ``A[row_idxs, :][:, col_idxs] @ x``. Has shape ``[len(row_idxs)]``.
+             ``A[row_idxs, :][:, col_idxs] @ x``. Has shape ``[len(row_idxs)]``.
         """
         v = zeros((self._A.shape[1],), dtype=self._A.dtype)
         v[self._col_idxs] = x
