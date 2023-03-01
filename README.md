@@ -24,6 +24,10 @@ such a routine is
 [`scipy.sparse.linalg.eigsh`](https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.linalg.eigsh.html)
 that lets you compute a subset of eigenpairs.
 
+The library also provides linear operator transformations, like taking the
+inverse (inverse matrix-vector product via conjugate gradients) or slicing out
+sub-matrices.
+
 - **Documentation:** https://curvlinops.readthedocs.io/en/latest/
 
 - **Bug reports & feature requests:**
@@ -49,8 +53,6 @@ Other features that could be supported in the future include:
   - the centered gradient covariance
   - terms of the [hierarchical GGN
     decomposition](https://arxiv.org/abs/2008.11865)
-
-- Block-diagonal approximations (via `param_groups`)
 
 ###### Logo mage credits
 - SciPy logo: Unknown, [CC BY-SA
