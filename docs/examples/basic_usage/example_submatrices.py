@@ -7,7 +7,7 @@ of another linear operator.
 
 Specifically, given the linear operator :code:`A`, we are
 interested in constructing the linear operator that corresponds to its sub-matrix
-:code:`A[row_cols, :][:, col_idxs]`, where :code:`row_cols` contains the sub-matrix's
+:code:`A[row_idxs, :][:, col_idxs]`, where :code:`row_idxs` contains the sub-matrix's
 row indices, and :code:`col_idxs` contains the sub-matrix's column indices.
 
 First, the imports.
