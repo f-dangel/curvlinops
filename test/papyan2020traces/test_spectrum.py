@@ -58,7 +58,6 @@ def test_approximate_boundaries_abs():
     A_diag = array([-2.0, -1.0, 3.0, 4.0, 5.0])
     A = diag(A_diag)
     lambda_abs_min, lambda_abs_max = abs(A_diag).min(), abs(A_diag).max()
-    print(lambda_abs_max, lambda_abs_min)
 
     cases = [
         [(0.0, 10.0), (0.0, 10.0)],
