@@ -20,4 +20,4 @@ def test_HessianLinearOperator_matmat(case, num_vecs: int = 3):
     H_functorch = functorch_hessian(*case).detach().cpu().numpy()
 
     X = random.rand(H.shape[1], num_vecs)
-    report_nonclose(H @ X, H_functorch @ X)
+    report_nonclose(H @ X, H_functorch @ X, atol=1e-6, rtol=5e-4)

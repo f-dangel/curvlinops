@@ -22,7 +22,7 @@ copyright = "2022, F. Dangel, L. Tatzel"
 author = "F. Dangel, L. Tatzel"
 
 # The full version, including alpha/beta/rc tags
-release = "0.0.1"
+release = "1.1.0"
 
 
 # -- General configuration ---------------------------------------------------
@@ -46,6 +46,7 @@ intersphinx_mapping = {
     "backpack": ("https://docs.backpack.pt/en/master", None),
     "scipy": ("http://docs.scipy.org/doc/scipy/reference/", None),
     "numpy": ("http://docs.scipy.org/doc/numpy/", None),
+    "matplotlib": ("https://matplotlib.org/stable/", None),
 }
 
 # -- Sphinx Gallery config ---------------------------------------------------
@@ -61,6 +62,7 @@ sphinx_gallery_conf = {
     ],  # path to where to save gallery generated output
     "default_thumb_file": "assets/logo.png",
     "filename_pattern": "example",
+    "matplotlib_animations": True,
 }
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ["_templates"]

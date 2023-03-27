@@ -11,6 +11,8 @@ for deep learning matrices, such as
 
 - the Hessian
 - the Fisher/generalized Gauss-Newton (GGN)
+- the Monte-Carlo approximated Fisher
+- the uncentered gradient covariance (aka empirical Fisher)
 
 Matrix-vector products are carried out in PyTorch, i.e. potentially on a GPU.
 The library supports defining these matrices not only on a mini-batch, but
@@ -21,6 +23,10 @@ lifting (matrix-vector multiplies) in PyTorch on GPU. My favorite example for
 such a routine is
 [`scipy.sparse.linalg.eigsh`](https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.linalg.eigsh.html)
 that lets you compute a subset of eigenpairs.
+
+The library also provides linear operator transformations, like taking the
+inverse (inverse matrix-vector product via conjugate gradients) or slicing out
+sub-matrices.
 
 - **Documentation:** https://curvlinops.readthedocs.io/en/latest/
 
@@ -44,19 +50,9 @@ Other features that could be supported in the future include:
 
 - Other matrices
 
-  - the un-centered gradient covariance (aka empirical Fisher)
   - the centered gradient covariance
   - terms of the [hierarchical GGN
     decomposition](https://arxiv.org/abs/2008.11865)
-
-- Block-diagonal approximations (via `param_groups`)
-
-- Inverse matrix-vector products by solving a linear system via conjugate
-  gradients
-
-  - This could allow computing generalization metrics like the Takeuchi
-    Information Criterion (TIC), using inverse matrix-vector products in
-    combination with Hutchinson trace estimation
 
 ###### Logo mage credits
 - SciPy logo: Unknown, [CC BY-SA
