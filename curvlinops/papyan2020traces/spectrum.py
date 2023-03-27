@@ -395,7 +395,6 @@ def fast_lanczos(
     v, v_prev = None, None
 
     for m in range(ncv):
-
         if m == 0:
             v = randn(dim)
             v /= norm(v)
@@ -443,15 +442,17 @@ def approximate_boundaries(
     Returns:
         Estimates of λₘᵢₙ and λₘₐₓ.
     """
-    eval_min, eval_max = (
-        boundaries
-        if boundaries is not None
-        else eigsh(A, k=2, which="BE", tol=tol, return_eigenvectors=False)
-    )
-    if eval_min is None:
-        eval_min = eigsh(A, k=1, which="SA", tol=tol, return_eigenvectors=False)
-    if eval_max is None:
-        eval_max = eigsh(A, k=1, which="LA", tol=tol, return_eigenvectors=False)
+    eigsh_kwargs = {"tol": tol, "return_eigenvectors": False}
+
+    if boundaries is None:
+        eval_min, eval_max = eigsh(A, k=2, which="BE", **eigsh_kwargs)
+    else:
+        eval_min, eval_max = boundaries
+
+        if eval_min is None:
+            (eval_min,) = eigsh(A, k=1, which="SA", **eigsh_kwargs)
+        if eval_max is None:
+            (eval_max,) = eigsh(A, k=1, which="LA", **eigsh_kwargs)
 
     return eval_min, eval_max
 
@@ -478,10 +479,11 @@ def approximate_boundaries_abs(
     """
     eval_min, eval_max = (None, None) if boundaries is None else boundaries
 
+    eigsh_kwargs = {"tol": tol, "return_eigenvectors": False}
     if eval_max is None:
-        (eval_max,) = eigsh(A, k=1, which="LM", tol=tol, return_eigenvectors=False)
+        (eval_max,) = eigsh(A, k=1, which="LM", **eigsh_kwargs)
     if eval_min is None:
-        (eval_min,) = eigsh(A, k=1, which="SM", tol=tol, return_eigenvectors=False)
+        (eval_min,) = eigsh(A, k=1, which="SM", **eigsh_kwargs)
 
     return abs(eval_min), abs(eval_max)
 
