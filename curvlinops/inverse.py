@@ -73,6 +73,8 @@ class CGInverseLinearOperator(_InverseLinearOperator):
 class NeumannInverseLinearOperator(_InverseLinearOperator):
     """Class for inverse linear operators via truncated Neumann series.
 
+    # noqa: B950
+
     See https://en.wikipedia.org/w/index.php?title=Neumann_series&oldid=1131424698#Approximate_matrix_inversion.
 
     Motivated by (referred to as lorraine2020optimizing in the following)
@@ -90,7 +92,7 @@ class NeumannInverseLinearOperator(_InverseLinearOperator):
         Use :py:class:`curvlinops.CGInverLinearOperator` for better accuracy.
     """
 
-    DEFAULT_NUM_TERMS = 10
+    DEFAULT_NUM_TERMS = 100
     DEFAULT_SCALE = 1.0
     DEFAULT_CHECK_NAN = True
 
@@ -124,7 +126,7 @@ class NeumannInverseLinearOperator(_InverseLinearOperator):
             \alpha \sum_{k=0}^{\infty}
             \left(\mathbf{I} - \alpha \mathbf{A} \right)^k\,,
 
-        which and is convergent if :math:`0 < \lambda(\mathbf{A})| < \frac{2}{\alpha}`.
+        which and is convergent if :math:`0 < \lambda(\mathbf{A}) < \frac{2}{\alpha}`.
 
         Additionally, we truncate the series at ``num_terms`` (:math:`K`):
 
@@ -136,7 +138,8 @@ class NeumannInverseLinearOperator(_InverseLinearOperator):
 
         Args:
             A: Linear operator whose inverse is formed.
-            num_terms: Number of terms in the truncated Neumann series. Default: ``10``.
+            num_terms: Number of terms in the truncated Neumann series.
+                Default: ``100``.
             scale: Scale applied to the matrix in the Neumann iteration. Crucial
                 for convergence of Neumann series (details above). Default: ``1.0``.
             check_nan: Whether to check for NaNs while applying the truncated Neumann
@@ -157,7 +160,8 @@ class NeumannInverseLinearOperator(_InverseLinearOperator):
         """Store hyperparameters for the truncated Neumann series.
 
         Args:
-            num_terms: Number of terms in the truncated Neumann series. Default: ``10``.
+            num_terms: Number of terms in the truncated Neumann series.
+                Default: ``100``.
             scale: Scale applied to the matrix in the Neumann iteration. Crucial
                 for convergence of Neumann series. Default: ``1.0``.
             check_nan: Whether to check for NaNs while applying the truncated Neumann
@@ -186,6 +190,10 @@ class NeumannInverseLinearOperator(_InverseLinearOperator):
             result = result + v
 
             if self._check_nan and not allclose(result, result):
-                raise ValueError(f"Detected NaNs after application of {idx}-th term.")
+                raise ValueError(
+                    f"Detected NaNs after application of {idx}-th term."
+                    + " This is probably because the Neumann series is non-convergent."
+                    + " Try decreasing `scale` and read the comment on convergence."
+                )
 
         return self._scale * result
