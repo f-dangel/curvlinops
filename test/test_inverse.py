@@ -1,9 +1,7 @@
 """Contains tests for ``curvlinops/inverse``."""
 
-from typing import Type
-
 from numpy import array, eye, random
-from numpy.linalg import inv
+from numpy.linalg import eigh, inv
 from pytest import raises
 from scipy import sparse
 from scipy.sparse.linalg import aslinearoperator
@@ -16,17 +14,9 @@ from curvlinops import (
 from curvlinops.examples.functorch import functorch_ggn
 from curvlinops.examples.utils import report_nonclose
 
-# from curvlinops.inverse import _InverseLinearOperator
 
-# INV_OPERATOR_CASES = [CGInverseLinearOperator, NeumannInverseLinearOperator]
-# INV_OPERATOR_IDS = ["CG", "Neumann"]
-
-# ATOLS = {CGInverseLinearOperator: 1e-5, NeumannInverseLinearOperator: 1e0}
-# RTOLS = {CGInverseLinearOperator: 5e-3, NeumannInverseLinearOperator: 1e0}
-
-
-def test_inverse_damped_GGN_matvec(case, delta: float = 1e-2):
-    """Test matrix-vector multiplication by the inverse damped GGN."""
+def test_CG_inverse_damped_GGN_matvec(case, delta: float = 1e-2):
+    """Test matrix-vector multiplication by the inverse damped GGN with CG."""
     model_func, loss_func, params, data = case
 
     GGN = GGNLinearOperator(model_func, loss_func, params, data)
@@ -42,8 +32,8 @@ def test_inverse_damped_GGN_matvec(case, delta: float = 1e-2):
     report_nonclose(inv_GGN @ x, inv_GGN_functorch @ x, rtol=5e-3, atol=1e-5)
 
 
-def test_inverse_damped_GGN_matmat(case, delta: float = 1e-2, num_vecs: int = 3):
-    """Test matrix-matrix multiplication by the inverse damped GGN."""
+def test_CG_inverse_damped_GGN_matmat(case, delta: float = 1e-2, num_vecs: int = 3):
+    """Test matrix-matrix multiplication by the inverse damped GGN with CG."""
     model_func, loss_func, params, data = case
 
     GGN = GGNLinearOperator(model_func, loss_func, params, data)
@@ -57,6 +47,29 @@ def test_inverse_damped_GGN_matmat(case, delta: float = 1e-2, num_vecs: int = 3)
 
     X = random.rand(GGN.shape[1], num_vecs)
     report_nonclose(inv_GGN @ X, inv_GGN_functorch @ X, rtol=5e-3, atol=1e-5)
+
+
+def test_Neumann_inverse_damped_GGN_matvec(case, delta: float = 1e-2):
+    """Test matrix-vector multiplication by the inverse damped GGN with Neumann."""
+    model_func, loss_func, params, data = case
+
+    GGN = GGNLinearOperator(model_func, loss_func, params, data)
+    damping = aslinearoperator(delta * sparse.eye(GGN.shape[0]))
+
+    damped_GGN_functorch = functorch_ggn(
+        model_func, loss_func, params, data
+    ).detach().cpu().numpy() + delta * eye(GGN.shape[1])
+    inv_GGN_functorch = inv(damped_GGN_functorch)
+
+    # set scale such that Neumann series converges
+    eval_max = eigh(damped_GGN_functorch)[0][-1]
+    scale = 1.0 if eval_max < 2 else 1.9 / eval_max
+
+    # NOTE This may break when other cases are added because slow convergence
+    inv_GGN = NeumannInverseLinearOperator(GGN + damping, num_terms=5_000, scale=scale)
+
+    x = random.rand(GGN.shape[1])
+    report_nonclose(inv_GGN @ x, inv_GGN_functorch @ x, rtol=1e-1, atol=1e-1)
 
 
 def test_NeumannInverseLinearOperator_toy():
@@ -78,7 +91,7 @@ def test_NeumannInverseLinearOperator_toy():
 
     inv_A = inv(A)
     inv_A_neumann = NeumannInverseLinearOperator(aslinearoperator(A))
-    inv_A_neumann.set_neumann_hyperparameters(num_terms=1000)
+    inv_A_neumann.set_neumann_hyperparameters(num_terms=1_000)
 
     x = random.rand(A.shape[1])
     report_nonclose(inv_A @ x, inv_A_neumann @ x, rtol=1e-3, atol=1e-5)
@@ -87,7 +100,7 @@ def test_NeumannInverseLinearOperator_toy():
     B = 2 * A
     inv_B = inv(B)
     inv_B_neumann = NeumannInverseLinearOperator(aslinearoperator(B))
-    inv_B_neumann.set_neumann_hyperparameters(num_terms=1000)
+    inv_B_neumann.set_neumann_hyperparameters(num_terms=1_000)
 
     y = random.rand(B.shape[1])
 
@@ -96,7 +109,7 @@ def test_NeumannInverseLinearOperator_toy():
         inv_B_neumann @ y
 
     # ... but if we scale the matrix back internally, the Neumann series converges
-    inv_B_neumann.set_neumann_hyperparameters(num_terms=1000, scale=0.5)
+    inv_B_neumann.set_neumann_hyperparameters(num_terms=1_000, scale=0.5)
     report_nonclose(inv_B @ y, inv_B_neumann @ y, rtol=1e-3, atol=1e-5)
 
     inv_ground_truth = inv(B)
