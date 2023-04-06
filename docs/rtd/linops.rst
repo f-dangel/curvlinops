@@ -32,6 +32,9 @@ Inverses
 .. autoclass:: curvlinops.CGInverseLinearOperator
    :members: __init__, set_cg_hyperparameters
 
+.. autoclass:: curvlinops.NeumannInverseLinearOperator
+   :members: __init__, set_neumann_hyperparameters
+
 Sub-matrices
 ------------
 
