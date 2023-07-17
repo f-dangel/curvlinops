@@ -1,6 +1,6 @@
 """Contains pytest fixtures that are visible by other files."""
 
-from test.cases import CASES, NON_DETERMINISTIC_CASES
+from test.cases import ADJOINT_CASES, CASES, NON_DETERMINISTIC_CASES
 from typing import Callable, Dict, Iterable, List, Tuple
 
 from numpy import random
@@ -51,3 +51,8 @@ def non_deterministic_case(
 ]:
     case = request.param
     yield initialize_case(case)
+
+
+@fixture(params=ADJOINT_CASES)
+def adjoint(request) -> bool:
+    return request.param

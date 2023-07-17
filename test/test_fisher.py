@@ -20,11 +20,15 @@ CHECK_EVERY = 1_000
 @mark.parametrize(
     "max_repeats,mc_samples", MAX_REPEATS_MC_SAMPLES, ids=MAX_REPEATS_MC_SAMPLES_IDS
 )
-def test_LinearOperator_matvec_expectation(case, max_repeats: int, mc_samples: int):
+def test_LinearOperator_matvec_expectation(
+    case, adjoint: bool, max_repeats: int, mc_samples: int
+):
     F = FisherMCLinearOperator(*case, mc_samples=mc_samples)
-    x = random.rand(F.shape[1]).astype(F.dtype)
-
     G_functorch = functorch_ggn(*case).detach().cpu().numpy()
+    if adjoint:
+        F, G_functorch = F.adjoint(), G_functorch.conj().T
+
+    x = random.rand(F.shape[1]).astype(F.dtype)
     Gx = G_functorch @ x
 
     Fx = zeros_like(x)
@@ -49,12 +53,14 @@ def test_LinearOperator_matvec_expectation(case, max_repeats: int, mc_samples: i
     "max_repeats,mc_samples", MAX_REPEATS_MC_SAMPLES, ids=MAX_REPEATS_MC_SAMPLES_IDS
 )
 def test_LinearOperator_matmat_expectation(
-    case, max_repeats: int, mc_samples: int, num_vecs: int = 2
+    case, adjoint: bool, max_repeats: int, mc_samples: int, num_vecs: int = 2
 ):
     F = FisherMCLinearOperator(*case, mc_samples=mc_samples)
-    X = random.rand(F.shape[1], num_vecs).astype(F.dtype)
-
     G_functorch = functorch_ggn(*case).detach().cpu().numpy()
+    if adjoint:
+        F, G_functorch = F.adjoint(), G_functorch.conj().T
+
+    X = random.rand(F.shape[1], num_vecs).astype(F.dtype)
     GX = G_functorch @ X
 
     FX = zeros_like(X)

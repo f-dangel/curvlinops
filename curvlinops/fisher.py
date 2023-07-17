@@ -1,5 +1,7 @@
 """Contains LinearOperator implementation of the (approximate) Fisher."""
 
+from __future__ import annotations
+
 from math import sqrt
 from typing import Callable, Iterable, List, Tuple, Union
 
@@ -270,3 +272,13 @@ class FisherMCLinearOperator(_LinearOperator):
 
         else:
             raise NotImplementedError(f"Supported losses: {self.supported_losses}")
+
+    def _adjoint(self) -> FisherMCLinearOperator:
+        """Return the linear operator representing the adjoint.
+
+        The Fisher MC-approximation is real symmetric, and hence self-adjoint.
+
+        Returns:
+            Self.
+        """
+        return self
