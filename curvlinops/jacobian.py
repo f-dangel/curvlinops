@@ -120,6 +120,20 @@ class JacobianLinearOperator(_LinearOperator):
 
         return self._postprocess(out_list)
 
+    def _adjoint(self) -> TransposedJacobianLinearOperator:
+        """Return a linear operator representing the adjoint.
+
+        Returns:
+            Linear operator representing the transposed Jacobian.
+        """
+        return TransposedJacobianLinearOperator(
+            self._model_func,
+            self._params,
+            self._data,
+            progressbar=self._progressbar,
+            check_deterministic=False,
+        )
+
 
 class TransposedJacobianLinearOperator(_LinearOperator):
     """Linear operator for the transpose Jacobian.
@@ -235,3 +249,17 @@ class TransposedJacobianLinearOperator(_LinearOperator):
                 p_res.add_(p_vjp)
 
         return self._postprocess(out_list)
+
+    def _adjoint(self) -> JacobianLinearOperator:
+        """Return a linear operator representing the adjoint.
+
+        Returns:
+            Linear operator representing the Jacobian.
+        """
+        return JacobianLinearOperator(
+            self._model_func,
+            self._params,
+            self._data,
+            progressbar=self._progressbar,
+            check_deterministic=False,
+        )
