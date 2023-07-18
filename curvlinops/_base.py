@@ -79,7 +79,7 @@ class _LinearOperator(LinearOperator):
         self._device = self._infer_device(self._params)
         self._progressbar = progressbar
 
-        self._num_data = sum(X.shape[0] for (X, _) in self._loop_over_data())
+        self._N_data = sum(X.shape[0] for (X, _) in self._loop_over_data())
 
         if check_deterministic:
             old_device = self._device

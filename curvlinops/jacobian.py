@@ -49,9 +49,6 @@ class JacobianLinearOperator(_LinearOperator):
             data: Iterable of batched input-target pairs.
             progressbar: Show progress bar.
             check_deterministic: Check if model and data are deterministic.
-
-        Raises:
-            RuntimeError: If deterministic checks are enables and fail.
         """
         num_data = sum(t.shape[0] for t, _ in data)
         x = next(iter(data))[0]
