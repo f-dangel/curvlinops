@@ -32,6 +32,9 @@ Jacobians
 .. autoclass:: curvlinops.JacobianLinearOperator
    :members: __init__
 
+.. autoclass:: curvlinops.TransposedJacobianLinearOperator
+   :members: __init__
+
 Inverses
 --------
 
