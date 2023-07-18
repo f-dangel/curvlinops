@@ -13,6 +13,7 @@ for deep learning matrices, such as
 - the Fisher/generalized Gauss-Newton (GGN)
 - the Monte-Carlo approximated Fisher
 - the uncentered gradient covariance (aka empirical Fisher)
+- the output-parameter Jacobian of a neural net
 
 Matrix-vector products are carried out in PyTorch, i.e. potentially on a GPU.
 The library supports defining these matrices not only on a mini-batch, but
