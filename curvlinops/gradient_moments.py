@@ -1,5 +1,7 @@
 """Contains LinearOperator implementation of gradient moment matrices."""
 
+from __future__ import annotations
+
 from typing import List, Tuple
 
 from torch import Tensor, autograd, einsum, zeros_like
@@ -76,3 +78,13 @@ class EFLinearOperator(_LinearOperator):
             raise ValueError("Loss must have reduction 'mean' or 'sum'.")
 
         return tuple(r / normalization for r in result_list)
+
+    def _adjoint(self) -> EFLinearOperator:
+        """Return the linear operator representing the adjoint.
+
+        The empirical Fisher is real symmetric, and hence self-adjoint.
+
+        Returns:
+            Self.
+        """
+        return self

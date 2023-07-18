@@ -1,5 +1,7 @@
 """Contains LinearOperator implementation of the GGN."""
 
+from __future__ import annotations
+
 from typing import List, Tuple
 
 from backpack.hessianfree.ggnvp import ggn_vector_product_from_plist
@@ -54,3 +56,13 @@ class GGNLinearOperator(_LinearOperator):
         output = self._model_func(X)
         loss = self._loss_func(output, y)
         return ggn_vector_product_from_plist(loss, output, self._params, x_list)
+
+    def _adjoint(self) -> GGNLinearOperator:
+        """Return the linear operator representing the adjoint.
+
+        The GGN is real symmetric, and hence self-adjoint.
+
+        Returns:
+            Self.
+        """
+        return self
