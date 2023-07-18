@@ -1,5 +1,7 @@
 """Implements linear operators for per-sample Jacobians."""
 
+from __future__ import annotations
+
 from typing import Callable, Iterable, List, Tuple
 
 from backpack.hessianfree.lop import transposed_jacobian_vector_product as vjp
