@@ -1,6 +1,6 @@
 """Contains functionality to analyze Hessian & GGN via matrix-free multiplication."""
 
-from typing import Callable, Iterable, List, Tuple
+from typing import Callable, Iterable, List, Optional, Tuple, Union
 
 from backpack.utils.convert_parameters import vector_to_parameter_list
 from numpy import (
@@ -14,17 +14,16 @@ from numpy import (
 )
 from numpy.random import rand
 from scipy.sparse.linalg import LinearOperator
-from torch import Tensor
+from torch import Tensor, cat
 from torch import device as torch_device
 from torch import from_numpy, tensor, zeros_like
 from torch.autograd import grad
 from torch.nn import Module, Parameter
-from torch.nn.utils import parameters_to_vector
 from tqdm import tqdm
 
 
 class _LinearOperator(LinearOperator):
-    """Base class for linear operators of DNN curvature matrices.
+    """Base class for linear operators of DNN matrices.
 
     Can be used with SciPy.
     """
@@ -32,13 +31,14 @@ class _LinearOperator(LinearOperator):
     def __init__(
         self,
         model_func: Callable[[Tensor], Tensor],
-        loss_func: Callable[[Tensor, Tensor], Tensor],
+        loss_func: Union[Callable[[Tensor, Tensor], Tensor], None],
         params: List[Parameter],
         data: Iterable[Tuple[Tensor, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
+        shape: Optional[Tuple[int, int]] = None,
     ):
-        """Linear operator for DNN curvature matrices.
+        """Linear operator for DNN matrices.
 
         Note:
             f(X; θ) denotes a neural network, parameterized by θ, that maps a mini-batch
@@ -49,10 +49,13 @@ class _LinearOperator(LinearOperator):
             model_func: A function that maps the mini-batch input X to predictions.
                 Could be a PyTorch module representing a neural network.
             loss_func: Loss function criterion. Maps predictions and mini-batch labels
-                to a scalar value.
+                to a scalar value. If ``None``, there is no loss function and the
+                represented matrix is independent of the loss function.
             params: List of differentiable parameters used by the prediction function.
             data: Source from which mini-batches can be drawn, for instance a list of
                 mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
+            shape: Shape of the represented matrix. If ``None`` assumes ``(D, D)``
+                where ``D`` is the total number of parameters
             progressbar: Show a progressbar during matrix-multiplication.
                 Default: ``False``.
             check_deterministic: Probe that model and data are deterministic, i.e.
@@ -64,8 +67,10 @@ class _LinearOperator(LinearOperator):
         Raises:
             RuntimeError: If the check for deterministic behavior fails.
         """
-        dim = sum(p.numel() for p in params)
-        super().__init__(shape=(dim, dim), dtype=float32)
+        if shape is None:
+            dim = sum(p.numel() for p in params)
+            shape = (dim, dim)
+        super().__init__(shape=shape, dtype=float32)
 
         self._params = params
         self._model_func = model_func
@@ -74,7 +79,7 @@ class _LinearOperator(LinearOperator):
         self._device = self._infer_device(self._params)
         self._progressbar = progressbar
 
-        self._N_data = sum(X.shape[0] for (X, _) in self._loop_over_data())
+        self._num_data = sum(X.shape[0] for (X, _) in self._loop_over_data())
 
         if check_deterministic:
             old_device = self._device
@@ -129,22 +134,37 @@ class _LinearOperator(LinearOperator):
         - Two independent loss/gradient computations yield different results
 
         Note:
-            Deterministic checks are performed on CPU. We noticed that even when it
-            passes on CPU, it can fail on GPU; probably due to non-deterministic
+            Deterministic checks should be performed on CPU. We noticed that even when
+            it passes on CPU, it can fail on GPU; probably due to non-deterministic
             operations.
 
         Raises:
             RuntimeError: If non-deterministic behavior is detected.
         """
-        print("Performing deterministic checks")
-
-        grad1, loss1 = self.gradient_and_loss()
-        grad1, loss1 = parameters_to_vector(grad1).cpu().numpy(), loss1.cpu().numpy()
-
-        grad2, loss2 = self.gradient_and_loss()
-        grad2, loss2 = parameters_to_vector(grad2).cpu().numpy(), loss2.cpu().numpy()
+        v = rand(self.shape[1]).astype(self.dtype)
+        mat_v1 = self @ v
+        mat_v2 = self @ v
 
         rtol, atol = 5e-5, 1e-6
+        if not allclose(mat_v1, mat_v2, rtol=rtol, atol=atol):
+            self.print_nonclose(mat_v1, mat_v2, rtol, atol)
+            raise RuntimeError("Check for deterministic matvec failed.")
+
+        if self._loss_func is None:
+            return
+
+        # only carried out if there is a loss function
+        grad1, loss1 = self.gradient_and_loss()
+        grad1, loss1 = (
+            self.flatten_and_concatenate(grad1).cpu().numpy(),
+            loss1.cpu().numpy(),
+        )
+
+        grad2, loss2 = self.gradient_and_loss()
+        grad2, loss2 = (
+            self.flatten_and_concatenate(grad2).cpu().numpy(),
+            loss2.cpu().numpy(),
+        )
 
         if not allclose(loss1, loss2, rtol=rtol, atol=atol):
             self.print_nonclose(loss1, loss2, rtol, atol)
@@ -153,16 +173,6 @@ class _LinearOperator(LinearOperator):
         if not allclose(grad1, grad2, rtol=rtol, atol=atol):
             self.print_nonclose(grad1, grad2, rtol, atol)
             raise RuntimeError("Check for deterministic gradient failed.")
-
-        v = rand(self.shape[1]).astype(self.dtype)
-        mat_v1 = self @ v
-        mat_v2 = self @ v
-
-        if not allclose(mat_v1, mat_v2, rtol=rtol, atol=atol):
-            self.print_nonclose(mat_v1, mat_v2, rtol, atol)
-            raise RuntimeError("Check for deterministic matvec failed.")
-
-        print("Deterministic checks passed")
 
     @staticmethod
     def print_nonclose(array1: ndarray, array2: ndarray, rtol: float, atol: float):
@@ -245,8 +255,7 @@ class _LinearOperator(LinearOperator):
         x_torch = from_numpy(x).to(self._device)
         return vector_to_parameter_list(x_torch, self._params)
 
-    @staticmethod
-    def _postprocess(x_list: List[Tensor]) -> ndarray:
+    def _postprocess(self, x_list: List[Tensor]) -> ndarray:
         """Convert torch list format to flat numpy array.
 
         Args:
@@ -255,7 +264,7 @@ class _LinearOperator(LinearOperator):
         Returns:
             Flat vector.
         """
-        return parameters_to_vector([x.contiguous() for x in x_list]).cpu().numpy()
+        return self.flatten_and_concatenate(x_list).cpu().numpy()
 
     def _loop_over_data(self) -> Iterable[Tuple[Tensor, Tensor]]:
         """Yield batches of the data set, loaded to the correct device.
@@ -279,7 +288,13 @@ class _LinearOperator(LinearOperator):
 
         Returns:
             Gradient and loss on the data set.
+
+        Raises:
+            ValueError: If there is no loss function.
         """
+        if self._loss_func is None:
+            raise ValueError("No loss function specified.")
+
         total_loss = tensor([0.0], device=self._device)
         total_grad = [zeros_like(p) for p in self._params]
 
@@ -317,3 +332,15 @@ class _LinearOperator(LinearOperator):
             return X.shape[0] / self._N_data
         else:
             raise ValueError("Loss must have reduction 'mean' or 'sum'.")
+
+    @staticmethod
+    def flatten_and_concatenate(tensors: List[Tensor]) -> Tensor:
+        """Flatten then concatenate all tensors in a list.
+
+        Args:
+            tensors: List of tensors.
+
+        Returns:
+            Concatenated flattened tensors.
+        """
+        return cat([t.flatten() for t in tensors])

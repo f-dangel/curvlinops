@@ -3,20 +3,14 @@
 from typing import Callable, Iterable, List, Tuple
 
 from backpack.hessianfree.rop import jacobian_vector_product as jvp
-from backpack.utils.convert_parameters import vector_to_parameter_list
-from numpy import allclose, column_stack, float32, ndarray
-from numpy.random import rand
-from scipy.sparse.linalg import LinearOperator
-from torch import Tensor, cat
-from torch import device as torch_device
-from torch import from_numpy, no_grad
-from torch.nn import Module, Parameter
-from tqdm import tqdm
+from numpy import allclose, ndarray
+from torch import Tensor, no_grad
+from torch.nn import Parameter
 
 from curvlinops._base import _LinearOperator
 
 
-class JacobianLinearOperator(LinearOperator):
+class JacobianLinearOperator(_LinearOperator):
     """Linear operator for the Jacobian.
 
     Can be used with SciPy.
@@ -63,114 +57,51 @@ class JacobianLinearOperator(LinearOperator):
         x = next(iter(data))[0]
         num_outputs = model_func(x).shape[1:].numel()
         num_params = sum(p.numel() for p in params)
-        super().__init__(shape=(num_data * num_outputs, num_params), dtype=float32)
-
-        self._params = params
-        self._model_func = model_func
-        self._data = data
-        self._device = _LinearOperator._infer_device(self._params)
-        self._progressbar = progressbar
-
-        if check_deterministic:
-            old_device = self._device
-            self.to_device(torch_device("cpu"))
-            try:
-                self._check_deterministic()
-            except RuntimeError as e:
-                raise e
-            finally:
-                self.to_device(old_device)
+        super().__init__(
+            model_func,
+            None,
+            params,
+            data,
+            progressbar=progressbar,
+            check_deterministic=check_deterministic,
+            shape=(num_data * num_outputs, num_params),
+        )
 
     def _check_deterministic(self):
         """Verify that the linear operator is deterministic.
 
-        - Checks that the data is loaded in a deterministic fashion (e.g. shuffling).
-        - Checks that the model is deterministic (e.g. dropout).
-        - Checks that matrix-vector multiplication with a single random vector is
-          deterministic.
+        In addition to the checks from the base class, checks that the model
+        predictions and data are always the same (loaded in the same order, and
+        only deterministic operations in the network.
 
         Note:
-            Deterministic checks are performed on CPU. We noticed that even when it
-            passes on CPU, it can fail on GPU; probably due to non-deterministic
+            Deterministic checks should be performed on CPU. We noticed that even when
+            it passes on CPU, it can fail on GPU; probably due to non-deterministic
             operations.
 
         Raises:
             RuntimeError: If the linear operator is not deterministic.
         """
-        print("Performing deterministic checks")
-
-        pred1, y1 = self.predictions_and_targets()
-        pred1, y1 = pred1.cpu().numpy(), y1.cpu().numpy()
-        pred2, y2 = self.predictions_and_targets()
-        pred2, y2 = pred2.cpu().numpy(), y2.cpu().numpy()
+        super()._check_deterministic()
 
         rtol, atol = 5e-5, 1e-6
 
-        if not allclose(y1, y2, rtol=rtol, atol=atol):
-            _LinearOperator.print_nonclose(y1, y2, rtol=rtol, atol=atol)
-            raise RuntimeError(
-                "Data is not loaded in a deterministic fashion."
-                + " Make sure shuffling is turned off."
-            )
-        if not allclose(pred1, pred2, rtol=rtol, atol=atol):
-            _LinearOperator.print_nonclose(pred1, pred2, rtol=rtol, atol=atol)
-            raise RuntimeError(
-                "Model predictions are not deterministic."
-                + " Make sure dropout and batch normalization are in eval mode."
-            )
-
-        v = rand(self.shape[1]).astype(self.dtype)
-        mat_v1 = self @ v
-        mat_v2 = self @ v
-        if not allclose(mat_v1, mat_v2, rtol=rtol, atol=atol):
-            _LinearOperator.print_nonclose(mat_v1, mat_v2, rtol, atol)
-            raise RuntimeError("Check for deterministic matvec failed.")
-
-    def to_device(self, device: torch_device):
-        """Load linear operator to a device (inplace).
-
-        Args:
-            device: Target device.
-        """
-        self._device = device
-
-        if isinstance(self._model_func, Module):
-            self._model_func = self._model_func.to(self._device)
-        self._params = [p.to(device) for p in self._params]
-
-    def _loop_over_data(self) -> Iterable[Tuple[Tensor, Tensor]]:
-        """Yield batches of the data set, loaded to the correct device.
-
-        Yields:
-            Mini-batches ``(X, y)``.
-        """
-        data_iter = iter(self._data)
-
-        if self._progressbar:
-            data_iter = tqdm(data_iter, desc="matvec")
-
-        for X, y in data_iter:
-            X, y = X.to(self._device), y.to(self._device)
-            yield (X, y)
-
-    def predictions_and_targets(self) -> Tuple[Tensor, Tensor]:
-        """Return the batch-concatenated model predictions and labels.
-
-        Returns:
-            Batch-concatenated model predictions of shape ``[N, *]`` where ``*``
-            denotes the model's output shape (for instance ``* = C``).
-            Batch-concatenated labels of shape ``[N, *]``, where ``*`` denotes
-            the dimension of a label.
-        """
-        total_pred, total_y = [], []
-
         with no_grad():
-            for X, y in self._loop_over_data():
-                total_pred.append(self._model_func(X))
-                total_y.append(y)
-        assert total_pred and total_y
+            for (X1, y1), (X2, y2) in zip(
+                self._loop_over_data(), self._loop_over_data()
+            ):
+                pred1, y1 = self._model_func(X1).cpu().numpy(), y1.cpu().numpy()
+                pred2, y2 = self._model_func(X2).cpu().numpy(), y2.cpu().numpy()
+                X1, X2 = X1.cpu().numpy(), X2.cpu().numpy()
 
-        return cat(total_pred), cat(total_y)
+                if not allclose(X1, X2) or not allclose(y1, y2):
+                    self.print_nonclose(X1, X2, rtol=rtol, atol=atol)
+                    self.print_nonclose(y1, y2, rtol=rtol, atol=atol)
+                    raise RuntimeError("Non-deterministic data loading detected.")
+
+                if not allclose(pred1, pred2):
+                    self.print_nonclose(pred1, pred2, rtol=rtol, atol=atol)
+                    raise RuntimeError("Non-deterministic model detected.")
 
     def _matvec(self, x: ndarray) -> ndarray:
         """Loop over all batches in the data and apply the matrix to vector x.
@@ -181,7 +112,7 @@ class JacobianLinearOperator(LinearOperator):
         Returns:
             Matrix-multiplication result ``mat @ x``.
         """
-        x_list = vector_to_parameter_list(from_numpy(x).to(self._device), self._params)
+        x_list = self._preprocess(x)
         out_list = [
             jvp(self._model_func(X), self._params, x_list, retain_graph=False)[
                 0
@@ -189,15 +120,4 @@ class JacobianLinearOperator(LinearOperator):
             for X, _ in self._loop_over_data()
         ]
 
-        return cat(out_list).cpu().numpy()
-
-    def _matmat(self, X: ndarray) -> ndarray:
-        """Matrix-matrix multiplication.
-
-        Args:
-            X: Matrix for multiplication.
-
-        Returns:
-            Matrix-multiplication result ``mat @ X``.
-        """
-        return column_stack([self @ col for col in X.T])
+        return self._postprocess(out_list)
