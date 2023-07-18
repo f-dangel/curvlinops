@@ -40,7 +40,7 @@ class JacobianLinearOperator(_LinearOperator):
                 \mathbf{J}_\mathbf{\theta}\mathbf{f}
             \right]_{(n,c), d}
             =
-            \frac{\partial f(\mathbf{x}_n, \mathbf{\theta})}{\partial \theta_d}\,.
+            \frac{\partial [f(\mathbf{x}_n, \mathbf{\theta})]_c}{\partial \theta_d}\,.
 
         Note that the data must be supplied in deterministic order.
 
@@ -150,7 +150,7 @@ class TransposedJacobianLinearOperator(_LinearOperator):
                 (\mathbf{J}_\mathbf{\theta}\mathbf{f})^\top
             \right]_{d, (n,c)}
             =
-            \frac{\partial f(\mathbf{x}_n, \mathbf{\theta})}{\partial \theta_d}\,.
+            \frac{\partial [f(\mathbf{x}_n, \mathbf{\theta})]_c}{\partial \theta_d}\,.
 
         Note that the data must be supplied in deterministic order.
 
