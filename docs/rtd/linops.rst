@@ -26,6 +26,12 @@ Uncentered gradient covariance (empirical Fisher)
 .. autoclass:: curvlinops.EFLinearOperator
    :members: __init__
 
+Jacobians
+---------
+
+.. autoclass:: curvlinops.JacobianLinearOperator
+   :members: __init__
+
 Inverses
 --------
 

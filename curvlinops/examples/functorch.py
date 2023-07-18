@@ -5,6 +5,7 @@ from typing import Iterable, List, Tuple
 
 from functorch import grad, hessian, jvp, make_functional, vmap
 from torch import Tensor, cat, einsum
+from torch.func import jacrev
 from torch.nn import Module
 
 
@@ -55,9 +56,7 @@ def functorch_hessian(
     model_fn, _ = make_functional(model_func)
     loss_fn, loss_fn_params = make_functional(loss_func)
 
-    # concatenate batches
-    X, y = list(zip(*list(data)))
-    X, y = cat(X), cat(y)
+    X, y = _concatenate_batches(data)
 
     def loss(X: Tensor, y: Tensor, params: Tuple[Tensor]) -> Tensor:
         """Compute the loss given a mini-batch and the neural network parameters.
@@ -100,9 +99,7 @@ def functorch_ggn(
     model_fn, _ = make_functional(model_func)
     loss_fn, loss_fn_params = make_functional(loss_func)
 
-    # concatenate batches
-    X, y = list(zip(*list(data)))
-    X, y = cat(X), cat(y)
+    X, y = _concatenate_batches(data)
 
     def linearized_model(
         anchor: Tuple[Tensor], params: Tuple[Tensor], X: Tensor
@@ -167,9 +164,7 @@ def functorch_gradient(
     model_fn, _ = make_functional(model_func)
     loss_fn, loss_fn_params = make_functional(loss_func)
 
-    # concatenate batches
-    X, y = list(zip(*list(data)))
-    X, y = cat(X), cat(y)
+    X, y = _concatenate_batches(data)
 
     def loss(X: Tensor, y: Tensor, params: Tuple[Tensor]) -> Tensor:
         """Compute the loss given a mini-batch and the neural network parameters.
@@ -213,9 +208,7 @@ def functorch_empirical_fisher(
     model_fn, _ = make_functional(model_func)
     loss_fn, loss_fn_params = make_functional(loss_func)
 
-    # concatenate batches
-    X, y = list(zip(*list(data)))
-    X, y = cat(X), cat(y)
+    X, y = _concatenate_batches(data)
 
     # compute batched gradients
     def loss_n(X_n: Tensor, y_n: Tensor, params: List[Tensor]) -> Tensor:
@@ -244,3 +237,52 @@ def functorch_empirical_fisher(
         raise ValueError("Cannot detect reduction method from loss function.")
 
     return 1 / normalization * einsum("ni,nj->ij", batch_grad, batch_grad)
+
+
+def functorch_jacobian(
+    model_func: Module,
+    params: List[Tensor],
+    data: Iterable[Tuple[Tensor, Tensor]],
+) -> Tensor:
+    """Compute the Jacobian with functorch.
+
+    Args:
+        model_func: A function that maps the mini-batch input X to predictions.
+            Could be a PyTorch module representing a neural network.
+        params: List of differentiable parameters used by the prediction function.
+        data: Source from which mini-batches can be drawn, for instance a list of
+            mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
+
+    Returns:
+        Matrix containing the Jacobian. Has shape ``[N * C, D]`` where ``D`` is the
+        total number of parameters, ``N`` the total number of data points, and ``C``
+        the model's output space dimension.
+    """
+    model_fn, _ = make_functional(model_func)
+    X, _ = _concatenate_batches(data)
+
+    def model_fn_params_only(params: Tuple[Tensor]) -> Tensor:
+        return model_fn(params, X)
+
+    # concatenate over flattened parameters and flattened outputs
+    jac = jacrev(model_fn_params_only)(params)
+    jac = [j.flatten(start_dim=-p.dim()) for j, p in zip(jac, params)]
+    jac = cat(jac, dim=-1).flatten(end_dim=-2)
+
+    return jac
+
+
+def _concatenate_batches(
+    data: Iterable[Tuple[Tensor, Tensor]]
+) -> Tuple[Tensor, Tensor]:
+    """Concatenate all batches in the dataset along the batch dimension.
+
+    Args:
+        data: A dataloader or iterable of batches.
+
+    Returns:
+        Concatenated model inputs.
+        Concatenated targets.
+    """
+    X, y = list(zip(*list(data)))
+    return cat(X), cat(y)
