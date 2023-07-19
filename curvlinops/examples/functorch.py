@@ -173,7 +173,7 @@ def functorch_gradient(
     params_argnum = 2
     grad_fn = grad(loss, argnums=params_argnum)
 
-    return grad_fn(X, y, params_dict)
+    return tuple(grad_fn(X, y, params_dict).values())
 
 
 def functorch_empirical_fisher(
