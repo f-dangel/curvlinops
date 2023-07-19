@@ -1,32 +1,31 @@
 """Contains functorch functionality for the examples."""
 
 from math import sqrt
-from typing import Iterable, List, Tuple
+from typing import Dict, Iterable, List, Tuple
 
-from functorch import grad, hessian, jvp, make_functional, vmap
 from torch import Tensor, cat, einsum
-from torch.func import jacrev
+from torch.func import functional_call, grad, hessian, jacrev, jvp, vmap
 from torch.nn import Module
 
 
-def blocks_to_matrix(blocks: Tuple[Tuple[Tensor]]) -> Tensor:
+def blocks_to_matrix(blocks: Dict[str, Dict[str, Tensor]]) -> Tensor:
     """Convert a block representation into a matrix.
 
     Assumes the diagonal blocks to be quadratic to automatically detect their dimension.
 
     Args:
-        blocks: Nested tuple of tensors that contains the ``(i, j)``th matrix
-            block at index ``[i, j]``.
+        blocks: Nested dictionaries with keys denoting parameter names, and blocks
+            ``(i, j)`` denoting the matrix block w.r.t parameters ``[i, j]``.
 
     Returns:
         Two-dimensional matrix with concatenated and flattened blocks.
     """
-    num_blocks = len(blocks)
     row_blocks = []
 
-    for idx in range(num_blocks):
-        block_num_rows = int(sqrt(blocks[idx][idx].numel()))
-        col_blocks = [b.reshape(block_num_rows, -1) for b in blocks[idx]]
+    param_names = list(blocks.keys())
+    for name, param_block in blocks.items():
+        num_rows = int(sqrt(param_block[name].numel()))
+        col_blocks = [param_block[n].reshape(num_rows, -1) for n in param_names]
         row_blocks.append(cat(col_blocks, dim=1))
 
     return cat(row_blocks)
@@ -52,25 +51,22 @@ def functorch_hessian(
     Returns:
         Square matrix containing the Hessian.
     """
-    # convert modules to functions
-    model_fn, _ = make_functional(model_func)
-    loss_fn, loss_fn_params = make_functional(loss_func)
-
     X, y = _concatenate_batches(data)
+    params_dict = _make_params_dict(model_func, params)
 
-    def loss(X: Tensor, y: Tensor, params: Tuple[Tensor]) -> Tensor:
+    def loss(X: Tensor, y: Tensor, params_dict: Dict[str, Tensor]) -> Tensor:
         """Compute the loss given a mini-batch and the neural network parameters.
 
         # noqa: DAR101
         # noqa: DAR201
         """
-        output = model_fn(params, X)
-        return loss_fn(loss_fn_params, output, y)
+        output = functional_call(model_func, params_dict, X)
+        return functional_call(loss_func, {}, (output, y))
 
     params_argnum = 2
     hessian_fn = hessian(loss, argnums=params_argnum)
 
-    return blocks_to_matrix(hessian_fn(X, y, params))
+    return blocks_to_matrix(hessian_fn(X, y, params_dict))
 
 
 def functorch_ggn(
@@ -95,14 +91,11 @@ def functorch_ggn(
     Returns:
         Square matrix containing the GGN.
     """
-    # convert modules to functions
-    model_fn, _ = make_functional(model_func)
-    loss_fn, loss_fn_params = make_functional(loss_func)
-
     X, y = _concatenate_batches(data)
+    params_dict = _make_params_dict(model_func, params)
 
     def linearized_model(
-        anchor: Tuple[Tensor], params: Tuple[Tensor], X: Tensor
+        anchor_dict: Dict[str, Tensor], params_dict: Dict[str, Tensor], X: Tensor
     ) -> Tensor:
         """Evaluate the model at params, using its linearization around anchor.
 
@@ -110,16 +103,21 @@ def functorch_ggn(
         # noqa: DAR201
         """
 
-        def model_fn_params_only(params: Tuple[Tensor]) -> Tensor:
-            return model_fn(params, X)
+        def model_fn_params_only(params_dict: Dict[str, Tensor]) -> Tensor:
+            return functional_call(model_func, params_dict, X)
 
-        diff = tuple(p - a for p, a in zip(params, anchor))
-        model_at_anchor, jvp_diff = jvp(model_fn_params_only, (anchor,), (diff,))
+        diff_dict = {n: params_dict[n] - anchor_dict[n] for n in params_dict}
+        model_at_anchor, jvp_diff = jvp(
+            model_fn_params_only, (anchor_dict,), (diff_dict,)
+        )
 
         return model_at_anchor + jvp_diff
 
     def linearized_loss(
-        X: Tensor, y: Tensor, anchor: Tuple[Tensor], params: Tuple[Tensor]
+        X: Tensor,
+        y: Tensor,
+        anchor_dict: Dict[str, Tensor],
+        params_dict: Dict[str, Tensor],
     ) -> Tensor:
         """Compute the loss given a mini-batch under a linearized NN around anchor.
 
@@ -129,15 +127,15 @@ def functorch_ggn(
             f(X, θ₀) + (J_θ₀ f(X, θ₀)) @ (θ - θ₀) with f the neural network, θ₀ the anchor
             point of the linearization, and θ the evaluation point.
         """
-        output = linearized_model(anchor, params, X)
-        return loss_fn(loss_fn_params, output, y)
+        output = linearized_model(anchor_dict, params_dict, X)
+        return functional_call(loss_func, {}, (output, y))
 
     params_argnum = 3
     ggn_fn = hessian(linearized_loss, argnums=params_argnum)
 
-    anchor = tuple(p.clone() for p in params)
+    anchor_dict = {n: p.clone() for n, p in params_dict.items()}
 
-    return blocks_to_matrix(ggn_fn(X, y, anchor, params))
+    return blocks_to_matrix(ggn_fn(X, y, anchor_dict, params_dict))
 
 
 def functorch_gradient(
@@ -160,25 +158,22 @@ def functorch_gradient(
     Returns:
         Gradient in same format as the parameters.
     """
-    # convert modules to functions
-    model_fn, _ = make_functional(model_func)
-    loss_fn, loss_fn_params = make_functional(loss_func)
-
     X, y = _concatenate_batches(data)
+    params_dict = _make_params_dict(model_func, params)
 
-    def loss(X: Tensor, y: Tensor, params: Tuple[Tensor]) -> Tensor:
+    def loss(X: Tensor, y: Tensor, params_dict: Dict[str, Tensor]) -> Tensor:
         """Compute the loss given a mini-batch and the neural network parameters.
 
         # noqa: DAR101
         # noqa: DAR201
         """
-        output = model_fn(params, X)
-        return loss_fn(loss_fn_params, output, y)
+        output = functional_call(model_func, params_dict, X)
+        return functional_call(loss_func, {}, (output, y))
 
     params_argnum = 2
     grad_fn = grad(loss, argnums=params_argnum)
 
-    return grad_fn(X, y, params)
+    return grad_fn(X, y, params_dict)
 
 
 def functorch_empirical_fisher(
@@ -204,30 +199,30 @@ def functorch_empirical_fisher(
     Raises:
         ValueError: If the loss function's reduction cannot be determined.
     """
-    # convert modules to functions
-    model_fn, _ = make_functional(model_func)
-    loss_fn, loss_fn_params = make_functional(loss_func)
-
     X, y = _concatenate_batches(data)
+    params_dict = _make_params_dict(model_func, params)
 
     # compute batched gradients
-    def loss_n(X_n: Tensor, y_n: Tensor, params: List[Tensor]) -> Tensor:
+    def loss_n(X_n: Tensor, y_n: Tensor, params_dict: Dict[str, Tensor]) -> Tensor:
         """Compute the gradient for a single sample.
 
         # noqa: DAR101
         # noqa: DAR201
         """
-        output = model_fn(params, X_n)
-        return loss_fn(loss_fn_params, output, y_n)
+        output = functional_call(model_func, params_dict, X_n)
+        return functional_call(loss_func, {}, (output, y_n))
 
     params_argnum = 2
     batch_grad_fn = vmap(grad(loss_n, argnums=params_argnum))
 
     N = X.shape[0]
-    params_replicated = [p.unsqueeze(0).expand(N, *(p.dim() * [-1])) for p in params]
+    params_replicated_dict = {
+        name: p.unsqueeze(0).expand(N, *(p.dim() * [-1]))
+        for name, p in params_dict.items()
+    }
 
-    batch_grad = batch_grad_fn(X, y, params_replicated)
-    batch_grad = cat([bg.flatten(start_dim=1) for bg in batch_grad], dim=1)
+    batch_grad = batch_grad_fn(X, y, params_replicated_dict)
+    batch_grad = cat([bg.flatten(start_dim=1) for bg in batch_grad.values()], dim=1)
 
     if loss_func.reduction == "sum":
         normalization = 1
@@ -258,15 +253,18 @@ def functorch_jacobian(
         total number of parameters, ``N`` the total number of data points, and ``C``
         the model's output space dimension.
     """
-    model_fn, _ = make_functional(model_func)
     X, _ = _concatenate_batches(data)
+    params_dict = _make_params_dict(model_func, params)
 
-    def model_fn_params_only(params: Tuple[Tensor]) -> Tensor:
-        return model_fn(params, X)
+    def model_fn_params_only(params_dict: Dict[str, Tensor]) -> Tensor:
+        return functional_call(model_func, params_dict, X)
 
     # concatenate over flattened parameters and flattened outputs
-    jac = jacrev(model_fn_params_only)(params)
-    jac = [j.flatten(start_dim=-p.dim()) for j, p in zip(jac, params)]
+    jac = jacrev(model_fn_params_only)(params_dict)
+    jac = [
+        j.flatten(start_dim=-p.dim())
+        for j, p in zip(jac.values(), params_dict.values())
+    ]
     jac = cat(jac, dim=-1).flatten(end_dim=-2)
 
     return jac
@@ -286,3 +284,19 @@ def _concatenate_batches(
     """
     X, y = list(zip(*list(data)))
     return cat(X), cat(y)
+
+
+def _make_params_dict(model_func: Module, params: List[Tensor]) -> Dict[str, Tensor]:
+    """Create a named dictionary for the parameter list.
+
+    Required for ``functorch``'s ``functional_call`` API.
+
+    Args:
+        model_func: A PyTorch module representing a neural network.
+        params: List of differentiable parameters used by the prediction function.
+
+    Returns:
+        Dictionary mapping parameter names to parameter tensors.
+    """
+    name_dict = {p.data_ptr(): name for name, p in model_func.named_parameters()}
+    return {name_dict[p.data_ptr()]: p for p in params}
