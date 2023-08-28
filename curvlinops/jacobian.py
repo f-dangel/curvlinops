@@ -54,7 +54,7 @@ class JacobianLinearOperator(_LinearOperator):
             check_deterministic: Check if model and data are deterministic.
         """
         num_data = sum(t.shape[0] for t, _ in data)
-        x = next(iter(data))[0]
+        x = next(iter(data))[0].to(self._infer_device(params))
         num_outputs = model_func(x).shape[1:].numel()
         num_params = sum(p.numel() for p in params)
         super().__init__(
@@ -178,7 +178,7 @@ class TransposedJacobianLinearOperator(_LinearOperator):
             check_deterministic: Check if model and data are deterministic.
         """
         num_data = sum(t.shape[0] for t, _ in data)
-        x = next(iter(data))[0]
+        x = next(iter(data))[0].to(self._infer_device(params))
         num_outputs = model_func(x).shape[1:].numel()
         num_params = sum(p.numel() for p in params)
         super().__init__(
