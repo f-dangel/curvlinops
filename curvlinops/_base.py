@@ -79,7 +79,9 @@ class _LinearOperator(LinearOperator):
         self._device = self._infer_device(self._params)
         self._progressbar = progressbar
 
-        self._N_data = sum(X.shape[0] for (X, _) in self._loop_over_data())
+        self._N_data = sum(
+            X.shape[0] for (X, _) in self._loop_over_data(desc="_N_data")
+        )
 
         if check_deterministic:
             old_device = self._device
@@ -206,7 +208,7 @@ class _LinearOperator(LinearOperator):
         x_list = self._preprocess(x)
         out_list = [zeros_like(x) for x in x_list]
 
-        for X, y in self._loop_over_data():
+        for X, y in self._loop_over_data(desc="_matvec"):
             normalization_factor = self._get_normalization_factor(X, y)
 
             for mat_x, current in zip(out_list, self._matvec_batch(X, y, x_list)):
@@ -266,8 +268,14 @@ class _LinearOperator(LinearOperator):
         """
         return self.flatten_and_concatenate(x_list).cpu().numpy()
 
-    def _loop_over_data(self) -> Iterable[Tuple[Tensor, Tensor]]:
+    def _loop_over_data(
+        self, desc: Optional[str] = None
+    ) -> Iterable[Tuple[Tensor, Tensor]]:
         """Yield batches of the data set, loaded to the correct device.
+
+        Args:
+            desc: Description for the progress bar. Will be ignored if progressbar is
+                disabled.
 
         Yields:
             Mini-batches ``(X, y)``.
@@ -275,7 +283,8 @@ class _LinearOperator(LinearOperator):
         data_iter = iter(self._data)
 
         if self._progressbar:
-            data_iter = tqdm(data_iter, desc="matvec")
+            desc = f"{self.__class__.__name__}{'' if desc is None else f'.{desc}'}"
+            data_iter = tqdm(data_iter, desc=desc)
 
         for X, y in data_iter:
             X, y = X.to(self._device), y.to(self._device)
@@ -298,7 +307,7 @@ class _LinearOperator(LinearOperator):
         total_loss = tensor([0.0], device=self._device)
         total_grad = [zeros_like(p) for p in self._params]
 
-        for X, y in self._loop_over_data():
+        for X, y in self._loop_over_data(desc="gradient_and_loss"):
             loss = self._loss_func(self._model_func(X), y)
             normalization_factor = self._get_normalization_factor(X, y)
 

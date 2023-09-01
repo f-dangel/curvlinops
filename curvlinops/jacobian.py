@@ -88,7 +88,8 @@ class JacobianLinearOperator(_LinearOperator):
 
         with no_grad():
             for (X1, y1), (X2, y2) in zip(
-                self._loop_over_data(), self._loop_over_data()
+                self._loop_over_data(desc="_check_deterministic_data_pred"),
+                self._loop_over_data(desc="_check_deterministic_data_pred2"),
             ):
                 pred1, y1 = self._model_func(X1).cpu().numpy(), y1.cpu().numpy()
                 pred2, y2 = self._model_func(X2).cpu().numpy(), y2.cpu().numpy()
@@ -117,7 +118,7 @@ class JacobianLinearOperator(_LinearOperator):
             jvp(self._model_func(X), self._params, x_list, retain_graph=False)[
                 0
             ].flatten(start_dim=1)
-            for X, _ in self._loop_over_data()
+            for X, _ in self._loop_over_data(desc="_matvec")
         ]
 
         return self._postprocess(out_list)
@@ -212,7 +213,8 @@ class TransposedJacobianLinearOperator(_LinearOperator):
 
         with no_grad():
             for (X1, y1), (X2, y2) in zip(
-                self._loop_over_data(), self._loop_over_data()
+                self._loop_over_data(desc="_check_deterministic_data_pred1"),
+                self._loop_over_data(desc="_check_deterministic_data_pred2"),
             ):
                 pred1, y1 = self._model_func(X1).cpu().numpy(), y1.cpu().numpy()
                 pred2, y2 = self._model_func(X2).cpu().numpy(), y2.cpu().numpy()
@@ -240,7 +242,7 @@ class TransposedJacobianLinearOperator(_LinearOperator):
         out_list = [zeros_like(p) for p in self._params]
 
         processed = 0
-        for X, _ in self._loop_over_data():
+        for X, _ in self._loop_over_data(desc="_matvec"):
             pred = self._model_func(X)
             v = x_torch[processed : processed + pred.numel()].reshape_as(pred)
             processed += pred.numel()
