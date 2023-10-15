@@ -168,10 +168,10 @@ rhs = sum(fisher @ theta for fisher, theta in zip(fishers, thetas))
 # term:
 
 dim = fishers[0].shape[0]
-I = sparse.eye(dim)
+identity = sparse.eye(dim)
 damping = 1e-3
 
-fisher_sum = aslinearoperator(damping * I)
+fisher_sum = aslinearoperator(damping * identity)
 
 for fisher in fishers:
     fisher_sum += fisher
