@@ -148,7 +148,6 @@ class HutchPPTraceEstimator:
             ]
         )
         self._Q, _ = qr(S)
-        assert self._Q.shape == (dim, self._basis_dim)
 
         self._tr_QT_A_Q = 0.0
         for i in range(self._basis_dim):
