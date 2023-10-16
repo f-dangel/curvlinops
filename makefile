@@ -69,10 +69,10 @@ install-test:
 .PHONY: test test-light
 
 test:
-	@pytest -vx --run-optional-tests=montecarlo --cov=curvlinops test
+	@pytest -vx --run-optional-tests=montecarlo --cov=curvlinops --doctest-modules curvlinops test
 
 test-light:
-	@pytest -vx --cov=curvlinops test
+	@pytest -vx --cov=curvlinops --doctest-modules curvlinops test
 
 .PHONY: install-lint
 

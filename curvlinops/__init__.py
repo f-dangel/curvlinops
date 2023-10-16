@@ -13,6 +13,7 @@ from curvlinops.papyan2020traces.spectrum import (
     lanczos_approximate_spectrum,
 )
 from curvlinops.submatrix import SubmatrixLinearOperator
+from curvlinops.trace.hutchinson import HutchinsonTraceEstimator
 
 __all__ = [
     "HessianLinearOperator",
@@ -28,4 +29,5 @@ __all__ = [
     "lanczos_approximate_log_spectrum",
     "LanczosApproximateSpectrumCached",
     "LanczosApproximateLogSpectrumCached",
+    "HutchinsonTraceEstimator",
 ]
