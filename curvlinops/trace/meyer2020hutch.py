@@ -68,10 +68,12 @@ class HutchPPTraceEstimator:
                 large, or the sampling distribution is not supported.
 
         Note:
-            If you are planning to perform a fair comparison with vanilla Hutchinson,
-            ``basis_dim`` should be ``s / 3`` where ``s`` is the number of samples
-            used by vanilla Hutchinson and you should take the mean over ``s / 3``
-            samples.
+            If you are planning to perform a fair (i.e. same computation budget)
+            comparison with vanilla Hutchinson, ``basis_dim`` should be ``s / 3``
+            where ``s`` is the number of samples used by vanilla Hutchinson. If
+            ``s / 3`` requires storing a too large matrix, you can pick
+            ``basis_dim = s1`` and draw ``s2`` samples from Hutch++ such that
+            ``2 * s1 + s2 = s``.
         """
         if len(A.shape) != 2 or A.shape[0] != A.shape[1]:
             raise ValueError(f"A must be square. Got shape {A.shape}.")
