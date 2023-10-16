@@ -59,3 +59,9 @@ Spectral density approximation
 
 .. autoclass:: curvlinops.LanczosApproximateSpectrumCached
    :members: __init__, approximate_spectrum
+
+Trace approximation
+===================
+
+.. autoclass:: curvlinops.HutchinsonTraceEstimator
+   :members: __init__, sample
