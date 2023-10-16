@@ -29,10 +29,10 @@ class HutchPPTraceEstimator:
         >>> estimator = HutchPPTraceEstimator(A)
         >>> # one- and multi-sample approximations
         >>> tr_A_low_precision = estimator.sample()
-        >>> tr_A_high_precision = mean([estimator.sample() for _ in range(333)])
+        >>> tr_A_high_precision = mean([estimator.sample() for _ in range(998)])
         >>> # assert abs(tr_A - tr_A_low_precision) > abs(tr_A - tr_A_high_precision)
         >>> round(tr_A, 4), round(tr_A_low_precision, 4), round(tr_A_high_precision, 4)
-        (4.4575, 7.1653, 4.4588)
+        (4.4575, 2.4085, 4.5791)
 
     Attributes:
         SUPPORTED_DISTRIBUTIONS: Dictionary mapping supported distributions to their
@@ -143,13 +143,13 @@ class HutchPPTraceEstimator:
             return
 
         dim = self._A.shape[1]
-        S = column_stack(
+        AS = column_stack(
             [
-                self.SUPPORTED_DISTRIBUTIONS[self._basis_distribution](dim)
+                self._A @ self.SUPPORTED_DISTRIBUTIONS[self._basis_distribution](dim)
                 for _ in range(self._basis_dim)
             ]
         )
-        self._Q, _ = qr(S)
+        self._Q, _ = qr(AS)
 
         self._tr_QT_A_Q = 0.0
         for i in range(self._basis_dim):
