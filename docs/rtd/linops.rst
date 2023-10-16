@@ -65,3 +65,6 @@ Trace approximation
 
 .. autoclass:: curvlinops.HutchinsonTraceEstimator
    :members: __init__, sample
+
+.. autoclass:: curvlinops.HutchPPTraceEstimator
+   :members: __init__, sample

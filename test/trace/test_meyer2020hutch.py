@@ -1,18 +1,18 @@
-"""Test ``curvlinops.trace.hutchinson``."""
+"""Test ``curvlinops.trace.meyer2020hutch."""
 
 from numpy import isclose, mean, trace
 from numpy.random import rand, seed
 from pytest import mark
 
-from curvlinops import HutchinsonTraceEstimator
+from curvlinops import HutchPPTraceEstimator
 
 DISTRIBUTIONS = ["rademacher", "normal"]
 DISTRIBUTION_IDS = [f"distribution={distribution}" for distribution in DISTRIBUTIONS]
 
 
 @mark.parametrize("distribution", DISTRIBUTIONS, ids=DISTRIBUTION_IDS)
-def test_HutchinsonTraceEstimator(distribution: str):
-    """Test whether Hutchinon's trace estimator converges to the true trace.
+def test_HutchPPTraceEstimator(distribution: str):
+    """Test whether Hutch++'s trace estimator converges to the true trace.
 
     Args:
         distribution: Distribution of the random vectors used for the trace estimation.
@@ -26,7 +26,7 @@ def test_HutchinsonTraceEstimator(distribution: str):
     chunk_size = 2_000  # add that many new samples before comparing against the truth
     atol, rtol = 1e-3, 1e-2
 
-    estimator = HutchinsonTraceEstimator(A)
+    estimator = HutchPPTraceEstimator(A)
 
     while len(samples) < max_samples:
         samples.extend(
