@@ -43,11 +43,11 @@ def _test_convergence(
             [estimator.sample(distribution=distribution) for _ in range(chunk_size)]
         )
         tr_estimator = mean(samples)
-        if not isclose(tr_A, tr_estimator, atol=atol, rtol=rtol):
-            print(f"{len(samples)} samples: Tr(A)={tr_A:.5f}≠{tr_estimator:.5f}.")
-        else:
+        if isclose(tr_A, tr_estimator, atol=atol, rtol=rtol):
             # quit once the estimator has converged
             break
+
+        print(f"{len(samples)} samples: Tr(A)={tr_A:.5f}≠{tr_estimator:.5f}.")
 
     tr_estimator = mean(samples)
     assert isclose(tr_A, tr_estimator, atol=atol, rtol=rtol)

@@ -1,5 +1,6 @@
 """``curvlinops`` library API."""
 
+from curvlinops.diagonal.hutchinson import HutchinsonDiagonalEstimator
 from curvlinops.fisher import FisherMCLinearOperator
 from curvlinops.ggn import GGNLinearOperator
 from curvlinops.gradient_moments import EFLinearOperator
@@ -32,4 +33,5 @@ __all__ = [
     "LanczosApproximateLogSpectrumCached",
     "HutchinsonTraceEstimator",
     "HutchPPTraceEstimator",
+    "HutchinsonDiagonalEstimator",
 ]
