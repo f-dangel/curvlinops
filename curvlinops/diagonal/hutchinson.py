@@ -68,9 +68,9 @@ class HutchinsonDiagonalEstimator:
         self._A = A
 
     def sample(self, distribution: str = "rademacher") -> ndarray:
-        """Draw a sample from the trace estimator.
+        """Draw a sample from the diagonal estimator.
 
-        Multiple samples can be combined into a more accurate trace estimation via
+        Multiple samples can be combined into a more accurate diagonal estimation via
         averaging.
 
         Args:
@@ -79,7 +79,7 @@ class HutchinsonDiagonalEstimator:
                 Default is ``'rademacher'``.
 
         Returns:
-            Sample from the diagonal estimator.
+            A Sample from the diagonal estimator.
         """
         dim = self._A.shape[1]
         v = random_vector(dim, distribution)
