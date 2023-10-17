@@ -1,21 +1,38 @@
 """Vanilla Hutchinson trace estimation."""
 
-from typing import Callable, Dict
-
-from numpy import dot, ndarray
+from numpy import dot
 from scipy.sparse.linalg import LinearOperator
 
-from curvlinops.trace.sampling import normal, rademacher
+from curvlinops.sampling import random_vector
 
 
 class HutchinsonTraceEstimator:
-    """Class to perform trace estimation with Hutchinson's method.
+    r"""Class to perform trace estimation with Hutchinson's method.
 
     For details, see
 
     - Hutchinson, M. (1989). A stochastic estimator of the trace of the influence
       matrix for laplacian smoothing splines. Communication in Statistics---Simulation
       and Computation.
+
+    Let :math:`\mathbf{A}` be a square linear operator. We can approximate its trace
+    :math:`\mathrm{Tr}(\mathbf{A})` by drawing a random vector :math:`\mathbf{v}`
+    which satisfies :math:`\mathbb{E}[\mathbf{v} \mathbf{v}^\top] = \mathbf{I}` and
+    sample from the estimator
+
+    .. math::
+        a
+        := \mathbf{v}^\top \mathbf{A} \mathbf{v}
+        \approx \mathrm{Tr}(\mathbf{A})\,.
+
+    This estimator is unbiased,
+
+    .. math::
+        \mathbb{E}[a]
+        = \mathrm{Tr}(\mathbb{E}[\mathbf{v}^\top\mathbf{A} \mathbf{v}])
+        = \mathrm{Tr}(\mathbf{A} \mathbb{E}[\mathbf{v} \mathbf{v}^\top])
+        = \mathrm{Tr}(\mathbf{A} \mathbf{I})
+        = \mathrm{Tr}(\mathbf{A})\,.
 
     Example:
         >>> from numpy import trace, mean, round
@@ -30,16 +47,7 @@ class HutchinsonTraceEstimator:
         >>> assert abs(tr_A - tr_A_low_precision) > abs(tr_A - tr_A_high_precision)
         >>> round(tr_A, 4), round(tr_A_low_precision, 4), round(tr_A_high_precision, 4)
         (4.4575, 6.6796, 4.3886)
-
-    Attributes:
-        SUPPORTED_DISTRIBUTIONS: Dictionary mapping supported distributions to their
-            sampling functions.
     """
-
-    SUPPORTED_DISTRIBUTIONS: Dict[str, Callable[[int], ndarray]] = {
-        "rademacher": rademacher,
-        "normal": normal,
-    }
 
     def __init__(self, A: LinearOperator):
         """Store the linear operator whose trace will be estimated.
@@ -67,19 +75,8 @@ class HutchinsonTraceEstimator:
 
         Returns:
             Sample from the trace estimator.
-
-        Raises:
-            ValueError: If the distribution is not supported.
         """
         dim = self._A.shape[1]
-
-        if distribution not in self.SUPPORTED_DISTRIBUTIONS:
-            raise ValueError(
-                f"Unsupported distribution {distribution:!r}. "
-                f"Supported distributions are {list(self.SUPPORTED_DISTRIBUTIONS)}."
-            )
-
-        v = self.SUPPORTED_DISTRIBUTIONS[distribution](dim)
+        v = random_vector(dim, distribution)
         Av = self._A @ v
-
         return dot(v, Av)

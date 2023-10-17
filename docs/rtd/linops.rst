@@ -68,3 +68,9 @@ Trace approximation
 
 .. autoclass:: curvlinops.HutchPPTraceEstimator
    :members: __init__, sample
+
+Diagonal approximation
+======================
+
+.. autoclass:: curvlinops.HutchinsonDiagonalEstimator
+   :members: __init__, sample

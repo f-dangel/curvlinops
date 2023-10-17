@@ -1,16 +1,16 @@
 """Implementation of Hutch++ trace estimation from Meyer et al."""
 
-from typing import Callable, Dict, Optional, Union
+from typing import Optional, Union
 
 from numpy import column_stack, dot, ndarray
 from numpy.linalg import qr
 from scipy.sparse.linalg import LinearOperator
 
-from curvlinops.trace.sampling import normal, rademacher
+from curvlinops.sampling import random_vector
 
 
 class HutchPPTraceEstimator:
-    """Class to perform trace estimation with the Huch++ method.
+    r"""Class to perform trace estimation with the Huch++ method.
 
     In contrast to vanilla Hutchinson, Hutch++ has lower variance, but requires more
     memory.
@@ -19,6 +19,26 @@ class HutchPPTraceEstimator:
 
     - Meyer, R. A., Musco, C., Musco, C., & Woodruff, D. P. (2020). Hutch++:
       optimal stochastic trace estimation.
+
+    Let :math:`\mathbf{A}` be a square linear operator whose trace we want to
+    approximate. First, we compute an orthonormal basis :math:`\mathbf{Q}` of a
+    sub-space spanned by :math:`\mathbf{A} \mathbf{S}` where :math:`\mathbf{S}` is a
+    tall random matrix with i.i.d. elements. Then, we compute the trace in the sub-space
+    and apply Hutchinson's estimator in the remaining space spanned by
+    :math:`\mathbf{I} - \mathbf{Q} \mathbf{Q}^\top`: We can draw a random vector
+    :math:`\mathbf{v}` which satisfies
+    :math:`\mathbb{E}[\mathbf{v} \mathbf{v}^\top] = \mathbf{I}` and sample from the
+    estimator
+
+    .. math::
+        a
+        := \mathrm{Tr}(\mathbf{Q}^\top \mathbf{A} \mathbf{Q})
+        + \mathbf{v}^\top (\mathbf{I} - \mathbf{Q} \mathbf{Q}^\top)^\top
+          \mathbf{A} (\mathbf{I} - \mathbf{Q} \mathbf{Q}^\top) \mathbf{v}
+        \approx \mathrm{Tr}(\mathbf{A})\,.
+
+    This estimator is unbiased, :math:`\mathbb{E}[a] = \mathrm{Tr}(\mathbf{A})`, as the
+    first term is constant and the second part is Hutchinson's estimator in a sub-space.
 
     Example:
         >>> from numpy import trace, mean, round
@@ -33,16 +53,7 @@ class HutchPPTraceEstimator:
         >>> # assert abs(tr_A - tr_A_low_precision) > abs(tr_A - tr_A_high_precision)
         >>> round(tr_A, 4), round(tr_A_low_precision, 4), round(tr_A_high_precision, 4)
         (4.4575, 2.4085, 4.5791)
-
-    Attributes:
-        SUPPORTED_DISTRIBUTIONS: Dictionary mapping supported distributions to their
-            sampling functions.
     """
-
-    SUPPORTED_DISTRIBUTIONS: Dict[str, Callable[[int], ndarray]] = {
-        "rademacher": rademacher,
-        "normal": normal,
-    }
 
     def __init__(
         self,
@@ -64,8 +75,8 @@ class HutchPPTraceEstimator:
                 ``'rademacher'``.
 
         Raises:
-            ValueError: If the operator is not square, the basis dimension is too
-                large, or the sampling distribution is not supported.
+            ValueError: If the operator is not square or the basis dimension is too
+                large.
 
         Note:
             If you are planning to perform a fair (i.e. same computation budget)
@@ -86,12 +97,6 @@ class HutchPPTraceEstimator:
                 f"Basis dimension must be at most {self._A.shape[1]}. Got {basis_dim}."
             )
         self._basis_dim = basis_dim
-
-        if basis_distribution not in self.SUPPORTED_DISTRIBUTIONS:
-            raise ValueError(
-                f"Unsupported distribution {basis_distribution:!r}. "
-                f"Supported distributions are {list(self.SUPPORTED_DISTRIBUTIONS)}."
-            )
         self._basis_distribution = basis_distribution
 
         # When drawing the first sample, the basis and its subspace trace will be
@@ -116,25 +121,14 @@ class HutchPPTraceEstimator:
 
         Returns:
             Sample from the trace estimator.
-
-        Raises:
-            ValueError: If the distribution is not supported.
         """
         self.maybe_compute_and_cache_subspace()
 
-        if distribution not in self.SUPPORTED_DISTRIBUTIONS:
-            raise ValueError(
-                f"Unsupported distribution {distribution:!r}. "
-                f"Supported distributions are {list(self.SUPPORTED_DISTRIBUTIONS)}."
-            )
-
         dim = self._A.shape[1]
-        v = self.SUPPORTED_DISTRIBUTIONS[distribution](dim)
+        v = random_vector(dim, distribution)
         # project out subspace
         v -= self._Q @ (self._Q.T @ v)
-
         Av = self._A @ v
-
         return self._tr_QT_A_Q + dot(v, Av)
 
     def maybe_compute_and_cache_subspace(self):
@@ -145,7 +139,7 @@ class HutchPPTraceEstimator:
         dim = self._A.shape[1]
         AS = column_stack(
             [
-                self._A @ self.SUPPORTED_DISTRIBUTIONS[self._basis_distribution](dim)
+                self._A @ random_vector(dim, self._basis_distribution)
                 for _ in range(self._basis_dim)
             ]
         )
