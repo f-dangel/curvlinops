@@ -10,7 +10,7 @@ from curvlinops.sampling import random_vector
 
 
 class HutchPPTraceEstimator:
-    """Class to perform trace estimation with the Huch++ method.
+    r"""Class to perform trace estimation with the Huch++ method.
 
     In contrast to vanilla Hutchinson, Hutch++ has lower variance, but requires more
     memory.
@@ -19,6 +19,26 @@ class HutchPPTraceEstimator:
 
     - Meyer, R. A., Musco, C., Musco, C., & Woodruff, D. P. (2020). Hutch++:
       optimal stochastic trace estimation.
+
+    Let :math:`\mathbf{A}` be a square linear operator whose trace we want to
+    approximate. First, we compute an orthonormal basis :math:`\mathbf{Q}` of a
+    sub-space spanned by :math:`\mathbf{A} \mathbf{S}` where :math:`\mathbf{S}` is a
+    tall random matrix with i.i.d. elements. Then, we compute the trace in the sub-space
+    and apply Hutchinson's estimator in the remaining space spanned by
+    :math:`\mathbf{I} - \mathbf{Q} \mathbf{Q}^\top`: We can draw a random vector
+    :math:`\mathbf{v}` which satisfies
+    :math:`\mathbb{E}[\mathbf{v} \mathbf{v}^\top] = \mathbf{I}` and sample from the
+    estimator
+
+    .. math::
+        a
+        := \mathrm{Tr}(\mathbf{Q}^\top \mathbf{A} \mathbf{Q})
+        + \mathbf{v}^\top (\mathbf{I} - \mathbf{Q} \mathbf{Q}^\top)^\top
+          \mathbf{A} (\mathbf{I} - \mathbf{Q} \mathbf{Q}^\top) \mathbf{v}
+        \approx \mathrm{Tr}(\mathbf{A})\,.
+
+    This estimator is unbiased, :math:`\mathbb{E}[a] = \mathrm{Tr}(\mathbf{A})`, as the
+    first term is constant and the second part is Hutchinson's estimator in a sub-space.
 
     Example:
         >>> from numpy import trace, mean, round

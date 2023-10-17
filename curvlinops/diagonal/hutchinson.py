@@ -8,12 +8,31 @@ from curvlinops.sampling import random_vector
 
 
 class HutchinsonDiagonalEstimator:
-    """Class to perform diagonal estimation with Hutchinson's method.
+    r"""Class to perform diagonal estimation with Hutchinson's method.
 
     For details, see
 
     - Martens, J., Sutskever, I., & Swersky, K. (2012). Estimating the hessian by
       back-propagating curvature. International Conference on Machine Learning (ICML).
+
+    Let :math:`\mathbf{A}` be a square linear operator. We can approximate its diagonal
+    :math:`\mathrm{diag}(\mathbf{A})` by drawing a random vector :math:`\mathbf{v}`
+    which satisfies :math:`\mathbb{E}[\mathbf{v} \mathbf{v}^\top] = \mathbf{I}` and
+    sample from the estimator
+
+    .. math::
+        \mathbf{a}
+        := \mathbf{v} \odot \mathbf{A} \mathbf{v}
+        \approx \mathrm{diag}(\mathbf{A})\,.
+
+    This estimator is unbiased,
+
+    .. math::
+        \mathbb{E}[a_i]
+        = \sum_j \mathbb{E}[v_i A_{i,j} v_j]
+        = \sum_j A_{i,j} \mathbb{E}[v_i  v_j]
+        = \sum_j A_{i,j} \delta_{i, j}
+        = A_{i,i}\,.
 
     Example:
         >>> from numpy import diag, mean, round

@@ -7,13 +7,32 @@ from curvlinops.sampling import random_vector
 
 
 class HutchinsonTraceEstimator:
-    """Class to perform trace estimation with Hutchinson's method.
+    r"""Class to perform trace estimation with Hutchinson's method.
 
     For details, see
 
     - Hutchinson, M. (1989). A stochastic estimator of the trace of the influence
       matrix for laplacian smoothing splines. Communication in Statistics---Simulation
       and Computation.
+
+    Let :math:`\mathbf{A}` be a square linear operator. We can approximate its trace
+    :math:`\mathrm{Tr}(\mathbf{A})` by drawing a random vector :math:`\mathbf{v}`
+    which satisfies :math:`\mathbb{E}[\mathbf{v} \mathbf{v}^\top] = \mathbf{I}` and
+    sample from the estimator
+
+    .. math::
+        a
+        := \mathbf{v}^\top \mathbf{A} \mathbf{v}
+        \approx \mathrm{Tr}(\mathbf{A})\,.
+
+    This estimator is unbiased,
+
+    .. math::
+        \mathbb{E}[a]
+        = \mathrm{Tr}(\mathbb{E}[\mathbf{v}^\top\mathbf{A} \mathbf{v}])
+        = \mathrm{Tr}(\mathbf{A} \mathbb{E}[\mathbf{v} \mathbf{v}^\top])
+        = \mathrm{Tr}(\mathbf{A} \mathbf{I})
+        = \mathrm{Tr}(\mathbf{A})\,.
 
     Example:
         >>> from numpy import trace, mean, round
