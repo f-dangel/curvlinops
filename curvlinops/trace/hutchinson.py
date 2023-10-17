@@ -1,11 +1,9 @@
 """Vanilla Hutchinson trace estimation."""
 
-from typing import Callable, Dict
-
-from numpy import dot, ndarray
+from numpy import dot
 from scipy.sparse.linalg import LinearOperator
 
-from curvlinops.trace.sampling import normal, rademacher
+from curvlinops.sampling import random_vector
 
 
 class HutchinsonTraceEstimator:
@@ -30,16 +28,7 @@ class HutchinsonTraceEstimator:
         >>> assert abs(tr_A - tr_A_low_precision) > abs(tr_A - tr_A_high_precision)
         >>> round(tr_A, 4), round(tr_A_low_precision, 4), round(tr_A_high_precision, 4)
         (4.4575, 6.6796, 4.3886)
-
-    Attributes:
-        SUPPORTED_DISTRIBUTIONS: Dictionary mapping supported distributions to their
-            sampling functions.
     """
-
-    SUPPORTED_DISTRIBUTIONS: Dict[str, Callable[[int], ndarray]] = {
-        "rademacher": rademacher,
-        "normal": normal,
-    }
 
     def __init__(self, A: LinearOperator):
         """Store the linear operator whose trace will be estimated.
@@ -67,19 +56,8 @@ class HutchinsonTraceEstimator:
 
         Returns:
             Sample from the trace estimator.
-
-        Raises:
-            ValueError: If the distribution is not supported.
         """
         dim = self._A.shape[1]
-
-        if distribution not in self.SUPPORTED_DISTRIBUTIONS:
-            raise ValueError(
-                f"Unsupported distribution {distribution:!r}. "
-                f"Supported distributions are {list(self.SUPPORTED_DISTRIBUTIONS)}."
-            )
-
-        v = self.SUPPORTED_DISTRIBUTIONS[distribution](dim)
+        v = random_vector(dim, distribution)
         Av = self._A @ v
-
         return dot(v, Av)
