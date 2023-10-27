@@ -13,9 +13,11 @@ from curvlinops.kfac import KFACLinearOperator
 
 
 def test_kfac(
-    kfac_case: Tuple[Module, MSELoss, List[Parameter], Iterable[Tuple[Tensor, Tensor]]]
+    kfac_expand_exact_case: Tuple[
+        Module, MSELoss, List[Parameter], Iterable[Tuple[Tensor, Tensor]]
+    ]
 ):
-    model, loss_func, params, data = kfac_case
+    model, loss_func, params, data = kfac_expand_exact_case
 
     ggn_blocks = []  # list of per-parameter GGNs
     for param in params:
