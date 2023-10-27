@@ -1,11 +1,13 @@
 """Contains pytest fixtures that are visible by other files."""
 
 from test.cases import ADJOINT_CASES, CASES, NON_DETERMINISTIC_CASES
+from test.kfac_cases import KFAC_EXPAND_EXACT_CASES
 from typing import Callable, Dict, Iterable, List, Tuple
 
 from numpy import random
 from pytest import fixture
-from torch import Tensor, manual_seed
+from torch import Module, Tensor, manual_seed
+from torch.nn import MSELoss
 
 
 def initialize_case(
@@ -56,3 +58,17 @@ def non_deterministic_case(
 @fixture(params=ADJOINT_CASES)
 def adjoint(request) -> bool:
     return request.param
+
+
+@fixture(params=KFAC_EXPAND_EXACT_CASES)
+def kfac_expand_exact_case(
+    request,
+) -> Tuple[Module, MSELoss, List[Tensor], Iterable[Tuple[Tensor, Tensor]],]:
+    """Prepare a test case for which KFAC-expand equals the GGN.
+
+    Yields:
+        A neural network, the mean-squared error function, a list of parameters, and
+        a data set.
+    """
+    kfac_case = request.param
+    yield initialize_case(kfac_case)
