@@ -148,6 +148,22 @@ class KFACLinearOperator(_LinearOperator):
             handle.remove()
 
     def draw_label(self, output: Tensor) -> Tensor:
+        r"""Draw a sample from the model's predictive distribution.
+
+        The model's distribution is implied by the (negative log likelihood) loss
+        function. For instance, ``MSELoss`` implies a Gaussian distribution with
+        constant variance, and ``CrossEntropyLoss`` implies a categorical distribution.
+
+        Args:
+            output: The model's prediction
+                :math:`\{f_\mathbf{\theta}(\mathbf{x}_n)\}_{n=1}^N`.
+
+        Returns:
+            A sample :math:`\{\mathbf{y}_n\}_{n=1}^N` drawn from the model's predictive
+            distribution :math:`p(\mathbf{y} \mid \mathbf{x}, \mathbf{\theta})`. Has
+            the same shape as the labels that would be fed into the loss function
+            together with ``output``.
+        """
         if isinstance(self._loss_func, MSELoss):
             std = {
                 "sum": sqrt(1.0 / 2.0),
@@ -166,46 +182,82 @@ class KFACLinearOperator(_LinearOperator):
     def _hook_accumulate_gradient_covariance(
         self, module: Module, grad_input: Tuple[Tensor], grad_output: Tuple[Tensor]
     ):
-        assert len(grad_output) == 1
+        """Backward hook that accumulates the output-gradient covariance of a layer.
+
+        Updates ``self._gradient_covariances``.
+
+        Args:
+            module: The layer on which the hook is called.
+            grad_input: The gradient of the loss w.r.t. the layer's inputs.
+            grad_output: The gradient of the loss w.r.t. the layer's outputs.
+
+        Raises:
+            ValueError: If ``grad_output`` is not a 1-tuple.
+            NotImplementedError: If a layer uses weight sharing.
+            NotImplementedError: If the layer is not supported.
+        """
+        if len(grad_output) != 1:
+            raise ValueError(
+                f"Expected grad_output to be a 1-tuple, got {len(grad_output)}."
+            )
+        g = grad_output[0].data.detach()
 
         if isinstance(module, Linear):
-            grad_out = grad_output[0].data.detach()
-            assert grad_out.ndim == 2
-            idx = tuple(p.data_ptr() for p in module.parameters())
+            if g.ndim != 2:
+                # TODO Support weight sharing
+                raise NotImplementedError(
+                    "Only 2d grad_outputs are supported for linear layers. "
+                    + f"Got {g.ndim}d."
+                )
 
-            batch_size = grad_output[0].shape[0]
+            batch_size = g.shape[0]
             correction = {
                 "sum": 1.0 / self._mc_samples,
                 "mean": batch_size**2 / (self._N_data * self._mc_samples),
             }[self._loss_func.reduction]
-
-            covariance = einsum("bi,bj->ij", grad_out, grad_out).mul_(correction)
-            if idx not in self._gradient_covariances:
-                self._gradient_covariances[idx] = covariance
-            else:
-                self._gradient_covariances[idx].add_(covariance)
+            covariance = einsum("bi,bj->ij", g, g).mul_(correction)
         else:
-            raise NotImplementedError
+            # TODO Support convolutions
+            raise NotImplementedError(f"Layer of type {type(module)} is unsupported.")
+
+        idx = tuple(p.data_ptr() for p in module.parameters())
+        if idx not in self._gradient_covariances:
+            self._gradient_covariances[idx] = covariance
+        else:
+            self._gradient_covariances[idx].add_(covariance)
 
     def _hook_accumulate_input_covariance(self, module: Module, inputs: Tuple[Tensor]):
-        assert len(inputs) == 1
+        """Pre-forward hook that accumulates the input covariance of a layer.
+
+        Updates ``self._input_covariances``.
+
+        Args:
+            module: Module on which the hook is called.
+            inputs: Inputs to the module.
+
+        Raises:
+            ValueError: If the module has multiple inputs.
+            NotImplementedError: If a layer uses weight sharing.
+            NotImplementedError: If a module is not supported.
+        """
+        if len(inputs) != 1:
+            raise ValueError("Modules with multiple inputs are not supported.")
+        x = inputs[0].data.detach()
 
         if isinstance(module, Linear):
-            module_input = inputs[0].data.detach()
-            assert module_input.ndim == 2
+            if x.ndim != 2:
+                # TODO Support weight sharing
+                raise NotImplementedError(
+                    f"Only 2d inputs are supported for linear layers. Got {x.ndim}d."
+                )
 
-            idx = tuple(p.data_ptr() for p in module.parameters())
-            correction = {
-                "sum": 1.0 / self._N_data,
-                "mean": 1.0 / self._N_data,
-            }[self._loss_func.reduction]
-
-            covariance = einsum("bi,bj->ij", module_input, module_input).mul_(
-                correction
-            )
-            if idx not in self._input_covariances:
-                self._input_covariances[idx] = covariance
-            else:
-                self._input_covariances[idx].add_(covariance)
+            covariance = einsum("bi,bj->ij", x, x).div_(self._N_data)
         else:
-            raise NotImplementedError
+            # TODO Support convolutions
+            raise NotImplementedError(f"Layer of type {type(module)} is unsupported.")
+
+        idx = tuple(p.data_ptr() for p in module.parameters())
+        if idx not in self._input_covariances:
+            self._input_covariances[idx] = covariance
+        else:
+            self._input_covariances[idx].add_(covariance)
