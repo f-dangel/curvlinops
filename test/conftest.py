@@ -6,8 +6,8 @@ from typing import Callable, Dict, Iterable, List, Tuple
 
 from numpy import random
 from pytest import fixture
-from torch import Module, Tensor, manual_seed
-from torch.nn import MSELoss
+from torch import Tensor, manual_seed
+from torch.nn import Module, MSELoss
 
 
 def initialize_case(
