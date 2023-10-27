@@ -116,6 +116,14 @@ class KFACLinearOperator(_LinearOperator):
                 from the model's predictive distribution. Defaults to ``2147483647``.
             mc_samples: The number of Monte-Carlo samples to use per data point.
                 Defaults to ``1``.
+
+        Raises:
+            ValueError: If the loss function is not supported.
+            NotImplementedError: If the parameters are not in the same order as the
+                model's parameters.
+            NotImplementedError: If the model contains bias-free linear layers.
+            NotImplementedError: If any parameter cannot be identified with a supported
+                layer.
         """
         if not isinstance(loss_func, self._SUPPORTED_LOSSES):
             raise ValueError(
