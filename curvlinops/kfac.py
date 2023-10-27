@@ -258,10 +258,14 @@ class KFACLinearOperator(_LinearOperator):
                 :math:`\{f_\mathbf{\theta}(\mathbf{x}_n)\}_{n=1}^N`.
 
         Returns:
-            A sample :math:`\{\mathbf{y}_n\}_{n=1}^N` drawn from the model's predictive
+            A sample
+            :math:`\{\mathbf{y}_n\}_{n=1}^N` drawn from the model's predictive
             distribution :math:`p(\mathbf{y} \mid \mathbf{x}, \mathbf{\theta})`. Has
             the same shape as the labels that would be fed into the loss function
             together with ``output``.
+
+        Raises:
+            NotImplementedError: If the loss function is not supported.
         """
         if isinstance(self._loss_func, MSELoss):
             std = {
