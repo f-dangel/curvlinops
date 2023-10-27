@@ -16,9 +16,10 @@ from __future__ import annotations
 from math import sqrt
 from typing import Dict, Iterable, List, Tuple, Union
 
+from einops import rearrange
 from numpy import ndarray
 from torch import Generator, Tensor, einsum, randn
-from torch.nn import Linear, Module, MSELoss, Parameter
+from torch.nn import CrossEntropyLoss, Linear, Module, MSELoss, Parameter
 from torch.utils.hooks import RemovableHandle
 
 from curvlinops._base import _LinearOperator
@@ -66,7 +67,7 @@ class KFACLinearOperator(_LinearOperator):
         _SUPPORTED_MODULES: Tuple of supported layers.
     """
 
-    _SUPPORTED_LOSSES = (MSELoss,)
+    _SUPPORTED_LOSSES = (MSELoss, CrossEntropyLoss)
     _SUPPORTED_MODULES = (Linear,)
 
     def __init__(
@@ -279,6 +280,17 @@ class KFACLinearOperator(_LinearOperator):
                 generator=self._generator,
             )
             return output.clone().detach() + perturbation
+        elif isinstance(self._loss_func, CrossEntropyLoss):
+            # TODO For output.ndim > 2, the scale of the 'would-be' gradient resulting
+            # from these labels might be off
+            probs = output.softmax(dim=1)
+            # each row contains a vector describing a categorical
+            probs_as_mat = rearrange(probs, "n c ... -> (n ...) c")
+            labels = probs_as_mat.multinomial(
+                num_samples=1, generator=self._generator
+            ).squeeze(-1)
+            label_shape = output.shape[:1] + output.shape[2:]
+            return labels.reshape(label_shape)
         else:
             raise NotImplementedError
 

@@ -1,7 +1,7 @@
 """Contains pytest fixtures that are visible by other files."""
 
 from test.cases import ADJOINT_CASES, CASES, NON_DETERMINISTIC_CASES
-from test.kfac_cases import KFAC_EXPAND_EXACT_CASES
+from test.kfac_cases import KFAC_EXPAND_EXACT_CASES, KFAC_EXPAND_EXACT_ONE_DATUM_CASES
 from typing import Callable, Dict, Iterable, List, Tuple
 
 from numpy import random
@@ -70,5 +70,19 @@ def kfac_expand_exact_case(
         A neural network, the mean-squared error function, a list of parameters, and
         a data set.
     """
-    kfac_case = request.param
-    yield initialize_case(kfac_case)
+    case = request.param
+    yield initialize_case(case)
+
+
+@fixture(params=KFAC_EXPAND_EXACT_ONE_DATUM_CASES)
+def kfac_expand_exact_one_datum_case(
+    request,
+) -> Tuple[Module, Module, List[Tensor], Iterable[Tuple[Tensor, Tensor]],]:
+    """Prepare a test case for which KFAC-expand equals the GGN and one datum is used.
+
+    Yields:
+        A neural network, loss function, a list of parameters, and
+        a data set with a single datum.
+    """
+    case = request.param
+    yield initialize_case(case)
