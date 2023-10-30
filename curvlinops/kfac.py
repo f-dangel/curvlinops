@@ -99,7 +99,7 @@ class KFACLinearOperator(_LinearOperator):
             - Weights and biases are treated separately.
             - No weight sharing is supported.
             - Only the Monte-Carlo sampled version is supported.
-            - Only the ``'expand'`` setting is supported.
+            - Only the ``'expand'`` approximation is supported.
 
         Args:
             model_func: The neural network. Must consist of modules.
@@ -280,9 +280,14 @@ class KFACLinearOperator(_LinearOperator):
                 generator=self._generator,
             )
             return output.clone().detach() + perturbation
+
         elif isinstance(self._loss_func, CrossEntropyLoss):
             # TODO For output.ndim > 2, the scale of the 'would-be' gradient resulting
             # from these labels might be off
+            if output.ndim != 2:
+                raise NotImplementedError(
+                    "Only 2D output is supported for CrossEntropyLoss for now."
+                )
             probs = output.softmax(dim=1)
             # each row contains a vector describing a categorical
             probs_as_mat = rearrange(probs, "n c ... -> (n ...) c")
@@ -291,6 +296,7 @@ class KFACLinearOperator(_LinearOperator):
             ).squeeze(-1)
             label_shape = output.shape[:1] + output.shape[2:]
             return labels.reshape(label_shape)
+
         else:
             raise NotImplementedError
 
@@ -333,7 +339,10 @@ class KFACLinearOperator(_LinearOperator):
             covariance = einsum("bi,bj->ij", g, g).mul_(correction)
         else:
             # TODO Support convolutions
-            raise NotImplementedError(f"Layer of type {type(module)} is unsupported.")
+            raise NotImplementedError(
+                f"Layer of type {type(module)} is unsupported. "
+                + f"Supported layers: {self._SUPPORTED_MODULES}."
+            )
 
         idx = tuple(p.data_ptr() for p in module.parameters())
         if idx not in self._gradient_covariances:
