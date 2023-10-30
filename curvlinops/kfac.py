@@ -97,7 +97,7 @@ class KFACLinearOperator(_LinearOperator):
             - Weights and biases are treated separately.
             - No weight sharing is supported.
             - Only the Monte-Carlo sampled version is supported.
-            - Only the ``'expand'`` setting is supported.
+            - Only the ``'expand'`` approximation is supported.
 
         Args:
             model_func: The neural network. Must consist of modules.
