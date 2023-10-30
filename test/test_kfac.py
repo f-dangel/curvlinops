@@ -46,3 +46,25 @@ def test_kfac(
     rtol = {"sum": 2e-2, "mean": 2e-2}[loss_func.reduction]
 
     report_nonclose(ggn, kfac_mat, rtol=rtol, atol=atol)
+
+
+def test_kfac_one_datum(
+    kfac_expand_exact_one_datum_case: Tuple[
+        Module, MSELoss, List[Parameter], Iterable[Tuple[Tensor, Tensor]]
+    ]
+):
+    model, loss_func, params, data = kfac_expand_exact_one_datum_case
+
+    ggn_blocks = []  # list of per-parameter GGNs
+    for param in params:
+        ggn = GGNLinearOperator(model, loss_func, [param], data)
+        ggn_blocks.append(ggn @ eye(ggn.shape[1]))
+    ggn = block_diag(*ggn_blocks)
+
+    kfac = KFACLinearOperator(model, loss_func, params, data, mc_samples=10_000)
+    kfac_mat = kfac @ eye(kfac.shape[1])
+
+    atol = {"sum": 1e-3, "mean": 1e-3}[loss_func.reduction]
+    rtol = {"sum": 3e-2, "mean": 3e-2}[loss_func.reduction]
+
+    report_nonclose(ggn, kfac_mat, rtol=rtol, atol=atol)
