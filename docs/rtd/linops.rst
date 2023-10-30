@@ -20,6 +20,9 @@ Fisher (approximate)
 .. autoclass:: curvlinops.FisherMCLinearOperator
    :members: __init__
 
+.. autoclass:: curvlinops.KFACLinearOperator
+   :members: __init__
+
 Uncentered gradient covariance (empirical Fisher)
 -------------------------------------------------
 

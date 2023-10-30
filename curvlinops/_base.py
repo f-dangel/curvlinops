@@ -1,6 +1,7 @@
 """Contains functionality to analyze Hessian & GGN via matrix-free multiplication."""
 
 from typing import Callable, Iterable, List, Optional, Tuple, Union
+from warnings import warn
 
 from backpack.utils.convert_parameters import vector_to_parameter_list
 from numpy import (
@@ -254,6 +255,13 @@ class _LinearOperator(LinearOperator):
         Returns:
             Vector in list format.
         """
+        if x.dtype != self.dtype:
+            warn(
+                f"Input vector is {x.dtype}, while linear operator is {self.dtype}. "
+                + f"Converting to {self.dtype}."
+            )
+            x = x.astype(self.dtype)
+
         x_torch = from_numpy(x).to(self._device)
         return vector_to_parameter_list(x_torch, self._params)
 

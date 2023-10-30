@@ -17,8 +17,6 @@ from torch.utils.data import DataLoader, TensorDataset
 DEVICES = get_available_devices()
 DEVICES_IDS = [f"dev={d}" for d in DEVICES]
 
-LINOPS = []
-
 # Add test cases here
 CASES_NO_DEVICE = [
     ###############################################################################
