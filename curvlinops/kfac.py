@@ -93,7 +93,6 @@ class KFACLinearOperator(_LinearOperator):
         Warning:
             This is an early proto-type with many limitations:
 
-            - Parameters must be in the same order as the model's parameters.
             - Only linear layers with bias are supported.
             - Weights and biases are treated separately.
             - No weight sharing is supported.
@@ -119,8 +118,6 @@ class KFACLinearOperator(_LinearOperator):
 
         Raises:
             ValueError: If the loss function is not supported.
-            NotImplementedError: If the parameters are not in the same order as the
-                model's parameters.
             NotImplementedError: If the model contains bias-free linear layers.
             NotImplementedError: If any parameter cannot be identified with a supported
                 layer.
@@ -130,8 +127,8 @@ class KFACLinearOperator(_LinearOperator):
                 f"Invalid loss: {loss_func}. Supported: {self._SUPPORTED_LOSSES}."
             )
 
+        self.param_ids = [p.data_ptr() for p in params]
         self.hooked_modules: List[str] = []
-        idx = 0
         for name, mod in model_func.named_modules():
             if isinstance(mod, self._SUPPORTED_MODULES):
                 # TODO Support bias-free layers
@@ -139,18 +136,15 @@ class KFACLinearOperator(_LinearOperator):
                     raise NotImplementedError(
                         "Bias-free linear layers are not yet supported."
                     )
-                # TODO Support arbitrary orders and sub-sets of parameters
-                if (
-                    params[idx].data_ptr() != mod.weight.data_ptr()
-                    or params[idx + 1].data_ptr() != mod.bias.data_ptr()
-                ):
-                    raise NotImplementedError(
-                        "KFAC parameters must be in same order as model parameters "
-                        + "for now."
-                    )
-                idx += 2
                 self.hooked_modules.append(name)
-        if idx != len(params):
+
+        # check that all parameters are in hooked modules
+        hooked_param_ids = {
+            p.data_ptr()
+            for mod in self.hooked_modules
+            for p in model_func.get_submodule(mod).parameters()
+        }
+        if set(self.param_ids) != hooked_param_ids:
             raise NotImplementedError(
                 "Could not identify all parameters with supported layers."
             )
@@ -188,9 +182,12 @@ class KFACLinearOperator(_LinearOperator):
         x_torch = super()._preprocess(x)
         assert len(x_torch) % 2 == 0
 
-        for idx in range(len(x_torch) // 2):
-            idx_weight, idx_bias = 2 * idx, 2 * idx + 1
-            weight, bias = self._params[idx_weight], self._params[idx_bias]
+        for mod_name in self.hooked_modules:
+            mod = self._model_func.get_submodule(mod_name)
+            weight, bias = mod.weight, mod.bias
+
+            idx_weight = self.param_ids.index(weight.data_ptr())
+            idx_bias = self.param_ids.index(bias.data_ptr())
             x_weight, x_bias = x_torch[idx_weight], x_torch[idx_bias]
 
             aaT = self._input_covariances[(weight.data_ptr(), bias.data_ptr())]
