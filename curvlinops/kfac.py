@@ -321,7 +321,10 @@ class KFACLinearOperator(_LinearOperator):
             covariance = einsum("bi,bj->ij", g, g).mul_(correction)
         else:
             # TODO Support convolutions
-            raise NotImplementedError(f"Layer of type {type(module)} is unsupported.")
+            raise NotImplementedError(
+                f"Layer of type {type(module)} is unsupported. "
+                + f"Supported layers: {self._SUPPORTED_MODULES}."
+            )
 
         idx = tuple(p.data_ptr() for p in module.parameters())
         if idx not in self._gradient_covariances:
