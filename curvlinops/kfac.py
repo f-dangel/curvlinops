@@ -97,7 +97,6 @@ class KFACLinearOperator(_LinearOperator):
             This is an early proto-type with many limitations:
 
             - Only linear layers are supported.
-            - Weights and biases are treated separately.
             - No weight sharing is supported.
             - Only the ``'expand'`` approximation is supported.
 
