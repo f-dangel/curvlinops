@@ -6,7 +6,7 @@ from numpy import eye
 from pytest import mark
 from scipy.linalg import block_diag
 from torch import Tensor, randperm
-from torch.nn import Module, MSELoss, Parameter
+from torch.nn import CrossEntropyLoss, Module, MSELoss, Parameter
 
 from curvlinops.examples.utils import report_nonclose
 from curvlinops.ggn import GGNLinearOperator
@@ -83,7 +83,26 @@ def test_kfac_mc(
 
 def test_kfac_one_datum(
     kfac_expand_exact_one_datum_case: Tuple[
-        Module, MSELoss, List[Parameter], Iterable[Tuple[Tensor, Tensor]]
+        Module, CrossEntropyLoss, List[Parameter], Iterable[Tuple[Tensor, Tensor]]
+    ]
+):
+    model, loss_func, params, data = kfac_expand_exact_one_datum_case
+
+    ggn_blocks = []  # list of per-parameter GGNs
+    for param in params:
+        ggn = GGNLinearOperator(model, loss_func, [param], data)
+        ggn_blocks.append(ggn @ eye(ggn.shape[1]))
+    ggn = block_diag(*ggn_blocks)
+
+    kfac = KFACLinearOperator(model, loss_func, params, data, fisher_type="type-2")
+    kfac_mat = kfac @ eye(kfac.shape[1])
+
+    report_nonclose(ggn, kfac_mat)
+
+
+def test_kfac_mc_one_datum(
+    kfac_expand_exact_one_datum_case: Tuple[
+        Module, CrossEntropyLoss, List[Parameter], Iterable[Tuple[Tensor, Tensor]]
     ]
 ):
     model, loss_func, params, data = kfac_expand_exact_one_datum_case
@@ -104,11 +123,11 @@ def test_kfac_one_datum(
 
 
 def test_kfac_ef_one_datum(
-    kfac_ef_exact_one_datum_case: Tuple[
-        Module, MSELoss, List[Parameter], Iterable[Tuple[Tensor, Tensor]]
+    kfac_expand_exact_one_datum_case: Tuple[
+        Module, CrossEntropyLoss, List[Parameter], Iterable[Tuple[Tensor, Tensor]]
     ]
 ):
-    model, loss_func, params, data = kfac_ef_exact_one_datum_case
+    model, loss_func, params, data = kfac_expand_exact_one_datum_case
 
     ef_blocks = []  # list of per-parameter EFs
     for param in params:
