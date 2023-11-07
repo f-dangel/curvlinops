@@ -56,6 +56,10 @@ def test_kfac(
 
     report_nonclose(ggn, kfac_mat)
 
+    # Check that input covariances were not computed
+    if exclude == "weight":
+        assert len(kfac._input_covariances) == 0
+
 
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_kfac_mc(
@@ -90,10 +94,6 @@ def test_kfac_mc(
     rtol = {"sum": 2e-2, "mean": 2e-2}[loss_func.reduction]
 
     report_nonclose(ggn, kfac_mat, rtol=rtol, atol=atol)
-
-    # Check that input covariances were not computed
-    if exclude == "weight":
-        assert len(kfac._input_covariances) == 0
 
 
 def test_kfac_one_datum(
