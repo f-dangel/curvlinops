@@ -230,13 +230,7 @@ class KFACLinearOperator(_LinearOperator):
         return self
 
     def _compute_kfac(self):
-        """Compute and cache KFAC's Kronecker factors for future ``matvec``s.
-
-        Raises:
-            NotImplementedError: If ``fisher_type == 'type-2'``.
-            ValueError: If ``fisher_type`` is not ``'type-2'``, ``'mc'``, or
-                ``'empirical'``.
-        """
+        """Compute and cache KFAC's Kronecker factors for future ``matvec``s."""
         # install forward and backward hooks
         hook_handles: List[RemovableHandle] = []
         hook_handles.extend(
@@ -267,7 +261,19 @@ class KFACLinearOperator(_LinearOperator):
             handle.remove()
 
     def _compute_loss_and_backward(self, output: Tensor, y: Tensor):
-        """Compute the loss and the backward pass(es) required for KFAC."""
+        """Compute the loss and the backward pass(es) required for KFAC.
+        
+        Args:
+            output: The model's prediction
+                :math:`\{f_\mathbf{\theta}(\mathbf{x}_n)\}_{n=1}^N`.
+            y: The labels :math:`\{\mathbf{y}_n\}_{n=1}^N`.
+        
+        Raises:
+            NotImplementedError: If ``fisher_type == 'type-2'`` and
+                ``isinstance(self._loss_func, CrossEntropyLoss)``.
+            ValueError: If ``fisher_type`` is not ``'type-2'``, ``'mc'``, or
+                ``'empirical'``.
+        """
         if self._fisher_type == "type-2":
             reduction = self._loss_func.reduction
             reduction_fn = {"sum": torch_sum, "mean": torch_mean}[reduction]
