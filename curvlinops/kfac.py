@@ -128,14 +128,17 @@ class KFACLinearOperator(_LinearOperator):
             )
 
         self.param_ids = [p.data_ptr() for p in params]
-        self.hooked_modules: List[str] = []
+        # mapping from tuples of parameter data pointers in a module to its name
+        self.param_ids_to_hooked_modules: Dict[Tuple[int, ...], str] = {}
+
         hooked_param_ids: Set[int] = set()
         for name, mod in model_func.named_modules():
+            p_ids = tuple(p.data_ptr() for p in mod.parameters())
             if isinstance(mod, self._SUPPORTED_MODULES) and any(
-                p.data_ptr() in self.param_ids for p in mod.parameters()
+                p_id in self.param_ids for p_id in p_ids
             ):
-                self.hooked_modules.append(name)
-                hooked_param_ids.update({p.data_ptr() for p in mod.parameters()})
+                self.param_ids_to_hooked_modules[p_ids] = name
+                hooked_param_ids.update(set(p_ids))
 
         # check that all parameters are in hooked modules
         if not set(self.param_ids).issubset(hooked_param_ids):
@@ -173,7 +176,7 @@ class KFACLinearOperator(_LinearOperator):
 
         x_torch = super()._preprocess(x)
 
-        for name in self.hooked_modules:
+        for name in self.param_ids_to_hooked_modules.values():
             mod = self._model_func.get_submodule(name)
 
             if mod.weight.data_ptr() in self.param_ids:
@@ -204,8 +207,8 @@ class KFACLinearOperator(_LinearOperator):
         # install forward and backward hooks
         hook_handles: List[RemovableHandle] = []
 
-        for module_name in self.hooked_modules:
-            module = self._model_func.get_submodule(module_name)
+        for name in self.param_ids_to_hooked_modules.values():
+            module = self._model_func.get_submodule(name)
 
             # input covariance only required for weights
             if module.weight.data_ptr() in self.param_ids:
@@ -380,10 +383,13 @@ class KFACLinearOperator(_LinearOperator):
             self._input_covariances[name].add_(covariance)
 
     def get_module_name(self, module: Module) -> str:
-        module_id = tuple(p.data_ptr() for p in module.parameters())
+        """Get the name of a module.
 
-        for name, mod in self._model_func.named_modules():
-            if tuple(p.data_ptr() for p in mod.parameters()) == module_id:
-                return name
+        Args:
+            module: The module.
 
-        raise RuntimeError(f"Module {module} not found in model.")
+        Returns:
+            The name of the module.
+        """
+        p_ids = tuple(p.data_ptr() for p in module.parameters())
+        return self.param_ids_to_hooked_modules[p_ids]

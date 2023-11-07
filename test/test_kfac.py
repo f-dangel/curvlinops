@@ -1,9 +1,9 @@
 """Contains tests for ``curvlinops.kfac``."""
 
-from typing import Iterable, List, Optional, Tuple
+from typing import Iterable, List, Tuple
 
 from numpy import eye
-from pytest import mark, skip
+from pytest import mark
 from scipy.linalg import block_diag
 from torch import Tensor, randperm
 from torch.nn import Module, MSELoss, Parameter
