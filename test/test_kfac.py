@@ -40,6 +40,38 @@ def test_kfac(
         ggn_blocks.append(ggn @ eye(ggn.shape[1]))
     ggn = block_diag(*ggn_blocks)
 
+    kfac = KFACLinearOperator(model, loss_func, params, data, fisher_type="type-2")
+    kfac_mat = kfac @ eye(kfac.shape[1])
+
+    report_nonclose(ggn, kfac_mat)
+
+
+@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
+def test_kfac_mc(
+    kfac_expand_exact_case: Tuple[
+        Module, MSELoss, List[Parameter], Iterable[Tuple[Tensor, Tensor]]
+    ],
+    shuffle: bool,
+):
+    """Test the KFAC implementation using MC samples against the exact GGN.
+
+    Args:
+        kfac_expand_exact_case: A fixture that returns a model, loss function, list of
+            parameters, and data.
+        shuffle: Whether to shuffle the parameters before computing the KFAC matrix.
+    """
+    model, loss_func, params, data = kfac_expand_exact_case
+
+    if shuffle:
+        permutation = randperm(len(params))
+        params = [params[i] for i in permutation]
+
+    ggn_blocks = []  # list of per-parameter GGNs
+    for param in params:
+        ggn = GGNLinearOperator(model, loss_func, [param], data)
+        ggn_blocks.append(ggn @ eye(ggn.shape[1]))
+    ggn = block_diag(*ggn_blocks)
+
     kfac = KFACLinearOperator(model, loss_func, params, data, mc_samples=2_000)
     kfac_mat = kfac @ eye(kfac.shape[1])
 
