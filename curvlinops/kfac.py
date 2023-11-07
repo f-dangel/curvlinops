@@ -261,7 +261,7 @@ class KFACLinearOperator(_LinearOperator):
             handle.remove()
 
     def _compute_loss_and_backward(self, output: Tensor, y: Tensor):
-        """Compute the loss and the backward pass(es) required for KFAC.
+        r"""Compute the loss and the backward pass(es) required for KFAC.
 
         Args:
             output: The model's prediction
