@@ -94,7 +94,7 @@ class KFACLinearOperator(_LinearOperator):
         Warning:
             This is an early proto-type with many limitations:
 
-            - Only linear layers with bias are supported.
+            - Only linear layers are supported.
             - Weights and biases are treated separately.
             - No weight sharing is supported.
             - Only the Monte-Carlo sampled version is supported.
@@ -119,7 +119,6 @@ class KFACLinearOperator(_LinearOperator):
 
         Raises:
             ValueError: If the loss function is not supported.
-            NotImplementedError: If the model contains bias-free linear layers.
             NotImplementedError: If any parameter cannot be identified with a supported
                 layer.
         """
@@ -135,11 +134,6 @@ class KFACLinearOperator(_LinearOperator):
             if isinstance(mod, self._SUPPORTED_MODULES) and any(
                 p.data_ptr() in self.param_ids for p in mod.parameters()
             ):
-                # TODO Support bias-free layers
-                if mod.bias is None:
-                    raise NotImplementedError(
-                        "Bias-free linear layers are not yet supported."
-                    )
                 self.hooked_modules.append(name)
                 hooked_param_ids.update({p.data_ptr() for p in mod.parameters()})
 

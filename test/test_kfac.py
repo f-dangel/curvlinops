@@ -1,9 +1,9 @@
 """Contains tests for ``curvlinops.kfac``."""
 
-from typing import Iterable, List, Tuple
+from typing import Iterable, List, Optional, Tuple
 
 from numpy import eye
-from pytest import mark
+from pytest import mark, skip
 from scipy.linalg import block_diag
 from torch import Tensor, randperm
 from torch.nn import Module, MSELoss, Parameter
@@ -13,14 +13,16 @@ from curvlinops.ggn import GGNLinearOperator
 from curvlinops.kfac import KFACLinearOperator
 
 
-@mark.parametrize("include_weights", [True, False], ids=["weights", "no_weights"])
+@mark.parametrize(
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_kfac(
     kfac_expand_exact_case: Tuple[
         Module, MSELoss, List[Parameter], Iterable[Tuple[Tensor, Tensor]]
     ],
     shuffle: bool,
-    include_weights: bool,
+    exclude: str,
 ):
     """Test the KFAC implementation against the exact GGN.
 
@@ -28,13 +30,15 @@ def test_kfac(
         kfac_expand_exact_case: A fixture that returns a model, loss function, list of
             parameters, and data.
         shuffle: Whether to shuffle the parameters before computing the KFAC matrix.
-        include_weights: Whether to include weight parameters in the KFAC matrix.
+        exclude: Which parameters to exclude. Can be ``'weight'``, ``'bias'``,
+            or ``None``.
     """
+    assert exclude in [None, "weight", "bias"]
     model, loss_func, params, data = kfac_expand_exact_case
 
-    if not include_weights:
+    if exclude is not None:
         names = {p.data_ptr(): name for name, p in model.named_parameters()}
-        params = [p for p in params if "weight" not in names[p.data_ptr()]]
+        params = [p for p in params if exclude not in names[p.data_ptr()]]
 
     if shuffle:
         permutation = randperm(len(params))
@@ -55,7 +59,7 @@ def test_kfac(
     report_nonclose(ggn, kfac_mat, rtol=rtol, atol=atol)
 
     # Check that input covariances were not computed
-    if not include_weights:
+    if exclude == "weight":
         assert len(kfac._input_covariances) == 0
 
 
