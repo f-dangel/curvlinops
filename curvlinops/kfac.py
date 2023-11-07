@@ -14,7 +14,7 @@ and extended to CNNs in
 from __future__ import annotations
 
 from math import sqrt
-from typing import Dict, Iterable, List, Tuple, Union
+from typing import Dict, Iterable, List, Set, Tuple, Union
 
 from einops import rearrange
 from numpy import ndarray
@@ -99,10 +99,9 @@ class KFACLinearOperator(_LinearOperator):
         Warning:
             This is an early proto-type with many limitations:
 
-            - Only linear layers with bias are supported.
+            - Only linear layers are supported.
             - Weights and biases are treated separately.
             - No weight sharing is supported.
-            - Only the Monte-Carlo sampled version is supported.
             - Only the ``'expand'`` approximation is supported.
 
         Args:
@@ -134,7 +133,6 @@ class KFACLinearOperator(_LinearOperator):
 
         Raises:
             ValueError: If the loss function is not supported.
-            NotImplementedError: If the model contains bias-free linear layers.
             NotImplementedError: If any parameter cannot be identified with a supported
                 layer.
         """
@@ -149,33 +147,28 @@ class KFACLinearOperator(_LinearOperator):
             )
 
         self.param_ids = [p.data_ptr() for p in params]
-        self.hooked_modules: List[str] = []
+        # mapping from tuples of parameter data pointers in a module to its name
+        self.param_ids_to_hooked_modules: Dict[Tuple[int, ...], str] = {}
+
+        hooked_param_ids: Set[int] = set()
         for name, mod in model_func.named_modules():
-            if isinstance(mod, self._SUPPORTED_MODULES):
-                # TODO Support bias-free layers
-                if mod.bias is None:
-                    raise NotImplementedError(
-                        "Bias-free linear layers are not yet supported."
-                    )
-                self.hooked_modules.append(name)
+            p_ids = tuple(p.data_ptr() for p in mod.parameters())
+            if isinstance(mod, self._SUPPORTED_MODULES) and any(
+                p_id in self.param_ids for p_id in p_ids
+            ):
+                self.param_ids_to_hooked_modules[p_ids] = name
+                hooked_param_ids.update(set(p_ids))
 
         # check that all parameters are in hooked modules
-        hooked_param_ids = {
-            p.data_ptr()
-            for mod in self.hooked_modules
-            for p in model_func.get_submodule(mod).parameters()
-        }
-        if set(self.param_ids) != hooked_param_ids:
-            raise NotImplementedError(
-                "Could not identify all parameters with supported layers."
-            )
+        if not set(self.param_ids).issubset(hooked_param_ids):
+            raise NotImplementedError("Found parameters outside supported layers.")
 
         self._seed = seed
         self._generator: Union[None, Generator] = None
         self._fisher_type = fisher_type
         self._mc_samples = mc_samples
-        self._input_covariances: Dict[Tuple[int, ...], Tensor] = {}
-        self._gradient_covariances: Dict[Tuple[int, ...], Tensor] = {}
+        self._input_covariances: Dict[str, Tensor] = {}
+        self._gradient_covariances: Dict[str, Tensor] = {}
 
         super().__init__(
             model_func,
@@ -202,21 +195,20 @@ class KFACLinearOperator(_LinearOperator):
             self._compute_kfac()
 
         x_torch = super()._preprocess(x)
-        assert len(x_torch) % 2 == 0
 
-        for mod_name in self.hooked_modules:
-            mod = self._model_func.get_submodule(mod_name)
-            weight, bias = mod.weight, mod.bias
+        for name in self.param_ids_to_hooked_modules.values():
+            mod = self._model_func.get_submodule(name)
 
-            idx_weight = self.param_ids.index(weight.data_ptr())
-            idx_bias = self.param_ids.index(bias.data_ptr())
-            x_weight, x_bias = x_torch[idx_weight], x_torch[idx_bias]
+            if mod.weight.data_ptr() in self.param_ids:
+                idx = self.param_ids.index(mod.weight.data_ptr())
+                aaT = self._input_covariances[name]
+                ggT = self._gradient_covariances[name]
+                x_torch[idx] = ggT @ x_torch[idx] @ aaT
 
-            aaT = self._input_covariances[(weight.data_ptr(), bias.data_ptr())]
-            ggT = self._gradient_covariances[(weight.data_ptr(), bias.data_ptr())]
-
-            x_torch[idx_weight] = ggT @ x_weight @ aaT
-            x_torch[idx_bias] = ggT @ x_bias
+            if mod.bias is not None and mod.bias.data_ptr() in self.param_ids:
+                idx = self.param_ids.index(mod.bias.data_ptr())
+                ggT = self._gradient_covariances[name]
+                x_torch[idx] = ggT @ x_torch[idx]
 
         return super()._postprocess(x_torch)
 
@@ -234,18 +226,24 @@ class KFACLinearOperator(_LinearOperator):
         """Compute and cache KFAC's Kronecker factors for future ``matvec``s."""
         # install forward and backward hooks
         hook_handles: List[RemovableHandle] = []
-        hook_handles.extend(
-            self._model_func.get_submodule(mod).register_forward_pre_hook(
-                self._hook_accumulate_input_covariance
+
+        for name in self.param_ids_to_hooked_modules.values():
+            module = self._model_func.get_submodule(name)
+
+            # input covariance only required for weights
+            if module.weight.data_ptr() in self.param_ids:
+                hook_handles.append(
+                    module.register_forward_pre_hook(
+                        self._hook_accumulate_input_covariance
+                    )
+                )
+
+            # gradient covariance required for weights and biases
+            hook_handles.append(
+                module.register_full_backward_hook(
+                    self._hook_accumulate_gradient_covariance
+                )
             )
-            for mod in self.hooked_modules
-        )
-        hook_handles.extend(
-            self._model_func.get_submodule(mod).register_full_backward_hook(
-                self._hook_accumulate_gradient_covariance
-            )
-            for mod in self.hooked_modules
-        )
 
         # loop over data set, computing the Kronecker factors
         if self._generator is None:
@@ -408,11 +406,11 @@ class KFACLinearOperator(_LinearOperator):
                 + f"Supported layers: {self._SUPPORTED_MODULES}."
             )
 
-        idx = tuple(p.data_ptr() for p in module.parameters())
-        if idx not in self._gradient_covariances:
-            self._gradient_covariances[idx] = covariance
+        name = self.get_module_name(module)
+        if name not in self._gradient_covariances:
+            self._gradient_covariances[name] = covariance
         else:
-            self._gradient_covariances[idx].add_(covariance)
+            self._gradient_covariances[name].add_(covariance)
 
     def _hook_accumulate_input_covariance(self, module: Module, inputs: Tuple[Tensor]):
         """Pre-forward hook that accumulates the input covariance of a layer.
@@ -444,8 +442,20 @@ class KFACLinearOperator(_LinearOperator):
             # TODO Support convolutions
             raise NotImplementedError(f"Layer of type {type(module)} is unsupported.")
 
-        idx = tuple(p.data_ptr() for p in module.parameters())
-        if idx not in self._input_covariances:
-            self._input_covariances[idx] = covariance
+        name = self.get_module_name(module)
+        if name not in self._input_covariances:
+            self._input_covariances[name] = covariance
         else:
-            self._input_covariances[idx].add_(covariance)
+            self._input_covariances[name].add_(covariance)
+
+    def get_module_name(self, module: Module) -> str:
+        """Get the name of a module.
+
+        Args:
+            module: The module.
+
+        Returns:
+            The name of the module.
+        """
+        p_ids = tuple(p.data_ptr() for p in module.parameters())
+        return self.param_ids_to_hooked_modules[p_ids]
