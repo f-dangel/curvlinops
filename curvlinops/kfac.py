@@ -117,13 +117,14 @@ class KFACLinearOperator(_LinearOperator):
                 from the model's predictive distribution. Defaults to ``2147483647``.
             fisher_type: The type of Fisher/GGN to approximate. If ``'type-2'``, the
                 expectation over the model outputs is computed exactly by
-                computing the backwward pass for each output dimension. This is
+                computing the backward pass for each output dimension. This is
                 sometimes also called type-2 Fisher. If ``'mc'``, the expectation
                 is approximated by sampling ``mc_samples`` labels from the model's
                 predictive distribution. If ``'empirical'``, the empirical gradients
                 are used which corresponds to the uncentered gradient covariance, or
                 the empirical Fisher. Defaults to ``'mc'``.
             mc_samples: The number of Monte-Carlo samples to use per data point.
+                Will be ignored when ``fisher_type`` is not ``'mc'``.
                 Defaults to ``1``.
 
         Raises:
@@ -226,7 +227,6 @@ class KFACLinearOperator(_LinearOperator):
             NotImplementedError: If ``fisher_type == 'type-2'``.
             ValueError: If ``fisher_type`` is not ``'type-2'``, ``'mc'``, or
                 ``'empirical'``.
-
         """
         # install forward and backward hooks
         hook_handles: List[RemovableHandle] = []
