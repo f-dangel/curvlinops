@@ -5,6 +5,8 @@ help:
 	@echo "        Install curvlinops and dependencies"
 	@echo "uninstall"
 	@echo "        Unstall curvlinops"
+	@echo "lint"
+	@echo "        Run all linting actions"
 	@echo "docs"
 	@echo "        Build the documentation"
 	@echo "install-dev"
@@ -114,3 +116,12 @@ pydocstyle-check:
 
 conda-env:
 	@conda env create --file .conda_env.yml
+
+.PHONY: lint
+
+lint:
+	make black-check
+	make isort-check
+	make flake8
+	make darglint-check
+	make pydocstyle-check
