@@ -80,6 +80,7 @@ class KFACLinearOperator(_LinearOperator):
         check_deterministic: bool = True,
         shape: Union[Tuple[int, int], None] = None,
         seed: int = 2147483647,
+        fisher_type: str = "mc",
         mc_samples: int = 1,
     ):
         """Kronecker-factored approximate curvature (KFAC) proxy of the Fisher/GGN.
@@ -114,7 +115,17 @@ class KFACLinearOperator(_LinearOperator):
                 from the parameters. Defaults to ``None``.
             seed: The seed for the random number generator used to draw labels
                 from the model's predictive distribution. Defaults to ``2147483647``.
+            fisher_type: The type of Fisher/GGN to approximate. If 'type-2', the
+                exact Hessian of the loss w.r.t. the model outputs is used. This
+                requires as many backward passes as the output dimension, i.e.
+                the number of classes for classification. This is sometimes also
+                called type-2 Fisher. If ``'mc'``, the expectation is approximated
+                by sampling ``mc_samples`` labels from the model's predictive
+                distribution. If ``'empirical'``, the empirical gradients are
+                used which corresponds to the uncentered gradient covariance, or
+                the empirical Fisher. Defaults to ``'mc'``.
             mc_samples: The number of Monte-Carlo samples to use per data point.
+                Will be ignored when ``fisher_type`` is not ``'mc'``.
                 Defaults to ``1``.
 
         Raises:
@@ -152,6 +163,7 @@ class KFACLinearOperator(_LinearOperator):
 
         self._seed = seed
         self._generator: Union[None, Generator] = None
+        self._fisher_type = fisher_type
         self._mc_samples = mc_samples
         self._input_covariances: Dict[Tuple[int, ...], Tensor] = {}
         self._gradient_covariances: Dict[Tuple[int, ...], Tensor] = {}
@@ -210,7 +222,13 @@ class KFACLinearOperator(_LinearOperator):
         return self
 
     def _compute_kfac(self):
-        """Compute and cache KFAC's Kronecker factors for future ``matvec``s."""
+        """Compute and cache KFAC's Kronecker factors for future ``matvec``s.
+
+        Raises:
+            NotImplementedError: If ``fisher_type == 'type-2'``.
+            ValueError: If ``fisher_type`` is not ``'type-2'``, ``'mc'``, or
+                ``'empirical'``.
+        """
         # install forward and backward hooks
         hook_handles: List[RemovableHandle] = []
         hook_handles.extend(
@@ -231,13 +249,27 @@ class KFACLinearOperator(_LinearOperator):
             self._generator = Generator(device=self._device)
         self._generator.manual_seed(self._seed)
 
-        for X, _ in self._loop_over_data(desc="KFAC matrices"):
+        for X, y in self._loop_over_data(desc="KFAC matrices"):
             output = self._model_func(X)
 
-            for mc in range(self._mc_samples):
-                y_sampled = self.draw_label(output)
-                loss = self._loss_func(output, y_sampled)
-                loss.backward(retain_graph=mc != self._mc_samples - 1)
+            if self._fisher_type == "type-2":
+                raise NotImplementedError(
+                    "Using the exact expectation for computing the KFAC "
+                    "approximation of the Fisher is not yet supported."
+                )
+            elif self._fisher_type == "mc":
+                for mc in range(self._mc_samples):
+                    y_sampled = self.draw_label(output)
+                    loss = self._loss_func(output, y_sampled)
+                    loss.backward(retain_graph=mc != self._mc_samples - 1)
+            elif self._fisher_type == "empirical":
+                loss = self._loss_func(output, y)
+                loss.backward()
+            else:
+                raise ValueError(
+                    f"Invalid fisher_type: {self._fisher_type}. "
+                    + "Supported: 'type-2', 'mc', 'empirical'."
+                )
 
         # clean up
         self._model_func.zero_grad()

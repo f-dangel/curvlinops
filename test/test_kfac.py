@@ -10,6 +10,7 @@ from torch.nn import Module, MSELoss, Parameter
 
 from curvlinops.examples.utils import report_nonclose
 from curvlinops.ggn import GGNLinearOperator
+from curvlinops.gradient_moments import EFLinearOperator
 from curvlinops.kfac import KFACLinearOperator
 
 
@@ -68,3 +69,22 @@ def test_kfac_one_datum(
     rtol = {"sum": 3e-2, "mean": 3e-2}[loss_func.reduction]
 
     report_nonclose(ggn, kfac_mat, rtol=rtol, atol=atol)
+
+
+def test_kfac_ef_one_datum(
+    kfac_ef_exact_one_datum_case: Tuple[
+        Module, MSELoss, List[Parameter], Iterable[Tuple[Tensor, Tensor]]
+    ]
+):
+    model, loss_func, params, data = kfac_ef_exact_one_datum_case
+
+    ef_blocks = []  # list of per-parameter EFs
+    for param in params:
+        ef = EFLinearOperator(model, loss_func, [param], data)
+        ef_blocks.append(ef @ eye(ef.shape[1]))
+    ef = block_diag(*ef_blocks)
+
+    kfac = KFACLinearOperator(model, loss_func, params, data, fisher_type="empirical")
+    kfac_mat = kfac @ eye(kfac.shape[1])
+
+    report_nonclose(ef, kfac_mat)

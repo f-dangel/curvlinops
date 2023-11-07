@@ -86,3 +86,17 @@ def kfac_expand_exact_one_datum_case(
     """
     case = request.param
     yield initialize_case(case)
+
+
+@fixture(params=KFAC_EXPAND_EXACT_ONE_DATUM_CASES)
+def kfac_ef_exact_one_datum_case(
+    request,
+) -> Tuple[Module, MSELoss, List[Tensor], Iterable[Tuple[Tensor, Tensor]],]:
+    """Prepare a test case with one datum for which KFAC with empirical gradients equals the EF.
+
+    Yields:
+        A neural network, the mean-squared error function, a list of parameters, and
+        a data set.
+    """
+    case = request.param
+    yield initialize_case(case)
