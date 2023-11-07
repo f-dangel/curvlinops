@@ -97,7 +97,6 @@ class KFACLinearOperator(_LinearOperator):
             - Only linear layers are supported.
             - Weights and biases are treated separately.
             - No weight sharing is supported.
-            - Only the Monte-Carlo sampled version is supported.
             - Only the ``'expand'`` approximation is supported.
 
         Args:
