@@ -204,8 +204,6 @@ class KFACLinearOperator(_LinearOperator):
 
                 w_cols = mod.weight.shape[1]
                 x_torch[w_pos], x_torch[b_pos] = x_joint.split([w_cols, 1], dim=1)
-                assert x_torch.w_pos.shape == mod.weight.shape
-                assert x_torch.b_pos.shape == mod.bias.shape
 
             # for weights we need to multiply from the right with aaT
             # for weights and biases we need to multiply from the left with ggT
