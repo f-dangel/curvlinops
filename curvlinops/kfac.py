@@ -19,7 +19,7 @@ from typing import Dict, Iterable, List, Set, Tuple, Union
 
 from einops import rearrange
 from numpy import ndarray
-from torch import Generator, Tensor, einsum, randn
+from torch import Generator, Tensor, cat, einsum, randn
 from torch.nn import CrossEntropyLoss, Linear, Module, MSELoss, Parameter
 from torch.utils.hooks import RemovableHandle
 
@@ -83,6 +83,7 @@ class KFACLinearOperator(_LinearOperator):
         seed: int = 2147483647,
         fisher_type: str = "mc",
         mc_samples: int = 1,
+        separate_weight_and_bias: bool = True,
     ):
         """Kronecker-factored approximate curvature (KFAC) proxy of the Fisher/GGN.
 
@@ -97,7 +98,6 @@ class KFACLinearOperator(_LinearOperator):
             This is an early proto-type with many limitations:
 
             - Only linear layers are supported.
-            - Weights and biases are treated separately.
             - No weight sharing is supported.
             - Only the ``'expand'`` approximation is supported.
 
@@ -127,11 +127,12 @@ class KFACLinearOperator(_LinearOperator):
             mc_samples: The number of Monte-Carlo samples to use per data point.
                 Will be ignored when ``fisher_type`` is not ``'mc'``.
                 Defaults to ``1``.
+            separate_weight_and_bias: Whether to treat weights and biases separately.
+                Defaults to ``True``.
 
         Raises:
             ValueError: If the loss function is not supported.
-            NotImplementedError: If any parameter cannot be identified with a supported
-                layer.
+            NotImplementedError: If a parameter is in an unsupported layer.
         """
         if not isinstance(loss_func, self._SUPPORTED_LOSSES):
             raise ValueError(
@@ -157,6 +158,7 @@ class KFACLinearOperator(_LinearOperator):
 
         self._seed = seed
         self._generator: Union[None, Generator] = None
+        self._separate_weight_and_bias = separate_weight_and_bias
         self._fisher_type = fisher_type
         self._mc_samples = mc_samples
         self._input_covariances: Dict[str, Tensor] = {}
@@ -191,16 +193,30 @@ class KFACLinearOperator(_LinearOperator):
         for name in self.param_ids_to_hooked_modules.values():
             mod = self._model_func.get_submodule(name)
 
-            if mod.weight.data_ptr() in self.param_ids:
-                idx = self.param_ids.index(mod.weight.data_ptr())
+            # bias and weights are treated jointly
+            if not self._separate_weight_and_bias and self.in_params(
+                mod.weight, mod.bias
+            ):
+                w_pos, b_pos = self.param_pos(mod.weight), self.param_pos(mod.bias)
+                x_joint = cat([x_torch[w_pos], x_torch[b_pos].unsqueeze(-1)], dim=1)
                 aaT = self._input_covariances[name]
                 ggT = self._gradient_covariances[name]
-                x_torch[idx] = ggT @ x_torch[idx] @ aaT
+                x_joint = ggT @ x_joint @ aaT
 
-            if mod.bias is not None and mod.bias.data_ptr() in self.param_ids:
-                idx = self.param_ids.index(mod.bias.data_ptr())
-                ggT = self._gradient_covariances[name]
-                x_torch[idx] = ggT @ x_torch[idx]
+                w_cols = mod.weight.shape[1]
+                x_torch[w_pos], x_torch[b_pos] = x_joint.split([w_cols, 1], dim=1)
+
+            # for weights we need to multiply from the right with aaT
+            # for weights and biases we need to multiply from the left with ggT
+            else:
+                for p_name in ["weight", "bias"]:
+                    p = getattr(mod, p_name)
+                    if self.in_params(p):
+                        pos = self.param_pos(p)
+                        x_torch[pos] = self._gradient_covariances[name] @ x_torch[pos]
+
+                        if p_name == "weight":
+                            x_torch[pos] = x_torch[pos] @ self._input_covariances[name]
 
         return super()._postprocess(x_torch)
 
@@ -229,7 +245,7 @@ class KFACLinearOperator(_LinearOperator):
             module = self._model_func.get_submodule(name)
 
             # input covariance only required for weights
-            if module.weight.data_ptr() in self.param_ids:
+            if self.in_params(module.weight):
                 hook_handles.append(
                     module.register_forward_pre_hook(
                         self._hook_accumulate_input_covariance
@@ -420,6 +436,12 @@ class KFACLinearOperator(_LinearOperator):
                     f"Only 2d inputs are supported for linear layers. Got {x.ndim}d."
                 )
 
+            if (
+                self.in_params(module.weight, module.bias)
+                and not self._separate_weight_and_bias
+            ):
+                x = cat([x, x.new_ones(x.shape[0], 1)], dim=1)
+
             covariance = einsum("bi,bj->ij", x, x).div_(self._N_data)
         else:
             # TODO Support convolutions
@@ -442,3 +464,25 @@ class KFACLinearOperator(_LinearOperator):
         """
         p_ids = tuple(p.data_ptr() for p in module.parameters())
         return self.param_ids_to_hooked_modules[p_ids]
+
+    def in_params(self, *params: Union[Parameter, Tensor, None]) -> bool:
+        """Check if all parameters are used in KFAC.
+
+        Args:
+            params: Parameters to check.
+
+        Returns:
+            Whether all parameters are used in KFAC.
+        """
+        return all(p is not None and p.data_ptr() in self.param_ids for p in params)
+
+    def param_pos(self, param: Union[Parameter, Tensor]) -> int:
+        """Get the position of a parameter in the list of parameters used in KFAC.
+
+        Args:
+            param: The parameter.
+
+        Returns:
+            The parameter's position in the parameter list.
+        """
+        return self.param_ids.index(param.data_ptr())
