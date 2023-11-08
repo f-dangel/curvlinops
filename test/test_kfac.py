@@ -1,13 +1,14 @@
 """Contains tests for ``curvlinops.kfac``."""
 
-from test.utils import ggn_block_diagonal
+from test.cases import DEVICES, DEVICES_IDS
+from test.utils import ggn_block_diagonal, regression_targets
 from typing import Iterable, List, Tuple
 
 from numpy import eye
 from pytest import mark
 from scipy.linalg import block_diag
-from torch import Tensor, randperm
-from torch.nn import Module, MSELoss, Parameter
+from torch import Tensor, device, manual_seed, rand, randperm
+from torch.nn import Linear, Module, MSELoss, Parameter, ReLU, Sequential
 
 from curvlinops.examples.utils import report_nonclose
 from curvlinops.gradient_moments import EFLinearOperator
@@ -113,3 +114,40 @@ def test_kfac_ef_one_datum(
     kfac_mat = kfac @ eye(kfac.shape[1])
 
     report_nonclose(ef, kfac_mat)
+
+
+@mark.parametrize("dev", DEVICES, ids=DEVICES_IDS)
+def test_kfac_inplace_activations(dev: device):
+    """Test that KFAC works if the network has in-place activations.
+
+    We use a test case with a single datum as KFAC becomes exact as the number of
+    MC samples increases.
+
+    Args:
+        dev: The device to run the test on.
+    """
+    manual_seed(0)
+    model = Sequential(Linear(6, 3), ReLU(inplace=True), Linear(3, 2)).to(dev)
+    loss_func = MSELoss().to(dev)
+    batch_size = 1
+    data = [(rand(batch_size, 6), regression_targets((batch_size, 2)))]
+    params = list(model.parameters())
+
+    # 1) compare KFAC and GGN
+    ggn = ggn_block_diagonal(model, loss_func, params, data)
+
+    kfac = KFACLinearOperator(model, loss_func, params, data, mc_samples=2_000)
+    kfac_mat = kfac @ eye(kfac.shape[1])
+
+    atol = {"sum": 5e-1, "mean": 2e-3}[loss_func.reduction]
+    rtol = {"sum": 2e-2, "mean": 2e-2}[loss_func.reduction]
+
+    report_nonclose(ggn, kfac_mat, rtol=rtol, atol=atol)
+
+    # 2) Compare GGN (inplace=True) and GGN (inplace=False)
+    for mod in model.modules():
+        if hasattr(mod, "inplace"):
+            mod.inplace = False
+    ggn_no_inplace = ggn_block_diagonal(model, loss_func, params, data)
+
+    report_nonclose(ggn, ggn_no_inplace)
