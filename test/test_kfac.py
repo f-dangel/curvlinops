@@ -57,7 +57,14 @@ def test_kfac(
         separate_weight_and_bias=separate_weight_and_bias,
     )
 
-    kfac = KFACLinearOperator(model, loss_func, params, data, mc_samples=2_000)
+    kfac = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        mc_samples=2_000,
+        separate_weight_and_bias=separate_weight_and_bias,
+    )
     kfac_mat = kfac @ eye(kfac.shape[1])
 
     atol = {"sum": 5e-1, "mean": 5e-3}[loss_func.reduction]

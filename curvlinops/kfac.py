@@ -197,7 +197,7 @@ class KFACLinearOperator(_LinearOperator):
                 mod.weight, mod.bias
             ):
                 w_pos, b_pos = self.param_pos(mod.weight), self.param_pos(mod.bias)
-                x_joint = cat([x_torch[w_pos], x_torch[b_pos]], dim=1)
+                x_joint = cat([x_torch[w_pos], x_torch[b_pos].unsqueeze(-1)], dim=1)
                 aaT = self._input_covariances[name]
                 ggT = self._gradient_covariances[name]
                 x_joint = ggT @ x_joint @ aaT
@@ -422,7 +422,7 @@ class KFACLinearOperator(_LinearOperator):
                 self.in_params(module.weight, module.bias)
                 and not self._separate_weight_and_bias
             ):
-                x = cat([x, x.new_ones(x.shape[1], 1)], dim=1)
+                x = cat([x, x.new_ones(x.shape[0], 1)], dim=1)
 
             covariance = einsum("bi,bj->ij", x, x).div_(self._N_data)
         else:
