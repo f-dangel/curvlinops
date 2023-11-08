@@ -1,5 +1,6 @@
 """Contains tests for ``curvlinops.kfac``."""
 
+from test.utils import ggn_block_diagonal
 from typing import Iterable, List, Tuple
 
 from numpy import eye
@@ -9,11 +10,13 @@ from torch import Tensor, randperm
 from torch.nn import CrossEntropyLoss, Module, MSELoss, Parameter
 
 from curvlinops.examples.utils import report_nonclose
-from curvlinops.ggn import GGNLinearOperator
 from curvlinops.gradient_moments import EFLinearOperator
 from curvlinops.kfac import KFACLinearOperator
 
 
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
 @mark.parametrize(
     "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
 )
@@ -24,6 +27,7 @@ def test_kfac(
     ],
     shuffle: bool,
     exclude: str,
+    separate_weight_and_bias: bool,
 ):
     """Test the KFAC implementation against the exact GGN.
 
@@ -33,6 +37,8 @@ def test_kfac(
         shuffle: Whether to shuffle the parameters before computing the KFAC matrix.
         exclude: Which parameters to exclude. Can be ``'weight'``, ``'bias'``,
             or ``None``.
+        separate_weight_and_bias: Whether to treat weight and bias as separate blocks in
+            the KFAC matrix.
     """
     assert exclude in [None, "weight", "bias"]
     model, loss_func, params, data = kfac_expand_exact_case
@@ -45,13 +51,21 @@ def test_kfac(
         permutation = randperm(len(params))
         params = [params[i] for i in permutation]
 
-    ggn_blocks = []  # list of per-parameter GGNs
-    for param in params:
-        ggn = GGNLinearOperator(model, loss_func, [param], data)
-        ggn_blocks.append(ggn @ eye(ggn.shape[1]))
-    ggn = block_diag(*ggn_blocks)
-
-    kfac = KFACLinearOperator(model, loss_func, params, data, fisher_type="type-2")
+    ggn = ggn_block_diagonal(
+        model,
+        loss_func,
+        params,
+        data,
+        separate_weight_and_bias=separate_weight_and_bias,
+    )
+    kfac = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        fisher_type="type-2",
+        separate_weight_and_bias=separate_weight_and_bias,
+    )
     kfac_mat = kfac @ eye(kfac.shape[1])
 
     report_nonclose(ggn, kfac_mat)
@@ -81,13 +95,9 @@ def test_kfac_mc(
         permutation = randperm(len(params))
         params = [params[i] for i in permutation]
 
-    ggn_blocks = []  # list of per-parameter GGNs
-    for param in params:
-        ggn = GGNLinearOperator(model, loss_func, [param], data)
-        ggn_blocks.append(ggn @ eye(ggn.shape[1]))
-    ggn = block_diag(*ggn_blocks)
-
+    ggn = ggn_block_diagonal(model, loss_func, params, data)
     kfac = KFACLinearOperator(model, loss_func, params, data, mc_samples=2_000)
+
     kfac_mat = kfac @ eye(kfac.shape[1])
 
     atol = {"sum": 5e-1, "mean": 5e-3}[loss_func.reduction]
@@ -103,12 +113,7 @@ def test_kfac_one_datum(
 ):
     model, loss_func, params, data = kfac_expand_exact_one_datum_case
 
-    ggn_blocks = []  # list of per-parameter GGNs
-    for param in params:
-        ggn = GGNLinearOperator(model, loss_func, [param], data)
-        ggn_blocks.append(ggn @ eye(ggn.shape[1]))
-    ggn = block_diag(*ggn_blocks)
-
+    ggn = ggn_block_diagonal(model, loss_func, params, data)
     kfac = KFACLinearOperator(model, loss_func, params, data, fisher_type="type-2")
     kfac_mat = kfac @ eye(kfac.shape[1])
 
@@ -121,12 +126,7 @@ def test_kfac_mc_one_datum(
     ]
 ):
     model, loss_func, params, data = kfac_expand_exact_one_datum_case
-
-    ggn_blocks = []  # list of per-parameter GGNs
-    for param in params:
-        ggn = GGNLinearOperator(model, loss_func, [param], data)
-        ggn_blocks.append(ggn @ eye(ggn.shape[1]))
-    ggn = block_diag(*ggn_blocks)
+    ggn = ggn_block_diagonal(model, loss_func, params, data)
 
     kfac = KFACLinearOperator(model, loss_func, params, data, mc_samples=10_000)
     kfac_mat = kfac @ eye(kfac.shape[1])
