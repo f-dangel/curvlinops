@@ -13,6 +13,7 @@ and extended to CNNs in
 
 from __future__ import annotations
 
+from functools import partial
 from math import sqrt
 from typing import Dict, Iterable, List, Set, Tuple, Union
 
@@ -237,8 +238,8 @@ class KFACLinearOperator(_LinearOperator):
 
             # gradient covariance required for weights and biases
             hook_handles.append(
-                module.register_full_backward_hook(
-                    self._hook_accumulate_gradient_covariance
+                module.register_forward_hook(
+                    self._register_tensor_hook_on_output_to_accumulate_gradient_covariance
                 )
             )
 
@@ -327,28 +328,45 @@ class KFACLinearOperator(_LinearOperator):
         else:
             raise NotImplementedError
 
-    def _hook_accumulate_gradient_covariance(
-        self, module: Module, grad_input: Tuple[Tensor], grad_output: Tuple[Tensor]
+    def _register_tensor_hook_on_output_to_accumulate_gradient_covariance(
+        self, module: Module, inputs: Tuple[Tensor], output: Tensor
     ):
-        """Backward hook that accumulates the output-gradient covariance of a layer.
+        """Register tensor hook on layer's output to accumulate the grad. covariance.
+
+        Note:
+            The easier way to compute the gradient covariance would be via a full
+            backward hook on the module itself which performs the computation.
+            However, this approach breaks down if the output of a layer feeds into an
+            activation with `inplace=True` (see
+            https://github.com/pytorch/pytorch/issues/61519). Hence we use the
+            workaround
+            https://github.com/pytorch/pytorch/issues/61519#issuecomment-883524237, and
+            install a module hook which installs a tensor hook on the module's output
+            tensor, which performs the accumulation of the gradient covariance.
+
+        Args:
+            module: Layer onto whose output a tensor hook to accumulate the gradient
+                covariance will be installed.
+            inputs: The layer's input tensors.
+            output: The layer's output tensor.
+        """
+        tensor_hook = partial(self._accumulate_gradient_covariance, module)
+        output.register_hook(tensor_hook)
+
+    def _accumulate_gradient_covariance(self, module: Module, grad_output: Tensor):
+        """Accumulate the gradient covariance for a layer's output.
 
         Updates ``self._gradient_covariances``.
 
         Args:
-            module: The layer on which the hook is called.
-            grad_input: The gradient of the loss w.r.t. the layer's inputs.
-            grad_output: The gradient of the loss w.r.t. the layer's outputs.
+            module: The layer whose output's gradient covariance will be accumulated.
+            grad_output: The gradient w.r.t. the output.
 
         Raises:
-            ValueError: If ``grad_output`` is not a 1-tuple.
             NotImplementedError: If a layer uses weight sharing.
             NotImplementedError: If the layer is not supported.
         """
-        if len(grad_output) != 1:
-            raise ValueError(
-                f"Expected grad_output to be a 1-tuple, got {len(grad_output)}."
-            )
-        g = grad_output[0].data.detach()
+        g = grad_output.data.detach()
 
         if isinstance(module, Linear):
             if g.ndim != 2:
