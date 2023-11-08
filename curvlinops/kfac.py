@@ -19,12 +19,8 @@ from typing import Dict, Iterable, List, Set, Tuple, Union
 
 from einops import rearrange
 from numpy import ndarray
-from torch import Generator, Tensor, cat, einsum
-from torch import mean as torch_mean
-from torch import no_grad, randn, stack
-from torch import sum as torch_sum
+from torch import Generator, Tensor, cat, einsum, randn, stack
 from torch.nn import CrossEntropyLoss, Linear, Module, MSELoss, Parameter
-from torch.nn.functional import log_softmax, softmax
 from torch.utils.hooks import RemovableHandle
 
 from curvlinops._base import _LinearOperator
