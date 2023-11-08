@@ -14,7 +14,9 @@ from curvlinops.gradient_moments import EFLinearOperator
 from curvlinops.kfac import KFACLinearOperator
 
 
-@mark.parametrize("separate_weight_and_bias", [True, False], ids=["separate", "joint"])
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
 @mark.parametrize(
     "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
 )
