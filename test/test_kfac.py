@@ -118,8 +118,8 @@ def test_kfac_inplace_activations(dev: device):
         dev: The device to run the test on.
     """
     manual_seed(0)
-    model = Sequential(Linear(6, 3), ReLU(inplace=True), Linear(3, 2))
-    loss_func = MSELoss()
+    model = Sequential(Linear(6, 3), ReLU(inplace=True), Linear(3, 2)).to(dev)
+    loss_func = MSELoss().to(dev)
     batch_size = 1
     data = [(rand(batch_size, 6), regression_targets((batch_size, 2)))]
     params = list(model.parameters())
