@@ -19,7 +19,8 @@ def hessian_matrix_sqrt(
         loss_func: The loss function.
 
     Returns:
-        The matrix square root :math:`\mathbf{S}` of the Hessian. Has shape
+        The matrix square root
+        :math:`\mathbf{S}` of the Hessian. Has shape
         ``[C, C]`` and satisfies the relation
 
         .. math::
