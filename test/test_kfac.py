@@ -30,7 +30,7 @@ from curvlinops.kfac import KFACLinearOperator
     "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
 )
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
-def test_kfac(
+def test_kfac_type2(
     kfac_expand_exact_case: Tuple[
         Module, MSELoss, List[Parameter], Iterable[Tuple[Tensor, Tensor]]
     ],

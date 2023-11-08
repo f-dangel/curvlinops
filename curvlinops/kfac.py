@@ -21,13 +21,14 @@ from einops import rearrange
 from numpy import ndarray
 from torch import Generator, Tensor, cat, einsum
 from torch import mean as torch_mean
-from torch import no_grad, randn
+from torch import no_grad, randn, stack
 from torch import sum as torch_sum
 from torch.nn import CrossEntropyLoss, Linear, Module, MSELoss, Parameter
 from torch.nn.functional import log_softmax, softmax
 from torch.utils.hooks import RemovableHandle
 
 from curvlinops._base import _LinearOperator
+from curvlinops.kfac_utils import hessian_matrix_sqrt
 
 
 class KFACLinearOperator(_LinearOperator):
@@ -287,39 +288,46 @@ class KFACLinearOperator(_LinearOperator):
         Raises:
             ValueError: If ``fisher_type`` is not ``'type-2'``, ``'mc'``, or
                 ``'empirical'``.
+            NotImplementedError: If ``fisher_type`` is ``'type-1'`` and the
+                output is not 2d.
         """
         if self._fisher_type == "type-2":
+            if output.ndim != 2:
+                raise NotImplementedError(
+                    "Type-2 Fisher not implemented for non-2d output."
+                )
+            # Compute per-sample Hessian square root, then concatenate over samples.
+            # Result has shape `(batch_size, num_classes, num_classes)`
+            hessian_sqrts = stack(
+                [
+                    hessian_matrix_sqrt(out.detach(), self._loss_func)
+                    for out in output.split(1)
+                ]
+            )
+
+            # Fix scaling caused by the batch dimension
+            batch_size = output.shape[0]
             reduction = self._loss_func.reduction
-            reduction_fn = {"sum": torch_sum, "mean": torch_mean}[reduction]
-            if isinstance(self._loss_func, MSELoss):
-                flat_logits = output.flatten(start_dim=1)
-                out_dims = flat_logits.shape[1]
-                # Accounts for the reduction used in the loss function.
-                scale = 1.0 / out_dims if reduction == "mean" else 1.0
-                for i in range(out_dims):
-                    # Mean or sum reduction over all loss terms.
-                    # Multiply by sqrt(scale * 2.0) since the MSELoss does
-                    # not include the 1 / 2 factor.
-                    loss_i = sqrt(scale * 2.0) * reduction_fn(flat_logits[:, i])
-                    loss_i.backward(retain_graph=i < out_dims - 1)
-            elif isinstance(self._loss_func, CrossEntropyLoss):
-                flat_logits = output.flatten(end_dim=-2)
-                log_probs = log_softmax(flat_logits, dim=-1)
-                with no_grad():
-                    sqrt_probs = softmax(flat_logits, dim=-1).sqrt()
-                num_classes = log_probs.shape[1]
-                for c in range(num_classes):
-                    # Mean or sum reduction over all loss terms.
-                    loss_c = reduction_fn(-log_probs[:, c] * sqrt_probs[:, c])
-                    loss_c.backward(retain_graph=c < num_classes - 1)
+            scale = {"sum": 1.0, "mean": 1.0 / batch_size}[reduction]
+            hessian_sqrts.mul_(scale)
+
+            # For each column `c` of the matrix square root we need to backpropagate,
+            # but we can do this for all samples in parallel
+            num_cols = hessian_sqrts.shape[-1]
+            for c in range(num_cols):
+                batched_column = hessian_sqrts[:, :, c]
+                (output * batched_column).sum().backward(retain_graph=c < num_cols - 1)
+
         elif self._fisher_type == "mc":
             for mc in range(self._mc_samples):
                 y_sampled = self.draw_label(output)
                 loss = self._loss_func(output, y_sampled)
                 loss.backward(retain_graph=mc != self._mc_samples - 1)
+
         elif self._fisher_type == "empirical":
             loss = self._loss_func(output, y)
             loss.backward()
+
         else:
             raise ValueError(
                 f"Invalid fisher_type: {self._fisher_type}. "
