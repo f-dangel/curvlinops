@@ -284,7 +284,7 @@ class KFACLinearOperator(_LinearOperator):
         Raises:
             ValueError: If ``fisher_type`` is not ``'type-2'``, ``'mc'``, or
                 ``'empirical'``.
-            NotImplementedError: If ``fisher_type`` is ``'type-1'`` and the
+            NotImplementedError: If ``fisher_type`` is ``'type-2'`` and the
                 output is not 2d.
         """
         if self._fisher_type == "type-2":
