@@ -40,3 +40,8 @@ Installation
 
 	linops
 	basic_usage/index
+
+.. toctree::
+	:caption: Internals
+
+	internals

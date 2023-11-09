@@ -8,7 +8,15 @@ from numpy import eye
 from pytest import mark
 from scipy.linalg import block_diag
 from torch import Tensor, device, manual_seed, rand, randperm
-from torch.nn import Linear, Module, MSELoss, Parameter, ReLU, Sequential
+from torch.nn import (
+    CrossEntropyLoss,
+    Linear,
+    Module,
+    MSELoss,
+    Parameter,
+    ReLU,
+    Sequential,
+)
 
 from curvlinops.examples.utils import report_nonclose
 from curvlinops.gradient_moments import EFLinearOperator
@@ -22,7 +30,7 @@ from curvlinops.kfac import KFACLinearOperator
     "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
 )
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
-def test_kfac(
+def test_kfac_type2(
     kfac_expand_exact_case: Tuple[
         Module, MSELoss, List[Parameter], Iterable[Tuple[Tensor, Tensor]]
     ],
@@ -59,15 +67,46 @@ def test_kfac(
         data,
         separate_weight_and_bias=separate_weight_and_bias,
     )
-
     kfac = KFACLinearOperator(
         model,
         loss_func,
         params,
         data,
-        mc_samples=2_000,
+        fisher_type="type-2",
         separate_weight_and_bias=separate_weight_and_bias,
     )
+    kfac_mat = kfac @ eye(kfac.shape[1])
+
+    report_nonclose(ggn, kfac_mat)
+
+    # Check that input covariances were not computed
+    if exclude == "weight":
+        assert len(kfac._input_covariances) == 0
+
+
+@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
+def test_kfac_mc(
+    kfac_expand_exact_case: Tuple[
+        Module, MSELoss, List[Parameter], Iterable[Tuple[Tensor, Tensor]]
+    ],
+    shuffle: bool,
+):
+    """Test the KFAC implementation using MC samples against the exact GGN.
+
+    Args:
+        kfac_expand_exact_case: A fixture that returns a model, loss function, list of
+            parameters, and data.
+        shuffle: Whether to shuffle the parameters before computing the KFAC matrix.
+    """
+    model, loss_func, params, data = kfac_expand_exact_case
+
+    if shuffle:
+        permutation = randperm(len(params))
+        params = [params[i] for i in permutation]
+
+    ggn = ggn_block_diagonal(model, loss_func, params, data)
+    kfac = KFACLinearOperator(model, loss_func, params, data, mc_samples=2_000)
+
     kfac_mat = kfac @ eye(kfac.shape[1])
 
     atol = {"sum": 5e-1, "mean": 5e-3}[loss_func.reduction]
@@ -75,14 +114,24 @@ def test_kfac(
 
     report_nonclose(ggn, kfac_mat, rtol=rtol, atol=atol)
 
-    # Check that input covariances were not computed
-    if exclude == "weight":
-        assert len(kfac._input_covariances) == 0
-
 
 def test_kfac_one_datum(
     kfac_expand_exact_one_datum_case: Tuple[
-        Module, MSELoss, List[Parameter], Iterable[Tuple[Tensor, Tensor]]
+        Module, CrossEntropyLoss, List[Parameter], Iterable[Tuple[Tensor, Tensor]]
+    ]
+):
+    model, loss_func, params, data = kfac_expand_exact_one_datum_case
+
+    ggn = ggn_block_diagonal(model, loss_func, params, data)
+    kfac = KFACLinearOperator(model, loss_func, params, data, fisher_type="type-2")
+    kfac_mat = kfac @ eye(kfac.shape[1])
+
+    report_nonclose(ggn, kfac_mat)
+
+
+def test_kfac_mc_one_datum(
+    kfac_expand_exact_one_datum_case: Tuple[
+        Module, CrossEntropyLoss, List[Parameter], Iterable[Tuple[Tensor, Tensor]]
     ]
 ):
     model, loss_func, params, data = kfac_expand_exact_one_datum_case
@@ -98,11 +147,11 @@ def test_kfac_one_datum(
 
 
 def test_kfac_ef_one_datum(
-    kfac_ef_exact_one_datum_case: Tuple[
-        Module, MSELoss, List[Parameter], Iterable[Tuple[Tensor, Tensor]]
+    kfac_expand_exact_one_datum_case: Tuple[
+        Module, CrossEntropyLoss, List[Parameter], Iterable[Tuple[Tensor, Tensor]]
     ]
 ):
-    model, loss_func, params, data = kfac_ef_exact_one_datum_case
+    model, loss_func, params, data = kfac_expand_exact_one_datum_case
 
     ef_blocks = []  # list of per-parameter EFs
     for param in params:

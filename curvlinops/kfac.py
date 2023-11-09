@@ -19,11 +19,12 @@ from typing import Dict, Iterable, List, Set, Tuple, Union
 
 from einops import rearrange
 from numpy import ndarray
-from torch import Generator, Tensor, cat, einsum, randn
+from torch import Generator, Tensor, cat, einsum, randn, stack
 from torch.nn import CrossEntropyLoss, Linear, Module, MSELoss, Parameter
 from torch.utils.hooks import RemovableHandle
 
 from curvlinops._base import _LinearOperator
+from curvlinops.kfac_utils import loss_hessian_matrix_sqrt
 
 
 class KFACLinearOperator(_LinearOperator):
@@ -125,7 +126,7 @@ class KFACLinearOperator(_LinearOperator):
                 used which corresponds to the uncentered gradient covariance, or
                 the empirical Fisher. Defaults to ``'mc'``.
             mc_samples: The number of Monte-Carlo samples to use per data point.
-                Will be ignored when ``fisher_type`` is not ``'mc'``.
+                Has to be set to ``1`` when ``fisher_type != 'mc'``.
                 Defaults to ``1``.
             separate_weight_and_bias: Whether to treat weights and biases separately.
                 Defaults to ``True``.
@@ -137,6 +138,11 @@ class KFACLinearOperator(_LinearOperator):
         if not isinstance(loss_func, self._SUPPORTED_LOSSES):
             raise ValueError(
                 f"Invalid loss: {loss_func}. Supported: {self._SUPPORTED_LOSSES}."
+            )
+        if fisher_type != "mc" and mc_samples != 1:
+            raise ValueError(
+                f"Invalid mc_samples: {mc_samples}. "
+                "Only mc_samples=1 is supported for fisher_type != 'mc'."
             )
 
         self.param_ids = [p.data_ptr() for p in params]
@@ -231,13 +237,7 @@ class KFACLinearOperator(_LinearOperator):
         return self
 
     def _compute_kfac(self):
-        """Compute and cache KFAC's Kronecker factors for future ``matvec``s.
-
-        Raises:
-            NotImplementedError: If ``fisher_type == 'type-2'``.
-            ValueError: If ``fisher_type`` is not ``'type-2'``, ``'mc'``, or
-                ``'empirical'``.
-        """
+        """Compute and cache KFAC's Kronecker factors for future ``matvec``s."""
         # install forward and backward hooks
         hook_handles: List[RemovableHandle] = []
 
@@ -266,30 +266,69 @@ class KFACLinearOperator(_LinearOperator):
 
         for X, y in self._loop_over_data(desc="KFAC matrices"):
             output = self._model_func(X)
-
-            if self._fisher_type == "type-2":
-                raise NotImplementedError(
-                    "Using the exact expectation for computing the KFAC "
-                    "approximation of the Fisher is not yet supported."
-                )
-            elif self._fisher_type == "mc":
-                for mc in range(self._mc_samples):
-                    y_sampled = self.draw_label(output)
-                    loss = self._loss_func(output, y_sampled)
-                    loss.backward(retain_graph=mc != self._mc_samples - 1)
-            elif self._fisher_type == "empirical":
-                loss = self._loss_func(output, y)
-                loss.backward()
-            else:
-                raise ValueError(
-                    f"Invalid fisher_type: {self._fisher_type}. "
-                    + "Supported: 'type-2', 'mc', 'empirical'."
-                )
+            self._compute_loss_and_backward(output, y)
 
         # clean up
         self._model_func.zero_grad()
         for handle in hook_handles:
             handle.remove()
+
+    def _compute_loss_and_backward(self, output: Tensor, y: Tensor):
+        r"""Compute the loss and the backward pass(es) required for KFAC.
+
+        Args:
+            output: The model's prediction
+                :math:`\{f_\mathbf{\theta}(\mathbf{x}_n)\}_{n=1}^N`.
+            y: The labels :math:`\{\mathbf{y}_n\}_{n=1}^N`.
+
+        Raises:
+            ValueError: If ``fisher_type`` is not ``'type-2'``, ``'mc'``, or
+                ``'empirical'``.
+            NotImplementedError: If ``fisher_type`` is ``'type-1'`` and the
+                output is not 2d.
+        """
+        if self._fisher_type == "type-2":
+            if output.ndim != 2:
+                raise NotImplementedError(
+                    "Type-2 Fisher not implemented for non-2d output."
+                )
+            # Compute per-sample Hessian square root, then concatenate over samples.
+            # Result has shape `(batch_size, num_classes, num_classes)`
+            hessian_sqrts = stack(
+                [
+                    loss_hessian_matrix_sqrt(out.detach(), self._loss_func)
+                    for out in output.split(1)
+                ]
+            )
+
+            # Fix scaling caused by the batch dimension
+            batch_size = output.shape[0]
+            reduction = self._loss_func.reduction
+            scale = {"sum": 1.0, "mean": 1.0 / batch_size}[reduction]
+            hessian_sqrts.mul_(scale)
+
+            # For each column `c` of the matrix square root we need to backpropagate,
+            # but we can do this for all samples in parallel
+            num_cols = hessian_sqrts.shape[-1]
+            for c in range(num_cols):
+                batched_column = hessian_sqrts[:, :, c]
+                (output * batched_column).sum().backward(retain_graph=c < num_cols - 1)
+
+        elif self._fisher_type == "mc":
+            for mc in range(self._mc_samples):
+                y_sampled = self.draw_label(output)
+                loss = self._loss_func(output, y_sampled)
+                loss.backward(retain_graph=mc != self._mc_samples - 1)
+
+        elif self._fisher_type == "empirical":
+            loss = self._loss_func(output, y)
+            loss.backward()
+
+        else:
+            raise ValueError(
+                f"Invalid fisher_type: {self._fisher_type}. "
+                + "Supported: 'type-2', 'mc', 'empirical'."
+            )
 
     def draw_label(self, output: Tensor) -> Tensor:
         r"""Draw a sample from the model's predictive distribution.
@@ -393,6 +432,7 @@ class KFACLinearOperator(_LinearOperator):
                 )
 
             batch_size = g.shape[0]
+            # self._mc_samples will be 1 if fisher_type != "mc"
             correction = {
                 "sum": 1.0 / self._mc_samples,
                 "mean": batch_size**2 / (self._N_data * self._mc_samples),
