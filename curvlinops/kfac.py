@@ -24,7 +24,7 @@ from torch.nn import CrossEntropyLoss, Linear, Module, MSELoss, Parameter
 from torch.utils.hooks import RemovableHandle
 
 from curvlinops._base import _LinearOperator
-from curvlinops.kfac_utils import hessian_matrix_sqrt
+from curvlinops.kfac_utils import loss_hessian_matrix_sqrt
 
 
 class KFACLinearOperator(_LinearOperator):
@@ -296,7 +296,7 @@ class KFACLinearOperator(_LinearOperator):
             # Result has shape `(batch_size, num_classes, num_classes)`
             hessian_sqrts = stack(
                 [
-                    hessian_matrix_sqrt(out.detach(), self._loss_func)
+                    loss_hessian_matrix_sqrt(out.detach(), self._loss_func)
                     for out in output.split(1)
                 ]
             )

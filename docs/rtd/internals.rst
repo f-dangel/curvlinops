@@ -8,4 +8,4 @@ details; because rendered LaTeX is easier to read than source code.
 KFAC-related
 -------------
 
-.. autofunction:: curvlinops.kfac_utils.hessian_matrix_sqrt
+.. autofunction:: curvlinops.kfac_utils.loss_hessian_matrix_sqrt

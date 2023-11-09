@@ -7,7 +7,7 @@ from torch import Tensor, diag, einsum, eye
 from torch.nn import CrossEntropyLoss, MSELoss
 
 
-def hessian_matrix_sqrt(
+def loss_hessian_matrix_sqrt(
     output_one_datum: Tensor, loss_func: Union[MSELoss, CrossEntropyLoss]
 ) -> Tensor:
     r"""Compute the loss function's matrix square root for a sample's output.
