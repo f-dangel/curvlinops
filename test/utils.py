@@ -3,10 +3,10 @@
 from itertools import product
 from typing import Iterable, List, Tuple
 
-from einops import rearrange
+from einops import rearrange, reduce
 from numpy import eye, ndarray
 from torch import Tensor, cat, cuda, device, from_numpy, rand, randint
-from torch.nn import Module, Parameter
+from torch.nn import Module, Parameter, Sequential
 
 from curvlinops import GGNLinearOperator
 
@@ -131,3 +131,75 @@ class Rearrange(Module):
             The rearranged tensor.
         """
         return rearrange(x, self.pattern)
+
+
+class WeightShareModel(Sequential):
+    """Sequential model with processing of the weight-sharing dimension.
+
+    Wraps a `Sequential` model, but processes the weight-sharing dimension based
+    on the `setting` before it returns the output of the sequential model.
+    Assumes that the output of the sequential model is of shape
+    (batch, ..., out_dim).
+    """
+
+    def __init__(self, *args):
+        """Initialize the model.
+
+        Args:
+            *args: Modules of the sequential model.
+        """
+        super().__init__(*args)
+        self._setting = None
+
+    @property
+    def setting(self) -> str:
+        """Return the setting of the model.
+
+        Returns:
+            The setting of the model.
+
+        Raises:
+            ValueError: If `setting` property has not been set.
+        """
+        if self._setting is None:
+            raise ValueError("WeightShareModel.setting has not been set.")
+        return self._setting
+
+    @setting.setter
+    def setting(self, setting: str):
+        """Set the weight-sharing setting of the model.
+
+        Args:
+            setting: The weight-sharing setting of the model.
+
+        Raises:
+            ValueError: If `setting` is neither `'expand'` nor `'reduce'`.
+        """
+        if setting not in {"expand", "reduce"}:
+            raise ValueError(
+                f"Expected 'setting' to be 'expand' or 'reduce', got {setting}."
+            )
+        self._setting = setting
+
+    def forward(self, x: Tensor) -> Tensor:
+        """Forward pass with processing of the weight-sharing dimension.
+
+        Assumes MSELoss. The output would have to be transposed to be used with
+        the CrossEntropyLoss.
+
+        Args:
+            x: Input to the forward pass.
+
+        Returns:
+            Output of the sequential model with processed weight-sharing dimension.
+        """
+        x = super().forward(x)
+        if self.setting == "reduce":
+            # Example: Vision transformer for image classification.
+            # (batch, image_patches, c) -> (batch, c)
+            return reduce(x, "batch ... c -> batch c", "mean")
+        # if self.setting == "expand":
+        # Example: Transformer for translation: (batch, sequence_length, c)
+        # (although second and third dimension would have to be transposed for
+        # classification)
+        return x
