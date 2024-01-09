@@ -11,7 +11,6 @@ from test.utils import (
 from torch import rand
 from torch.nn import CrossEntropyLoss, Linear, MSELoss, Sequential
 
-
 # Add test cases here, devices and loss function with different reductions will be
 # added automatically below
 KFAC_EXACT_CASES_NO_DEVICE_NO_LOSS_FUNC = [
