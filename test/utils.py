@@ -27,7 +27,7 @@ def get_available_devices():
 
 def classification_targets(size: Tuple[int], num_classes: int) -> Tensor:
     """Create random targets for classes 0, ..., `num_classes - 1`.
-    
+
     Args:
         size: Size of the targets to create.
         num_classes: Number of classes.
@@ -40,10 +40,10 @@ def classification_targets(size: Tuple[int], num_classes: int) -> Tensor:
 
 def regression_targets(size: Tuple[int]) -> Tensor:
     """Create random targets for regression.
-    
+
     Args:
         size: Size of the targets to create.
-    
+
     Returns:
         Random targets.
     """
