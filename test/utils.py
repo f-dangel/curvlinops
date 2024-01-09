@@ -3,6 +3,7 @@
 from itertools import product
 from typing import Iterable, List, Tuple
 
+from einops import rearrange
 from numpy import eye, ndarray
 from torch import Tensor, cat, cuda, device, from_numpy, rand, randint
 from torch.nn import Module, Parameter
@@ -24,13 +25,28 @@ def get_available_devices():
     return devices
 
 
-def classification_targets(size, num_classes):
-    """Create random targets for classes 0, ..., `num_classes - 1`."""
+def classification_targets(size: Tuple[int], num_classes: int) -> Tensor:
+    """Create random targets for classes 0, ..., `num_classes - 1`.
+    
+    Args:
+        size: Size of the targets to create.
+        num_classes: Number of classes.
+
+    Returns:
+        Random targets.
+    """
     return randint(size=size, low=0, high=num_classes)
 
 
-def regression_targets(size):
-    """Create random targets for regression."""
+def regression_targets(size: Tuple[int]) -> Tensor:
+    """Create random targets for regression.
+    
+    Args:
+        size: Size of the targets to create.
+    
+    Returns:
+        Random targets.
+    """
     return rand(*size)
 
 
@@ -91,3 +107,27 @@ def ggn_block_diagonal(
 
     # concatenate all blocks
     return cat([cat(row_blocks, dim=1) for row_blocks in ggn_blocks], dim=0).numpy()
+
+
+class Rearrange(Module):
+    """A module that rearranges the input tensor."""
+
+    def __init__(self, pattern: str):
+        """Initialize the module.
+
+        Args:
+            pattern: The rearrangement pattern.
+        """
+        super().__init__()
+        self.pattern = pattern
+
+    def forward(self, x: Tensor) -> Tensor:
+        """Rearrange the input tensor.
+
+        Args:
+            x: The input tensor.
+
+        Returns:
+            The rearranged tensor.
+        """
+        return rearrange(x, self.pattern)
