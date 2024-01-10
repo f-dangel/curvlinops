@@ -136,13 +136,13 @@ class KFACLinearOperator(_LinearOperator):
                 Defaults to ``1``.
             loss_average: Whether the loss function is a mean over per-sample
                 losses and if yes, over which dimensions the mean is taken.
-                If `"batch"`, the loss function is a mean over as many terms as
-                the size of the mini-batch. If `"batch+sequence"`, the loss
+                If ``'batch'``, the loss function is a mean over as many terms as
+                the size of the mini-batch. If ``'batch+sequence'``, the loss
                 function is a mean over as many terms as the size of the
                 mini-batch times the sequence length, e.g. in the case of
-                language modeling. If `None`, the loss function is a sum. This
+                language modeling. If ``None``, the loss function is a sum. This
                 argument is used to ensure that the preconditioner is scaled
-                consistently with the loss and the gradient. Default: `"batch"`.
+                consistently with the loss and the gradient. Default: ``'batch'``.
             separate_weight_and_bias: Whether to treat weights and biases separately.
                 Defaults to ``True``.
 
@@ -378,12 +378,16 @@ class KFACLinearOperator(_LinearOperator):
             together with ``output``.
 
         Raises:
+            ValueError: If the output is not 2d.
             NotImplementedError: If the loss function is not supported.
         """
+        if output.ndim != 2:
+            raise ValueError("Only a 2d output is supported.")
+
         if isinstance(self._loss_func, MSELoss):
             std = {
                 "sum": sqrt(1.0 / 2.0),
-                "mean": sqrt(output.shape[1:].numel() / 2.0),
+                "mean": sqrt(output.shape[1] / 2.0),
             }[self._loss_func.reduction]
             perturbation = std * randn(
                 output.shape,
@@ -394,7 +398,6 @@ class KFACLinearOperator(_LinearOperator):
             return output.clone().detach() + perturbation
 
         elif isinstance(self._loss_func, CrossEntropyLoss):
-            # each row contains a vector describing a categorical
             probs = output.softmax(dim=1)
             labels = probs.multinomial(
                 num_samples=1, generator=self._generator
