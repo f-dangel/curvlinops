@@ -6,7 +6,7 @@ from typing import Iterable, List, Tuple
 from einops import rearrange, reduce
 from numpy import eye, ndarray
 from torch import Tensor, cat, cuda, device, from_numpy, rand, randint
-from torch.nn import Module, Parameter, Sequential
+from torch.nn import AdaptiveAvgPool2d, Conv2d, Flatten, Module, Parameter, Sequential
 
 from curvlinops import GGNLinearOperator
 
@@ -203,3 +203,65 @@ class WeightShareModel(Sequential):
         # (although second and third dimension would have to be transposed for
         # classification)
         return x
+
+
+class Conv2dModel(Module):
+    """Sequential model with Conv2d module for expand and reduce setting."""
+
+    def __init__(self):
+        """Initialize the model."""
+        super().__init__()
+        self._setting = None
+        self._models = {
+            "expand": Sequential(
+                Conv2d(3, 2, 4, padding=4 // 2),
+                Rearrange("batch c h w -> batch h w c"),
+            ),
+            "reduce": Sequential(
+                Conv2d(3, 2, 4, padding=4 // 2),
+                AdaptiveAvgPool2d(1),
+                Flatten(start_dim=1),
+            ),
+        }
+
+    @property
+    def setting(self) -> str:
+        """Return the setting of the model.
+
+        Returns:
+            The setting of the model.
+
+        Raises:
+            ValueError: If `setting` property has not been set.
+        """
+        if self._setting is None:
+            raise ValueError("Conv2dModel.setting has not been set.")
+        return self._setting
+
+    @setting.setter
+    def setting(self, setting: str):
+        """Set the weight-sharing setting of the model.
+
+        Args:
+            setting: The weight-sharing setting of the model.
+
+        Raises:
+            ValueError: If ``setting`` is neither ``'expand'`` nor ``'reduce'``.
+        """
+        if setting not in {"expand", "reduce"}:
+            raise ValueError(
+                f"Expected 'setting' to be 'expand' or 'reduce', got {setting}."
+            )
+        self._setting = setting
+        self._model = self._models[setting]
+
+    def forward(self, x: Tensor) -> Tensor:
+        """Forward pass with sequential model based on the setting.
+
+        Args:
+            x: Input to the forward pass.
+
+        Returns:
+            Output of the sequential model.
+        """
+        return self._model(x)
