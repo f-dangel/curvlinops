@@ -2,6 +2,7 @@
 
 from test.cases import DEVICES, DEVICES_IDS
 from test.utils import (
+    Conv2dModel,
     Rearrange,
     WeightShareModel,
     classification_targets,
@@ -126,6 +127,9 @@ def test_kfac_type2_weight_sharing(
     assert exclude in [None, "weight", "bias"]
     model, loss_func, params, data = kfac_weight_sharing_exact_case
     model.setting = setting
+    if isinstance(model, Conv2dModel):
+        # parameters are only initialized after the setting property is set
+        params = [p for p in model.parameters() if p.requires_grad]
     data = data[setting]
 
     # set appropriate loss_average argument based on loss reduction and setting
