@@ -21,11 +21,15 @@ from typing import Dict, Iterable, List, Set, Tuple, Union
 from einops import rearrange, reduce
 from numpy import ndarray
 from torch import Generator, Tensor, cat, einsum, randn, stack
-from torch.nn import CrossEntropyLoss, Linear, Module, MSELoss, Parameter
+from torch.nn import Conv2d, CrossEntropyLoss, Linear, Module, MSELoss, Parameter
 from torch.utils.hooks import RemovableHandle
 
 from curvlinops._base import _LinearOperator
-from curvlinops.kfac_utils import loss_hessian_matrix_sqrt
+from curvlinops.kfac_utils import (
+    extract_averaged_patches,
+    extract_patches,
+    loss_hessian_matrix_sqrt,
+)
 
 
 class KFACLinearOperator(_LinearOperator):
@@ -71,7 +75,7 @@ class KFACLinearOperator(_LinearOperator):
     """
 
     _SUPPORTED_LOSSES = (MSELoss, CrossEntropyLoss)
-    _SUPPORTED_MODULES = (Linear,)
+    _SUPPORTED_MODULES = (Linear, Conv2d)
     _SUPPORTED_LOSS_AVERAGE: Tuple[Union[None, str], ...] = (
         None,
         "batch",
@@ -105,11 +109,8 @@ class KFACLinearOperator(_LinearOperator):
             changes.
 
         Warning:
-            This is an early proto-type with many limitations:
-
-            - Only linear layers are supported.
-            - No weight sharing is supported.
-            - Only the ``'expand'`` approximation is supported.
+            This is an early proto-type with limitations:
+                - Only Linear and Conv2d modules are supported.
 
         Args:
             model_func: The neural network. Must consist of modules.
@@ -258,12 +259,13 @@ class KFACLinearOperator(_LinearOperator):
                 mod.weight, mod.bias
             ):
                 w_pos, b_pos = self.param_pos(mod.weight), self.param_pos(mod.bias)
-                x_joint = cat([x_torch[w_pos], x_torch[b_pos].unsqueeze(-1)], dim=1)
+                x_w = rearrange(x_torch[w_pos], "c_out ... -> c_out (...)")
+                x_joint = cat([x_w, x_torch[b_pos].unsqueeze(-1)], dim=1)
                 aaT = self._input_covariances[name]
                 ggT = self._gradient_covariances[name]
                 x_joint = ggT @ x_joint @ aaT
 
-                w_cols = mod.weight.shape[1]
+                w_cols = x_w.shape[1]
                 x_torch[w_pos], x_torch[b_pos] = x_joint.split([w_cols, 1], dim=1)
 
             # for weights we need to multiply from the right with aaT
@@ -273,10 +275,12 @@ class KFACLinearOperator(_LinearOperator):
                     p = getattr(mod, p_name)
                     if self.in_params(p):
                         pos = self.param_pos(p)
-                        x_torch[pos] = self._gradient_covariances[name] @ x_torch[pos]
 
                         if p_name == "weight":
-                            x_torch[pos] = x_torch[pos] @ self._input_covariances[name]
+                            x_w = rearrange(x_torch[pos], "c_out ... -> c_out (...)")
+                            x_torch[pos] = x_w @ self._input_covariances[name]
+
+                        x_torch[pos] = self._gradient_covariances[name] @ x_torch[pos]
 
         return super()._postprocess(x_torch)
 
@@ -465,12 +469,10 @@ class KFACLinearOperator(_LinearOperator):
         Args:
             module: The layer whose output's gradient covariance will be accumulated.
             grad_output: The gradient w.r.t. the output.
-
-        Raises:
-            NotImplementedError: If a layer uses weight sharing.
-            NotImplementedError: If the layer is not supported.
         """
         g = grad_output.data.detach()
+        if isinstance(module, Conv2d):
+            g = rearrange(g, "batch c o1 o2 -> batch o1 o2 c")
         num_loss_terms = g.shape[0]  # batch_size
         sequence_length = g.shape[1:-1].numel()
         if self._loss_average == "batch+sequence":
@@ -484,21 +486,14 @@ class KFACLinearOperator(_LinearOperator):
             # KFAC-reduce approximation
             g = reduce(g, "batch ... d_out -> batch d_out", "sum")
 
-        if isinstance(module, Linear):
-            # self._mc_samples will be 1 if fisher_type != "mc"
-            correction = {
-                None: 1.0 / self._mc_samples,
-                "batch": num_loss_terms**2 / (self._N_data * self._mc_samples),
-                "batch+sequence": num_loss_terms**2
-                / (self._N_data * self._mc_samples * sequence_length),
-            }[self._loss_average]
-            covariance = einsum("bi,bj->ij", g, g).mul_(correction)
-        else:
-            # TODO Support convolutions
-            raise NotImplementedError(
-                f"Layer of type {type(module)} is unsupported. "
-                + f"Supported layers: {self._SUPPORTED_MODULES}."
-            )
+        # self._mc_samples will be 1 if fisher_type != "mc"
+        correction = {
+            None: 1.0 / self._mc_samples,
+            "batch": num_loss_terms**2 / (self._N_data * self._mc_samples),
+            "batch+sequence": num_loss_terms**2
+            / (self._N_data * self._mc_samples * sequence_length),
+        }[self._loss_average]
+        covariance = einsum("bi,bj->ij", g, g).mul_(correction)
 
         name = self.get_module_name(module)
         if name not in self._gradient_covariances:
@@ -517,32 +512,42 @@ class KFACLinearOperator(_LinearOperator):
 
         Raises:
             ValueError: If the module has multiple inputs.
-            NotImplementedError: If a layer uses weight sharing.
-            NotImplementedError: If a module is not supported.
         """
         if len(inputs) != 1:
             raise ValueError("Modules with multiple inputs are not supported.")
         x = inputs[0].data.detach()
 
+        if isinstance(module, Conv2d):
+            patch_extractor_fn = (
+                extract_patches
+                if self._kfac_approx == "expand"
+                else extract_averaged_patches
+            )
+            x = patch_extractor_fn(
+                x,
+                module.kernel_size,
+                module.stride,
+                module.padding,
+                module.dilation,
+                module.groups,
+            )
+
         if self._kfac_approx == "expand":
             # KFAC-expand approximation
             scale = x.shape[1:-1].numel()  # sequence_length
             x = rearrange(x, "batch ... d_in -> (batch ...) d_in")
-        else:
+        elif self._kfac_approx == "reduce":
             # KFAC-reduce approximation
             scale = 1.0  # since we use a mean reduction
             x = reduce(x, "batch ... d_in -> batch d_in", "mean")
 
-        if isinstance(module, Linear):
-            if (
-                self.in_params(module.weight, module.bias)
-                and not self._separate_weight_and_bias
-            ):
-                x = cat([x, x.new_ones(x.shape[0], 1)], dim=1)
-            covariance = einsum("bi,bj->ij", x, x).div_(self._N_data * scale)
-        else:
-            # TODO Support convolutions
-            raise NotImplementedError(f"Layer of type {type(module)} is unsupported.")
+        if (
+            self.in_params(module.weight, module.bias)
+            and not self._separate_weight_and_bias
+        ):
+            x = cat([x, x.new_ones(x.shape[0], 1)], dim=1)
+
+        covariance = einsum("bi,bj->ij", x, x).div_(self._N_data * scale)
 
         name = self.get_module_name(module)
         if name not in self._input_covariances:
