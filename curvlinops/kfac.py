@@ -525,7 +525,6 @@ class KFACLinearOperator(_LinearOperator):
         if len(inputs) != 1:
             raise ValueError("Modules with multiple inputs are not supported.")
         x = inputs[0].data.detach()
-        sequence_length = x.shape[1:-1].numel()
 
         if self._kfac_approx == "expand":
             # KFAC-expand approximation
