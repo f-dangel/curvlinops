@@ -312,13 +312,12 @@ class KFACLinearOperator(_LinearOperator):
                 ``'empirical'``.
         """
         # if >2d output we convert to an equivalent 2d output
-        if output.ndim > 2:
-            if isinstance(self._loss_func, CrossEntropyLoss):
-                output = rearrange(output, "batch c ... -> (batch ...) c")
-                y = rearrange(y, "batch ... -> (batch ...)")
-            else:
-                output = rearrange(output, "batch ... c -> (batch ...) c")
-                y = rearrange(y, "batch ... c -> (batch ...) c")
+        if isinstance(self._loss_func, CrossEntropyLoss):
+            output = rearrange(output, "batch c ... -> (batch ...) c")
+            y = rearrange(y, "batch ... -> (batch ...)")
+        else:
+            output = rearrange(output, "batch ... c -> (batch ...) c")
+            y = rearrange(y, "batch ... c -> (batch ...) c")
 
         if self._fisher_type == "type-2":
             # Compute per-sample Hessian square root, then concatenate over samples.
