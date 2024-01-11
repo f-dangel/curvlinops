@@ -2,7 +2,6 @@
 
 from test.cases import DEVICES, DEVICES_IDS
 from test.utils import (
-    Rearrange,
     WeightShareModel,
     classification_targets,
     ggn_block_diagonal,
@@ -10,6 +9,7 @@ from test.utils import (
 )
 from typing import Dict, Iterable, List, Tuple, Union
 
+from einops.layers.torch import Rearrange
 from numpy import eye
 from pytest import mark
 from scipy.linalg import block_diag
@@ -312,14 +312,14 @@ def test_multi_dim_output(
     loss_func = loss(reduction=reduction).to(dev)
     if isinstance(loss_func, MSELoss):
         data = [
-            (rand(2, 4, 5), regression_targets((2, 4, 3))),
+            (rand(2, 7, 5, 5), regression_targets((2, 7, 5, 3))),
             (rand(4, 7, 5, 5), regression_targets((4, 7, 5, 3))),
         ]
         manual_seed(711)
         model = Sequential(Linear(5, 4), Linear(4, 3)).to(dev)
     else:
         data = [
-            (rand(2, 4, 5), classification_targets((2, 4), 3)),
+            (rand(2, 7, 5, 5), classification_targets((2, 7, 5), 3)),
             (rand(4, 7, 5, 5), classification_targets((4, 7, 5), 3)),
         ]
         manual_seed(711)
@@ -330,12 +330,12 @@ def test_multi_dim_output(
             Rearrange("batch ... c -> batch c ..."),
         ).to(dev)
 
-    # KFAC for deep linear network with 3d/4d input and output
+    # KFAC for deep linear network with 4d input and output
     params = list(model.parameters())
     kfac = KFACLinearOperator(model, loss_func, params, data, fisher_type=fisher_type)
     kfac_mat = kfac @ eye(kfac.shape[1])
 
-    # KFAC for deep linear network with 3d/4d input and equivalent 2d output
+    # KFAC for deep linear network with 4d input and equivalent 2d output
     manual_seed(711)
     model_flat = Sequential(
         Linear(5, 4),

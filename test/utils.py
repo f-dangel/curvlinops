@@ -1,9 +1,9 @@
-"""Utility functions to test `curvlinops`."""
+"""Utility functions to test ``curvlinops``."""
 
 from itertools import product
 from typing import Iterable, List, Tuple
 
-from einops import rearrange, reduce
+from einops import reduce
 from numpy import eye, ndarray
 from torch import Tensor, cat, cuda, device, from_numpy, rand, randint
 from torch.nn import Module, Parameter, Sequential
@@ -15,7 +15,7 @@ def get_available_devices():
     """Return CPU and, if present, GPU device.
 
     Returns:
-        [device]: Available devices for `torch`.
+        [device]: Available devices for ``torch``.
     """
     devices = [device("cpu")]
 
@@ -26,7 +26,7 @@ def get_available_devices():
 
 
 def classification_targets(size: Tuple[int], num_classes: int) -> Tensor:
-    """Create random targets for classes 0, ..., `num_classes - 1`.
+    """Create random targets for classes ``0``, ..., ``num_classes - 1``.
 
     Args:
         size: Size of the targets to create.
@@ -109,37 +109,13 @@ def ggn_block_diagonal(
     return cat([cat(row_blocks, dim=1) for row_blocks in ggn_blocks], dim=0).numpy()
 
 
-class Rearrange(Module):
-    """A module that rearranges the input tensor."""
-
-    def __init__(self, pattern: str):
-        """Initialize the module.
-
-        Args:
-            pattern: The rearrangement pattern.
-        """
-        super().__init__()
-        self.pattern = pattern
-
-    def forward(self, x: Tensor) -> Tensor:
-        """Rearrange the input tensor.
-
-        Args:
-            x: The input tensor.
-
-        Returns:
-            The rearranged tensor.
-        """
-        return rearrange(x, self.pattern)
-
-
 class WeightShareModel(Sequential):
     """Sequential model with processing of the weight-sharing dimension.
 
-    Wraps a `Sequential` model, but processes the weight-sharing dimension based
-    on the `setting` before it returns the output of the sequential model.
+    Wraps a ``Sequential`` model, but processes the weight-sharing dimension based
+    on the ``setting`` before it returns the output of the sequential model.
     Assumes that the output of the sequential model is of shape
-    (batch, ..., out_dim).
+    ``(batch, ..., out_dim)``.
     """
 
     def __init__(self, *args):
@@ -159,7 +135,7 @@ class WeightShareModel(Sequential):
             The setting of the model.
 
         Raises:
-            ValueError: If `setting` property has not been set.
+            ValueError: If ``setting`` property has not been set.
         """
         if self._setting is None:
             raise ValueError("WeightShareModel.setting has not been set.")
@@ -173,7 +149,7 @@ class WeightShareModel(Sequential):
             setting: The weight-sharing setting of the model.
 
         Raises:
-            ValueError: If `setting` is neither `'expand'` nor `'reduce'`.
+            ValueError: If ``setting`` is neither ``'expand'`` nor ``'reduce'``.
         """
         if setting not in {"expand", "reduce"}:
             raise ValueError(

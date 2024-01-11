@@ -340,13 +340,12 @@ class KFACLinearOperator(_LinearOperator):
                 ``'empirical'``.
         """
         # if >2d output we convert to an equivalent 2d output
-        if output.ndim > 2:
-            if isinstance(self._loss_func, CrossEntropyLoss):
-                output = rearrange(output, "batch c ... -> (batch ...) c")
-                y = rearrange(y, "batch ... -> (batch ...)")
-            else:
-                output = rearrange(output, "batch ... c -> (batch ...) c")
-                y = rearrange(y, "batch ... c -> (batch ...) c")
+        if isinstance(self._loss_func, CrossEntropyLoss):
+            output = rearrange(output, "batch c ... -> (batch ...) c")
+            y = rearrange(y, "batch ... -> (batch ...)")
+        else:
+            output = rearrange(output, "batch ... c -> (batch ...) c")
+            y = rearrange(y, "batch ... c -> (batch ...) c")
 
         if self._fisher_type == "type-2":
             # Compute per-sample Hessian square root, then concatenate over samples.
@@ -406,12 +405,16 @@ class KFACLinearOperator(_LinearOperator):
             together with ``output``.
 
         Raises:
+            ValueError: If the output is not 2d.
             NotImplementedError: If the loss function is not supported.
         """
+        if output.ndim != 2:
+            raise ValueError("Only a 2d output is supported.")
+
         if isinstance(self._loss_func, MSELoss):
             std = {
                 "sum": sqrt(1.0 / 2.0),
-                "mean": sqrt(output.shape[1:].numel() / 2.0),
+                "mean": sqrt(output.shape[1] / 2.0),
             }[self._loss_func.reduction]
             perturbation = std * randn(
                 output.shape,
@@ -422,7 +425,6 @@ class KFACLinearOperator(_LinearOperator):
             return output.clone().detach() + perturbation
 
         elif isinstance(self._loss_func, CrossEntropyLoss):
-            # each row contains a vector describing a categorical
             probs = output.softmax(dim=1)
             labels = probs.multinomial(
                 num_samples=1, generator=self._generator
@@ -523,6 +525,7 @@ class KFACLinearOperator(_LinearOperator):
         if len(inputs) != 1:
             raise ValueError("Modules with multiple inputs are not supported.")
         x = inputs[0].data.detach()
+        sequence_length = x.shape[1:-1].numel()
 
         if self._kfac_approx == "expand":
             # KFAC-expand approximation
