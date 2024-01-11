@@ -24,13 +24,28 @@ def get_available_devices():
     return devices
 
 
-def classification_targets(size, num_classes):
-    """Create random targets for classes 0, ..., `num_classes - 1`."""
+def classification_targets(size: Tuple[int], num_classes: int) -> Tensor:
+    """Create random targets for classes ``0``, ..., ``num_classes - 1``.
+
+    Args:
+        size: Size of the targets to create.
+        num_classes: Number of classes.
+
+    Returns:
+        Random targets.
+    """
     return randint(size=size, low=0, high=num_classes)
 
 
-def regression_targets(size):
-    """Create random targets for regression."""
+def regression_targets(size: Tuple[int]) -> Tensor:
+    """Create random targets for regression.
+
+    Args:
+        size: Size of the targets to create.
+
+    Returns:
+        Random targets.
+    """
     return rand(*size)
 
 
