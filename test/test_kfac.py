@@ -3,7 +3,6 @@
 from test.cases import DEVICES, DEVICES_IDS
 from test.utils import (
     Conv2dModel,
-    Rearrange,
     WeightShareModel,
     classification_targets,
     ggn_block_diagonal,
@@ -11,6 +10,7 @@ from test.utils import (
 )
 from typing import Dict, Iterable, List, Tuple, Union
 
+from einops.layers.torch import Rearrange
 from numpy import eye
 from pytest import mark
 from scipy.linalg import block_diag
@@ -59,6 +59,7 @@ def test_kfac_type2(
     """
     assert exclude in [None, "weight", "bias"]
     model, loss_func, params, data = kfac_exact_case
+    loss_average = None if loss_func.reduction == "sum" else "batch"
 
     if exclude is not None:
         names = {p.data_ptr(): name for name, p in model.named_parameters()}
@@ -81,6 +82,7 @@ def test_kfac_type2(
         params,
         data,
         fisher_type="type-2",
+        loss_average=loss_average,
         separate_weight_and_bias=separate_weight_and_bias,
     )
     kfac_mat = kfac @ eye(kfac.shape[1])
@@ -102,7 +104,7 @@ def test_kfac_type2(
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_kfac_type2_weight_sharing(
     kfac_weight_sharing_exact_case: Tuple[
-        WeightShareModel,
+        Union[WeightShareModel, Conv2dModel],
         MSELoss,
         List[Parameter],
         Dict[str, Iterable[Tuple[Tensor, Tensor]]],
@@ -190,13 +192,16 @@ def test_kfac_mc(
         shuffle: Whether to shuffle the parameters before computing the KFAC matrix.
     """
     model, loss_func, params, data = kfac_exact_case
+    loss_average = None if loss_func.reduction == "sum" else "batch"
 
     if shuffle:
         permutation = randperm(len(params))
         params = [params[i] for i in permutation]
 
     ggn = ggn_block_diagonal(model, loss_func, params, data)
-    kfac = KFACLinearOperator(model, loss_func, params, data, mc_samples=2_000)
+    kfac = KFACLinearOperator(
+        model, loss_func, params, data, mc_samples=2_000, loss_average=loss_average
+    )
 
     kfac_mat = kfac @ eye(kfac.shape[1])
 
@@ -212,9 +217,12 @@ def test_kfac_one_datum(
     ]
 ):
     model, loss_func, params, data = kfac_exact_one_datum_case
+    loss_average = None if loss_func.reduction == "sum" else "batch"
 
     ggn = ggn_block_diagonal(model, loss_func, params, data)
-    kfac = KFACLinearOperator(model, loss_func, params, data, fisher_type="type-2")
+    kfac = KFACLinearOperator(
+        model, loss_func, params, data, fisher_type="type-2", loss_average=loss_average
+    )
     kfac_mat = kfac @ eye(kfac.shape[1])
 
     report_nonclose(ggn, kfac_mat)
@@ -226,9 +234,12 @@ def test_kfac_mc_one_datum(
     ]
 ):
     model, loss_func, params, data = kfac_exact_one_datum_case
-    ggn = ggn_block_diagonal(model, loss_func, params, data)
+    loss_average = None if loss_func.reduction == "sum" else "batch"
 
-    kfac = KFACLinearOperator(model, loss_func, params, data, mc_samples=10_000)
+    ggn = ggn_block_diagonal(model, loss_func, params, data)
+    kfac = KFACLinearOperator(
+        model, loss_func, params, data, mc_samples=10_000, loss_average=loss_average
+    )
     kfac_mat = kfac @ eye(kfac.shape[1])
 
     atol = {"sum": 1e-3, "mean": 1e-3}[loss_func.reduction]
@@ -243,6 +254,7 @@ def test_kfac_ef_one_datum(
     ]
 ):
     model, loss_func, params, data = kfac_exact_one_datum_case
+    loss_average = None if loss_func.reduction == "sum" else "batch"
 
     ef_blocks = []  # list of per-parameter EFs
     for param in params:
@@ -250,7 +262,14 @@ def test_kfac_ef_one_datum(
         ef_blocks.append(ef @ eye(ef.shape[1]))
     ef = block_diag(*ef_blocks)
 
-    kfac = KFACLinearOperator(model, loss_func, params, data, fisher_type="empirical")
+    kfac = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        fisher_type="empirical",
+        loss_average=loss_average,
+    )
     kfac_mat = kfac @ eye(kfac.shape[1])
 
     report_nonclose(ef, kfac_mat)
@@ -314,16 +333,17 @@ def test_multi_dim_output(
     manual_seed(0)
     # set up loss function, data, and model
     loss_func = loss(reduction=reduction).to(dev)
+    loss_average = None if reduction == "sum" else "batch+sequence"
     if isinstance(loss_func, MSELoss):
         data = [
-            (rand(2, 4, 5), regression_targets((2, 4, 3))),
+            (rand(2, 7, 5, 5), regression_targets((2, 7, 5, 3))),
             (rand(4, 7, 5, 5), regression_targets((4, 7, 5, 3))),
         ]
         manual_seed(711)
         model = Sequential(Linear(5, 4), Linear(4, 3)).to(dev)
     else:
         data = [
-            (rand(2, 4, 5), classification_targets((2, 4), 3)),
+            (rand(2, 7, 5, 5), classification_targets((2, 7, 5), 3)),
             (rand(4, 7, 5, 5), classification_targets((4, 7, 5), 3)),
         ]
         manual_seed(711)
@@ -334,12 +354,19 @@ def test_multi_dim_output(
             Rearrange("batch ... c -> batch c ..."),
         ).to(dev)
 
-    # KFAC for deep linear network with 3d/4d input and output
+    # KFAC for deep linear network with 4d input and output
     params = list(model.parameters())
-    kfac = KFACLinearOperator(model, loss_func, params, data, fisher_type=fisher_type)
+    kfac = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        fisher_type=fisher_type,
+        loss_average=loss_average,
+    )
     kfac_mat = kfac @ eye(kfac.shape[1])
 
-    # KFAC for deep linear network with 3d/4d input and equivalent 2d output
+    # KFAC for deep linear network with 4d input and equivalent 2d output
     manual_seed(711)
     model_flat = Sequential(
         Linear(5, 4),
@@ -354,7 +381,12 @@ def test_multi_dim_output(
         for x, y in data
     ]
     kfac_flat = KFACLinearOperator(
-        model_flat, loss_func, params_flat, data_flat, fisher_type=fisher_type
+        model_flat,
+        loss_func,
+        params_flat,
+        data_flat,
+        fisher_type=fisher_type,
+        loss_average=loss_average,
     )
     kfac_flat_mat = kfac_flat @ eye(kfac_flat.shape[1])
 

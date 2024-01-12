@@ -1,19 +1,23 @@
 """Linear operator for the Fisher/GGN's Kronecker-factored approximation.
 
-Kronecker-factored approximate curvature was originally introduced for MLPs in
+Kronecker-Factored Approximate Curvature (KFAC) was originally introduced for MLPs in
 
 - Martens, J., & Grosse, R. (2015). Optimizing neural networks with Kronecker-factored
-  approximate curvature. International Conference on Machine Learning (ICML).
+  approximate curvature. International Conference on Machine Learning (ICML),
 
-and extended to CNNs in
+extended to CNNs in
 
 - Grosse, R., & Martens, J. (2016). A kronecker-factored approximate Fisher matrix for
-  convolution layers. International Conference on Machine Learning (ICML).
+  convolution layers. International Conference on Machine Learning (ICML),
+
+and generalized to all linear layers with weight sharing in
+
+- Eschenhagen, R., Immer, A., Turner, R. E., Schneider, F., Hennig, P. (2023).
+  Kronecker-Factored Approximate Curvature for Modern Neural Network Architectures (NeurIPS).
 """
 
 from __future__ import annotations
 
-import warnings
 from functools import partial
 from math import sqrt
 from typing import Dict, Iterable, List, Set, Tuple, Union
@@ -59,15 +63,20 @@ class KFACLinearOperator(_LinearOperator):
     'would-be' gradients w.r.t. the layer's output. Those 'would-be' gradients result
     from sampling labels from the model's distribution and computing their gradients.
 
-    The basic version of KFAC for MLPs was introduced in
+    Kronecker-Factored Approximate Curvature (KFAC) was originally introduced for MLPs in
 
-    - Martens, J., & Grosse, R. (2015). Optimizing neural networks with
-      Kronecker-factored approximate curvature. ICML.
+    - Martens, J., & Grosse, R. (2015). Optimizing neural networks with Kronecker-factored
+    approximate curvature. International Conference on Machine Learning (ICML),
 
-    and later generalized to convolutions in
+    extended to CNNs in
 
-    - Grosse, R., & Martens, J. (2016). A kronecker-factored approximate Fisher
-      matrix for convolution layers. ICML.
+    - Grosse, R., & Martens, J. (2016). A kronecker-factored approximate Fisher matrix for
+    convolution layers. International Conference on Machine Learning (ICML),
+
+    and generalized to all linear layers with weight sharing in
+
+    - Eschenhagen, R., Immer, A., Turner, R. E., Schneider, F., Hennig, P. (2023).
+    Kronecker-Factored Approximate Curvature for Modern Neural Network Architectures (NeurIPS).
 
     Attributes:
         _SUPPORTED_LOSSES: Tuple of supported loss functions.
@@ -139,21 +148,21 @@ class KFACLinearOperator(_LinearOperator):
                 Has to be set to ``1`` when ``fisher_type != 'mc'``.
                 Defaults to ``1``.
             kfac_approx: A string specifying the KFAC approximation that should
-                be used for linear weight-sharing layers, e.g. `Conv2d` modules
-                or `Linear` modules that process matrix- or higher-dimensional
+                be used for linear weight-sharing layers, e.g. ``Conv2d`` modules
+                or ``Linear`` modules that process matrix- or higher-dimensional
                 features.
                 Possible values are ``'expand'`` and ``'reduce'``.
-                See [Eschenhagen et al., 2023](https://arxiv.org/abs/2311.00636)
+                See `Eschenhagen et al., 2023 <https://arxiv.org/abs/2311.00636>`_
                 for an explanation of the two approximations.
             loss_average: Whether the loss function is a mean over per-sample
                 losses and if yes, over which dimensions the mean is taken.
-                If `"batch"`, the loss function is a mean over as many terms as
-                the size of the mini-batch. If `"batch+sequence"`, the loss
+                If ``"batch"``, the loss function is a mean over as many terms as
+                the size of the mini-batch. If ``"batch+sequence"``, the loss
                 function is a mean over as many terms as the size of the
                 mini-batch times the sequence length, e.g. in the case of
-                language modeling. If `None`, the loss function is a sum. This
+                language modeling. If ``None``, the loss function is a sum. This
                 argument is used to ensure that the preconditioner is scaled
-                consistently with the loss and the gradient. Default: `"batch"`.
+                consistently with the loss and the gradient. Default: ``"batch"``.
             separate_weight_and_bias: Whether to treat weights and biases separately.
                 Defaults to ``True``.
 
@@ -162,6 +171,8 @@ class KFACLinearOperator(_LinearOperator):
             ValueError: If the loss average is not supported.
             ValueError: If the loss average is ``None`` and the loss function's
                 reduction is not ``'sum'``.
+            ValueError: If the loss average is not ``None`` and the loss function's
+                reduction is ``'sum'``.
             ValueError: If ``fisher_type != 'mc'`` and ``mc_samples != 1``.
             NotImplementedError: If a parameter is in an unsupported layer.
         """
@@ -180,13 +191,10 @@ class KFACLinearOperator(_LinearOperator):
                 f"Must be 'batch' or 'batch+sequence' if loss_func.reduction != 'sum'."
             )
         if loss_func.reduction == "sum" and loss_average is not None:
-            # reduction used in loss function will overwrite loss_average
-            warnings.warn(
+            raise ValueError(
                 f"Loss function uses reduction='sum', but loss_average={loss_average}."
-                " loss_average is set to None.",
-                stacklevel=2,
+                " Set loss_average to None if you want to use reduction='sum'."
             )
-            loss_average = None
         if fisher_type != "mc" and mc_samples != 1:
             raise ValueError(
                 f"Invalid mc_samples: {mc_samples}. "
@@ -344,13 +352,12 @@ class KFACLinearOperator(_LinearOperator):
                 ``'empirical'``.
         """
         # if >2d output we convert to an equivalent 2d output
-        if output.ndim > 2:
-            if isinstance(self._loss_func, CrossEntropyLoss):
-                output = rearrange(output, "batch c ... -> (batch ...) c")
-                y = rearrange(y, "batch ... -> (batch ...)")
-            else:
-                output = rearrange(output, "batch ... c -> (batch ...) c")
-                y = rearrange(y, "batch ... c -> (batch ...) c")
+        if isinstance(self._loss_func, CrossEntropyLoss):
+            output = rearrange(output, "batch c ... -> (batch ...) c")
+            y = rearrange(y, "batch ... -> (batch ...)")
+        else:
+            output = rearrange(output, "batch ... c -> (batch ...) c")
+            y = rearrange(y, "batch ... c -> (batch ...) c")
 
         if self._fisher_type == "type-2":
             # Compute per-sample Hessian square root, then concatenate over samples.
@@ -410,12 +417,16 @@ class KFACLinearOperator(_LinearOperator):
             together with ``output``.
 
         Raises:
+            ValueError: If the output is not 2d.
             NotImplementedError: If the loss function is not supported.
         """
+        if output.ndim != 2:
+            raise ValueError("Only a 2d output is supported.")
+
         if isinstance(self._loss_func, MSELoss):
             std = {
                 "sum": sqrt(1.0 / 2.0),
-                "mean": sqrt(output.shape[1:].numel() / 2.0),
+                "mean": sqrt(output.shape[1] / 2.0),
             }[self._loss_func.reduction]
             perturbation = std * randn(
                 output.shape,
@@ -426,7 +437,6 @@ class KFACLinearOperator(_LinearOperator):
             return output.clone().detach() + perturbation
 
         elif isinstance(self._loss_func, CrossEntropyLoss):
-            # each row contains a vector describing a categorical
             probs = output.softmax(dim=1)
             labels = probs.multinomial(
                 num_samples=1, generator=self._generator
@@ -471,13 +481,15 @@ class KFACLinearOperator(_LinearOperator):
             grad_output: The gradient w.r.t. the output.
         """
         g = grad_output.data.detach()
+        batch_size = g.shape[0]
         if isinstance(module, Conv2d):
             g = rearrange(g, "batch c o1 o2 -> batch o1 o2 c")
-        num_loss_terms = g.shape[0]  # batch_size
         sequence_length = g.shape[1:-1].numel()
-        if self._loss_average == "batch+sequence":
-            # Number of all loss terms = batch_size * sequence_length
-            num_loss_terms *= sequence_length
+        num_loss_terms = {
+            None: batch_size,
+            "batch": batch_size,
+            "batch+sequence": batch_size * sequence_length,
+        }[self._loss_average]
 
         if self._kfac_approx == "expand":
             # KFAC-expand approximation
@@ -536,7 +548,7 @@ class KFACLinearOperator(_LinearOperator):
             # KFAC-expand approximation
             scale = x.shape[1:-1].numel()  # sequence_length
             x = rearrange(x, "batch ... d_in -> (batch ...) d_in")
-        elif self._kfac_approx == "reduce":
+        else:
             # KFAC-reduce approximation
             scale = 1.0  # since we use a mean reduction
             x = reduce(x, "batch ... d_in -> batch d_in", "mean")
