@@ -101,7 +101,7 @@ def test_ActivationHessianLinearOperator(dev: device):
     H_mat = from_numpy(H_linop @ numpy_eye(H_linop.shape[1])).to(dev, X.dtype)
 
     # we know that the Hessian of softmax CE loss is ``diag(p(x)) - p(x) p(x)ᵀ``
-    # where `p(x)` is the softmax probability on a single datum ``x``. On a batch,
+    # where ``p(x)`` is the softmax probability on a single datum ``x``. On a batch,
     # the Hessian is the block diagonal stack of these per-sample Hessians
     p = X.softmax(dim=1).detach()
     blocks = []
