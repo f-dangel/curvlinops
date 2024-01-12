@@ -14,7 +14,7 @@ from curvlinops import GGNLinearOperator
 
 def get_available_devices() -> List[device]:
     """Return CPU and, if present, GPU device.
-    AdaptiveAvgPool2d, Conv2d, Flatten,
+
         Returns:
             devices: Available devices for ``torch``.
     """
