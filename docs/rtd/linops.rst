@@ -77,3 +77,12 @@ Diagonal approximation
 
 .. autoclass:: curvlinops.HutchinsonDiagonalEstimator
    :members: __init__, sample
+
+Experimental
+============
+
+The API of experimental features may be subject to changes, or they might become
+deprecated.
+
+.. autoclass:: curvlinops.experimental.ActivationHessianLinearOperator
+   :members: __init__
