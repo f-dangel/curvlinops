@@ -60,15 +60,20 @@ class KFACLinearOperator(_LinearOperator):
     'would-be' gradients w.r.t. the layer's output. Those 'would-be' gradients result
     from sampling labels from the model's distribution and computing their gradients.
 
-    The basic version of KFAC for MLPs was introduced in
+    Kronecker-Factored Approximate Curvature (KFAC) was originally introduced for MLPs in
 
-    - Martens, J., & Grosse, R. (2015). Optimizing neural networks with
-      Kronecker-factored approximate curvature. ICML.
+    - Martens, J., & Grosse, R. (2015). Optimizing neural networks with Kronecker-factored
+    approximate curvature. International Conference on Machine Learning (ICML),
 
-    and later generalized to convolutions in
+    extended to CNNs in
 
-    - Grosse, R., & Martens, J. (2016). A kronecker-factored approximate Fisher
-      matrix for convolution layers. ICML.
+    - Grosse, R., & Martens, J. (2016). A kronecker-factored approximate Fisher matrix for
+    convolution layers. International Conference on Machine Learning (ICML),
+
+    and generalized to all linear layers with weight sharing in
+
+    - Eschenhagen, R., Immer, A., Turner, R. E., Schneider, F., Hennig, P. (2023).
+    Kronecker-Factored Approximate Curvature for Modern Neural Network Architectures (NeurIPS).
 
     Attributes:
         _SUPPORTED_LOSSES: Tuple of supported loss functions.
@@ -143,21 +148,21 @@ class KFACLinearOperator(_LinearOperator):
                 Has to be set to ``1`` when ``fisher_type != 'mc'``.
                 Defaults to ``1``.
             kfac_approx: A string specifying the KFAC approximation that should
-                be used for linear weight-sharing layers, e.g. `Conv2d` modules
-                or `Linear` modules that process matrix- or higher-dimensional
+                be used for linear weight-sharing layers, e.g. ``Conv2d`` modules
+                or ``Linear`` modules that process matrix- or higher-dimensional
                 features.
                 Possible values are ``'expand'`` and ``'reduce'``.
-                See [Eschenhagen et al., 2023](https://arxiv.org/abs/2311.00636)
+                See `Eschenhagen et al., 2023 <https://arxiv.org/abs/2311.00636>`_ 
                 for an explanation of the two approximations.
             loss_average: Whether the loss function is a mean over per-sample
                 losses and if yes, over which dimensions the mean is taken.
-                If `"batch"`, the loss function is a mean over as many terms as
-                the size of the mini-batch. If `"batch+sequence"`, the loss
+                If ``"batch"``, the loss function is a mean over as many terms as
+                the size of the mini-batch. If ``"batch+sequence"``, the loss
                 function is a mean over as many terms as the size of the
                 mini-batch times the sequence length, e.g. in the case of
-                language modeling. If `None`, the loss function is a sum. This
+                language modeling. If ``None``, the loss function is a sum. This
                 argument is used to ensure that the preconditioner is scaled
-                consistently with the loss and the gradient. Default: `"batch"`.
+                consistently with the loss and the gradient. Default: ``"batch"``.
             separate_weight_and_bias: Whether to treat weights and biases separately.
                 Defaults to ``True``.
 
