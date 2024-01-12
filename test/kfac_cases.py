@@ -76,12 +76,12 @@ KFAC_WEIGHT_SHARING_EXACT_CASES_NO_DEVICE_NO_LOSS_FUNC = [
         "model_func": lambda: Conv2dModel(),
         "data": lambda: {
             "expand": [
-                (rand(2, 3, 16, 16), regression_targets((2, 17, 17, 2))),
-                (rand(7, 3, 16, 16), regression_targets((7, 17, 17, 2))),
+                (rand(2, 3, 32, 32), regression_targets((2, 33, 33, 2))),
+                (rand(7, 3, 32, 32), regression_targets((7, 33, 33, 2))),
             ],
             "reduce": [
-                (rand(1, 3, 16, 16), regression_targets((1, 2))),
-                (rand(8, 3, 16, 16), regression_targets((8, 2))),
+                (rand(1, 3, 32, 32), regression_targets((1, 2))),
+                (rand(8, 3, 32, 32), regression_targets((8, 2))),
             ],
         },
         "seed": 0,
