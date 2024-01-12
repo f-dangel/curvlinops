@@ -38,7 +38,7 @@ def test_store_activation(dev: device):
         Sigmoid(),
         Linear(6, 4),
     ]
-    layers = [l.to(dev) for l in layers]
+    layers = [layer.to(dev) for layer in layers]
     model = Sequential(*layers).to(dev)
     X = rand(5, 10, device=dev)
 
