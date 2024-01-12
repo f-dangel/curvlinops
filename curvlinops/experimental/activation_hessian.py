@@ -77,6 +77,31 @@ class ActivationHessianLinearOperator(_LinearOperator):
 
         Raises:
             ValueError: If ``data`` contains more than one batch.
+
+        Example:
+            >>> from numpy import eye, allclose
+            >>> from torch import manual_seed, rand
+            >>> from torch.nn import Linear, MSELoss, Sequential, ReLU
+            >>>
+            >>> loss_func = MSELoss()
+            >>> model = Sequential(Linear(4, 3), ReLU(), Linear(3, 2))
+            >>> [name for name, _ in model.named_modules()] # available layer names
+            ['', '0', '1', '2']
+            >>> data = [(rand(10, 4), rand(10, 2))]
+            >>>
+            >>> hessian = ActivationHessianLinearOperator( # Hessian w.r.t. ReLU input
+            ...     model, loss_func, ("1", "input", 0), data
+            ... )
+            >>> hessian.shape # batch size * feature dimension (10 * 3)
+            (30, 30)
+            >>>
+            >>> # The ReLU's input is the first Linear's output, let's check that
+            >>> hessian2 = ActivationHessianLinearOperator( # Hessian w.r.t. first output
+            ...     model, loss_func, ("0", "output", 0), data
+            ... )
+            >>> I = eye(hessian.shape[1])
+            >>> allclose(hessian @ I, hessian2 @ I)
+            True
         """
         self._activation = activation
 
