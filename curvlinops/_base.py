@@ -55,15 +55,15 @@ class _LinearOperator(LinearOperator):
             params: List of differentiable parameters used by the prediction function.
             data: Source from which mini-batches can be drawn, for instance a list of
                 mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
-            shape: Shape of the represented matrix. If ``None`` assumes ``(D, D)``
-                where ``D`` is the total number of parameters
             progressbar: Show a progressbar during matrix-multiplication.
                 Default: ``False``.
             check_deterministic: Probe that model and data are deterministic, i.e.
-                that the data does not use `drop_last` or data augmentation. Also, the
+                that the data does not use ``drop_last`` or data augmentation. Also, the
                 model's forward pass could depend on the order in which mini-batches
                 are presented (BatchNorm, Dropout). Default: ``True``. This is a
                 safeguard, only turn it off if you know what you are doing.
+            shape: Shape of the represented matrix. If ``None`` assumes ``(D, D)``
+                where ``D`` is the total number of parameters
 
         Raises:
             RuntimeError: If the check for deterministic behavior fails.

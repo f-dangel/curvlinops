@@ -14,7 +14,30 @@ from curvlinops._base import _LinearOperator
 
 
 class ActivationHessianLinearOperator(_LinearOperator):
-    """Hessian of the loss w.r.t. hidden features in a neural network."""
+    r"""Hessian of the loss w.r.t. hidden features in a neural network.
+
+    Consider the empirical risk on a single mini-batch
+    :math:`\mathbf{X} = \{ \mathbf{x}_1, \dots, \mathbf{x}_N\}`,
+    :math:`\mathbf{y} = \{ \mathbf{y}_1, \dots, \mathbf{y}_N\}`:
+
+    .. math::
+        \mathcal{L}(\mathbf{\theta})
+        =
+        \ell(f_{\mathbf{\theta}}(\mathbf{X}), \mathbf{y})
+
+    Let :math:`\mathbf{Z} = \{ \mathbf{z}_1, \dots, \mathbf{z}_N \}` denote a batch
+    of some intermediate feature produced inside the neural network's forward pass.
+    The Hessian w.r.t. the flattened activations that is represented by this linear
+    operator is
+
+    .. math::
+        \nabla^2_{\mathbf{Z}} \mathcal{L}
+        =
+        \nabla^2_{\mathbf{Z}}
+        \ell(f_{\mathbf{\theta}}(\mathbf{X}), \mathbf{y})
+
+    and has dimension :math:`\mathrm{dim}(\mathbf{Z}) = N \mathrm{dim}(\mathbf{z})`.
+    """
 
     def __init__(
         self,
@@ -26,6 +49,32 @@ class ActivationHessianLinearOperator(_LinearOperator):
         check_deterministic: bool = True,
         shape: Optional[Tuple[int, int]] = None,
     ):
+        """Linear operator for the loss Hessian w.r.t. intermediate features.
+
+        Args:
+            model_func: A neural network.
+            loss_func: A loss function.
+            activation: A tuple specifying w.r.t. what intermediate feature the Hessian
+                shall be computed. Has three entries. The first entry is the layer's
+                name inside the model (any string from ``model_func.named_modules``).
+                The second entry can either be ``"output"`` or ``"input"`` and
+                specifies whether the intermediate feature is the layer's output or the
+                layer's input. The third entry specifies what tensor should be taken
+                from the tuple of input tensors or the tuple of output tensors. For
+                most layers that process a single Tensor into another single Tensor,
+                this value is ``0``.
+            data: An iterable of mini-batches. Must have a single batch, otherwise the
+                activation Hessian is not defined.
+            progressbar: Show a progressbar during matrix-multiplication.
+                Default: ``False``.
+            check_deterministic: Probe that model and data are deterministic, i.e.
+                that the data does not use ``drop_last`` or data augmentation. Also, the
+                model's forward pass could depend on the order in which mini-batches
+                are presented (BatchNorm, Dropout). Default: ``True``. This is a
+                safeguard, only turn it off if you know what you are doing.
+            shape: Shape of the represented matrix. If ``None``, this dimension will be
+                inferred at the cost of one forward pass through the model.
+        """
         self._activation = activation
 
         # Compute shape of activation and ensure there is only one batch
