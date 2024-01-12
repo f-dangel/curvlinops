@@ -18,7 +18,6 @@ and generalized to all linear layers with weight sharing in
 
 from __future__ import annotations
 
-import warnings
 from functools import partial
 from math import sqrt
 from typing import Dict, Iterable, List, Set, Tuple, Union
