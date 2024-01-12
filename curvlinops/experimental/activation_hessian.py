@@ -74,6 +74,9 @@ class ActivationHessianLinearOperator(_LinearOperator):
                 safeguard, only turn it off if you know what you are doing.
             shape: Shape of the represented matrix. If ``None``, this dimension will be
                 inferred at the cost of one forward pass through the model.
+
+        Raises:
+            ValueError: If ``data`` contains more than one batch.
         """
         self._activation = activation
 
