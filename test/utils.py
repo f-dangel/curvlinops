@@ -11,11 +11,11 @@ from torch.nn import Module, Parameter, Sequential
 from curvlinops import GGNLinearOperator
 
 
-def get_available_devices():
+def get_available_devices() -> List[device]:
     """Return CPU and, if present, GPU device.
 
     Returns:
-        [device]: Available devices for ``torch``.
+        devices: Available devices for ``torch``.
     """
     devices = [device("cpu")]
 
@@ -118,7 +118,7 @@ class WeightShareModel(Sequential):
     ``(batch, ..., out_dim)``.
     """
 
-    def __init__(self, *args):
+    def __init__(self, *args: Module):
         """Initialize the model.
 
         Args:

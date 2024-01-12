@@ -59,16 +59,12 @@ KFAC_WEIGHT_SHARING_EXACT_CASES_NO_DEVICE_NO_LOSS_FUNC = [
     {
         "model_func": lambda: WeightShareModel(Linear(5, 4), Linear(4, 3)),
         "data": lambda: {
-            # exactess with expand requires that the product of all
-            # weight-sharing dimension sizes is the same in all batches
-            # (e.g. 32 = 4 * 8)
             "expand": [
-                (rand(2, 32, 5), regression_targets((2, 32, 3))),
+                (rand(2, 4, 8, 5), regression_targets((2, 4, 8, 3))),
                 (rand(7, 4, 8, 5), regression_targets((7, 4, 8, 3))),
             ],
-            # for reduce it works with arbitrary weight-sharing dims per batch
             "reduce": [
-                (rand(1, 4, 5), regression_targets((1, 3))),
+                (rand(1, 4, 8, 5), regression_targets((1, 3))),
                 (rand(7, 4, 8, 5), regression_targets((7, 3))),
             ],
         },
