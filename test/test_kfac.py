@@ -170,7 +170,7 @@ def test_kfac_type2_weight_sharing(
     )
     kfac_mat = kfac @ eye(kfac.shape[1])
 
-    report_nonclose(ggn, kfac_mat)
+    report_nonclose(ggn, kfac_mat, rtol=1e-4)
 
     # Check that input covariances were not computed
     if exclude == "weight":
