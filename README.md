@@ -12,7 +12,7 @@ for deep learning matrices, such as
 - the Hessian
 - the Fisher/generalized Gauss-Newton (GGN)
 - the Monte-Carlo approximated Fisher
-- the Fisher's KFAC approximation (Kronecker-Factored Approximate Curvature)
+- the Fisher/GGN's KFAC approximation (Kronecker-Factored Approximate Curvature)
 - the uncentered gradient covariance (aka empirical Fisher)
 - the output-parameter Jacobian of a neural net and its transpose
 
