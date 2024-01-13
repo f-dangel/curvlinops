@@ -17,8 +17,6 @@ from torch.utils.data import DataLoader, TensorDataset
 DEVICES = get_available_devices()
 DEVICES_IDS = [f"dev={d}" for d in DEVICES]
 
-LINOPS = []
-
 # Add test cases here
 CASES_NO_DEVICE = [
     ###############################################################################
@@ -171,3 +169,5 @@ for case in NON_DETERMINISTIC_CASES_NO_DEVICE:
     for device in DEVICES:
         case_with_device = {**case, "device": device}
         NON_DETERMINISTIC_CASES.append(case_with_device)
+
+ADJOINT_CASES = [False, True]

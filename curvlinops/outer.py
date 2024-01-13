@@ -1,5 +1,7 @@
 """Utility linear operators."""
 
+from __future__ import annotations
+
 from numpy import einsum, einsum_path, ndarray, ones
 from scipy.sparse.linalg import LinearOperator
 
@@ -41,6 +43,16 @@ class OuterProductLinearOperator(LinearOperator):
             Result of linear operator applied to the vector.
         """
         return einsum(self._equation, *self._operands, x, optimize=self._path)
+
+    def _adjoint(self) -> OuterProductLinearOperator:
+        """Return the linear operator representing the adjoint.
+
+        An outer product is self-adjoint.
+
+        Returns:
+            Self.
+        """
+        return self
 
 
 class Projector(OuterProductLinearOperator):

@@ -1,5 +1,7 @@
 """Contains LinearOperator implementation of the Hessian."""
 
+from __future__ import annotations
+
 from typing import List, Tuple
 
 from backpack.hessianfree.hvp import hessian_vector_product
@@ -45,3 +47,13 @@ class HessianLinearOperator(_LinearOperator):
         """
         loss = self._loss_func(self._model_func(X), y)
         return hessian_vector_product(loss, self._params, x_list)
+
+    def _adjoint(self) -> HessianLinearOperator:
+        """Return the linear operator representing the adjoint.
+
+        The Hessian is real symmetric, and hence self-adjoint.
+
+        Returns:
+            Self.
+        """
+        return self

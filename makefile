@@ -5,6 +5,8 @@ help:
 	@echo "        Install curvlinops and dependencies"
 	@echo "uninstall"
 	@echo "        Unstall curvlinops"
+	@echo "lint"
+	@echo "        Run all linting actions"
 	@echo "docs"
 	@echo "        Build the documentation"
 	@echo "install-dev"
@@ -69,10 +71,10 @@ install-test:
 .PHONY: test test-light
 
 test:
-	@pytest -vx --run-optional-tests=montecarlo --cov=curvlinops test
+	@pytest -vx --run-optional-tests=montecarlo --cov=curvlinops --doctest-modules curvlinops test
 
 test-light:
-	@pytest -vx --cov=curvlinops test
+	@pytest -vx --cov=curvlinops --doctest-modules curvlinops test
 
 .PHONY: install-lint
 
@@ -114,3 +116,12 @@ pydocstyle-check:
 
 conda-env:
 	@conda env create --file .conda_env.yml
+
+.PHONY: lint
+
+lint:
+	make black-check
+	make isort-check
+	make flake8
+	make darglint-check
+	make pydocstyle-check
