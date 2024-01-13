@@ -2,6 +2,7 @@
 
 from functools import partial
 from test.utils import (
+    Conv2dModel,
     WeightShareModel,
     classification_targets,
     get_available_devices,
@@ -66,6 +67,21 @@ KFAC_WEIGHT_SHARING_EXACT_CASES_NO_DEVICE_NO_LOSS_FUNC = [
             "reduce": [
                 (rand(1, 4, 8, 5), regression_targets((1, 3))),
                 (rand(7, 4, 8, 5), regression_targets((7, 3))),
+            ],
+        },
+        "seed": 0,
+    },
+    # Conv2d module with vector output (uses average pooling for reduce setting)
+    {
+        "model_func": lambda: Conv2dModel(),
+        "data": lambda: {
+            "expand": [
+                (rand(2, 3, 32, 32), regression_targets((2, 33, 33, 2))),
+                (rand(7, 3, 32, 32), regression_targets((7, 33, 33, 2))),
+            ],
+            "reduce": [
+                (rand(1, 3, 32, 32), regression_targets((1, 2))),
+                (rand(8, 3, 32, 32), regression_targets((8, 2))),
             ],
         },
         "seed": 0,

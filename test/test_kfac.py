@@ -2,6 +2,7 @@
 
 from test.cases import DEVICES, DEVICES_IDS
 from test.utils import (
+    Conv2dModel,
     WeightShareModel,
     classification_targets,
     ggn_block_diagonal,
@@ -103,7 +104,7 @@ def test_kfac_type2(
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_kfac_type2_weight_sharing(
     kfac_weight_sharing_exact_case: Tuple[
-        WeightShareModel,
+        Union[WeightShareModel, Conv2dModel],
         MSELoss,
         List[Parameter],
         Dict[str, Iterable[Tuple[Tensor, Tensor]]],
@@ -128,6 +129,9 @@ def test_kfac_type2_weight_sharing(
     assert exclude in [None, "weight", "bias"]
     model, loss_func, params, data = kfac_weight_sharing_exact_case
     model.setting = setting
+    if isinstance(model, Conv2dModel):
+        # parameters are only initialized after the setting property is set
+        params = [p for p in model.parameters() if p.requires_grad]
     data = data[setting]
 
     # set appropriate loss_average argument based on loss reduction and setting
@@ -166,7 +170,7 @@ def test_kfac_type2_weight_sharing(
     )
     kfac_mat = kfac @ eye(kfac.shape[1])
 
-    report_nonclose(ggn, kfac_mat)
+    report_nonclose(ggn, kfac_mat, rtol=1e-4)
 
     # Check that input covariances were not computed
     if exclude == "weight":

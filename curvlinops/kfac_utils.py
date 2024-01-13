@@ -1,10 +1,15 @@
 """Utility functions related to KFAC."""
 
 from math import sqrt
-from typing import Union
+from typing import Tuple, Union
 
-from torch import Tensor, diag, einsum, eye
+from einconv import index_pattern
+from einconv.utils import get_conv_paddings
+from einops import einsum, rearrange, reduce
+from torch import Tensor, diag, eye
 from torch.nn import CrossEntropyLoss, MSELoss
+from torch.nn.functional import unfold
+from torch.nn.modules.utils import _pair
 
 
 def loss_hessian_matrix_sqrt(
@@ -87,6 +92,111 @@ def loss_hessian_matrix_sqrt(
         c = 1.0
         p = output_one_datum.softmax(dim=1).squeeze()
         p_sqrt = p.sqrt()
-        return (diag(p_sqrt) - einsum("i,j->ij", p, p_sqrt)).mul_(sqrt(c))
+        return (diag(p_sqrt) - einsum(p, p_sqrt, "i, j -> i j")).mul_(sqrt(c))
     else:
         raise NotImplementedError(f"Loss function {loss_func} not supported.")
+
+
+def extract_patches(
+    x: Tensor,
+    kernel_size: Union[Tuple[int, int], int],
+    stride: Union[Tuple[int, int], int],
+    padding: Union[Tuple[int, int], int, str],
+    dilation: Union[Tuple[int, int], int],
+    groups: int,
+) -> Tensor:
+    """Extract patches from the input of a 2d-convolution.
+
+    The patches are averaged over channel groups.
+
+    Args:
+        x: Input to a 2d-convolution. Has shape ``[batch_size, C_in, I1, I2]``.
+        kernel_size: The convolution's kernel size supplied as 2-tuple or integer.
+        stride: The convolution's stride supplied as 2-tuple or integer.
+        padding: The convolution's padding supplied as 2-tuple, integer, or string.
+        dilation: The convolution's dilation supplied as 2-tuple or integer.
+        groups: The number of channel groups.
+
+    Returns:
+        A tensor of shape ``[batch_size, O1 * O2, C_in // groups * K1 * K2]`` where
+        each column ``[b, o1_o2, :]`` contains the flattened patch of sample ``b`` used
+        for output location ``(o1, o2)``, averaged over channel groups.
+
+    Raises:
+        NotImplementedError: If ``padding`` is a string that would lead to unequal
+            padding along a dimension.
+    """
+    if isinstance(padding, str):  # get padding as integers
+        padding_as_int = []
+        for k, s, d in zip(_pair(kernel_size), _pair(stride), _pair(dilation)):
+            p_left, p_right = get_conv_paddings(k, s, padding, d)
+            if p_left != p_right:
+                raise NotImplementedError("Unequal padding not supported in unfold.")
+            padding_as_int.append(p_left)
+        padding = tuple(padding_as_int)
+
+    # average channel groups
+    x = rearrange(x, "b (g c_in) i1 i2 -> b g c_in i1 i2", g=groups)
+    x = reduce(x, "b g c_in i1 i2 -> b c_in i1 i2", "mean")
+
+    x_unfold = unfold(x, kernel_size, dilation=dilation, padding=padding, stride=stride)
+    return rearrange(x_unfold, "b c_in_k1_k2 o1_o2 -> b o1_o2 c_in_k1_k2")
+
+
+def extract_averaged_patches(
+    x: Tensor,
+    kernel_size: Union[Tuple[int, int], int],
+    stride: Union[Tuple[int, int], int],
+    padding: Union[Tuple[int, int], int, str],
+    dilation: Union[Tuple[int, int], int],
+    groups: int,
+) -> Tensor:
+    """Extract averaged patches from the input of a 2d-convolution.
+
+    The patches are averaged over channel groups and output locations.
+
+    Uses the tensor network formulation of convolution from
+    `Dangel, 2023 <https://arxiv.org/abs/2307.02275>`_.
+
+    Args:
+        x: Input to a 2d-convolution. Has shape ``[batch_size, C_in, I1, I2]``.
+        kernel_size: The convolution's kernel size supplied as 2-tuple or integer.
+        stride: The convolution's stride supplied as 2-tuple or integer.
+        padding: The convolution's padding supplied as 2-tuple, integer, or string.
+        dilation: The convolution's dilation supplied as 2-tuple or integer.
+        groups: The number of channel groups.
+
+    Returns:
+        A tensor of shape ``[batch_size, C_in // groups * K1 * K2]`` where each column
+        ``[b, :]`` contains the flattened patch of sample ``b`` averaged over all output
+        locations and channel groups.
+    """
+    # average channel groups
+    x = rearrange(x, "b (g c_in) i1 i2 -> b g c_in i1 i2", g=groups)
+    x = reduce(x, "b g c_in i1 i2 -> b c_in i1 i2", "mean")
+
+    # TODO For convolutions with special structure, we don't even need to compute
+    # the index pattern tensors, or can resort to contracting only slices thereof.
+    # In order for this to work `einconv`'s TN simplification mechanism must first
+    # be refactored to work purely symbolically. Once this is done, it will be
+    # possible to do the below even more efficiently (memory and run time) for
+    # structured convolutions.
+
+    # compute index pattern tensors, average output dimension
+    patterns = []
+    input_sizes = x.shape[-2:]
+    for i, k, s, p, d in zip(
+        input_sizes,
+        _pair(kernel_size),
+        _pair(stride),
+        (padding, padding) if isinstance(padding, str) else _pair(padding),
+        _pair(dilation),
+    ):
+        pi = index_pattern(
+            i, k, stride=s, padding=p, dilation=d, dtype=x.dtype, device=x.device
+        )
+        pi = reduce(pi, "k o i -> k i", "mean")
+        patterns.append(pi)
+
+    x = einsum(x, *patterns, "b c_in i1 i2, k1 i1, k2 i2 -> b c_in k1 k2")
+    return rearrange(x, "b c_in k1 k2 -> b (c_in k1 k2)")
