@@ -110,7 +110,7 @@ def extract_patches(
     The patches are averaged over channel groups.
 
     Args:
-        x: Input to a 2d-convolution. Has shape `[batch_size, C_in, I1, I2]`.
+        x: Input to a 2d-convolution. Has shape ``[batch_size, C_in, I1, I2]``.
         kernel_size: The convolution's kernel size supplied as 2-tuple or integer.
         stride: The convolution's stride supplied as 2-tuple or integer.
         padding: The convolution's padding supplied as 2-tuple, integer, or string.
@@ -118,12 +118,12 @@ def extract_patches(
         groups: The number of channel groups.
 
     Returns:
-        A tensor of shape `[batch_size, O1 * O2, C_in // groups * K1 * K2]` where
-        each column `[b, o1_o2, :]` contains the flattened patch of sample `b` used
-        for output location `(o1, o2)`, averaged over channel groups.
+        A tensor of shape ``[batch_size, O1 * O2, C_in // groups * K1 * K2]`` where
+        each column ``[b, o1_o2, :]`` contains the flattened patch of sample ``b`` used
+        for output location ``(o1, o2)``, averaged over channel groups.
 
     Raises:
-        NotImplementedError: If `padding` is a string that would lead to unequal
+        NotImplementedError: If ``padding`` is a string that would lead to unequal
             padding along a dimension.
     """
     if isinstance(padding, str):  # get padding as integers
@@ -156,10 +156,10 @@ def extract_averaged_patches(
     The patches are averaged over channel groups and output locations.
 
     Uses the tensor network formulation of convolution from
-    [Dangel, 2023](https://arxiv.org/abs/2307.02275).
+    `Dangel, 2023 <https://arxiv.org/abs/2307.02275>`_.
 
     Args:
-        x: Input to a 2d-convolution. Has shape `[batch_size, C_in, I1, I2]`.
+        x: Input to a 2d-convolution. Has shape ``[batch_size, C_in, I1, I2]``.
         kernel_size: The convolution's kernel size supplied as 2-tuple or integer.
         stride: The convolution's stride supplied as 2-tuple or integer.
         padding: The convolution's padding supplied as 2-tuple, integer, or string.
@@ -167,8 +167,8 @@ def extract_averaged_patches(
         groups: The number of channel groups.
 
     Returns:
-        A tensor of shape `[batch_size, C_in // groups * K1 * K2]` where each column
-        `[b, :]` contains the flattened patch of sample `b` averaged over all output
+        A tensor of shape ``[batch_size, C_in // groups * K1 * K2]`` where each column
+        ``[b, :]`` contains the flattened patch of sample ``b`` averaged over all output
         locations and channel groups.
     """
     # average channel groups
