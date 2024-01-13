@@ -530,11 +530,10 @@ class KFACLinearOperator(_LinearOperator):
         x = inputs[0].data.detach()
 
         if isinstance(module, Conv2d):
-            patch_extractor_fn = (
-                extract_patches
-                if self._kfac_approx == "expand"
-                else extract_averaged_patches
-            )
+            patch_extractor_fn = {
+                "expand": extract_patches,
+                "reduce": extract_averaged_patches,
+            }[self._kfac_approx]
             x = patch_extractor_fn(
                 x,
                 module.kernel_size,
