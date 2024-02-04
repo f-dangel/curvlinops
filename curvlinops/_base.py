@@ -84,9 +84,9 @@ class _LinearOperator(LinearOperator):
         self._progressbar = progressbar
 
         self._N_data = (
-            num_data
-            if num_data is not None
-            else sum(X.shape[0] for (X, _) in self._loop_over_data(desc="_N_data"))
+            sum(X.shape[0] for (X, _) in self._loop_over_data(desc="_N_data"))
+            if num_data is None
+            else num_data
         )
 
         if check_deterministic:
