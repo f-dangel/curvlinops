@@ -5,7 +5,11 @@ from curvlinops.fisher import FisherMCLinearOperator
 from curvlinops.ggn import GGNLinearOperator
 from curvlinops.gradient_moments import EFLinearOperator
 from curvlinops.hessian import HessianLinearOperator
-from curvlinops.inverse import CGInverseLinearOperator, NeumannInverseLinearOperator
+from curvlinops.inverse import (
+    CGInverseLinearOperator,
+    KFACInverseLinearOperator,
+    NeumannInverseLinearOperator,
+)
 from curvlinops.jacobian import JacobianLinearOperator, TransposedJacobianLinearOperator
 from curvlinops.kfac import KFACLinearOperator
 from curvlinops.papyan2020traces.spectrum import (
@@ -28,6 +32,7 @@ __all__ = [
     "TransposedJacobianLinearOperator",
     "CGInverseLinearOperator",
     "NeumannInverseLinearOperator",
+    "KFACInverseLinearOperator",
     "SubmatrixLinearOperator",
     "lanczos_approximate_spectrum",
     "lanczos_approximate_log_spectrum",

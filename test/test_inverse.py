@@ -1,14 +1,17 @@
 """Contains tests for ``curvlinops/inverse``."""
 
+import torch
 from numpy import array, eye, random
 from numpy.linalg import eigh, inv
-from pytest import raises
+from pytest import mark, raises
 from scipy import sparse
 from scipy.sparse.linalg import aslinearoperator
 
 from curvlinops import (
     CGInverseLinearOperator,
     GGNLinearOperator,
+    KFACInverseLinearOperator,
+    KFACLinearOperator,
     NeumannInverseLinearOperator,
 )
 from curvlinops.examples.functorch import functorch_ggn
@@ -125,3 +128,27 @@ def test_NeumannInverseLinearOperator_toy():
 
     report_nonclose(inv_neumann, inv_ground_truth, rtol=1e-3, atol=1e-5)
     report_nonclose(inv_neumann @ y, inv_ground_truth @ y, rtol=1e-3, atol=1e-5)
+
+
+@mark.parametrize("cache", [True, False], ids=["cached", "uncached"])
+def test_KFAC_inverse_damped_matvec(case, cache: bool, delta: float = 1e-2):
+    """Test matrix-vector multiplication by an inverse damped KFAC approximation."""
+    model_func, loss_func, params, data = case
+
+    loss_average = "batch" if loss_func.reduction == "mean" else None
+    KFAC = KFACLinearOperator(
+        model_func, loss_func, params, data, loss_average=loss_average
+    )
+    KFAC._compute_kfac()
+    # add damping
+    for aaT, ggT in zip(
+        KFAC._input_covariances.values(), KFAC._gradient_covariances.values()
+    ):
+        aaT += delta * torch.eye(aaT.shape[0])
+        ggT += delta * torch.eye(ggT.shape[0])
+
+    inv_KFAC = KFACInverseLinearOperator(KFAC, cache=cache)
+    inv_KFAC_naive = torch.inverse(torch.as_tensor(KFAC @ torch.eye(KFAC.shape[0])))
+
+    x = random.rand(KFAC.shape[1])
+    report_nonclose(inv_KFAC @ x, inv_KFAC_naive @ x, rtol=1e-3)
