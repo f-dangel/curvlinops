@@ -1,6 +1,5 @@
 """Hutchinson-style matrix diagonal estimation."""
 
-
 from numpy import ndarray
 from scipy.sparse.linalg import LinearOperator
 
