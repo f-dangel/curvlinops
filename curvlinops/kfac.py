@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from functools import partial
 from math import sqrt
-from typing import Dict, Iterable, List, Set, Tuple, Union
+from typing import Dict, Iterable, List, Optional, Set, Tuple, Union
 
 from einops import rearrange, reduce
 from numpy import ndarray
@@ -107,6 +107,7 @@ class KFACLinearOperator(_LinearOperator):
         kfac_approx: str = "expand",
         loss_average: Union[None, str] = "batch",
         separate_weight_and_bias: bool = True,
+        num_data: Optional[int] = None,
     ):
         """Kronecker-factored approximate curvature (KFAC) proxy of the Fisher/GGN.
 
@@ -165,6 +166,8 @@ class KFACLinearOperator(_LinearOperator):
                 consistently with the loss and the gradient. Default: ``"batch"``.
             separate_weight_and_bias: Whether to treat weights and biases separately.
                 Defaults to ``True``.
+            num_data: Number of data points. If ``None``, it is inferred from the data
+                at the cost of one traversal through the data loader.
 
         Raises:
             ValueError: If the loss function is not supported.
@@ -241,6 +244,7 @@ class KFACLinearOperator(_LinearOperator):
             progressbar=progressbar,
             check_deterministic=check_deterministic,
             shape=shape,
+            num_data=num_data,
         )
 
     def _matvec(self, x: ndarray) -> ndarray:

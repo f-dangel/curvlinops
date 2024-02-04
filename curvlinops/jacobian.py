@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Callable, Iterable, List, Tuple
+from typing import Callable, Iterable, List, Optional, Tuple
 
 from backpack.hessianfree.lop import transposed_jacobian_vector_product as vjp
 from backpack.hessianfree.rop import jacobian_vector_product as jvp
@@ -26,6 +26,7 @@ class JacobianLinearOperator(_LinearOperator):
         data: Iterable[Tuple[Tensor, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
+        num_data: Optional[int] = None,
     ):
         r"""Linear operator for the Jacobian as SciPy linear operator.
 
@@ -52,8 +53,10 @@ class JacobianLinearOperator(_LinearOperator):
             data: Iterable of batched input-target pairs.
             progressbar: Show progress bar.
             check_deterministic: Check if model and data are deterministic.
+            num_data: Number of data points. If ``None``, it is inferred from the data
+                at the cost of one traversal through the data loader.
         """
-        num_data = sum(t.shape[0] for t, _ in data)
+        num_data = sum(t.shape[0] for t, _ in data) if num_data is None else num_data
         x = next(iter(data))[0].to(self._infer_device(params))
         num_outputs = model_func(x).shape[1:].numel()
         num_params = sum(p.numel() for p in params)
@@ -65,6 +68,7 @@ class JacobianLinearOperator(_LinearOperator):
             progressbar=progressbar,
             check_deterministic=check_deterministic,
             shape=(num_data * num_outputs, num_params),
+            num_data=num_data,
         )
 
     def _check_deterministic(self):
@@ -151,6 +155,7 @@ class TransposedJacobianLinearOperator(_LinearOperator):
         data: Iterable[Tuple[Tensor, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
+        num_data: Optional[int] = None,
     ):
         r"""Linear operator for the transpose Jacobian as SciPy linear operator.
 
@@ -177,8 +182,10 @@ class TransposedJacobianLinearOperator(_LinearOperator):
             data: Iterable of batched input-target pairs.
             progressbar: Show progress bar.
             check_deterministic: Check if model and data are deterministic.
+            num_data: Number of data points. If ``None``, it is inferred from the data
+                at the cost of one traversal through the data loader.
         """
-        num_data = sum(t.shape[0] for t, _ in data)
+        num_data = sum(t.shape[0] for t, _ in data) if num_data is None else num_data
         x = next(iter(data))[0].to(self._infer_device(params))
         num_outputs = model_func(x).shape[1:].numel()
         num_params = sum(p.numel() for p in params)
@@ -190,6 +197,7 @@ class TransposedJacobianLinearOperator(_LinearOperator):
             progressbar=progressbar,
             check_deterministic=check_deterministic,
             shape=(num_params, num_data * num_outputs),
+            num_data=num_data,
         )
 
     def _check_deterministic(self):

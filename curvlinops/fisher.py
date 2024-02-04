@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from math import sqrt
-from typing import Callable, Iterable, List, Tuple, Union
+from typing import Callable, Iterable, List, Optional, Tuple, Union
 
 from numpy import ndarray
 from torch import (
@@ -120,6 +120,7 @@ class FisherMCLinearOperator(_LinearOperator):
         check_deterministic: bool = True,
         seed: int = 2147483647,
         mc_samples: int = 1,
+        num_data: Optional[int] = None,
     ):
         """Linear operator for the MC approximation of the Fisher.
 
@@ -149,6 +150,8 @@ class FisherMCLinearOperator(_LinearOperator):
                 draw samples at the beginning of each matrix-vector product.
                 Default: ``2147483647``
             mc_samples: Number of samples to use. Default: ``1``.
+            num_data: Number of data points. If ``None``, it is inferred from the data
+                at the cost of one traversal through the data loader.
 
         Raises:
             NotImplementedError: If the loss function differs from ``MSELoss`` or
@@ -168,6 +171,7 @@ class FisherMCLinearOperator(_LinearOperator):
             data,
             progressbar=progressbar,
             check_deterministic=check_deterministic,
+            num_data=num_data,
         )
 
     def _matvec(self, x: ndarray) -> ndarray:
