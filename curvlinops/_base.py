@@ -17,7 +17,7 @@ from numpy.random import rand
 from scipy.sparse.linalg import LinearOperator
 from torch import Tensor, cat
 from torch import device as torch_device
-from torch import from_numpy, tensor, zeros_like
+from torch import from_numpy, stack, tensor, zeros_like
 from torch.autograd import grad
 from torch.nn import Module, Parameter
 from tqdm import tqdm
@@ -202,46 +202,35 @@ class _LinearOperator(LinearOperator):
             ):
                 print(f"at index {idx}: {a1:.5e} ≠ {a2:.5e}, ratio: {a1 / a2:.5e}")
 
-    def _matvec(self, x: ndarray) -> ndarray:
-        """Loop over all batches in the data and apply the matrix to vector x.
-
-        Args:
-            x: Vector for multiplication.
-
-        Returns:
-            Matrix-multiplication result ``mat @ x``.
-        """
-        x_list = self._preprocess(x)
-        out_list = [zeros_like(x) for x in x_list]
-
-        for X, y in self._loop_over_data(desc="_matvec"):
-            normalization_factor = self._get_normalization_factor(X, y)
-
-            for mat_x, current in zip(out_list, self._matvec_batch(X, y, x_list)):
-                mat_x.add_(current, alpha=normalization_factor)
-
-        return self._postprocess(out_list)
-
-    def _matmat(self, X: ndarray) -> ndarray:
+    def _matmat(self, M: ndarray) -> ndarray:
         """Matrix-matrix multiplication.
 
         Args:
-            X: Matrix for multiplication.
+            M: Matrix for multiplication.
 
         Returns:
-            Matrix-multiplication result ``mat @ X``.
+            Matrix-multiplication result ``mat @ M``.
         """
-        return column_stack([self @ col for col in X.T])
+        M_list = self._preprocess(M)
+        out_list = [zeros_like(M) for M in M_list]
 
-    def _matvec_batch(
-        self, X: Tensor, y: Tensor, x_list: List[Tensor]
+        for X, y in self._loop_over_data(desc="_matmat"):
+            normalization_factor = self._get_normalization_factor(X, y)
+            for out, current in zip(out_list, self._matmat_batch(X, y, M_list)):
+                out.add_(current, alpha=normalization_factor)
+
+        return self._postprocess(out_list)
+
+    def _matmat_batch(
+        self, X: Tensor, y: Tensor, M_list: List[Tensor]
     ) -> Tuple[Tensor]:
         """Apply the mini-batch matrix to a vector.
 
         Args:
             X: Input to the DNN.
             y: Ground truth.
-            x_list: Vector in list format (same shape as trainable model parameters).
+            M_list: Matrix in list format (same shape as trainable model parameters with
+                additional leading dimension of size number of columns).
 
         Returns: # noqa: D402
            Result of matrix-multiplication in list format.
@@ -251,35 +240,50 @@ class _LinearOperator(LinearOperator):
         """
         raise NotImplementedError
 
-    def _preprocess(self, x: ndarray) -> List[Tensor]:
-        """Convert flat numpy array to torch list format.
+    def _preprocess(self, M: ndarray) -> List[Tensor]:
+        """Convert numpy matrix to torch parameter list format.
 
         Args:
-            x: Vector for multiplication.
+            M: Matrix for multiplication.
 
         Returns:
-            Vector in list format.
+            Matrix in list format. Each entry has the same shape as a parameter with
+            an additional leading dimension for the columns.
         """
-        if x.dtype != self.dtype:
+        if M.dtype != self.dtype:
             warn(
-                f"Input vector is {x.dtype}, while linear operator is {self.dtype}. "
+                f"Input matrix is {M.dtype}, while linear operator is {self.dtype}. "
                 + f"Converting to {self.dtype}."
             )
-            x = x.astype(self.dtype)
+            M = M.astype(self.dtype)
 
-        x_torch = from_numpy(x).to(self._device)
-        return vector_to_parameter_list(x_torch, self._params)
+        M_torch = from_numpy(M).to(self._device)
 
-    def _postprocess(self, x_list: List[Tensor]) -> ndarray:
-        """Convert torch list format to flat numpy array.
+        # collect columns per-parameter
+        out_torch = [[] for _ in range(len(self._params))]
+        for v in M_torch.T:
+            for p, v_p in enumerate(vector_to_parameter_list(v, self._params)):
+                out_torch[p].append(v_p)
+
+        # combine columns into new leading axis
+        return [stack(out) for out in out_torch]
+
+    def _postprocess(self, M_list: List[Tensor]) -> ndarray:
+        """Convert torch list format to flat numpy format.
 
         Args:
-            x_list: Vector in list format.
+            M_list: Matrix in list format.
 
         Returns:
-            Flat vector.
+            Flat matrix.
         """
-        return self.flatten_and_concatenate(x_list).cpu().numpy()
+        num_vecs = M_list[0].shape[0]
+        out = []
+        for n in range(num_vecs):
+            M_n = [M[n] for M in M_list]
+            out.append(self.flatten_and_concatenate(M_n).cpu().numpy())
+
+        return column_stack(out)
 
     def _loop_over_data(
         self, desc: Optional[str] = None

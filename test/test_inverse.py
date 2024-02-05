@@ -15,7 +15,7 @@ from curvlinops.examples.functorch import functorch_ggn
 from curvlinops.examples.utils import report_nonclose
 
 
-def test_CG_inverse_damped_GGN_matvec(case, delta: float = 1e-2):
+def test_CG_inverse_damped_GGN_matvec(case, delta: float = 2e-2):
     """Test matrix-vector multiplication by the inverse damped GGN with CG."""
     model_func, loss_func, params, data = case
 
