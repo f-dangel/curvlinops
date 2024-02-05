@@ -67,7 +67,12 @@ def adjoint(request) -> bool:
 @fixture(params=KFAC_EXACT_CASES)
 def kfac_exact_case(
     request,
-) -> Tuple[Module, MSELoss, List[Tensor], Iterable[Tuple[Tensor, Tensor]],]:
+) -> Tuple[
+    Module,
+    MSELoss,
+    List[Tensor],
+    Iterable[Tuple[Tensor, Tensor]],
+]:
     """Prepare a test case for which KFAC equals the GGN.
 
     Yields:
@@ -81,7 +86,12 @@ def kfac_exact_case(
 @fixture(params=KFAC_WEIGHT_SHARING_EXACT_CASES)
 def kfac_weight_sharing_exact_case(
     request,
-) -> Tuple[Module, MSELoss, List[Tensor], Iterable[Tuple[Tensor, Tensor]],]:
+) -> Tuple[
+    Module,
+    MSELoss,
+    List[Tensor],
+    Iterable[Tuple[Tensor, Tensor]],
+]:
     """Prepare a test case with weight-sharing for which KFAC equals the GGN.
 
     Yields:
@@ -95,7 +105,12 @@ def kfac_weight_sharing_exact_case(
 @fixture(params=KFAC_EXACT_ONE_DATUM_CASES)
 def kfac_exact_one_datum_case(
     request,
-) -> Tuple[Module, Module, List[Tensor], Iterable[Tuple[Tensor, Tensor]],]:
+) -> Tuple[
+    Module,
+    Module,
+    List[Tensor],
+    Iterable[Tuple[Tensor, Tensor]],
+]:
     """Prepare a test case for which KFAC equals the GGN and one datum is used.
 
     Yields:
