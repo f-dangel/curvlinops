@@ -1,6 +1,5 @@
 """Test ``curvlinops.trace``."""
 
-
 from typing import Union
 
 from numpy import isclose, mean

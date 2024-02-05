@@ -108,6 +108,7 @@ class FisherMCLinearOperator(_LinearOperator):
     To generate different samples, you have to create instances with varying random
     seed argument.
     """
+
     supported_losses = (MSELoss, CrossEntropyLoss)
 
     def __init__(
