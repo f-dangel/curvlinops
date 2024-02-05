@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import List, Tuple
 
 from backpack.hessianfree.ggnvp import ggn_vector_product_from_plist
-from torch import Tensor, stack, zeros_like
+from torch import Tensor, zeros_like
 
 from curvlinops._base import _LinearOperator
 
@@ -50,7 +50,7 @@ class GGNLinearOperator(_LinearOperator):
             y: Ground truth.
             M_list: Matrix to be multiplied with in list format.
                 Tensors have same shape as trainable model parameters, and an
-            additional leading axis for the matrix columns.
+                additional leading axis for the matrix columns.
 
         Returns:
             Result of GGN multiplication in list format. Has the same shape as

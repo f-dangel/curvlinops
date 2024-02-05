@@ -52,20 +52,18 @@ class EFLinearOperator(_LinearOperator):
             y: Ground truth.
             M_list: Matrix to be multiplied with in list format.
                 Tensors have same shape as trainable model parameters, and an
-            additional leading axis for the matrix columns.
+                additional leading axis for the matrix columns.
 
         Returns:
             Result of EF multiplication in list format. Has the same shape as
             ``M_list``, i.e. each tensor in the list has the shape of a parameter and a
             leading dimension of matrix columns.
+
+        Raises:
         """
-        reduction = self._loss_func.reduction
-        if reduction == "mean":
-            normalization = 1.0 / X.shape[0]
-        elif reduction == "sum":
-            normalization = 1.0
-        else:
-            raise ValueError("Loss must have reduction 'mean' or 'sum'.")
+        normalization = {"mean": 1.0 / X.shape[0], "sum": 1.0}[
+            self._loss_func.reduction
+        ]
 
         result_list = [zeros_like(M) for M in M_list]
 

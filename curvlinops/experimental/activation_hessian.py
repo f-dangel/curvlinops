@@ -140,7 +140,7 @@ class ActivationHessianLinearOperator(_LinearOperator):
             y: Ground truth.
             M_list: Matrix to be multiplied with in list format.
                 Tensors have same shape as trainable model parameters, and an
-            additional leading axis for the matrix columns.
+                additional leading axis for the matrix columns.
 
         Returns:
             Result of activation Hessian multiplication in list format. Has the same

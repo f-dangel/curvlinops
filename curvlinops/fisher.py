@@ -203,7 +203,7 @@ class FisherMCLinearOperator(_LinearOperator):
             y: Ground truth.
             M_list: Matrix to be multiplied with in list format.
                 Tensors have same shape as trainable model parameters, and an
-            additional leading axis for the matrix columns.
+                additional leading axis for the matrix columns.
 
         Returns:
             Result of MC-Fisher multiplication in list format. Has the same shape as
@@ -214,7 +214,6 @@ class FisherMCLinearOperator(_LinearOperator):
         normalization = {"mean": N, "sum": 1.0}[self._loss_func.reduction]
 
         result_list = [zeros_like(M) for M in M_list]
-        num_vectors = M_list[0].shape[0]
 
         for n in range(N):
             X_n = X[n].unsqueeze(0)
