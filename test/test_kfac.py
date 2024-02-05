@@ -375,9 +375,11 @@ def test_multi_dim_output(
     ).to(dev)
     params_flat = list(model_flat.parameters())
     data_flat = [
-        (x, y.flatten(start_dim=0, end_dim=-2))
-        if isinstance(loss_func, MSELoss)
-        else (x, y.flatten(start_dim=0))
+        (
+            (x, y.flatten(start_dim=0, end_dim=-2))
+            if isinstance(loss_func, MSELoss)
+            else (x, y.flatten(start_dim=0))
+        )
         for x, y in data
     ]
     kfac_flat = KFACLinearOperator(

@@ -22,7 +22,6 @@ coincide as the Monte-Carlo approximation converges.
 Let's get the imports out of our way.
 """
 
-
 import matplotlib.pyplot as plt
 import numpy
 import torch
