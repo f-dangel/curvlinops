@@ -212,7 +212,7 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
     def __init__(
         self,
         A: KFACLinearOperator,
-        damping: Tuple[float, float] = (0., 0.),
+        damping: Tuple[float, float] = (0.0, 0.0),
         cache: bool = True,
     ):
         """Store the linear operator whose inverse should be represented.
@@ -250,28 +250,26 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
         if name in self._inverse_input_covariances:
             aaT_inv = self._inverse_input_covariances.get(name)
             ggT_inv = self._inverse_gradient_covariances.get(name)
-        else:
-            aaT = self._A._input_covariances.get(name)
-            ggT = self._A._gradient_covariances.get(name)
-            damping_aaT = self._damping[0] if self._damping is not None else 0.0
-            aaT_inv = (
-                cholesky_inverse(
-                    cholesky(aaT + damping_aaT * eye(aaT.shape[0], device=aaT.device))
-                )
-                if aaT is not None
-                else None
+            return aaT_inv, ggT_inv
+        aaT = self._A._input_covariances.get(name)
+        ggT = self._A._gradient_covariances.get(name)
+        aaT_inv = (
+            cholesky_inverse(
+                cholesky(aaT + self._damping[0] * eye(aaT.shape[0], device=aaT.device))
             )
-            damping_ggT = self._damping[1] if self._damping is not None else 0.0
-            ggT_inv = (
-                cholesky_inverse(
-                    cholesky(ggT + damping_ggT * eye(ggT.shape[0], device=ggT.device))
-                )
-                if ggT is not None
-                else None
+            if aaT is not None
+            else None
+        )
+        ggT_inv = (
+            cholesky_inverse(
+                cholesky(ggT + self._damping[1] * eye(ggT.shape[0], device=ggT.device))
             )
-            if self._cache:
-                self._inverse_input_covariances[name] = aaT_inv
-                self._inverse_gradient_covariances[name] = ggT_inv
+            if ggT is not None
+            else None
+        )
+        if self._cache:
+            self._inverse_input_covariances[name] = aaT_inv
+            self._inverse_gradient_covariances[name] = ggT_inv
         return aaT_inv, ggT_inv
 
     def _matvec(self, x: ndarray) -> ndarray:
