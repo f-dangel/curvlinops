@@ -157,14 +157,20 @@ def test_KFAC_inverse_damped_matvec(
         separate_weight_and_bias=separate_weight_and_bias,
     )
     KFAC._compute_kfac()
-    # add damping
+
+    # add damping manually
     for aaT in KFAC._input_covariances.values():
         aaT.add_(torch.eye(aaT.shape[0], device=aaT.device), alpha=delta)
     for ggT in KFAC._gradient_covariances.values():
         ggT.add_(torch.eye(ggT.shape[0], device=ggT.device), alpha=delta)
-
-    inv_KFAC = KFACInverseLinearOperator(KFAC, cache=cache)
     inv_KFAC_naive = torch.inverse(torch.as_tensor(KFAC @ eye(KFAC.shape[0])))
+
+    # remove damping and pass it on as an argument instead
+    for aaT in KFAC._input_covariances.values():
+        aaT.sub_(torch.eye(aaT.shape[0], device=aaT.device), alpha=delta)
+    for ggT in KFAC._gradient_covariances.values():
+        ggT.sub_(torch.eye(ggT.shape[0], device=ggT.device), alpha=delta)
+    inv_KFAC = KFACInverseLinearOperator(KFAC, damping=(delta, delta), cache=cache)
 
     x = random.rand(KFAC.shape[1])
     report_nonclose(inv_KFAC @ x, inv_KFAC_naive @ x, rtol=5e-2)

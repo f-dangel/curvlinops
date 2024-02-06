@@ -1,11 +1,11 @@
 """Implements linear operator inverses."""
 
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 from einops import rearrange
 from numpy import allclose, column_stack, ndarray
 from scipy.sparse.linalg import LinearOperator, cg
-from torch import Tensor, cat, cholesky_inverse
+from torch import Tensor, cat, cholesky_inverse, eye
 from torch.linalg import cholesky
 
 from curvlinops.kfac import KFACLinearOperator
@@ -209,11 +209,17 @@ class NeumannInverseLinearOperator(_InverseLinearOperator):
 class KFACInverseLinearOperator(_InverseLinearOperator):
     """Class to invert instances of the ``KFACLinearOperator``."""
 
-    def __init__(self, A: KFACLinearOperator, cache: bool = True):
+    def __init__(
+        self,
+        A: KFACLinearOperator,
+        damping: Optional[Tuple[float, float]] = None,
+        cache: bool = True,
+    ):
         """Store the linear operator whose inverse should be represented.
 
         Args:
             A: ``KFACLinearOperator`` whose inverse is formed.
+            damping: Damping values for all input and gradient covariances.
             cache: Whether to cache the inverses of the Kronecker factors.
                 Default: ``True``.
 
@@ -226,6 +232,7 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
             )
         super().__init__(A.dtype, A.shape)
         self._A = A
+        self._damping = damping
         self._cache = cache
         self._inverse_input_covariances: Dict[str, Tensor] = {}
         self._inverse_gradient_covariances: Dict[str, Tensor] = {}
@@ -245,8 +252,22 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
         else:
             aaT = self._A._input_covariances.get(name)
             ggT = self._A._gradient_covariances.get(name)
-            aaT_inv = cholesky_inverse(cholesky(aaT)) if aaT is not None else None
-            ggT_inv = cholesky_inverse(cholesky(ggT)) if ggT is not None else None
+            damping_aaT = self._damping[0] if self._damping is not None else 0.0
+            aaT_inv = (
+                cholesky_inverse(
+                    cholesky(aaT + damping_aaT * eye(aaT.shape[0], device=aaT.device))
+                )
+                if aaT is not None
+                else None
+            )
+            damping_ggT = self._damping[1] if self._damping is not None else 0.0
+            ggT_inv = (
+                cholesky_inverse(
+                    cholesky(ggT + damping_ggT * eye(ggT.shape[0], device=ggT.device))
+                )
+                if ggT is not None
+                else None
+            )
             if self._cache:
                 self._inverse_input_covariances[name] = aaT_inv
                 self._inverse_gradient_covariances[name] = ggT_inv
