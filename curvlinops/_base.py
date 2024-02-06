@@ -38,6 +38,7 @@ class _LinearOperator(LinearOperator):
         progressbar: bool = False,
         check_deterministic: bool = True,
         shape: Optional[Tuple[int, int]] = None,
+        num_data: Optional[int] = None,
     ):
         """Linear operator for DNN matrices.
 
@@ -64,6 +65,8 @@ class _LinearOperator(LinearOperator):
                 safeguard, only turn it off if you know what you are doing.
             shape: Shape of the represented matrix. If ``None`` assumes ``(D, D)``
                 where ``D`` is the total number of parameters
+            num_data: Number of data points. If ``None``, it is inferred from the data
+                at the cost of one traversal through the data loader.
 
         Raises:
             RuntimeError: If the check for deterministic behavior fails.
@@ -80,8 +83,10 @@ class _LinearOperator(LinearOperator):
         self._device = self._infer_device(self._params)
         self._progressbar = progressbar
 
-        self._N_data = sum(
-            X.shape[0] for (X, _) in self._loop_over_data(desc="_N_data")
+        self._N_data = (
+            sum(X.shape[0] for (X, _) in self._loop_over_data(desc="_N_data"))
+            if num_data is None
+            else num_data
         )
 
         if check_deterministic:
