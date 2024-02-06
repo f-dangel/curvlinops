@@ -212,7 +212,7 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
     def __init__(
         self,
         A: KFACLinearOperator,
-        damping: Optional[Tuple[float, float]] = None,
+        damping: Tuple[float, float] = (0., 0.),
         cache: bool = True,
     ):
         """Store the linear operator whose inverse should be represented.
@@ -220,6 +220,7 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
         Args:
             A: ``KFACLinearOperator`` whose inverse is formed.
             damping: Damping values for all input and gradient covariances.
+                Default: ``(0., 0.)``.
             cache: Whether to cache the inverses of the Kronecker factors.
                 Default: ``True``.
 
