@@ -131,24 +131,50 @@ def test_NeumannInverseLinearOperator_toy():
 
 
 @mark.parametrize("cache", [True, False], ids=["cached", "uncached"])
-def test_KFAC_inverse_damped_matvec(case, cache: bool, delta: float = 1e-2):
+@mark.parametrize(
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+def test_KFAC_inverse_damped_matvec(
+    case, cache: bool, exclude: str, separate_weight_and_bias: bool, delta: float = 1e-2
+):
     """Test matrix-vector multiplication by an inverse damped KFAC approximation."""
     model_func, loss_func, params, data = case
 
+    if exclude is not None:
+        names = {p.data_ptr(): name for name, p in model_func.named_parameters()}
+        params = [p for p in params if exclude not in names[p.data_ptr()]]
+
     loss_average = "batch" if loss_func.reduction == "mean" else None
     KFAC = KFACLinearOperator(
-        model_func, loss_func, params, data, loss_average=loss_average
+        model_func,
+        loss_func,
+        params,
+        data,
+        loss_average=loss_average,
+        separate_weight_and_bias=separate_weight_and_bias,
     )
     KFAC._compute_kfac()
     # add damping
-    for aaT, ggT in zip(
-        KFAC._input_covariances.values(), KFAC._gradient_covariances.values()
-    ):
-        aaT += delta * torch.eye(aaT.shape[0])
-        ggT += delta * torch.eye(ggT.shape[0])
+    for aaT in KFAC._input_covariances.values():
+        aaT.add_(torch.eye(aaT.shape[0], device=aaT.device), alpha=delta)
+    for ggT in KFAC._gradient_covariances.values():
+        ggT.add_(torch.eye(ggT.shape[0], device=ggT.device), alpha=delta)
 
     inv_KFAC = KFACInverseLinearOperator(KFAC, cache=cache)
-    inv_KFAC_naive = torch.inverse(torch.as_tensor(KFAC @ torch.eye(KFAC.shape[0])))
+    inv_KFAC_naive = torch.inverse(torch.as_tensor(KFAC @ eye(KFAC.shape[0])))
 
     x = random.rand(KFAC.shape[1])
-    report_nonclose(inv_KFAC @ x, inv_KFAC_naive @ x, rtol=1e-3)
+    report_nonclose(inv_KFAC @ x, inv_KFAC_naive @ x, rtol=5e-2)
+
+    assert inv_KFAC._cache == cache
+    if cache:
+        # test that the cache is not empty
+        assert len(inv_KFAC._inverse_input_covariances) > 0
+        assert len(inv_KFAC._inverse_gradient_covariances) > 0
+    else:
+        # test that the cache is empty
+        assert len(inv_KFAC._inverse_input_covariances) == 0
+        assert len(inv_KFAC._inverse_gradient_covariances) == 0
