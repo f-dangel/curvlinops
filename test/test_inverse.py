@@ -1,14 +1,17 @@
 """Contains tests for ``curvlinops/inverse``."""
 
+import torch
 from numpy import array, eye, random
 from numpy.linalg import eigh, inv
-from pytest import raises
+from pytest import mark, raises
 from scipy import sparse
 from scipy.sparse.linalg import aslinearoperator
 
 from curvlinops import (
     CGInverseLinearOperator,
     GGNLinearOperator,
+    KFACInverseLinearOperator,
+    KFACLinearOperator,
     NeumannInverseLinearOperator,
 )
 from curvlinops.examples.functorch import functorch_ggn
@@ -125,3 +128,59 @@ def test_NeumannInverseLinearOperator_toy():
 
     report_nonclose(inv_neumann, inv_ground_truth, rtol=1e-3, atol=1e-5)
     report_nonclose(inv_neumann @ y, inv_ground_truth @ y, rtol=1e-3, atol=1e-5)
+
+
+@mark.parametrize("cache", [True, False], ids=["cached", "uncached"])
+@mark.parametrize(
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+def test_KFAC_inverse_damped_matvec(
+    case, cache: bool, exclude: str, separate_weight_and_bias: bool, delta: float = 1e-2
+):
+    """Test matrix-vector multiplication by an inverse damped KFAC approximation."""
+    model_func, loss_func, params, data = case
+
+    if exclude is not None:
+        names = {p.data_ptr(): name for name, p in model_func.named_parameters()}
+        params = [p for p in params if exclude not in names[p.data_ptr()]]
+
+    loss_average = "batch" if loss_func.reduction == "mean" else None
+    KFAC = KFACLinearOperator(
+        model_func,
+        loss_func,
+        params,
+        data,
+        loss_average=loss_average,
+        separate_weight_and_bias=separate_weight_and_bias,
+    )
+    KFAC._compute_kfac()
+
+    # add damping manually
+    for aaT in KFAC._input_covariances.values():
+        aaT.add_(torch.eye(aaT.shape[0], device=aaT.device), alpha=delta)
+    for ggT in KFAC._gradient_covariances.values():
+        ggT.add_(torch.eye(ggT.shape[0], device=ggT.device), alpha=delta)
+    inv_KFAC_naive = torch.inverse(torch.as_tensor(KFAC @ eye(KFAC.shape[0])))
+
+    # remove damping and pass it on as an argument instead
+    for aaT in KFAC._input_covariances.values():
+        aaT.sub_(torch.eye(aaT.shape[0], device=aaT.device), alpha=delta)
+    for ggT in KFAC._gradient_covariances.values():
+        ggT.sub_(torch.eye(ggT.shape[0], device=ggT.device), alpha=delta)
+    inv_KFAC = KFACInverseLinearOperator(KFAC, damping=(delta, delta), cache=cache)
+
+    x = random.rand(KFAC.shape[1])
+    report_nonclose(inv_KFAC @ x, inv_KFAC_naive @ x, rtol=5e-2)
+
+    assert inv_KFAC._cache == cache
+    if cache:
+        # test that the cache is not empty
+        assert len(inv_KFAC._inverse_input_covariances) > 0
+        assert len(inv_KFAC._inverse_gradient_covariances) > 0
+    else:
+        # test that the cache is empty
+        assert len(inv_KFAC._inverse_input_covariances) == 0
+        assert len(inv_KFAC._inverse_gradient_covariances) == 0

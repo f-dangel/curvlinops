@@ -1,7 +1,14 @@
 """Implements linear operator inverses."""
 
+from typing import Dict, Optional, Tuple
+
+from einops import rearrange
 from numpy import allclose, column_stack, ndarray
 from scipy.sparse.linalg import LinearOperator, cg
+from torch import Tensor, cat, cholesky_inverse, eye
+from torch.linalg import cholesky
+
+from curvlinops.kfac import KFACLinearOperator
 
 
 class _InverseLinearOperator(LinearOperator):
@@ -197,3 +204,122 @@ class NeumannInverseLinearOperator(_InverseLinearOperator):
                 )
 
         return self._scale * result
+
+
+class KFACInverseLinearOperator(_InverseLinearOperator):
+    """Class to invert instances of the ``KFACLinearOperator``."""
+
+    def __init__(
+        self,
+        A: KFACLinearOperator,
+        damping: Tuple[float, float] = (0.0, 0.0),
+        cache: bool = True,
+    ):
+        """Store the linear operator whose inverse should be represented.
+
+        Args:
+            A: ``KFACLinearOperator`` whose inverse is formed.
+            damping: Damping values for all input and gradient covariances.
+                Default: ``(0., 0.)``.
+            cache: Whether to cache the inverses of the Kronecker factors.
+                Default: ``True``.
+
+        Raises:
+            ValueError: If the linear operator is not a ``KFACLinearOperator``.
+        """
+        if not isinstance(A, KFACLinearOperator):
+            raise ValueError(
+                "The input `A` must be an instance of `KFACLinearOperator`."
+            )
+        super().__init__(A.dtype, A.shape)
+        self._A = A
+        self._damping = damping
+        self._cache = cache
+        self._inverse_input_covariances: Dict[str, Tensor] = {}
+        self._inverse_gradient_covariances: Dict[str, Tensor] = {}
+
+    def _compute_or_get_cached_inverse(
+        self, name: str
+    ) -> Tuple[Optional[Tensor], Optional[Tensor]]:
+        """Invert the Kronecker factors of the KFACLinearOperator or retrieve them.
+
+        Args:
+            name: Name of the layer for which to invert Kronecker factors.
+
+        Returns:
+            Tuple of inverses of the input and gradient covariance Kronecker factors.
+        """
+        if name in self._inverse_input_covariances:
+            aaT_inv = self._inverse_input_covariances.get(name)
+            ggT_inv = self._inverse_gradient_covariances.get(name)
+            return aaT_inv, ggT_inv
+        aaT = self._A._input_covariances.get(name)
+        ggT = self._A._gradient_covariances.get(name)
+        aaT_inv = (
+            None
+            if aaT is None
+            else cholesky_inverse(
+                cholesky(aaT + self._damping[0] * eye(aaT.shape[0], device=aaT.device))
+            )
+        )
+        ggT_inv = (
+            None
+            if ggT is None
+            else cholesky_inverse(
+                cholesky(ggT + self._damping[1] * eye(ggT.shape[0], device=ggT.device))
+            )
+        )
+        if self._cache:
+            self._inverse_input_covariances[name] = aaT_inv
+            self._inverse_gradient_covariances[name] = ggT_inv
+        return aaT_inv, ggT_inv
+
+    def _matvec(self, x: ndarray) -> ndarray:
+        """Multiply x by the inverse of A.
+
+        Args:
+             x: Vector for multiplication.
+
+        Returns:
+             Result of inverse matrix-vector multiplication, ``A⁻¹ @ x``.
+        """
+        if not self._A._input_covariances and not self._A._gradient_covariances:
+            self._A._compute_kfac()
+
+        x_torch = self._A._preprocess(x)
+
+        for name in self._A.param_ids_to_hooked_modules.values():
+            mod = self._A._model_func.get_submodule(name)
+
+            # retrieve the inverses of the Kronecker factors from cache or invert them
+            aaT_inv, ggT_inv = self._compute_or_get_cached_inverse(name)
+
+            # bias and weights are treated jointly
+            if not self._A._separate_weight_and_bias and self._A.in_params(
+                mod.weight, mod.bias
+            ):
+                w_pos, b_pos = self._A.param_pos(mod.weight), self._A.param_pos(
+                    mod.bias
+                )
+                x_w = rearrange(x_torch[w_pos], "c_out ... -> c_out (...)")
+                x_joint = cat([x_w, x_torch[b_pos].unsqueeze(-1)], dim=1)
+                x_joint = ggT_inv @ x_joint @ aaT_inv
+
+                w_cols = x_w.shape[1]
+                x_torch[w_pos], x_torch[b_pos] = x_joint.split([w_cols, 1], dim=1)
+
+            # for weights we need to multiply from the right with aaT
+            # for weights and biases we need to multiply from the left with ggT
+            else:
+                for p_name in ["weight", "bias"]:
+                    p = getattr(mod, p_name)
+                    if self._A.in_params(p):
+                        pos = self._A.param_pos(p)
+
+                        if p_name == "weight":
+                            x_w = rearrange(x_torch[pos], "c_out ... -> c_out (...)")
+                            x_torch[pos] = x_w @ aaT_inv
+
+                        x_torch[pos] = ggT_inv @ x_torch[pos]
+
+        return self._A._postprocess(x_torch)
