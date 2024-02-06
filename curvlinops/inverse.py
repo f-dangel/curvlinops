@@ -1,6 +1,6 @@
 """Implements linear operator inverses."""
 
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 from einops import rearrange
 from numpy import allclose, column_stack, ndarray
@@ -238,7 +238,9 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
         self._inverse_input_covariances: Dict[str, Tensor] = {}
         self._inverse_gradient_covariances: Dict[str, Tensor] = {}
 
-    def _compute_or_get_cached_inverse(self, name: str) -> Tuple[Tensor, Tensor]:
+    def _compute_or_get_cached_inverse(
+        self, name: str
+    ) -> Tuple[Optional[Tensor], Optional[Tensor]]:
         """Invert the Kronecker factors of the KFACLinearOperator or retrieve them.
 
         Args:
@@ -254,18 +256,18 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
         aaT = self._A._input_covariances.get(name)
         ggT = self._A._gradient_covariances.get(name)
         aaT_inv = (
-            cholesky_inverse(
+            None
+            if aaT is None
+            else cholesky_inverse(
                 cholesky(aaT + self._damping[0] * eye(aaT.shape[0], device=aaT.device))
             )
-            if aaT is not None
-            else None
         )
         ggT_inv = (
-            cholesky_inverse(
+            None
+            if ggT is None
+            else cholesky_inverse(
                 cholesky(ggT + self._damping[1] * eye(ggT.shape[0], device=ggT.device))
             )
-            if ggT is not None
-            else None
         )
         if self._cache:
             self._inverse_input_covariances[name] = aaT_inv
