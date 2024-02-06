@@ -1,6 +1,6 @@
 """Implements linear operator inverses."""
 
-from typing import Dict, Optional, Tuple
+from typing import Dict, Tuple
 
 from einops import rearrange
 from numpy import allclose, column_stack, ndarray
