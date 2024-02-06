@@ -1,6 +1,6 @@
 """Implements linear operator inverses."""
 
-from typing import Dict
+from typing import Dict, Tuple
 
 from einops import rearrange
 from numpy import allclose, column_stack, ndarray
@@ -230,16 +230,27 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
         self._inverse_input_covariances: Dict[str, Tensor] = {}
         self._inverse_gradient_covariances: Dict[str, Tensor] = {}
 
-    def _invert_kronecker_factors(self):
-        """Invert the Kronecker factors of the KFACLinearOperator and store them."""
-        self._inverse_input_covariances = {
-            key: cholesky_inverse(cholesky(value))
-            for key, value in self._A._input_covariances.items()
-        }
-        self._inverse_gradient_covariances = {
-            key: cholesky_inverse(cholesky(value))
-            for key, value in self._A._gradient_covariances.items()
-        }
+    def _compute_or_get_cached_inverse(self, name: str) -> Tuple[Tensor, Tensor]:
+        """Invert the Kronecker factors of the KFACLinearOperator or retrieve them.
+
+        Args:
+            name: Name of the layer for which to invert Kronecker factors.
+
+        Returns:
+            Tuple of inverses of the input and gradient covariance Kronecker factors.
+        """
+        if name in self._inverse_input_covariances:
+            aaT_inv = self._inverse_input_covariances.get(name)
+            ggT_inv = self._inverse_gradient_covariances.get(name)
+        else:
+            aaT = self._A._input_covariances.get(name)
+            ggT = self._A._gradient_covariances.get(name)
+            aaT_inv = cholesky_inverse(cholesky(aaT)) if aaT is not None else None
+            ggT_inv = cholesky_inverse(cholesky(ggT)) if ggT is not None else None
+            if self._cache:
+                self._inverse_input_covariances[name] = aaT_inv
+                self._inverse_gradient_covariances[name] = ggT_inv
+        return aaT_inv, ggT_inv
 
     def _matvec(self, x: ndarray) -> ndarray:
         """Multiply x by the inverse of A.
@@ -252,12 +263,6 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
         """
         if not self._A._input_covariances and not self._A._gradient_covariances:
             self._A._compute_kfac()
-        if (
-            self._cache
-            and not self._inverse_input_covariances
-            and not self._inverse_gradient_covariances
-        ):
-            self._invert_kronecker_factors()
 
         x_torch = self._A._preprocess(x)
 
@@ -265,14 +270,7 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
             mod = self._A._model_func.get_submodule(name)
 
             # retrieve the inverses of the Kronecker factors from cache or invert them
-            if self._cache:
-                aaT_inv = self._inverse_input_covariances[name]
-                ggT_inv = self._inverse_gradient_covariances[name]
-            else:
-                aaT_inv = cholesky_inverse(cholesky(self._A._input_covariances[name]))
-                ggT_inv = cholesky_inverse(
-                    cholesky(self._A._gradient_covariances[name])
-                )
+            aaT_inv, ggT_inv = self._compute_or_get_cached_inverse(name)
 
             # bias and weights are treated jointly
             if not self._A._separate_weight_and_bias and self._A.in_params(
