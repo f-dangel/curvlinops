@@ -5,6 +5,7 @@ from __future__ import annotations
 from math import sqrt
 from typing import Callable, Iterable, List, Optional, Tuple, Union
 
+from einops import einsum
 from numpy import ndarray
 from torch import (
     Generator,
@@ -175,40 +176,44 @@ class FisherMCLinearOperator(_LinearOperator):
             num_data=num_data,
         )
 
-    def _matvec(self, x: ndarray) -> ndarray:
-        """Loop over all batches in the data and apply the matrix to vector x.
+    def _matmat(self, M: ndarray) -> ndarray:
+        """Multiply the MC-Fisher onto a matrix.
 
         Create and seed the random number generator.
 
         Args:
-            x: Vector for multiplication.
+            M: Matrix for multiplication.
 
         Returns:
-            Matrix-multiplication result ``mat @ x``.
+            Matrix-multiplication result ``mat @ M``.
         """
         if self._generator is None:
             self._generator = Generator(device=self._device)
         self._generator.manual_seed(self._seed)
 
-        return super()._matvec(x)
+        return super()._matmat(M)
 
-    def _matvec_batch(
-        self, X: Tensor, y: Tensor, x_list: List[Tensor]
+    def _matmat_batch(
+        self, X: Tensor, y: Tensor, M_list: List[Tensor]
     ) -> Tuple[Tensor, ...]:
-        """Apply the mini-batch MC-Fisher to a vector.
+        """Apply the mini-batch MC-Fisher to a matrix.
 
         Args:
             X: Input to the DNN.
             y: Ground truth.
-            x_list: Vector in list format (same shape as trainable model parameters).
+            M_list: Matrix to be multiplied with in list format.
+                Tensors have same shape as trainable model parameters, and an
+                additional leading axis for the matrix columns.
 
         Returns:
-            Result of MC-Fisher-multiplication in list format.
+            Result of MC-Fisher multiplication in list format. Has the same shape as
+            ``M_list``, i.e. each tensor in the list has the shape of a parameter and a
+            leading dimension of matrix columns.
         """
         N = X.shape[0]
         normalization = {"mean": N, "sum": 1.0}[self._loss_func.reduction]
 
-        result_list = [zeros_like(x) for x in x_list]
+        result_list = [zeros_like(M) for M in M_list]
 
         for n in range(N):
             X_n = X[n].unsqueeze(0)
@@ -224,14 +229,18 @@ class FisherMCLinearOperator(_LinearOperator):
                     grad_outputs=grad_output_sampled_n,
                     retain_graph=retain_graph,
                 )
+                # coefficients for each matrix-vector product
                 c = (
-                    sum((g * x).sum() for g, x in zip(grad_sampled_n, x_list))
+                    sum(
+                        einsum(g, M, "..., col ... -> col")
+                        for g, M in zip(grad_sampled_n, M_list)
+                    )
                     / self._mc_samples
                     / normalization
                 )
 
                 for idx, g in enumerate(grad_sampled_n):
-                    result_list[idx] += c * g
+                    result_list[idx].add_(einsum(c, g, "col, ... -> col ..."))
 
         return tuple(result_list)
 

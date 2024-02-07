@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import List, Tuple
 
-from torch import Tensor, autograd, einsum, zeros_like
+from einops import einsum
+from torch import Tensor, autograd, zeros_like
 
 from curvlinops._base import _LinearOperator
 
@@ -41,43 +42,45 @@ class EFLinearOperator(_LinearOperator):
         inefficient for-loop.
     """
 
-    def _matvec_batch(
-        self, X: Tensor, y: Tensor, x_list: List[Tensor]
+    def _matmat_batch(
+        self, X: Tensor, y: Tensor, M_list: List[Tensor]
     ) -> Tuple[Tensor, ...]:
-        """Apply the mini-batch uncentered gradient covariance to a vector.
+        """Apply the mini-batch empirical Fisher to a matrix.
 
         Args:
             X: Input to the DNN.
             y: Ground truth.
-            x_list: Vector in list format (same shape as trainable model parameters).
+            M_list: Matrix to be multiplied with in list format.
+                Tensors have same shape as trainable model parameters, and an
+                additional leading axis for the matrix columns.
 
         Returns:
-            Result of uncentered gradient covariance-multiplication in list format.
+            Result of EF multiplication in list format. Has the same shape as
+            ``M_list``, i.e. each tensor in the list has the shape of a parameter and a
+            leading dimension of matrix columns.
 
         Raises:
-            ValueError: If the loss function's reduction cannot be determined.
         """
-        result_list = [zeros_like(x) for x in x_list]
+        normalization = {"mean": 1.0 / X.shape[0], "sum": 1.0}[
+            self._loss_func.reduction
+        ]
+
+        result_list = [zeros_like(M) for M in M_list]
 
         for n in range(X.shape[0]):
             X_n, y_n = X[n].unsqueeze(0), y[n].unsqueeze(0)
             loss_n = self._loss_func(self._model_func(X_n), y_n)
             grad_n = autograd.grad(loss_n, self._params)
 
-            c = sum(einsum("...,...->", g, x) for g, x in zip(grad_n, x_list))
+            # coefficients per matrix-vector product
+            c = sum(einsum(g, M, "..., col ...-> col") for g, M in zip(grad_n, M_list))
 
             for idx, g in enumerate(grad_n):
-                result_list[idx] += c * g
+                result_list[idx].add_(
+                    einsum(c, g, "col, ... -> col ..."), alpha=normalization
+                )
 
-        reduction = self._loss_func.reduction
-        if reduction == "mean":
-            normalization = X.shape[0]
-        elif reduction == "sum":
-            normalization = 1.0
-        else:
-            raise ValueError("Loss must have reduction 'mean' or 'sum'.")
-
-        return tuple(r / normalization for r in result_list)
+        return tuple(result_list)
 
     def _adjoint(self) -> EFLinearOperator:
         """Return the linear operator representing the adjoint.

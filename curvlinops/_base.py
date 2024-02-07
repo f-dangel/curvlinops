@@ -3,16 +3,8 @@
 from typing import Callable, Iterable, List, Optional, Tuple, Union
 from warnings import warn
 
-from backpack.utils.convert_parameters import vector_to_parameter_list
-from numpy import (
-    allclose,
-    argwhere,
-    column_stack,
-    float32,
-    isclose,
-    logical_not,
-    ndarray,
-)
+from einops import rearrange
+from numpy import allclose, argwhere, float32, isclose, logical_not, ndarray
 from numpy.random import rand
 from scipy.sparse.linalg import LinearOperator
 from torch import Tensor, cat
@@ -202,46 +194,35 @@ class _LinearOperator(LinearOperator):
             ):
                 print(f"at index {idx}: {a1:.5e} ≠ {a2:.5e}, ratio: {a1 / a2:.5e}")
 
-    def _matvec(self, x: ndarray) -> ndarray:
-        """Loop over all batches in the data and apply the matrix to vector x.
-
-        Args:
-            x: Vector for multiplication.
-
-        Returns:
-            Matrix-multiplication result ``mat @ x``.
-        """
-        x_list = self._preprocess(x)
-        out_list = [zeros_like(x) for x in x_list]
-
-        for X, y in self._loop_over_data(desc="_matvec"):
-            normalization_factor = self._get_normalization_factor(X, y)
-
-            for mat_x, current in zip(out_list, self._matvec_batch(X, y, x_list)):
-                mat_x.add_(current, alpha=normalization_factor)
-
-        return self._postprocess(out_list)
-
-    def _matmat(self, X: ndarray) -> ndarray:
+    def _matmat(self, M: ndarray) -> ndarray:
         """Matrix-matrix multiplication.
 
         Args:
-            X: Matrix for multiplication.
+            M: Matrix for multiplication.
 
         Returns:
-            Matrix-multiplication result ``mat @ X``.
+            Matrix-multiplication result ``mat @ M``.
         """
-        return column_stack([self @ col for col in X.T])
+        M_list = self._preprocess(M)
+        out_list = [zeros_like(M) for M in M_list]
 
-    def _matvec_batch(
-        self, X: Tensor, y: Tensor, x_list: List[Tensor]
+        for X, y in self._loop_over_data(desc="_matmat"):
+            normalization_factor = self._get_normalization_factor(X, y)
+            for out, current in zip(out_list, self._matmat_batch(X, y, M_list)):
+                out.add_(current, alpha=normalization_factor)
+
+        return self._postprocess(out_list)
+
+    def _matmat_batch(
+        self, X: Tensor, y: Tensor, M_list: List[Tensor]
     ) -> Tuple[Tensor]:
         """Apply the mini-batch matrix to a vector.
 
         Args:
             X: Input to the DNN.
             y: Ground truth.
-            x_list: Vector in list format (same shape as trainable model parameters).
+            M_list: Matrix in list format (same shape as trainable model parameters with
+                additional leading dimension of size number of columns).
 
         Returns: # noqa: D402
            Result of matrix-multiplication in list format.
@@ -251,35 +232,49 @@ class _LinearOperator(LinearOperator):
         """
         raise NotImplementedError
 
-    def _preprocess(self, x: ndarray) -> List[Tensor]:
-        """Convert flat numpy array to torch list format.
+    def _preprocess(self, M: ndarray) -> List[Tensor]:
+        """Convert numpy matrix to torch parameter list format.
 
         Args:
-            x: Vector for multiplication.
+            M: Matrix for multiplication. Has shape ``[D, K]`` where ``D`` is the
+                number of parameters, and ``K`` is the number of columns.
 
         Returns:
-            Vector in list format.
+            Matrix in list format. Each entry has the same shape as a parameter with
+            an additional leading dimension of size ``K`` for the columns, i.e.
+            ``[(K,) + p1.shape), (K,) + p2.shape, ...]``.
         """
-        if x.dtype != self.dtype:
+        if M.dtype != self.dtype:
             warn(
-                f"Input vector is {x.dtype}, while linear operator is {self.dtype}. "
+                f"Input matrix is {M.dtype}, while linear operator is {self.dtype}. "
                 + f"Converting to {self.dtype}."
             )
-            x = x.astype(self.dtype)
+            M = M.astype(self.dtype)
+        num_vectors = M.shape[1]
 
-        x_torch = from_numpy(x).to(self._device)
-        return vector_to_parameter_list(x_torch, self._params)
+        result = from_numpy(M).to(self._device)
+        # split parameter blocks
+        dims = [p.numel() for p in self._params]
+        result = result.split(dims)
+        # column-index first + unflatten parameter dimension
+        shapes = [(num_vectors,) + p.shape for p in self._params]
+        result = [res.T.reshape(shape) for res, shape in zip(result, shapes)]
 
-    def _postprocess(self, x_list: List[Tensor]) -> ndarray:
-        """Convert torch list format to flat numpy array.
+        return result
+
+    def _postprocess(self, M_list: List[Tensor]) -> ndarray:
+        """Convert torch list format of a matrix to flat numpy matrix format.
 
         Args:
-            x_list: Vector in list format.
+            M_list: Matrix in list format. Each entry has a leading dimension of size
+                ``K``. The remaining dimensions are flattened and concatenated.
 
         Returns:
-            Flat vector.
+            Flat matrix. Has shape ``[D, K]`` where ``D`` is sum of flattened and
+            concatenated dimensions over all list entries.
         """
-        return self.flatten_and_concatenate(x_list).cpu().numpy()
+        result = [rearrange(M, "k ... -> (...) k") for M in M_list]
+        return cat(result, dim=0).cpu().numpy()
 
     def _loop_over_data(
         self, desc: Optional[str] = None

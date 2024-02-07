@@ -7,7 +7,7 @@ from typing import Callable, Iterable, List, Optional, Tuple
 from backpack.hessianfree.lop import transposed_jacobian_vector_product as vjp
 from backpack.hessianfree.rop import jacobian_vector_product as jvp
 from numpy import allclose, ndarray
-from torch import Tensor, from_numpy, no_grad, zeros_like
+from torch import Tensor, cat, from_numpy, no_grad, stack, zeros_like
 from torch.nn import Parameter
 
 from curvlinops._base import _LinearOperator
@@ -108,24 +108,35 @@ class JacobianLinearOperator(_LinearOperator):
                     self.print_nonclose(pred1, pred2, rtol=rtol, atol=atol)
                     raise RuntimeError("Non-deterministic model detected.")
 
-    def _matvec(self, x: ndarray) -> ndarray:
-        """Loop over all batches in the data and apply the matrix to vector x.
+    def _matmat(self, M: ndarray) -> ndarray:
+        """Apply the Jacobian to a matrix.
 
         Args:
-            x: Vector for multiplication. Has shape ``[D]``.
+            M: Matrix for multiplication. Has shape ``[D, K]``.
 
         Returns:
-            Matrix-multiplication result ``mat @ x``. Has shape ``[N * C]``.
+            Matrix-multiplication result ``J @ M``. Has shape ``[N * C, K]``.
         """
-        x_list = self._preprocess(x)
-        out_list = [
-            jvp(self._model_func(X), self._params, x_list, retain_graph=False)[
-                0
-            ].flatten(start_dim=1)
-            for X, _ in self._loop_over_data(desc="_matvec")
-        ]
+        num_vecs = M.shape[1]
+        M_list = self._preprocess(M)
 
-        return self._postprocess(out_list)
+        result_list = []
+
+        for X, _ in self._loop_over_data(desc="_matmat"):
+            output = self._model_func(X)
+
+            # multiply the mini-batch Jacobian onto all vectors
+            col = []
+            for n in range(num_vecs):
+                (col_n,) = jvp(output, self._params, [M[n] for M in M_list])
+                col.append(col_n.flatten(start_dim=1))
+            # combine columns into a single tensor and append
+            result_list.append(stack(col))
+
+        # concatenate over batches
+        result_list = [cat(result_list, dim=1)]
+
+        return self._postprocess(result_list)
 
     def _adjoint(self) -> TransposedJacobianLinearOperator:
         """Return a linear operator representing the adjoint.
@@ -237,28 +248,37 @@ class TransposedJacobianLinearOperator(_LinearOperator):
                     self.print_nonclose(pred1, pred2, rtol=rtol, atol=atol)
                     raise RuntimeError("Non-deterministic model detected.")
 
-    def _matvec(self, x: ndarray) -> ndarray:
-        """Loop over all batches in the data and apply the matrix to vector x.
+    def _matmat(self, M: ndarray) -> ndarray:
+        """Apply the transpose Jacobian to a matrix.
 
         Args:
-            x: Vector for multiplication. Has shape ``[N C]``.
+            M: Matrix for multiplication. Has shape ``[N C, K]``.
 
         Returns:
-            Matrix-multiplication result ``mat @ x``. Has shape ``[D]``.
+            Matrix-multiplication result ``J^T @ M``. Has shape ``[D, K]``.
         """
-        x_torch = from_numpy(x).to(self._device)
-        out_list = [zeros_like(p) for p in self._params]
+        M_torch = from_numpy(M).to(self._device)
+        num_vectors = M_torch.shape[1]
+
+        # allocate result tensors
+        out_list = []
+        for p in self._params:
+            repeat = [num_vectors] + [1] * p.ndim
+            out_list.append(zeros_like(p).unsqueeze(0).repeat(*repeat))
 
         processed = 0
-        for X, _ in self._loop_over_data(desc="_matvec"):
+        for X, _ in self._loop_over_data(desc="_matmat"):
             pred = self._model_func(X)
-            v = x_torch[processed : processed + pred.numel()].reshape_as(pred)
-            processed += pred.numel()
+            start, end = processed, processed + pred.numel()
 
-            for p_res, p_vjp in zip(
-                out_list, vjp(pred, self._params, v, retain_graph=False)
-            ):
-                p_res.add_(p_vjp)
+            for n in range(num_vectors):
+                v = M_torch[start:end, n].reshape_as(pred)
+                JT_v = vjp(pred, self._params, v)
+
+                for p_res, p_vjp in zip(out_list, JT_v):
+                    p_res[n].add_(p_vjp)
+
+            processed += pred.numel()
 
         return self._postprocess(out_list)
 

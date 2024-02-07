@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import List, Tuple
 
 from backpack.hessianfree.ggnvp import ggn_vector_product_from_plist
-from torch import Tensor
+from torch import Tensor, zeros_like
 
 from curvlinops._base import _LinearOperator
 
@@ -40,22 +40,38 @@ class GGNLinearOperator(_LinearOperator):
         \right)\,.
     """
 
-    def _matvec_batch(
-        self, X: Tensor, y: Tensor, x_list: List[Tensor]
+    def _matmat_batch(
+        self, X: Tensor, y: Tensor, M_list: List[Tensor]
     ) -> Tuple[Tensor, ...]:
-        """Apply the mini-batch GGN to a vector.
+        """Apply the mini-batch GGN to a matrix.
 
         Args:
             X: Input to the DNN.
             y: Ground truth.
-            x_list: Vector in list format (same shape as trainable model parameters).
+            M_list: Matrix to be multiplied with in list format.
+                Tensors have same shape as trainable model parameters, and an
+                additional leading axis for the matrix columns.
 
         Returns:
-            Result of GGN-multiplication in list format.
+            Result of GGN multiplication in list format. Has the same shape as
+            ``M_list``, i.e. each tensor in the list has the shape of a parameter and a
+            leading dimension of matrix columns.
         """
         output = self._model_func(X)
         loss = self._loss_func(output, y)
-        return ggn_vector_product_from_plist(loss, output, self._params, x_list)
+
+        # collect matrix-matrix products per parameter
+        result_list = [zeros_like(M) for M in M_list]
+
+        num_vecs = M_list[0].shape[0]
+        for n in range(num_vecs):
+            col_n_list = ggn_vector_product_from_plist(
+                loss, output, self._params, [M[n] for M in M_list]
+            )
+            for result, col_n in zip(result_list, col_n_list):
+                result[n].add_(col_n)
+
+        return tuple(result_list)
 
     def _adjoint(self) -> GGNLinearOperator:
         """Return the linear operator representing the adjoint.

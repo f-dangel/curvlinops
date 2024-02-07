@@ -6,7 +6,8 @@ from typing import Callable, Iterable, List, Optional, Set, Tuple, Type, Union
 
 from backpack.hessianfree.hvp import hessian_vector_product
 from numpy import ndarray
-from torch import Tensor, from_numpy
+from torch import Tensor, from_numpy, zeros_like
+from torch.autograd import grad
 from torch.nn import Module
 from torch.utils.hooks import RemovableHandle
 
@@ -129,36 +130,61 @@ class ActivationHessianLinearOperator(_LinearOperator):
             shape=shape,
         )
 
-    def _matvec_batch(
-        self, X: Tensor, y: Tensor, x_list: List[Tensor]
+    def _matmat_batch(
+        self, X: Tensor, y: Tensor, M_list: List[Tensor]
     ) -> Tuple[Tensor, ...]:
-        """Apply the mini-batch Hessian to a vector.
+        """Apply the activation Hessian to a matrix.
 
         Args:
             X: Input to the DNN.
             y: Ground truth.
-            x_list: Vector in list format (same shape as trainable model parameters).
+            M_list: Matrix to be multiplied with in list format.
+                Tensors have same shape as trainable model parameters, and an
+                additional leading axis for the matrix columns.
 
         Returns:
-            Result of Hessian-multiplication in list format.
+            Result of activation Hessian multiplication in list format. Has the same
+            shape as ``M_list``, i.e. each tensor in the list has the shape of a
+            parameter and a leading dimension of matrix columns.
         """
         activation_storage = []
         with store_activation(self._model_func, *self._activation, activation_storage):
             loss = self._loss_func(self._model_func(X), y)
         activation = activation_storage.pop()
 
-        return hessian_vector_product(loss, [activation], x_list)
+        # Re-cycle first backward pass of the HVP's double-backward
+        # between columns the Hessian is multiplied onto
+        grad_activation = grad(loss, activation, create_graph=True)
 
-    def _preprocess(self, x: ndarray) -> List[Tensor]:
-        """Reshape the incoming vector into the activation shape and convert to PyTorch.
+        # collect
+        result_list = [zeros_like(M) for M in M_list]
+
+        num_vectors = M_list[0].shape[0]
+        for n in range(num_vectors):
+            out_n_list = hessian_vector_product(
+                loss, [activation], [M[n] for M in M_list], grad_params=grad_activation
+            )
+            for result, out_n in zip(result_list, out_n_list):
+                result[n].add_(out_n)
+
+        return tuple(result_list)
+
+    def _preprocess(self, M: ndarray) -> List[Tensor]:
+        """Reshape the incoming matrix into the activation shape and convert to PyTorch.
 
         Args:
-            x: Vector in NumPy format onto which the linear operator is applied.
+            M: Matrix in NumPy format onto which the linear operator is applied.
 
         Returns:
-            Vector in PyTorch format. Has same shape as the activation.
+            Matrix in PyTorch format. Has same shape as the activation with an
+            additional leading axis for the matrix columns.
         """
-        return [from_numpy(x).to(self._device).reshape(self._activation_shape)]
+        num_vectors = M.shape[1]
+        return [
+            from_numpy(M.T)
+            .to(self._device)
+            .reshape(num_vectors, *self._activation_shape)
+        ]
 
 
 class store_activation:

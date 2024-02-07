@@ -24,7 +24,9 @@ def report_nonclose(
         ValueError: If the two arrays don't match in shape or have nonclose values.
     """
     if array1.shape != array2.shape:
-        raise ValueError("Arrays shapes don't match.")
+        raise ValueError(
+            f"Arrays shapes don't match: {array1.shape} vs. {array2.shape}."
+        )
 
     if allclose(array1, array2, rtol=rtol, atol=atol, equal_nan=equal_nan):
         print("Compared arrays match.")

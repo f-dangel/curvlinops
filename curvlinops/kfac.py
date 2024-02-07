@@ -22,9 +22,9 @@ from functools import partial
 from math import sqrt
 from typing import Dict, Iterable, List, Optional, Set, Tuple, Union
 
-from einops import rearrange, reduce
+from einops import einsum, rearrange, reduce
 from numpy import ndarray
-from torch import Generator, Tensor, cat, einsum, randn, stack
+from torch import Generator, Tensor, cat, randn, stack
 from torch.nn import Conv2d, CrossEntropyLoss, Linear, Module, MSELoss, Parameter
 from torch.utils.hooks import RemovableHandle
 
@@ -247,21 +247,19 @@ class KFACLinearOperator(_LinearOperator):
             num_data=num_data,
         )
 
-    def _matvec(self, x: ndarray) -> ndarray:
-        """Loop over all batches in the data and apply the matrix to vector x.
-
-        Create and seed the random number generator.
+    def _matmat(self, M: ndarray) -> ndarray:
+        """Apply KFAC to a matrix (multiple vectors).
 
         Args:
-            x: Vector for multiplication.
+            M: Matrix for multiplication. Has shape ``[D, K]`` with some ``K``.
 
         Returns:
-            Matrix-multiplication result ``mat @ x``.
+            Matrix-multiplication result ``KFAC @ M``. Has shape ``[D, K]``.
         """
         if not self._input_covariances and not self._gradient_covariances:
             self._compute_kfac()
 
-        x_torch = super()._preprocess(x)
+        M_torch = super()._preprocess(M)
 
         for name in self.param_ids_to_hooked_modules.values():
             mod = self._model_func.get_submodule(name)
@@ -271,14 +269,15 @@ class KFACLinearOperator(_LinearOperator):
                 mod.weight, mod.bias
             ):
                 w_pos, b_pos = self.param_pos(mod.weight), self.param_pos(mod.bias)
-                x_w = rearrange(x_torch[w_pos], "c_out ... -> c_out (...)")
-                x_joint = cat([x_w, x_torch[b_pos].unsqueeze(-1)], dim=1)
+                # v denotes the free dimension for treating multiple vectors in parallel
+                M_w = rearrange(M_torch[w_pos], "v c_out ... -> v c_out (...)")
+                M_joint = cat([M_w, M_torch[b_pos].unsqueeze(-1)], dim=2)
                 aaT = self._input_covariances[name]
                 ggT = self._gradient_covariances[name]
-                x_joint = ggT @ x_joint @ aaT
+                M_joint = einsum(ggT, M_joint, aaT, "i j,v j k,k l -> v i l")
 
-                w_cols = x_w.shape[1]
-                x_torch[w_pos], x_torch[b_pos] = x_joint.split([w_cols, 1], dim=1)
+                w_cols = M_w.shape[2]
+                M_torch[w_pos], M_torch[b_pos] = M_joint.split([w_cols, 1], dim=2)
 
             # for weights we need to multiply from the right with aaT
             # for weights and biases we need to multiply from the left with ggT
@@ -289,12 +288,22 @@ class KFACLinearOperator(_LinearOperator):
                         pos = self.param_pos(p)
 
                         if p_name == "weight":
-                            x_w = rearrange(x_torch[pos], "c_out ... -> c_out (...)")
-                            x_torch[pos] = x_w @ self._input_covariances[name]
+                            M_w = rearrange(
+                                M_torch[pos], "v c_out ... -> v c_out (...)"
+                            )
+                            M_torch[pos] = einsum(
+                                M_w,
+                                self._input_covariances[name],
+                                "v c_out j,j k -> v c_out k",
+                            )
 
-                        x_torch[pos] = self._gradient_covariances[name] @ x_torch[pos]
+                        M_torch[pos] = einsum(
+                            self._gradient_covariances[name],
+                            M_torch[pos],
+                            "j k,v k ... -> v j ...",
+                        )
 
-        return super()._postprocess(x_torch)
+        return self._postprocess(M_torch)
 
     def _adjoint(self) -> KFACLinearOperator:
         """Return the linear operator representing the adjoint.
@@ -509,7 +518,7 @@ class KFACLinearOperator(_LinearOperator):
             "batch+sequence": num_loss_terms**2
             / (self._N_data * self._mc_samples * sequence_length),
         }[self._loss_average]
-        covariance = einsum("bi,bj->ij", g, g).mul_(correction)
+        covariance = einsum(g, g, "b i,b j->i j").mul_(correction)
 
         name = self.get_module_name(module)
         if name not in self._gradient_covariances:
@@ -562,7 +571,7 @@ class KFACLinearOperator(_LinearOperator):
         ):
             x = cat([x, x.new_ones(x.shape[0], 1)], dim=1)
 
-        covariance = einsum("bi,bj->ij", x, x).div_(self._N_data * scale)
+        covariance = einsum(x, x, "b i,b j -> i j").div_(self._N_data * scale)
 
         name = self.get_module_name(module)
         if name not in self._input_covariances:
