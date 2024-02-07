@@ -3,21 +3,13 @@
 from typing import Callable, Iterable, List, Optional, Tuple, Union
 from warnings import warn
 
-from backpack.utils.convert_parameters import vector_to_parameter_list
-from numpy import (
-    allclose,
-    argwhere,
-    column_stack,
-    float32,
-    isclose,
-    logical_not,
-    ndarray,
-)
+from einops import rearrange
+from numpy import allclose, argwhere, float32, isclose, logical_not, ndarray
 from numpy.random import rand
 from scipy.sparse.linalg import LinearOperator
 from torch import Tensor, cat
 from torch import device as torch_device
-from torch import from_numpy, stack, tensor, zeros_like
+from torch import from_numpy, tensor, zeros_like
 from torch.autograd import grad
 from torch.nn import Module, Parameter
 from tqdm import tqdm
@@ -244,11 +236,13 @@ class _LinearOperator(LinearOperator):
         """Convert numpy matrix to torch parameter list format.
 
         Args:
-            M: Matrix for multiplication.
+            M: Matrix for multiplication. Has shape ``[D, K]`` where ``D`` is the
+                number of parameters, and ``K`` is the number of columns.
 
         Returns:
             Matrix in list format. Each entry has the same shape as a parameter with
-            an additional leading dimension for the columns.
+            an additional leading dimension of size ``K`` for the columns, i.e.
+            ``[(K,) + p1.shape), (K,) + p2.shape, ...]``.
         """
         if M.dtype != self.dtype:
             warn(
@@ -256,34 +250,31 @@ class _LinearOperator(LinearOperator):
                 + f"Converting to {self.dtype}."
             )
             M = M.astype(self.dtype)
+        num_vectors = M.shape[1]
 
-        M_torch = from_numpy(M).to(self._device)
+        result = from_numpy(M).to(self._device)
+        # split parameter blocks
+        dims = [p.numel() for p in self._params]
+        result = result.split(dims)
+        # column-index first + unflatten parameter dimension
+        shapes = [(num_vectors,) + p.shape for p in self._params]
+        result = [res.T.reshape(shape) for res, shape in zip(result, shapes)]
 
-        # collect columns per-parameter
-        out_torch = [[] for _ in range(len(self._params))]
-        for v in M_torch.T:
-            for p, v_p in enumerate(vector_to_parameter_list(v, self._params)):
-                out_torch[p].append(v_p)
-
-        # combine columns into new leading axis
-        return [stack(out) for out in out_torch]
+        return result
 
     def _postprocess(self, M_list: List[Tensor]) -> ndarray:
-        """Convert torch list format to flat numpy format.
+        """Convert torch list format of a matrix to flat numpy matrix format.
 
         Args:
-            M_list: Matrix in list format.
+            M_list: Matrix in list format. Each entry has a leading dimension of size
+                ``K``. The remaining dimensions are flattened and concatenated.
 
         Returns:
-            Flat matrix.
+            Flat matrix. Has shape ``[D, K]`` where ``D`` is sum of flattened and
+            concatenated dimensions over all list entries.
         """
-        num_vecs = M_list[0].shape[0]
-        out = []
-        for n in range(num_vecs):
-            M_n = [M[n] for M in M_list]
-            out.append(self.flatten_and_concatenate(M_n).cpu().numpy())
-
-        return column_stack(out)
+        result = [rearrange(M, "k ... -> (...) k") for M in M_list]
+        return cat(result, dim=0).cpu().numpy()
 
     def _loop_over_data(
         self, desc: Optional[str] = None
