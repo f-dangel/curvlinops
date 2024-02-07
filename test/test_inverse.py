@@ -137,10 +137,10 @@ def test_NeumannInverseLinearOperator_toy():
 @mark.parametrize(
     "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
 )
-def test_KFAC_inverse_damped_matvec(
+def test_KFAC_inverse_damped_matmat(
     case, cache: bool, exclude: str, separate_weight_and_bias: bool, delta: float = 1e-2
 ):
-    """Test matrix-vector multiplication by an inverse damped KFAC approximation."""
+    """Test matrix-matrix multiplication by an inverse damped KFAC approximation."""
     model_func, loss_func, params, data = case
 
     if exclude is not None:
@@ -172,8 +172,9 @@ def test_KFAC_inverse_damped_matvec(
         ggT.sub_(torch.eye(ggT.shape[0], device=ggT.device), alpha=delta)
     inv_KFAC = KFACInverseLinearOperator(KFAC, damping=(delta, delta), cache=cache)
 
-    x = random.rand(KFAC.shape[1])
-    report_nonclose(inv_KFAC @ x, inv_KFAC_naive @ x, rtol=5e-2)
+    num_vectors = 2
+    X = random.rand(KFAC.shape[1], num_vectors)
+    report_nonclose(inv_KFAC @ X, inv_KFAC_naive @ X, rtol=5e-2)
 
     assert inv_KFAC._cache == cache
     if cache:

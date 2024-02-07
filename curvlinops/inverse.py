@@ -2,7 +2,7 @@
 
 from typing import Dict, Optional, Tuple
 
-from einops import rearrange
+from einops import einsum, rearrange
 from numpy import allclose, column_stack, ndarray
 from scipy.sparse.linalg import LinearOperator, cg
 from torch import Tensor, cat, cholesky_inverse, eye
@@ -274,19 +274,19 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
             self._inverse_gradient_covariances[name] = ggT_inv
         return aaT_inv, ggT_inv
 
-    def _matvec(self, x: ndarray) -> ndarray:
-        """Multiply x by the inverse of A.
+    def _matmat(self, M: ndarray) -> ndarray:
+        """Multiply a matrix ``M`` x by the inverse of KFAC.
 
         Args:
-             x: Vector for multiplication.
+             M: Matrix for multiplication.
 
         Returns:
-             Result of inverse matrix-vector multiplication, ``A⁻¹ @ x``.
+             Result of inverse matrix-matrixmultiplication, ``KFAC⁻¹ @ M``.
         """
         if not self._A._input_covariances and not self._A._gradient_covariances:
             self._A._compute_kfac()
 
-        x_torch = self._A._preprocess(x)
+        M_torch = self._A._preprocess(M)
 
         for name in self._A.param_ids_to_hooked_modules.values():
             mod = self._A._model_func.get_submodule(name)
@@ -295,18 +295,17 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
             aaT_inv, ggT_inv = self._compute_or_get_cached_inverse(name)
 
             # bias and weights are treated jointly
+            weight, bias = mod.weight, mod.bias
             if not self._A._separate_weight_and_bias and self._A.in_params(
-                mod.weight, mod.bias
+                weight, bias
             ):
-                w_pos, b_pos = self._A.param_pos(mod.weight), self._A.param_pos(
-                    mod.bias
-                )
-                x_w = rearrange(x_torch[w_pos], "c_out ... -> c_out (...)")
-                x_joint = cat([x_w, x_torch[b_pos].unsqueeze(-1)], dim=1)
-                x_joint = ggT_inv @ x_joint @ aaT_inv
+                w_pos, b_pos = self._A.param_pos(weight), self._A.param_pos(bias)
+                M_w = rearrange(M_torch[w_pos], "m c_out ... -> m c_out (...)")
+                M_joint = cat([M_w, M_torch[b_pos].unsqueeze(2)], dim=2)
+                M_joint = einsum(ggT_inv, M_joint, aaT_inv, "i j,m j k, k l -> m i l")
 
-                w_cols = x_w.shape[1]
-                x_torch[w_pos], x_torch[b_pos] = x_joint.split([w_cols, 1], dim=1)
+                w_cols = M_w.shape[2]
+                M_torch[w_pos], M_torch[b_pos] = M_joint.split([w_cols, 1], dim=2)
 
             # for weights we need to multiply from the right with aaT
             # for weights and biases we need to multiply from the left with ggT
@@ -317,9 +316,13 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
                         pos = self._A.param_pos(p)
 
                         if p_name == "weight":
-                            x_w = rearrange(x_torch[pos], "c_out ... -> c_out (...)")
-                            x_torch[pos] = x_w @ aaT_inv
+                            M_w = rearrange(
+                                M_torch[pos], "m c_out ... -> m c_out (...)"
+                            )
+                            M_torch[pos] = einsum(M_w, aaT_inv, "m i j, j k -> m i k")
 
-                        x_torch[pos] = ggT_inv @ x_torch[pos]
+                        M_torch[pos] = einsum(
+                            ggT_inv, M_torch[pos], "i j, m j ... -> m i ..."
+                        )
 
-        return self._A._postprocess(x_torch)
+        return self._A._postprocess(M_torch)
