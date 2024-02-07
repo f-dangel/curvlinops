@@ -297,8 +297,6 @@ class KFACLinearOperator(_LinearOperator):
                                 "v c_out j,j k -> v c_out k",
                             )
 
-                        print(self._gradient_covariances[name].shape)
-                        print(M_torch[pos].shape)
                         M_torch[pos] = einsum(
                             self._gradient_covariances[name],
                             M_torch[pos],

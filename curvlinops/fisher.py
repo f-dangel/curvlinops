@@ -176,22 +176,22 @@ class FisherMCLinearOperator(_LinearOperator):
             num_data=num_data,
         )
 
-    def _matmat(self, X: ndarray) -> ndarray:
+    def _matmat(self, M: ndarray) -> ndarray:
         """Multiply the MC-Fisher onto a matrix.
 
         Create and seed the random number generator.
 
         Args:
-            X: Matrix for multiplication.
+            M: Matrix for multiplication.
 
         Returns:
-            Matrix-multiplication result ``mat @ X``.
+            Matrix-multiplication result ``mat @ M``.
         """
         if self._generator is None:
             self._generator = Generator(device=self._device)
         self._generator.manual_seed(self._seed)
 
-        return super()._matmat(X)
+        return super()._matmat(M)
 
     def _matmat_batch(
         self, X: Tensor, y: Tensor, M_list: List[Tensor]
