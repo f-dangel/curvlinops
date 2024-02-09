@@ -19,7 +19,14 @@ class _LinearOperator(LinearOperator):
     """Base class for linear operators of DNN matrices.
 
     Can be used with SciPy.
+
+    Attributes:
+        SUPPORTS_BLOCKS: Whether the linear operator supports multiplication with
+            a block-diagonal approximation rather than the full matrix.
+            Default: ``False``.
     """
+
+    SUPPORTS_BLOCKS: bool = False
 
     def __init__(
         self,
@@ -31,6 +38,7 @@ class _LinearOperator(LinearOperator):
         check_deterministic: bool = True,
         shape: Optional[Tuple[int, int]] = None,
         num_data: Optional[int] = None,
+        block_sizes: Optional[List[int]] = None,
     ):
         """Linear operator for DNN matrices.
 
@@ -59,9 +67,19 @@ class _LinearOperator(LinearOperator):
                 where ``D`` is the total number of parameters
             num_data: Number of data points. If ``None``, it is inferred from the data
                 at the cost of one traversal through the data loader.
+            block_sizes: This argument will be ignored if the linear operator does not
+                support blocks. List of integers indicating the number of
+                ``nn.Parameter``s forming a block. Entries must sum to ``len(params)``.
+                For instance ``[len(params)]`` considers the full matrix, while
+                ``[1, 1, ...]`` corresponds to a block diagonal approximation where
+                each parameter forms its own block.
 
         Raises:
             RuntimeError: If the check for deterministic behavior fails.
+            ValueError: If ``block_sizes`` is specified but the linear operator does not
+                support blocks.
+            ValueError: If the sum of blocks does not equal the number of parameters.
+            ValueError: If any block size is not positive.
         """
         if shape is None:
             dim = sum(p.numel() for p in params)
@@ -69,6 +87,17 @@ class _LinearOperator(LinearOperator):
         super().__init__(shape=shape, dtype=float32)
 
         self._params = params
+        if block_sizes is not None:
+            if not self.SUPPORTS_BLOCKS:
+                raise ValueError(
+                    "Block sizes were specified but operator does not support blocking."
+                )
+            if sum(block_sizes) != len(params):
+                raise ValueError("Sum of blocks must equal the number of parameters.")
+            if any(s <= 0 for s in block_sizes):
+                raise ValueError("Block sizes must be positive.")
+        self._block_sizes = [len(params)] if block_sizes is None else block_sizes
+
         self._model_func = model_func
         self._loss_func = loss_func
         self._data = data
@@ -334,21 +363,10 @@ class _LinearOperator(LinearOperator):
 
         Returns:
             Normalization factor
-
-        Raises:
-            ValueError: If loss function does not have a ``reduction`` attribute or
-                it is not set to ``'mean'`` or ``'sum'``.
         """
-        if not hasattr(self._loss_func, "reduction"):
-            raise ValueError("Loss must have a 'reduction' attribute.")
-
-        reduction = self._loss_func.reduction
-        if reduction == "sum":
-            return 1.0
-        elif reduction == "mean":
-            return X.shape[0] / self._N_data
-        else:
-            raise ValueError("Loss must have reduction 'mean' or 'sum'.")
+        return {"sum": 1.0, "mean": X.shape[0] / self._N_data}[
+            self._loss_func.reduction
+        ]
 
     @staticmethod
     def flatten_and_concatenate(tensors: List[Tensor]) -> Tensor:

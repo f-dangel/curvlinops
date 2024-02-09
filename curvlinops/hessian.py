@@ -9,6 +9,7 @@ from torch import Tensor, zeros_like
 from torch.autograd import grad
 
 from curvlinops._base import _LinearOperator
+from curvlinops.utils import split_list
 
 
 class HessianLinearOperator(_LinearOperator):
@@ -31,7 +32,13 @@ class HessianLinearOperator(_LinearOperator):
         c \sum_{n=1}^{N}
         \nabla_{\mathbf{\theta}}^2
         \ell(f_{\mathbf{\theta}}(\mathbf{x}_n), \mathbf{y}_n)\,.
+
+    Attributes:
+        SUPPORTS_BLOCKS: Whether the linear operator supports block operations.
+            Default is ``True``.
     """
+
+    SUPPORTS_BLOCKS: bool = True
 
     def _matmat_batch(
         self, X: Tensor, y: Tensor, M_list: List[Tensor]
@@ -55,17 +62,24 @@ class HessianLinearOperator(_LinearOperator):
         # Re-cycle first backward pass from the HVP's double-backward
         grad_params = grad(loss, self._params, create_graph=True)
 
-        result_list = [zeros_like(M) for M in M_list]
-
         num_vecs = M_list[0].shape[0]
-        for n in range(num_vecs):
-            col_n_list = hessian_vector_product(
-                loss, self._params, [M[n] for M in M_list], grad_params=grad_params
-            )
-            for result, col_n in zip(result_list, col_n_list):
-                result[n].add_(col_n)
+        result = [zeros_like(M) for M in M_list]
 
-        return result_list
+        # per-block HMP
+        for M_block, p_block, g_block, res_block in zip(
+            split_list(M_list, self._block_sizes),
+            split_list(self._params, self._block_sizes),
+            split_list(grad_params, self._block_sizes),
+            split_list(result, self._block_sizes),
+        ):
+            for n in range(num_vecs):
+                col_n = hessian_vector_product(
+                    loss, p_block, [M[n] for M in M_block], grad_params=g_block
+                )
+                for p, col in enumerate(col_n):
+                    res_block[p][n].add_(col)
+
+        return tuple(result)
 
     def _adjoint(self) -> HessianLinearOperator:
         """Return the linear operator representing the adjoint.
