@@ -257,8 +257,7 @@ class _LinearOperator(LinearOperator):
            Result of matrix-multiplication in list format.
 
         Raises:
-            NotImplementedError: Must be implemented by descendants which do not support
-                blocks.
+            NotImplementedError: Must be implemented by descendants.
         """
         raise NotImplementedError
 
