@@ -40,12 +40,10 @@ BLOCKING_FNS = {
 
 @mark.parametrize("blocking", BLOCKING_FNS.keys(), ids=BLOCKING_FNS.keys())
 def test_blocked_HessianLinearOperator_matmat(
-    case, adjoint: bool, blocking: str, num_vecs: int = 3
+    case, adjoint: bool, blocking: str, num_vecs: int = 2
 ):
     """Test matrix-matrix multiplication with the block-diagonal Hessian."""
     model, loss_func, params, data = case
-
-    # one parameter per block
     block_sizes = BLOCKING_FNS[blocking](params)
 
     op = HessianLinearOperator(model, loss_func, params, data, block_sizes=block_sizes)

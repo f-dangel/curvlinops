@@ -69,7 +69,7 @@ class _LinearOperator(LinearOperator):
                 at the cost of one traversal through the data loader.
             block_sizes: This argument will be ignored if the linear operator does not
                 support blocks. List of integers indicating the number of
-                ``nn.Parameter``s that for a block. Entries must sum to ``len(params)``.
+                ``nn.Parameter``s forming a block. Entries must sum to ``len(params)``.
                 For instance ``[len(params)]`` considers the full matrix, while
                 ``[1, 1, ...]`` corresponds to a block diagonal approximation where
                 each parameter forms its own block.
@@ -87,11 +87,11 @@ class _LinearOperator(LinearOperator):
         super().__init__(shape=shape, dtype=float32)
 
         self._params = params
-        if block_sizes is not None and not self.SUPPORTS_BLOCKS:
-            raise ValueError(
-                "Block sizes were specified but operator does not support blocking."
-            )
         if block_sizes is not None:
+            if not self.SUPPORTS_BLOCKS:
+                raise ValueError(
+                    "Block sizes were specified but operator does not support blocking."
+                )
             if sum(block_sizes) != len(params):
                 raise ValueError("Sum of blocks must equal the number of parameters.")
             if any(s <= 0 for s in block_sizes):
