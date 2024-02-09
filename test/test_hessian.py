@@ -42,7 +42,14 @@ BLOCKING_FNS = {
 def test_blocked_HessianLinearOperator_matmat(
     case, adjoint: bool, blocking: str, num_vecs: int = 2
 ):
-    """Test matrix-matrix multiplication with the block-diagonal Hessian."""
+    """Test matrix-matrix multiplication with the block-diagonal Hessian.
+
+    Args:
+        case: Tuple of model, loss function, parameters, and data.
+        adjoint: Whether to test the adjoint operator.
+        blocking: Blocking scheme.
+        num_vecs: Number of vectors to multiply with. Default is ``2``.
+    """
     model, loss_func, params, data = case
     block_sizes = BLOCKING_FNS[blocking](params)
 

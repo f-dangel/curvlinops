@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from typing import List, Tuple, Union
+from typing import List, Tuple
 
 from backpack.hessianfree.hvp import hessian_vector_product
 from torch import Tensor, zeros_like
 from torch.autograd import grad
-from torch.nn import Parameter
 
 from curvlinops._base import _LinearOperator
 from curvlinops.utils import split_list
