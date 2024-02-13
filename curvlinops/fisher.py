@@ -10,11 +10,11 @@ from numpy import ndarray
 from torch import (
     Generator,
     Tensor,
+    as_tensor,
     autograd,
     multinomial,
     normal,
     softmax,
-    tensor,
     zeros_like,
 )
 from torch.nn import CrossEntropyLoss, MSELoss, Parameter
@@ -187,7 +187,7 @@ class FisherMCLinearOperator(_LinearOperator):
         Returns:
             Matrix-multiplication result ``mat @ M``.
         """
-        if self._generator is None:
+        if self._generator is None or self._generator.device != self._device:
             self._generator = Generator(device=self._device)
         self._generator.manual_seed(self._seed)
 
@@ -271,8 +271,9 @@ class FisherMCLinearOperator(_LinearOperator):
         C = output.shape[1]
 
         if isinstance(self._loss_func, MSELoss):
-            std = tensor(
-                sqrt(0.5 / C) if self._loss_func.reduction == "mean" else sqrt(0.5)
+            std = as_tensor(
+                sqrt(0.5 / C) if self._loss_func.reduction == "mean" else sqrt(0.5),
+                device=output.device,
             )
             return 2 * normal(zeros_like(output), std, generator=self._generator)
 
