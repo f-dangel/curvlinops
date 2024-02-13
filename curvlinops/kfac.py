@@ -339,7 +339,7 @@ class KFACLinearOperator(_LinearOperator):
             )
 
         # loop over data set, computing the Kronecker factors
-        if self._generator is None:
+        if self._generator is None or self._generator.device != self._device:
             self._generator = Generator(device=self._device)
         self._generator.manual_seed(self._seed)
 
