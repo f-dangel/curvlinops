@@ -180,7 +180,6 @@ class KFACLinearOperator(_LinearOperator):
             ValueError: If the loss average is not ``None`` and the loss function's
                 reduction is ``'sum'``.
             ValueError: If ``fisher_type != 'mc'`` and ``mc_samples != 1``.
-            NotImplementedError: If a parameter is in an unsupported layer.
         """
         if not isinstance(loss_func, self._SUPPORTED_LOSSES):
             raise ValueError(
@@ -212,7 +211,9 @@ class KFACLinearOperator(_LinearOperator):
                 f"Supported: {self._SUPPORTED_KFAC_APPROX}."
             )
 
-        self.param_ids, self.param_ids_to_hooked_modules = self.parameter_to_module_mapping(params, model_func)
+        self.param_ids, self.param_ids_to_hooked_modules = (
+            self.parameter_to_module_mapping(params, model_func)
+        )
 
         self._seed = seed
         self._generator: Union[None, Generator] = None
@@ -244,12 +245,14 @@ class KFACLinearOperator(_LinearOperator):
         Returns:
             Matrix-multiplication result ``KFAC @ M``. Has shape ``[D, K]``.
         """
-        # Need to update parameter mapping if they have changed (e.g. device transfer), and reset caches
+        # Need to update parameter mapping if they have changed (e.g. device
+        # transfer), and reset caches
         if self.param_ids != [p.data_ptr() for p in self._params]:
             print("Invalidated parameter mapping detected")
-            self.param_ids, self.param_ids_to_hooked_modules = self.parameter_to_module_mapping(self._params, self._model_func)
-            self._input_covariances = {}
-            self._gradient_covariances = {}
+            self.param_ids, self.param_ids_to_hooked_modules = (
+                self.parameter_to_module_mapping(self._params, self._model_func)
+            )
+            self._input_covariances, self._gradient_covariances = {}, {}
 
         if not self._input_covariances and not self._gradient_covariances:
             self._compute_and_cache_kfac()
@@ -302,7 +305,10 @@ class KFACLinearOperator(_LinearOperator):
                         processed.add(pos)
 
         if processed != set(range(len(M_torch))):
-            raise RuntimeError("Some entries of the matrix were not modified." + f" Out of {len(M_torch)}, the following entries were processed: {processed}.")
+            raise RuntimeError(
+                "Some entries of the matrix were not modified."
+                + f" Out of {len(M_torch)}, the following entries were processed: {processed}."
+            )
 
         return self._postprocess(M_torch)
 
@@ -615,7 +621,24 @@ class KFACLinearOperator(_LinearOperator):
         return self.param_ids.index(param.data_ptr())
 
     @classmethod
-    def parameter_to_module_mapping(cls, params, model_func):
+    def parameter_to_module_mapping(
+        cls, params: List[Tensor], model_func: Module
+    ) -> Tuple[List[int], Dict[Tuple[int, ...], str]]:
+        """Construct the mapping between parameters and modules.
+
+        Args:
+            params: List of parameters.
+            model_func: The model function.
+
+        Returns:
+            A tuple containing:
+            - A list of parameter data pointers.
+            - A dictionary mapping from tuples of parameter data pointers in a module
+              to its name.
+
+        Raises:
+            NotImplementedError: If parameters are found outside supported layers.
+        """
         param_ids = [p.data_ptr() for p in params]
         # mapping from tuples of parameter data pointers in a module to its name
         param_ids_to_hooked_modules: Dict[Tuple[int, ...], str] = {}

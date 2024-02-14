@@ -306,13 +306,15 @@ class _LinearOperator(LinearOperator):
         return cat(result, dim=0).cpu().numpy()
 
     def _loop_over_data(
-            self, desc: Optional[str] = None, add_device_to_desc: bool=True
+        self, desc: Optional[str] = None, add_device_to_desc: bool = True
     ) -> Iterable[Tuple[Tensor, Tensor]]:
         """Yield batches of the data set, loaded to the correct device.
 
         Args:
             desc: Description for the progress bar. Will be ignored if progressbar is
                 disabled.
+            add_device_to_desc: Whether to add the device to the description.
+                Default: ``True``.
 
         Yields:
             Mini-batches ``(X, y)``.
