@@ -260,6 +260,7 @@ class KFACLinearOperator(_LinearOperator):
             self._compute_kfac()
 
         M_torch = super()._preprocess(M)
+        processed = set()
 
         for name in self.param_ids_to_hooked_modules.values():
             mod = self._model_func.get_submodule(name)
@@ -278,6 +279,7 @@ class KFACLinearOperator(_LinearOperator):
 
                 w_cols = M_w.shape[2]
                 M_torch[w_pos], M_torch[b_pos] = M_joint.split([w_cols, 1], dim=2)
+                processed.update([w_pos, b_pos])
 
             # for weights we need to multiply from the right with aaT
             # for weights and biases we need to multiply from the left with ggT
@@ -302,6 +304,10 @@ class KFACLinearOperator(_LinearOperator):
                             M_torch[pos],
                             "j k,v k ... -> v j ...",
                         )
+                        processed.add(pos)
+
+        if processed != set(range(len(M_torch))):
+            raise RuntimeError("Some entries of the matrix were not modified." + f" Out of {len(M_torch)}, the following entries were processed: {processed}.")
 
         return self._postprocess(M_torch)
 

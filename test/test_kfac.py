@@ -394,20 +394,18 @@ def test_multi_dim_output(
 
     report_nonclose(kfac_mat, kfac_flat_mat)
 
+def test_bug_device_change_invalidates_parameter_mapping():
+    """Reproduce #77: Loading KFAC from GPU to CPU invalidates the internal mapping.
 
-def test_bug_changed_param_ids_after_device_change():
-    """Re-produce a bug described in TODO.
-
-    The KFAC linear operator relies ``.data_ptr()``s of parameters. These change when
-    the linear operator is loaded to a different device.
+    This leads to some parameter blocks not being updated inside ``.matmat``.
     """
     if not cuda.is_available():
         skip("Test requires GPU.")
+    gpu, cpu = device("cuda"), device("cpu")
 
     manual_seed(0)
 
-    gpu, cpu = device("cuda"), device("cpu")
-    model = Sequential(Linear(5, 4)).to(gpu)
+    model = Sequential(Linear(5, 4), ReLU(), Linear(4,4)).to(gpu)
     data = [(rand(2, 5), regression_targets((2, 4)))]
     loss_func = MSELoss().to(gpu)
 
@@ -416,16 +414,12 @@ def test_bug_changed_param_ids_after_device_change():
         loss_func,
         list(model.parameters()),
         data,
-        check_deterministic=False,  # turn off because it loads to CPU
+        fisher_type='empirical',
+        check_deterministic=False,  # turn off to avoid implicit device changes
     )
     x = rand(kfac.shape[1]).numpy()
-
     kfac_x_gpu = kfac @ x
 
-    # This invalidates the internal mapping from parameter data pointers to ids
-    kfac.to_device(cpu)
-
-    with raises(KeyError):
+    kfac.to_device(cpu) # invalidates internal mapping
+    with raises(RuntimeError):
         kfac_x_cpu = kfac @ x
-
-    # TODO Make sure both results are identical
