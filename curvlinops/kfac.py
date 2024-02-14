@@ -246,7 +246,7 @@ class KFACLinearOperator(_LinearOperator):
             Matrix-multiplication result ``KFAC @ M``. Has shape ``[D, K]``.
 
         Raises:
-            ValueError: If the incoming matrix was not fully processed, indicating an
+            RuntimeError: If the incoming matrix was not fully processed, indicating an
                 error due to the internal mapping from parameters to modules.
         """
         # Need to update parameter mapping if they have changed (e.g. device
@@ -259,7 +259,7 @@ class KFACLinearOperator(_LinearOperator):
             self._input_covariances, self._gradient_covariances = {}, {}
 
         if not self._input_covariances and not self._gradient_covariances:
-            self._compute_and_cache_kfac()
+            self._compute_kfac()
 
         M_torch = super()._preprocess(M)
         processed = set()
@@ -326,7 +326,7 @@ class KFACLinearOperator(_LinearOperator):
         """
         return self
 
-    def _compute_and_cache_kfac(self):
+    def _compute_kfac(self):
         """Compute and cache KFAC's Kronecker factors for future ``matvec``s."""
         # install forward and backward hooks
         hook_handles: List[RemovableHandle] = []
