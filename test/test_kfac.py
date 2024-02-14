@@ -400,7 +400,7 @@ def test_bug_device_change_invalidates_parameter_mapping():
     This leads to some parameter blocks not being updated inside ``.matmat``.
     """
     if not cuda.is_available():
-        skip("Test requires GPU.")
+        skip("This test requires a GPU.")
     gpu, cpu = device("cuda"), device("cpu")
 
     manual_seed(0)
@@ -416,10 +416,15 @@ def test_bug_device_change_invalidates_parameter_mapping():
         data,
         fisher_type='empirical',
         check_deterministic=False,  # turn off to avoid implicit device changes
+        progressbar=True,
     )
     x = rand(kfac.shape[1]).numpy()
     kfac_x_gpu = kfac @ x
 
     kfac.to_device(cpu) # invalidates internal mapping
-    with raises(RuntimeError):
-        kfac_x_cpu = kfac @ x
+    assert kfac.param_ids != [p.data_ptr() for p in kfac._params]
+    kfac_x_cpu = kfac @ x
+    # make sure invalidation is detected and fixed inside ``matmat``
+    assert kfac.param_ids == [p.data_ptr() for p in kfac._params]
+
+    report_nonclose(kfac_x_gpu, kfac_x_gpu)

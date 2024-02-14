@@ -121,6 +121,9 @@ class KFACLinearOperator(_LinearOperator):
         Warning:
             This is an early proto-type with limitations:
                 - Only Linear and Conv2d modules are supported.
+                - If ``deterministic_checks`` is turned on (as is by default), this
+                  will compute the KFAC matrices on CPU, even if all passed arguments
+                  live on the GPU.
 
         Args:
             model_func: The neural network. Must consist of modules.
@@ -209,22 +212,7 @@ class KFACLinearOperator(_LinearOperator):
                 f"Supported: {self._SUPPORTED_KFAC_APPROX}."
             )
 
-        self.param_ids = [p.data_ptr() for p in params]
-        # mapping from tuples of parameter data pointers in a module to its name
-        self.param_ids_to_hooked_modules: Dict[Tuple[int, ...], str] = {}
-
-        hooked_param_ids: Set[int] = set()
-        for name, mod in model_func.named_modules():
-            p_ids = tuple(p.data_ptr() for p in mod.parameters())
-            if isinstance(mod, self._SUPPORTED_MODULES) and any(
-                p_id in self.param_ids for p_id in p_ids
-            ):
-                self.param_ids_to_hooked_modules[p_ids] = name
-                hooked_param_ids.update(set(p_ids))
-
-        # check that all parameters are in hooked modules
-        if not set(self.param_ids).issubset(hooked_param_ids):
-            raise NotImplementedError("Found parameters outside supported layers.")
+        self.param_ids, self.param_ids_to_hooked_modules = self.parameter_to_module_mapping(params, model_func)
 
         self._seed = seed
         self._generator: Union[None, Generator] = None
@@ -256,8 +244,15 @@ class KFACLinearOperator(_LinearOperator):
         Returns:
             Matrix-multiplication result ``KFAC @ M``. Has shape ``[D, K]``.
         """
+        # Need to update parameter mapping if they have changed (e.g. device transfer), and reset caches
+        if self.param_ids != [p.data_ptr() for p in self._params]:
+            print("Invalidated parameter mapping detected")
+            self.param_ids, self.param_ids_to_hooked_modules = self.parameter_to_module_mapping(self._params, self._model_func)
+            self._input_covariances = {}
+            self._gradient_covariances = {}
+
         if not self._input_covariances and not self._gradient_covariances:
-            self._compute_kfac()
+            self._compute_and_cache_kfac()
 
         M_torch = super()._preprocess(M)
         processed = set()
@@ -321,7 +316,7 @@ class KFACLinearOperator(_LinearOperator):
         """
         return self
 
-    def _compute_kfac(self):
+    def _compute_and_cache_kfac(self):
         """Compute and cache KFAC's Kronecker factors for future ``matvec``s."""
         # install forward and backward hooks
         hook_handles: List[RemovableHandle] = []
@@ -618,3 +613,24 @@ class KFACLinearOperator(_LinearOperator):
             The parameter's position in the parameter list.
         """
         return self.param_ids.index(param.data_ptr())
+
+    @classmethod
+    def parameter_to_module_mapping(cls, params, model_func):
+        param_ids = [p.data_ptr() for p in params]
+        # mapping from tuples of parameter data pointers in a module to its name
+        param_ids_to_hooked_modules: Dict[Tuple[int, ...], str] = {}
+
+        hooked_param_ids: Set[int] = set()
+        for name, mod in model_func.named_modules():
+            p_ids = tuple(p.data_ptr() for p in mod.parameters())
+            if isinstance(mod, cls._SUPPORTED_MODULES) and any(
+                p_id in param_ids for p_id in p_ids
+            ):
+                param_ids_to_hooked_modules[p_ids] = name
+                hooked_param_ids.update(set(p_ids))
+
+        # check that all parameters are in hooked modules
+        if not set(param_ids).issubset(hooked_param_ids):
+            raise NotImplementedError("Found parameters outside supported layers.")
+
+        return param_ids, param_ids_to_hooked_modules
