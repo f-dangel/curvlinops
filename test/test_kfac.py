@@ -12,9 +12,9 @@ from typing import Dict, Iterable, List, Tuple, Union
 
 from einops.layers.torch import Rearrange
 from numpy import eye
-from pytest import mark
+from pytest import mark, raises, skip
 from scipy.linalg import block_diag
-from torch import Tensor, device, manual_seed, rand, randperm
+from torch import Tensor, cuda, device, manual_seed, rand, randperm
 from torch.nn import (
     CrossEntropyLoss,
     Flatten,
@@ -393,3 +393,39 @@ def test_multi_dim_output(
     kfac_flat_mat = kfac_flat @ eye(kfac_flat.shape[1])
 
     report_nonclose(kfac_mat, kfac_flat_mat)
+
+
+def test_bug_changed_param_ids_after_device_change():
+    """Re-produce a bug described in TODO.
+
+    The KFAC linear operator relies ``.data_ptr()``s of parameters. These change when
+    the linear operator is loaded to a different device.
+    """
+    if not cuda.is_available():
+        skip("Test requires GPU.")
+
+    manual_seed(0)
+
+    gpu, cpu = device("cuda"), device("cpu")
+    model = Sequential(Linear(5, 4)).to(gpu)
+    data = [(rand(2, 5), regression_targets((2, 4)))]
+    loss_func = MSELoss().to(gpu)
+
+    kfac = KFACLinearOperator(
+        model,
+        loss_func,
+        list(model.parameters()),
+        data,
+        check_deterministic=False,  # turn off because it loads to CPU
+    )
+    x = rand(kfac.shape[1]).numpy()
+
+    kfac_x_gpu = kfac @ x
+
+    # This invalidates the internal mapping from parameter data pointers to ids
+    kfac.to_device(cpu)
+
+    with raises(KeyError):
+        kfac_x_cpu = kfac @ x
+
+    # TODO Make sure both results are identical
