@@ -244,6 +244,10 @@ class KFACLinearOperator(_LinearOperator):
 
         Returns:
             Matrix-multiplication result ``KFAC @ M``. Has shape ``[D, K]``.
+
+        Raises:
+            ValueError: If the incoming matrix was not fully processed, indicating an
+                error due to the internal mapping from parameters to modules.
         """
         # Need to update parameter mapping if they have changed (e.g. device
         # transfer), and reset caches
