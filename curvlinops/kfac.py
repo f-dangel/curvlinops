@@ -240,10 +240,10 @@ class KFACLinearOperator(_LinearOperator):
             device: The device to which the linear operator should be moved.
         """
         super().to_device(device)
-        for t in self._input_covariances.values():
-            t = t.to(device)
-        for t in self._gradient_covariances.values():
-            t = t.to(device)
+        for key in self._input_covariances.keys():
+            self._input_covariances[key] = self._input_covariances[key].to(device)
+        for key in self._gradient_covariances.keys():
+            self._gradient_covariances[key] = self._gradient_covariances[key].to(device)
 
     def _matmat(self, M: ndarray) -> ndarray:
         """Apply KFAC to a matrix (multiple vectors).
