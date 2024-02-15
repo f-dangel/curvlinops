@@ -24,7 +24,7 @@ from typing import Dict, Iterable, List, Optional, Tuple, Union
 
 from einops import einsum, rearrange, reduce
 from numpy import ndarray
-from torch import Generator, Tensor, cat, randn, stack
+from torch import Generator, Tensor, cat, device, randn, stack
 from torch.nn import Conv2d, CrossEntropyLoss, Linear, Module, MSELoss, Parameter
 from torch.utils.hooks import RemovableHandle
 
@@ -232,6 +232,18 @@ class KFACLinearOperator(_LinearOperator):
             shape=shape,
             num_data=num_data,
         )
+
+    def to_device(self, device: device):
+        """Load the linear operator to another device.
+
+        Args:
+            device: The device to which the linear operator should be moved.
+        """
+        super().to_device(device)
+        for t in self._input_covariances.values():
+            t = t.to(device)
+        for t in self._gradient_covariances.values():
+            t = t.to(device)
 
     def _matmat(self, M: ndarray) -> ndarray:
         """Apply KFAC to a matrix (multiple vectors).
