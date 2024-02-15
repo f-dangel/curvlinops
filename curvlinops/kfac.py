@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from functools import partial
 from math import sqrt
-from typing import Dict, Iterable, List, Optional, Set, Tuple, Union
+from typing import Dict, Iterable, List, Optional, Tuple, Union
 
 from einops import einsum, rearrange, reduce
 from numpy import ndarray
@@ -211,10 +211,6 @@ class KFACLinearOperator(_LinearOperator):
                 f"Supported: {self._SUPPORTED_KFAC_APPROX}."
             )
 
-        self.param_ids, self.param_ids_to_hooked_modules = (
-            self.parameter_to_module_mapping(params, model_func)
-        )
-
         self._seed = seed
         self._generator: Union[None, Generator] = None
         self._separate_weight_and_bias = separate_weight_and_bias
@@ -224,6 +220,7 @@ class KFACLinearOperator(_LinearOperator):
         self._loss_average = loss_average
         self._input_covariances: Dict[str, Tensor] = {}
         self._gradient_covariances: Dict[str, Tensor] = {}
+        self._mapping = self.compute_parameter_mapping(params, model_func)
 
         super().__init__(
             model_func,
@@ -244,75 +241,47 @@ class KFACLinearOperator(_LinearOperator):
 
         Returns:
             Matrix-multiplication result ``KFAC @ M``. Has shape ``[D, K]``.
-
-        Raises:
-            RuntimeError: If the incoming matrix was not fully processed, indicating an
-                error due to the internal mapping from parameters to modules.
         """
-        # Need to update parameter mapping if they have changed (e.g. device
-        # transfer), and reset caches
-        if self.param_ids != [p.data_ptr() for p in self._params]:
-            print("Invalidated parameter mapping detected")
-            self.param_ids, self.param_ids_to_hooked_modules = (
-                self.parameter_to_module_mapping(self._params, self._model_func)
-            )
-            self._input_covariances, self._gradient_covariances = {}, {}
-
         if not self._input_covariances and not self._gradient_covariances:
             self._compute_kfac()
 
         M_torch = super()._preprocess(M)
-        processed = set()
 
-        for name in self.param_ids_to_hooked_modules.values():
-            mod = self._model_func.get_submodule(name)
-
+        for mod_name, param_pos in self._mapping.items():
             # bias and weights are treated jointly
-            if not self._separate_weight_and_bias and self.in_params(
-                mod.weight, mod.bias
+            if (
+                not self._separate_weight_and_bias
+                and "weight" in param_pos.keys()
+                and "bias" in param_pos.keys()
             ):
-                w_pos, b_pos = self.param_pos(mod.weight), self.param_pos(mod.bias)
+                w_pos, b_pos = param_pos["weight"], param_pos["bias"]
                 # v denotes the free dimension for treating multiple vectors in parallel
                 M_w = rearrange(M_torch[w_pos], "v c_out ... -> v c_out (...)")
                 M_joint = cat([M_w, M_torch[b_pos].unsqueeze(-1)], dim=2)
-                aaT = self._input_covariances[name]
-                ggT = self._gradient_covariances[name]
+                aaT = self._input_covariances[mod_name]
+                ggT = self._gradient_covariances[mod_name]
                 M_joint = einsum(ggT, M_joint, aaT, "i j,v j k,k l -> v i l")
 
                 w_cols = M_w.shape[2]
                 M_torch[w_pos], M_torch[b_pos] = M_joint.split([w_cols, 1], dim=2)
-                processed.update([w_pos, b_pos])
 
             # for weights we need to multiply from the right with aaT
             # for weights and biases we need to multiply from the left with ggT
             else:
-                for p_name in ["weight", "bias"]:
-                    p = getattr(mod, p_name)
-                    if self.in_params(p):
-                        pos = self.param_pos(p)
-
-                        if p_name == "weight":
-                            M_w = rearrange(
-                                M_torch[pos], "v c_out ... -> v c_out (...)"
-                            )
-                            M_torch[pos] = einsum(
-                                M_w,
-                                self._input_covariances[name],
-                                "v c_out j,j k -> v c_out k",
-                            )
-
+                for p_name, pos in param_pos.items():
+                    if p_name == "weight":
+                        M_w = rearrange(M_torch[pos], "v c_out ... -> v c_out (...)")
                         M_torch[pos] = einsum(
-                            self._gradient_covariances[name],
-                            M_torch[pos],
-                            "j k,v k ... -> v j ...",
+                            M_w,
+                            self._input_covariances[mod_name],
+                            "v c_out j,j k -> v c_out k",
                         )
-                        processed.add(pos)
 
-        if processed != set(range(len(M_torch))):
-            raise RuntimeError(
-                "Some entries of the matrix were not modified."
-                + f" Out of {len(M_torch)}, the following entries were processed: {processed}."
-            )
+                    M_torch[pos] = einsum(
+                        self._gradient_covariances[mod_name],
+                        M_torch[pos],
+                        "j k,v k ... -> v j ...",
+                    )
 
         return self._postprocess(M_torch)
 
@@ -331,21 +300,26 @@ class KFACLinearOperator(_LinearOperator):
         # install forward and backward hooks
         hook_handles: List[RemovableHandle] = []
 
-        for name in self.param_ids_to_hooked_modules.values():
-            module = self._model_func.get_submodule(name)
+        for mod_name, param_pos in self._mapping.items():
+            module = self._model_func.get_submodule(mod_name)
 
             # input covariance only required for weights
-            if self.in_params(module.weight):
+            if "weight" in param_pos.keys():
                 hook_handles.append(
                     module.register_forward_pre_hook(
-                        self._hook_accumulate_input_covariance
+                        partial(
+                            self._hook_accumulate_input_covariance, module_name=mod_name
+                        )
                     )
                 )
 
             # gradient covariance required for weights and biases
             hook_handles.append(
                 module.register_forward_hook(
-                    self._register_tensor_hook_on_output_to_accumulate_gradient_covariance
+                    partial(
+                        self._register_tensor_hook_on_output_to_accumulate_gradient_covariance,
+                        module_name=mod_name,
+                    )
                 )
             )
 
@@ -471,7 +445,7 @@ class KFACLinearOperator(_LinearOperator):
             raise NotImplementedError
 
     def _register_tensor_hook_on_output_to_accumulate_gradient_covariance(
-        self, module: Module, inputs: Tuple[Tensor], output: Tensor
+        self, module: Module, inputs: Tuple[Tensor], output: Tensor, module_name: str
     ):
         """Register tensor hook on layer's output to accumulate the grad. covariance.
 
@@ -491,18 +465,24 @@ class KFACLinearOperator(_LinearOperator):
                 covariance will be installed.
             inputs: The layer's input tensors.
             output: The layer's output tensor.
+            module_name: The name of the layer in the neural network.
         """
-        tensor_hook = partial(self._accumulate_gradient_covariance, module)
+        tensor_hook = partial(
+            self._accumulate_gradient_covariance, module=module, module_name=module_name
+        )
         output.register_hook(tensor_hook)
 
-    def _accumulate_gradient_covariance(self, module: Module, grad_output: Tensor):
+    def _accumulate_gradient_covariance(
+        self, grad_output: Tensor, module: Module, module_name: str
+    ):
         """Accumulate the gradient covariance for a layer's output.
 
         Updates ``self._gradient_covariances``.
 
         Args:
-            module: The layer whose output's gradient covariance will be accumulated.
             grad_output: The gradient w.r.t. the output.
+            module: The layer whose output's gradient covariance will be accumulated.
+            module_name: The name of the layer in the neural network.
         """
         g = grad_output.data.detach()
         batch_size = g.shape[0]
@@ -531,13 +511,14 @@ class KFACLinearOperator(_LinearOperator):
         }[self._loss_average]
         covariance = einsum(g, g, "b i,b j->i j").mul_(correction)
 
-        name = self.get_module_name(module)
-        if name not in self._gradient_covariances:
-            self._gradient_covariances[name] = covariance
+        if module_name not in self._gradient_covariances:
+            self._gradient_covariances[module_name] = covariance
         else:
-            self._gradient_covariances[name].add_(covariance)
+            self._gradient_covariances[module_name].add_(covariance)
 
-    def _hook_accumulate_input_covariance(self, module: Module, inputs: Tuple[Tensor]):
+    def _hook_accumulate_input_covariance(
+        self, module: Module, inputs: Tuple[Tensor], module_name: str
+    ):
         """Pre-forward hook that accumulates the input covariance of a layer.
 
         Updates ``self._input_covariances``.
@@ -545,6 +526,7 @@ class KFACLinearOperator(_LinearOperator):
         Args:
             module: Module on which the hook is called.
             inputs: Inputs to the module.
+            module_name: Name of the module in the neural network.
 
         Raises:
             ValueError: If the module has multiple inputs.
@@ -576,88 +558,58 @@ class KFACLinearOperator(_LinearOperator):
             scale = 1.0  # since we use a mean reduction
             x = reduce(x, "batch ... d_in -> batch d_in", "mean")
 
+        params = self._mapping[module_name]
         if (
-            self.in_params(module.weight, module.bias)
+            "weight" in params.keys()
+            and "bias" in params.keys()
             and not self._separate_weight_and_bias
         ):
             x = cat([x, x.new_ones(x.shape[0], 1)], dim=1)
 
         covariance = einsum(x, x, "b i,b j -> i j").div_(self._N_data * scale)
 
-        name = self.get_module_name(module)
-        if name not in self._input_covariances:
-            self._input_covariances[name] = covariance
+        if module_name not in self._input_covariances:
+            self._input_covariances[module_name] = covariance
         else:
-            self._input_covariances[name].add_(covariance)
-
-    def get_module_name(self, module: Module) -> str:
-        """Get the name of a module.
-
-        Args:
-            module: The module.
-
-        Returns:
-            The name of the module.
-        """
-        p_ids = tuple(p.data_ptr() for p in module.parameters())
-        return self.param_ids_to_hooked_modules[p_ids]
-
-    def in_params(self, *params: Union[Parameter, Tensor, None]) -> bool:
-        """Check if all parameters are used in KFAC.
-
-        Args:
-            params: Parameters to check.
-
-        Returns:
-            Whether all parameters are used in KFAC.
-        """
-        return all(p is not None and p.data_ptr() in self.param_ids for p in params)
-
-    def param_pos(self, param: Union[Parameter, Tensor]) -> int:
-        """Get the position of a parameter in the list of parameters used in KFAC.
-
-        Args:
-            param: The parameter.
-
-        Returns:
-            The parameter's position in the parameter list.
-        """
-        return self.param_ids.index(param.data_ptr())
+            self._input_covariances[module_name].add_(covariance)
 
     @classmethod
-    def parameter_to_module_mapping(
-        cls, params: List[Tensor], model_func: Module
-    ) -> Tuple[List[int], Dict[Tuple[int, ...], str]]:
-        """Construct the mapping between parameters and modules.
+    def compute_parameter_mapping(
+        cls, params: List[Union[Tensor, Parameter]], model_func: Module
+    ) -> Dict[str, Dict[str, int]]:
+        """Construct the mapping between layers, their parameters, and positions.
 
         Args:
             params: List of parameters.
             model_func: The model function.
 
         Returns:
-            A tuple containing:
-            - A list of parameter data pointers.
-            - A dictionary mapping from tuples of parameter data pointers in a module
-              to its name.
+            A dictionary of dictionaries. The outer dictionary's keys are the names of
+            the layers that contain parameters. The interior dictionary's keys are the
+            parameter names, and the values their respective positions.
 
         Raises:
             NotImplementedError: If parameters are found outside supported layers.
         """
         param_ids = [p.data_ptr() for p in params]
-        # mapping from tuples of parameter data pointers in a module to its name
-        param_ids_to_hooked_modules: Dict[Tuple[int, ...], str] = {}
+        positions = {}
+        processed = set()
 
-        hooked_param_ids: Set[int] = set()
-        for name, mod in model_func.named_modules():
-            p_ids = tuple(p.data_ptr() for p in mod.parameters())
+        for mod_name, mod in model_func.named_modules():
             if isinstance(mod, cls._SUPPORTED_MODULES) and any(
-                p_id in param_ids for p_id in p_ids
+                p.data_ptr() in param_ids for p in mod.parameters()
             ):
-                param_ids_to_hooked_modules[p_ids] = name
-                hooked_param_ids.update(set(p_ids))
+                param_positions = {}
+                for p_name, p in mod.named_parameters():
+                    p_id = p.data_ptr()
+                    if p_id in param_ids:
+                        pos = param_ids.index(p_id)
+                        param_positions[p_name] = pos
+                        processed.add(p_id)
+                positions[mod_name] = param_positions
 
-        # check that all parameters are in hooked modules
-        if not set(param_ids).issubset(hooked_param_ids):
-            raise NotImplementedError("Found parameters outside supported layers.")
+        # check that all parameters are in known modules
+        if len(processed) != len(param_ids):
+            raise NotImplementedError("Found parameters in un-supported layers.")
 
-        return param_ids, param_ids_to_hooked_modules
+        return positions

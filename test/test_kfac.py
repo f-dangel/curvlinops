@@ -422,10 +422,7 @@ def test_bug_device_change_invalidates_parameter_mapping():
     x = rand(kfac.shape[1]).numpy()
     kfac_x_gpu = kfac @ x
 
-    kfac.to_device(cpu)  # invalidates internal mapping
-    assert kfac.param_ids != [p.data_ptr() for p in kfac._params]
+    kfac.to_device(cpu)
     kfac_x_cpu = kfac @ x
-    # make sure invalidation is detected and fixed inside ``matmat``
-    assert kfac.param_ids == [p.data_ptr() for p in kfac._params]
 
     report_nonclose(kfac_x_gpu, kfac_x_cpu)
