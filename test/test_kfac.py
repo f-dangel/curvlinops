@@ -12,9 +12,9 @@ from typing import Dict, Iterable, List, Tuple, Union
 
 from einops.layers.torch import Rearrange
 from numpy import eye
-from pytest import mark
+from pytest import mark, skip
 from scipy.linalg import block_diag
-from torch import Tensor, device, manual_seed, rand, randperm
+from torch import Tensor, cuda, device, manual_seed, rand, randperm
 from torch.nn import (
     CrossEntropyLoss,
     Flatten,
@@ -393,3 +393,39 @@ def test_multi_dim_output(
     kfac_flat_mat = kfac_flat @ eye(kfac_flat.shape[1])
 
     report_nonclose(kfac_mat, kfac_flat_mat)
+
+
+def test_bug_device_change_invalidates_parameter_mapping():
+    """Reproduce #77: Loading KFAC from GPU to CPU invalidates the internal mapping.
+
+    This leads to some parameter blocks not being updated inside ``.matmat``.
+    """
+    if not cuda.is_available():
+        skip("This test requires a GPU.")
+    gpu, cpu = device("cuda"), device("cpu")
+
+    manual_seed(0)
+
+    model = Sequential(Linear(5, 4), ReLU(), Linear(4, 4)).to(gpu)
+    data = [(rand(2, 5), regression_targets((2, 4)))]
+    loss_func = MSELoss().to(gpu)
+
+    kfac = KFACLinearOperator(
+        model,
+        loss_func,
+        list(model.parameters()),
+        data,
+        fisher_type="empirical",
+        check_deterministic=False,  # turn off to avoid implicit device changes
+        progressbar=True,
+    )
+    x = rand(kfac.shape[1]).numpy()
+    kfac_x_gpu = kfac @ x
+
+    kfac.to_device(cpu)  # invalidates internal mapping
+    assert kfac.param_ids != [p.data_ptr() for p in kfac._params]
+    kfac_x_cpu = kfac @ x
+    # make sure invalidation is detected and fixed inside ``matmat``
+    assert kfac.param_ids == [p.data_ptr() for p in kfac._params]
+
+    report_nonclose(kfac_x_gpu, kfac_x_cpu)

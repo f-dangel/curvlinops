@@ -121,6 +121,9 @@ class KFACLinearOperator(_LinearOperator):
         Warning:
             This is an early proto-type with limitations:
                 - Only Linear and Conv2d modules are supported.
+                - If ``deterministic_checks`` is turned on (as is by default), this
+                  will compute the KFAC matrices on CPU, even if all passed arguments
+                  live on the GPU.
 
         Args:
             model_func: The neural network. Must consist of modules.
@@ -177,7 +180,6 @@ class KFACLinearOperator(_LinearOperator):
             ValueError: If the loss average is not ``None`` and the loss function's
                 reduction is ``'sum'``.
             ValueError: If ``fisher_type != 'mc'`` and ``mc_samples != 1``.
-            NotImplementedError: If a parameter is in an unsupported layer.
         """
         if not isinstance(loss_func, self._SUPPORTED_LOSSES):
             raise ValueError(
@@ -209,22 +211,9 @@ class KFACLinearOperator(_LinearOperator):
                 f"Supported: {self._SUPPORTED_KFAC_APPROX}."
             )
 
-        self.param_ids = [p.data_ptr() for p in params]
-        # mapping from tuples of parameter data pointers in a module to its name
-        self.param_ids_to_hooked_modules: Dict[Tuple[int, ...], str] = {}
-
-        hooked_param_ids: Set[int] = set()
-        for name, mod in model_func.named_modules():
-            p_ids = tuple(p.data_ptr() for p in mod.parameters())
-            if isinstance(mod, self._SUPPORTED_MODULES) and any(
-                p_id in self.param_ids for p_id in p_ids
-            ):
-                self.param_ids_to_hooked_modules[p_ids] = name
-                hooked_param_ids.update(set(p_ids))
-
-        # check that all parameters are in hooked modules
-        if not set(self.param_ids).issubset(hooked_param_ids):
-            raise NotImplementedError("Found parameters outside supported layers.")
+        self.param_ids, self.param_ids_to_hooked_modules = (
+            self.parameter_to_module_mapping(params, model_func)
+        )
 
         self._seed = seed
         self._generator: Union[None, Generator] = None
@@ -255,11 +244,25 @@ class KFACLinearOperator(_LinearOperator):
 
         Returns:
             Matrix-multiplication result ``KFAC @ M``. Has shape ``[D, K]``.
+
+        Raises:
+            RuntimeError: If the incoming matrix was not fully processed, indicating an
+                error due to the internal mapping from parameters to modules.
         """
+        # Need to update parameter mapping if they have changed (e.g. device
+        # transfer), and reset caches
+        if self.param_ids != [p.data_ptr() for p in self._params]:
+            print("Invalidated parameter mapping detected")
+            self.param_ids, self.param_ids_to_hooked_modules = (
+                self.parameter_to_module_mapping(self._params, self._model_func)
+            )
+            self._input_covariances, self._gradient_covariances = {}, {}
+
         if not self._input_covariances and not self._gradient_covariances:
             self._compute_kfac()
 
         M_torch = super()._preprocess(M)
+        processed = set()
 
         for name in self.param_ids_to_hooked_modules.values():
             mod = self._model_func.get_submodule(name)
@@ -278,6 +281,7 @@ class KFACLinearOperator(_LinearOperator):
 
                 w_cols = M_w.shape[2]
                 M_torch[w_pos], M_torch[b_pos] = M_joint.split([w_cols, 1], dim=2)
+                processed.update([w_pos, b_pos])
 
             # for weights we need to multiply from the right with aaT
             # for weights and biases we need to multiply from the left with ggT
@@ -302,6 +306,13 @@ class KFACLinearOperator(_LinearOperator):
                             M_torch[pos],
                             "j k,v k ... -> v j ...",
                         )
+                        processed.add(pos)
+
+        if processed != set(range(len(M_torch))):
+            raise RuntimeError(
+                "Some entries of the matrix were not modified."
+                + f" Out of {len(M_torch)}, the following entries were processed: {processed}."
+            )
 
         return self._postprocess(M_torch)
 
@@ -612,3 +623,41 @@ class KFACLinearOperator(_LinearOperator):
             The parameter's position in the parameter list.
         """
         return self.param_ids.index(param.data_ptr())
+
+    @classmethod
+    def parameter_to_module_mapping(
+        cls, params: List[Tensor], model_func: Module
+    ) -> Tuple[List[int], Dict[Tuple[int, ...], str]]:
+        """Construct the mapping between parameters and modules.
+
+        Args:
+            params: List of parameters.
+            model_func: The model function.
+
+        Returns:
+            A tuple containing:
+            - A list of parameter data pointers.
+            - A dictionary mapping from tuples of parameter data pointers in a module
+              to its name.
+
+        Raises:
+            NotImplementedError: If parameters are found outside supported layers.
+        """
+        param_ids = [p.data_ptr() for p in params]
+        # mapping from tuples of parameter data pointers in a module to its name
+        param_ids_to_hooked_modules: Dict[Tuple[int, ...], str] = {}
+
+        hooked_param_ids: Set[int] = set()
+        for name, mod in model_func.named_modules():
+            p_ids = tuple(p.data_ptr() for p in mod.parameters())
+            if isinstance(mod, cls._SUPPORTED_MODULES) and any(
+                p_id in param_ids for p_id in p_ids
+            ):
+                param_ids_to_hooked_modules[p_ids] = name
+                hooked_param_ids.update(set(p_ids))
+
+        # check that all parameters are in hooked modules
+        if not set(param_ids).issubset(hooked_param_ids):
+            raise NotImplementedError("Found parameters outside supported layers.")
+
+        return param_ids, param_ids_to_hooked_modules
