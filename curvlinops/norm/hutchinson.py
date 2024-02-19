@@ -14,7 +14,7 @@ class HutchinsonSquaredFrobeniusNormEstimator:
     .. math::
         \lVert\mathbf{A}\rVert_\text{F}^2
         =
-        \sum_{m=1}^M \sum_{n=1}^N \mathbf{A}_{i,j}^2
+        \sum_{m=1}^M \sum_{n=1}^N \mathbf{A}_{n,m}^2
         =
         \text{Tr}(\mathbf{A}^\top \mathbf{A}).
 
