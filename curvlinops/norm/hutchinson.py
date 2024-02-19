@@ -48,8 +48,8 @@ class HutchinsonSquaredFrobeniusNormEstimator:
     def sample(self, distribution: str = "rademacher") -> float:
         """Draw a sample from the squared Frobenius norm estimator.
 
-        Multiple samples can be combined into a more accurate trace estimation via
-        averaging.
+        Multiple samples can be combined into a more accurate squared Frobenius norm
+        estimation via averaging.
 
         Args:
             distribution: Distribution of the vector along which the linear operator
