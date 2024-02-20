@@ -12,6 +12,7 @@ from curvlinops.inverse import (
 )
 from curvlinops.jacobian import JacobianLinearOperator, TransposedJacobianLinearOperator
 from curvlinops.kfac import KFACLinearOperator
+from curvlinops.norm.hutchinson import HutchinsonSquaredFrobeniusNormEstimator
 from curvlinops.papyan2020traces.spectrum import (
     LanczosApproximateLogSpectrumCached,
     LanczosApproximateSpectrumCached,
@@ -23,6 +24,7 @@ from curvlinops.trace.hutchinson import HutchinsonTraceEstimator
 from curvlinops.trace.meyer2020hutch import HutchPPTraceEstimator
 
 __all__ = [
+    # linear operators
     "HessianLinearOperator",
     "GGNLinearOperator",
     "EFLinearOperator",
@@ -30,15 +32,22 @@ __all__ = [
     "KFACLinearOperator",
     "JacobianLinearOperator",
     "TransposedJacobianLinearOperator",
+    # inversion
     "CGInverseLinearOperator",
     "NeumannInverseLinearOperator",
     "KFACInverseLinearOperator",
+    # slicing
     "SubmatrixLinearOperator",
+    # spectral properties
     "lanczos_approximate_spectrum",
     "lanczos_approximate_log_spectrum",
     "LanczosApproximateSpectrumCached",
     "LanczosApproximateLogSpectrumCached",
+    # trace estimation
     "HutchinsonTraceEstimator",
     "HutchPPTraceEstimator",
+    # diagonal estimation
     "HutchinsonDiagonalEstimator",
+    # norm estimation
+    "HutchinsonSquaredFrobeniusNormEstimator",
 ]
