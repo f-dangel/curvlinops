@@ -18,11 +18,11 @@
 # -- Project information -----------------------------------------------------
 
 project = "CurvLinOps"
-copyright = "2022, F. Dangel, L. Tatzel"
-author = "F. Dangel, L. Tatzel"
+copyright = "2022, F. Dangel, L. Tatzel, R. Eschenhagen"
+author = "F. Dangel, L. Tatzel, R. Eschenhagen"
 
 # The full version, including alpha/beta/rc tags
-release = "1.1.0"
+release = "1.2.0"
 
 
 # -- General configuration ---------------------------------------------------
@@ -37,6 +37,7 @@ extensions = [
     "sphinx.ext.autosectionlabel",
     "sphinx.ext.intersphinx",
     "sphinx_gallery.gen_gallery",
+    'sphinx.ext.viewcode', # show source code links
 ]
 
 # -- Intersphinx config -----------------------------------------------------
