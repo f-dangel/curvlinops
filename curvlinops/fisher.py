@@ -6,7 +6,7 @@ from math import sqrt
 from typing import Callable, Iterable, List, Optional, Tuple, Union
 
 from backpack.hessianfree.ggnvp import ggn_vector_product_from_plist
-from einops import einsum
+from einops import einsum, rearrange
 from numpy import ndarray
 from torch import (
     Generator,
@@ -214,23 +214,16 @@ class FisherMCLinearOperator(_LinearOperator):
         # compute ∂ℓₙ(yₙₘ)/∂fₙ where fₙ is the prediction for datum n and
         # yₙₘ is the m-th sampled label for datum n
         output = self._model_func(X)
-        grad_output = zeros(
-            self._mc_samples, *output.shape, device=output.device, dtype=output.dtype
-        )
-        for n, output_n in enumerate(output.split(1)):
-            for m in range(self._mc_samples):
-                grad_output[m, n].add_(self.sample_grad_output(output_n).squeeze(0))
+        grad_output = self.sample_grad_output(output, self._mc_samples)
 
         # Compute the pseudo-loss L' := 0.5 / (M * c) ∑ₙ ∑ₘ fₙᵀ (gₙₘ gₙₘᵀ) fₙ where
         # gₙₘ = ∂ℓₙ(yₙₘ)/∂fₙ (detached) and M is the number of MC samples.
         # The GGN of L' linearized at fₙ is the MC Fisher.
         # We can thus multiply with it by computing the GGN-vector products of L'.
-        normalization = {"mean": 1.0 / X.shape[0], "sum": 1.0}[
-            self._loss_func.reduction
-        ]
+        reduction_factor = {"mean": X.shape[0], "sum": 1.0}[self._loss_func.reduction]
         loss = (
             0.5
-            * normalization
+            / reduction_factor
             / self._mc_samples
             * (einsum(output, grad_output, "n ..., m n ... -> m n") ** 2).sum()
         )
@@ -248,45 +241,54 @@ class FisherMCLinearOperator(_LinearOperator):
 
         return tuple(result_list)
 
-    def sample_grad_output(self, output: Tensor) -> Tensor:
-        """Draw a scaled gradient ``∇_f log p(·|f)``.
+    def sample_grad_output(self, output: Tensor, num_samples: int) -> Tensor:
+        """Draw would-be gradients ``∇_f log p(·|f)``.
 
-        Its outer product equals the Hessian ``∇²_f log p(·|f)`` in expectation.
+        For a single data point, the would-be gradient's outer product equals the
+        Hessian ``∇²_f log p(·|f)`` in expectation.
 
-        Currently only supports ``MSELoss`` and ``CrossEntropyLoss1``.
+        Currently only supports ``MSELoss`` and ``CrossEntropyLoss``.
 
         Args:
-            output: model prediction ``f`` for a single sample with batch axis as
+            output: model prediction ``f`` for multiple data with batch axis as
                 0th dimension.
+            num_samples: Number of samples to draw.
 
         Returns:
-            Sample of the gradient w.r.t. the model prediction.
+            Samples of the gradient w.r.t. the model prediction.
+            Has shape ``[num_samples, *output.shape]``.
 
         Raises:
             NotImplementedError: For unsupported loss functions.
-            NotImplementedError: If the prediction does not satisfy batch size 1
-                and two total dimensions.
+            NotImplementedError: If the prediction does not have two dimensions.
         """
-        if output.dim() != 2 or output.shape[0] != 1:
-            raise NotImplementedError(
-                f"Only 2d outputs with shape (1, C) supported. Got {output.shape}"
-            )
+        if output.ndim != 2:
+            raise NotImplementedError(f"Only 2d outputs supported. Got {output.shape}")
 
         C = output.shape[1]
 
         if isinstance(self._loss_func, MSELoss):
             std = as_tensor(
-                sqrt(0.5 / C) if self._loss_func.reduction == "mean" else sqrt(0.5),
+                {"mean": sqrt(0.5 / C), "sum": sqrt(0.5)}[self._loss_func.reduction],
                 device=output.device,
             )
-            return 2 * normal(zeros_like(output), std, generator=self._generator)
+            mean = zeros(
+                num_samples, *output.shape, device=output.device, dtype=output.dtype
+            )
+            return 2 * normal(mean, std, generator=self._generator)
 
         elif isinstance(self._loss_func, CrossEntropyLoss):
-            prob = softmax(output, dim=1).squeeze(0)
+            prob = softmax(output, dim=1)
             sample = multinomial(
-                prob, num_samples=1, replacement=True, generator=self._generator
+                prob,
+                num_samples=num_samples,
+                replacement=True,
+                generator=self._generator,
             )
+            sample = rearrange(sample, "batch s -> s batch")
             onehot_sample = one_hot(sample, num_classes=C)
+            # repeat ``num_sample`` times along a new leading axis to avoid broadcasting
+            prob = prob.unsqueeze(0).expand_as(onehot_sample)
             return prob - onehot_sample
 
         else:
