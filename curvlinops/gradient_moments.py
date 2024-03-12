@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import List, Tuple
 
+from backpack.hessianfree.ggnvp import ggn_vector_product_from_plist
 from einops import einsum
-from torch import Tensor, autograd, zeros_like
+from torch import Tensor, autograd, cat, zeros_like
 
 from curvlinops._base import _LinearOperator
 
@@ -58,27 +59,38 @@ class EFLinearOperator(_LinearOperator):
             Result of EF multiplication in list format. Has the same shape as
             ``M_list``, i.e. each tensor in the list has the shape of a parameter and a
             leading dimension of matrix columns.
-
-        Raises:
         """
+        # compute ∂ℓₙ/∂fₙ without reduction factor of L
+        output = self._model_func(X)
+        grad_output = []
+        for output_n, y_n in zip(output.split(1), y.split(1)):
+            loss_n = self._loss_func(output_n, y_n)
+            (grad_output_n,) = autograd.grad(loss_n, output_n)
+            grad_output.append(grad_output_n.detach())
+        grad_output = cat(grad_output)
+
+        # Compute the pseudo-loss L' := 0.5 / c ∑ₙ fₙᵀ (gₙ gₙᵀ) fₙ where gₙ = ∂ℓₙ/∂fₙ
+        # (detached). The GGN of L' linearized at fₙ is the empirical Fisher.
+        # We can thus multiply with the EF by computing the GGN-vector products of L'.
         normalization = {"mean": 1.0 / X.shape[0], "sum": 1.0}[
             self._loss_func.reduction
         ]
+        loss = (
+            0.5
+            * normalization
+            * (einsum(output, grad_output, "n ..., n ... -> n") ** 2).sum()
+        )
 
+        # Multiply the EF onto each vector in the input matrix
         result_list = [zeros_like(M) for M in M_list]
-
-        for n in range(X.shape[0]):
-            X_n, y_n = X[n].unsqueeze(0), y[n].unsqueeze(0)
-            loss_n = self._loss_func(self._model_func(X_n), y_n)
-            grad_n = autograd.grad(loss_n, self._params)
-
-            # coefficients per matrix-vector product
-            c = sum(einsum(g, M, "..., col ...-> col") for g, M in zip(grad_n, M_list))
-
-            for idx, g in enumerate(grad_n):
-                result_list[idx].add_(
-                    einsum(c, g, "col, ... -> col ..."), alpha=normalization
+        num_vectors = M_list[0].shape[0]
+        for v in range(num_vectors):
+            for idx, ggnvp in enumerate(
+                ggn_vector_product_from_plist(
+                    loss, output, self._params, [M[v] for M in M_list]
                 )
+            ):
+                result_list[idx][v].add_(ggnvp.detach())
 
         return tuple(result_list)
 
