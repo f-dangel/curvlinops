@@ -358,11 +358,11 @@ class KFACLinearOperator(_LinearOperator):
         device transfers when working with GPUs.
 
         Args:
-            v_torch: Vector for multiplication.
+            v_torch: Vector for multiplication. Has shape ``[D]``.
             return_tensor: Whether to return the result as a tensor or list of tensors.
 
         Returns:
-            Matrix-multiplication result ``KFAC @ M``. If tensor, has shape ``[D, K]``.
+            Matrix-multiplication result ``KFAC @ v``. If tensor, has shape ``[D]``.
 
         Raises:
             ValueError: If the input tensor has the wrong shape.
