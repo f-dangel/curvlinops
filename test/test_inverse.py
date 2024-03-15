@@ -156,7 +156,6 @@ def test_KFAC_inverse_damped_matmat(
         loss_average=loss_average,
         separate_weight_and_bias=separate_weight_and_bias,
     )
-    KFAC._compute_kfac()
 
     # add damping manually
     for aaT in KFAC._input_covariances.values():
@@ -185,3 +184,62 @@ def test_KFAC_inverse_damped_matmat(
         # test that the cache is empty
         assert len(inv_KFAC._inverse_input_covariances) == 0
         assert len(inv_KFAC._inverse_gradient_covariances) == 0
+
+
+def test_KFAC_inverse_damped_torch_matmat(case, delta: float = 1e-2):
+    """Test torch matrix-matrix multiplication by an inverse damped KFAC approximation."""
+    model_func, loss_func, params, data = case
+
+    loss_average = "batch" if loss_func.reduction == "mean" else None
+    KFAC = KFACLinearOperator(
+        model_func,
+        loss_func,
+        params,
+        data,
+        loss_average=loss_average,
+    )
+    inv_KFAC = KFACInverseLinearOperator(KFAC, damping=(delta, delta))
+
+    num_vectors = 2
+    X = torch.rand(KFAC.shape[1], num_vectors)
+    inv_KFAC_X = inv_KFAC.torch_matmat(X)
+    assert inv_KFAC_X.dtype == X.dtype
+    assert inv_KFAC_X.device == X.device
+    assert inv_KFAC_X.shape == (KFAC.shape[0], num_vectors)
+
+    # Test against multiplication with dense matrix
+    inv_KFAC_mat = inv_KFAC.torch_matmat(torch.eye(inv_KFAC.shape[1]))
+    inv_KFAC_mat_x = inv_KFAC_mat @ X
+    report_nonclose(inv_KFAC_X.cpu().numpy(), inv_KFAC_mat_x.cpu().numpy(), rtol=1e-4)
+
+    # Test against _matmat
+    report_nonclose(inv_KFAC @ X, inv_KFAC_X.cpu().numpy())
+
+
+def test_KFAC_inverse_damped_torch_matvec(case, delta: float = 1e-2):
+    """Test torch matrix-vector multiplication by an inverse damped KFAC approximation."""
+    model_func, loss_func, params, data = case
+
+    loss_average = "batch" if loss_func.reduction == "mean" else None
+    KFAC = KFACLinearOperator(
+        model_func,
+        loss_func,
+        params,
+        data,
+        loss_average=loss_average,
+    )
+    inv_KFAC = KFACInverseLinearOperator(KFAC, damping=(delta, delta))
+
+    x = torch.rand(KFAC.shape[1])
+    inv_KFAC_X = inv_KFAC.torch_matvec(x)
+    assert inv_KFAC_X.dtype == x.dtype
+    assert inv_KFAC_X.device == x.device
+    assert inv_KFAC_X.shape == x.shape
+
+    # Test against multiplication with dense matrix
+    inv_KFAC_mat = inv_KFAC.torch_matmat(torch.eye(inv_KFAC.shape[1]))
+    inv_KFAC_mat_x = inv_KFAC_mat @ x
+    report_nonclose(inv_KFAC_X.cpu().numpy(), inv_KFAC_mat_x.cpu().numpy(), rtol=5e-5)
+
+    # Test against _matmat
+    report_nonclose(inv_KFAC @ x, inv_KFAC_X.cpu().numpy())
