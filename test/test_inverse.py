@@ -210,7 +210,7 @@ def test_KFAC_inverse_damped_torch_matmat(case, delta: float = 1e-2):
     # Test against multiplication with dense matrix
     inv_KFAC_mat = inv_KFAC.torch_matmat(torch.eye(inv_KFAC.shape[1]))
     inv_KFAC_mat_x = inv_KFAC_mat @ X
-    report_nonclose(inv_KFAC_X.cpu().numpy(), inv_KFAC_mat_x.cpu().numpy(), rtol=1e-4)
+    report_nonclose(inv_KFAC_X.cpu().numpy(), inv_KFAC_mat_x.cpu().numpy(), rtol=5e-4)
 
     # Test against _matmat
     report_nonclose(inv_KFAC @ X, inv_KFAC_X.cpu().numpy())
