@@ -14,7 +14,9 @@ from einops.layers.torch import Rearrange
 from numpy import eye
 from pytest import mark, skip
 from scipy.linalg import block_diag
-from torch import Tensor, cuda, device, manual_seed, rand, randperm
+from torch import Tensor, cuda, device
+from torch import eye as torch_eye
+from torch import manual_seed, rand, randperm
 from torch.nn import (
     CrossEntropyLoss,
     Flatten,
@@ -426,3 +428,64 @@ def test_bug_device_change_invalidates_parameter_mapping():
     kfac_x_cpu = kfac @ x
 
     report_nonclose(kfac_x_gpu, kfac_x_cpu)
+
+
+@mark.parametrize("dev", DEVICES, ids=DEVICES_IDS)
+def test_torch_matmat(dev: device):
+    """Test that the torch_matmat method of KFACLinearOperator works."""
+    manual_seed(0)
+
+    data = [(rand(2, 5, device=dev), regression_targets((2, 4)).to(dev))]
+    model = Sequential(Linear(5, 4), ReLU(), Linear(4, 4)).to(dev)
+    loss_func = MSELoss().to(dev)
+
+    kfac = KFACLinearOperator(
+        model,
+        loss_func,
+        list(model.parameters()),
+        data,
+        fisher_type="empirical",
+    )
+
+    x = rand(kfac.shape[1], 16, device=dev)
+    kfac_x = kfac.torch_matmat(x)
+    assert x.device == kfac_x.device
+    assert x.dtype == kfac_x.dtype
+    assert kfac_x.shape == (kfac.shape[0], x.shape[1])
+
+    kfac_mat = kfac.torch_matmat(torch_eye(kfac.shape[1], device=dev))
+    kfac_mat_x = kfac_mat @ x
+    report_nonclose(kfac_x.cpu().numpy(), kfac_mat_x.cpu().numpy())
+
+    kfac_x_numpy = kfac @ x.cpu().numpy()
+    report_nonclose(kfac_x.cpu().numpy(), kfac_x_numpy)
+
+
+@mark.parametrize("dev", DEVICES, ids=DEVICES_IDS)
+def test_torch_matvec(dev: device):
+    """Test that the torch_matvec method of KFACLinearOperator works."""
+    manual_seed(0)
+
+    data = [(rand(2, 5, device=dev), regression_targets((2, 4)).to(dev))]
+    model = Sequential(Linear(5, 4), ReLU(), Linear(4, 4)).to(dev)
+    loss_func = MSELoss().to(dev)
+
+    kfac = KFACLinearOperator(
+        model,
+        loss_func,
+        list(model.parameters()),
+        data,
+    )
+
+    x = rand(kfac.shape[1], device=dev)
+    kfac_x = kfac.torch_matvec(x)
+    assert x.device == kfac_x.device
+    assert x.dtype == kfac_x.dtype
+    assert kfac_x.shape == x.shape
+
+    kfac_mat = kfac.torch_matmat(torch_eye(kfac.shape[1], device=dev))
+    kfac_mat_x = kfac_mat @ x
+    report_nonclose(kfac_x.cpu().numpy(), kfac_mat_x.cpu().numpy())
+
+    kfac_x_numpy = kfac @ x.cpu().numpy()
+    report_nonclose(kfac_x.cpu().numpy(), kfac_x_numpy)
