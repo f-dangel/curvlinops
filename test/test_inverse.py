@@ -1,5 +1,7 @@
 """Contains tests for ``curvlinops/inverse``."""
 
+from math import sqrt
+
 import torch
 from numpy import array, eye, random
 from numpy.linalg import eigh, inv
@@ -16,6 +18,8 @@ from curvlinops import (
 )
 from curvlinops.examples.functorch import functorch_ggn
 from curvlinops.examples.utils import report_nonclose
+
+KFAC_MIN_DAMPING = 1e-8
 
 
 def test_CG_inverse_damped_GGN_matvec(case, delta: float = 2e-2):
@@ -169,10 +173,173 @@ def test_KFAC_inverse_damped_matmat(
         aaT.sub_(torch.eye(aaT.shape[0], device=aaT.device), alpha=delta)
     for ggT in KFAC._gradient_covariances.values():
         ggT.sub_(torch.eye(ggT.shape[0], device=ggT.device), alpha=delta)
-    inv_KFAC = KFACInverseLinearOperator(KFAC, damping=(delta, delta), cache=cache)
+    # as a single scalar
+    inv_KFAC = KFACInverseLinearOperator(KFAC, damping=delta, cache=cache)
+    # and as a tuple
+    inv_KFAC_tuple = KFACInverseLinearOperator(
+        KFAC, damping=(delta, delta), cache=cache
+    )
 
     num_vectors = 2
     X = random.rand(KFAC.shape[1], num_vectors)
+    report_nonclose(inv_KFAC @ X, inv_KFAC_naive @ X, rtol=5e-2)
+    report_nonclose(inv_KFAC_tuple @ X, inv_KFAC @ X, rtol=5e-2)
+
+    assert inv_KFAC._cache == cache
+    if cache:
+        # test that the cache is not empty
+        assert len(inv_KFAC._inverse_input_covariances) > 0
+        assert len(inv_KFAC._inverse_gradient_covariances) > 0
+    else:
+        # test that the cache is empty
+        assert len(inv_KFAC._inverse_input_covariances) == 0
+        assert len(inv_KFAC._inverse_gradient_covariances) == 0
+
+
+@mark.parametrize("cache", [True, False], ids=["cached", "uncached"])
+@mark.parametrize(
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901
+    case, cache: bool, exclude: str, separate_weight_and_bias: bool, delta: float = 1e-2
+):
+    """Test matrix-matrix multiplication by an inverse (heuristically) damped KFAC
+    approximation."""
+    model_func, loss_func, params, data = case
+
+    if exclude is not None:
+        names = {p.data_ptr(): name for name, p in model_func.named_parameters()}
+        params = [p for p in params if exclude not in names[p.data_ptr()]]
+
+    loss_average = "batch" if loss_func.reduction == "mean" else None
+    KFAC = KFACLinearOperator(
+        model_func,
+        loss_func,
+        params,
+        data,
+        loss_average=loss_average,
+        separate_weight_and_bias=separate_weight_and_bias,
+    )
+
+    # add heuristic damping manually
+    heuristic_damping = {}
+    for mod_name in KFAC._mapping.keys():
+        aaT = KFAC._input_covariances.get(mod_name)
+        ggT = KFAC._gradient_covariances.get(mod_name)
+        if aaT is not None and ggT is not None:
+            aaT_eig_mean = aaT.trace() / len(aaT)
+            ggT_eig_mean = ggT.trace() / len(ggT)
+            if aaT_eig_mean >= 0.0 and ggT_eig_mean > 0.0:
+                sqrt_eig_mean_ratio = (aaT_eig_mean / ggT_eig_mean).sqrt()
+                sqrt_damping = sqrt(delta)
+                damping_aaT = max(sqrt_damping * sqrt_eig_mean_ratio, KFAC_MIN_DAMPING)
+                damping_ggT = max(sqrt_damping / sqrt_eig_mean_ratio, KFAC_MIN_DAMPING)
+                heuristic_damping[mod_name] = (damping_aaT, damping_ggT)
+            else:
+                damping_aaT, damping_ggT = delta, delta
+        else:
+            damping_aaT, damping_ggT = delta, delta
+        if aaT is not None:
+            aaT.add_(torch.eye(aaT.shape[0], device=aaT.device), alpha=damping_aaT)
+        if ggT is not None:
+            ggT.add_(torch.eye(ggT.shape[0], device=ggT.device), alpha=damping_ggT)
+
+    # manual heuristically damped inverse
+    inv_KFAC_naive = torch.inverse(torch.as_tensor(KFAC @ eye(KFAC.shape[0])))
+
+    # remove heuristic damping
+    for mod_name in KFAC._mapping.keys():
+        aaT = KFAC._input_covariances.get(mod_name)
+        ggT = KFAC._gradient_covariances.get(mod_name)
+        if mod_name in heuristic_damping:
+            damping_aaT, damping_ggT = heuristic_damping[mod_name]
+        else:
+            damping_aaT, damping_ggT = delta, delta
+        if aaT is not None:
+            aaT.sub_(torch.eye(aaT.shape[0], device=aaT.device), alpha=damping_aaT)
+        if ggT is not None:
+            ggT.sub_(torch.eye(ggT.shape[0], device=ggT.device), alpha=damping_ggT)
+
+    # check that passing a tuple for heuristic damping will fail
+    with raises(ValueError):
+        inv_KFAC = KFACInverseLinearOperator(
+            KFAC, damping=(delta, delta), use_heuristic_damping=True
+        )
+
+    # use heuristic damping with KFACInverseLinearOperator
+    inv_KFAC = KFACInverseLinearOperator(
+        KFAC,
+        damping=delta,
+        cache=cache,
+        use_heuristic_damping=True,
+        min_damping=KFAC_MIN_DAMPING,
+    )
+
+    num_vectors = 2
+    X = random.rand(KFAC.shape[1], num_vectors)
+    # test for equivalence
+    report_nonclose(inv_KFAC @ X, inv_KFAC_naive @ X, rtol=5e-2)
+
+    assert inv_KFAC._cache == cache
+    if cache:
+        # test that the cache is not empty
+        assert len(inv_KFAC._inverse_input_covariances) > 0
+        assert len(inv_KFAC._inverse_gradient_covariances) > 0
+    else:
+        # test that the cache is empty
+        assert len(inv_KFAC._inverse_input_covariances) == 0
+        assert len(inv_KFAC._inverse_gradient_covariances) == 0
+
+
+@mark.parametrize("cache", [True, False], ids=["cached", "uncached"])
+@mark.parametrize(
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+def test_KFAC_inverse_exactly_damped_matmat(
+    case, cache: bool, exclude: str, separate_weight_and_bias: bool, delta: float = 1e-2
+):
+    """Test matrix-matrix multiplication by an inverse (exactly) damped KFAC approximation."""
+    model_func, loss_func, params, data = case
+
+    if exclude is not None:
+        names = {p.data_ptr(): name for name, p in model_func.named_parameters()}
+        params = [p for p in params if exclude not in names[p.data_ptr()]]
+
+    loss_average = "batch" if loss_func.reduction == "mean" else None
+    KFAC = KFACLinearOperator(
+        model_func,
+        loss_func,
+        params,
+        data,
+        loss_average=loss_average,
+        separate_weight_and_bias=separate_weight_and_bias,
+    )
+
+    # manual exactly damped inverse
+    inv_KFAC_naive = torch.inverse(
+        KFAC.torch_matmat(torch.eye(KFAC.shape[0])) + delta * torch.eye(KFAC.shape[0])
+    )
+
+    # check that passing a tuple for exact damping will fail
+    with raises(ValueError):
+        inv_KFAC = KFACInverseLinearOperator(
+            KFAC, damping=(delta, delta), use_exact_damping=True
+        )
+
+    # use exact damping with KFACInverseLinearOperator
+    inv_KFAC = KFACInverseLinearOperator(
+        KFAC, damping=delta, cache=cache, use_exact_damping=True
+    )
+
+    num_vectors = 2
+    X = random.rand(KFAC.shape[1], num_vectors)
+    # test for equivalence
     report_nonclose(inv_KFAC @ X, inv_KFAC_naive @ X, rtol=5e-2)
 
     assert inv_KFAC._cache == cache
