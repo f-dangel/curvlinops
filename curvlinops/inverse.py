@@ -1,12 +1,13 @@
 """Implements linear operator inverses."""
 
+from math import sqrt
 from typing import Dict, List, Optional, Tuple, Union
 
 from einops import einsum, rearrange
 from numpy import allclose, column_stack, ndarray
 from scipy.sparse.linalg import LinearOperator, cg
-from torch import Tensor, cat, cholesky_inverse, eye
-from torch.linalg import cholesky
+from torch import Tensor, cat, cholesky_inverse, eye, outer
+from torch.linalg import cholesky, eigh
 
 from curvlinops.kfac import KFACLinearOperator
 
@@ -212,20 +213,32 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
     def __init__(
         self,
         A: KFACLinearOperator,
-        damping: Tuple[float, float] = (0.0, 0.0),
+        damping: Union[float, Tuple[float, float]] = 0.0,
+        use_heuristic_damping: bool = False,
+        min_damping: float = 1e-8,
+        use_exact_damping: bool = False,
         cache: bool = True,
     ):
         """Store the linear operator whose inverse should be represented.
 
         Args:
             A: ``KFACLinearOperator`` whose inverse is formed.
-            damping: Damping values for all input and gradient covariances.
-                Default: ``(0., 0.)``.
+            damping: Damping value(s) for all input and gradient covariances.
+                Default: ``0.``.
+            use_heuristic_damping: Whether to use a heuristic damping strategy.
+                Default: ``False``.
+            min_damping: Minimum damping value. Default: ``1e-8``. Only used if
+                ``use_heuristic_damping`` is ``True``.
+            use_exact_damping: Whether to use exact damping.
+                Default: ``False``.
             cache: Whether to cache the inverses of the Kronecker factors.
                 Default: ``True``.
 
         Raises:
             ValueError: If the linear operator is not a ``KFACLinearOperator``.
+            ValueError: If both heuristic and exact damping are selected.
+            ValueError: If heuristic or exact damping is used and the damping value is a
+                tuple.
         """
         if not isinstance(A, KFACLinearOperator):
             raise ValueError(
@@ -233,48 +246,125 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
             )
         super().__init__(A.dtype, A.shape)
         self._A = A
+        if use_heuristic_damping and use_exact_damping:
+            raise ValueError("Either use heuristic damping or exact damping, not both.")
+        if use_heuristic_damping or use_exact_damping:
+            if isinstance(damping, tuple):
+                raise ValueError(
+                    "Heuristic and exact damping require a single damping value."
+                )
         self._damping = damping
+        self._use_heuristic_damping = use_heuristic_damping
+        self._min_damping = min_damping
+        self._use_exact_damping = use_exact_damping
         self._cache = cache
-        self._inverse_input_covariances: Dict[str, Tensor] = {}
-        self._inverse_gradient_covariances: Dict[str, Tensor] = {}
+        self._inverse_input_covariances: Dict[
+            str, Union[Optional[Tensor], Tuple[Optional[Tensor], Optional[Tensor]]]
+        ] = {}
+        self._inverse_gradient_covariances: Dict[
+            str, Union[Optional[Tensor], Tuple[Optional[Tensor], Optional[Tensor]]]
+        ] = {}
 
-    def _compute_or_get_cached_inverse(
-        self, name: str
-    ) -> Tuple[Optional[Tensor], Optional[Tensor]]:
+    def _compute_damping(
+        self, aaT: Optional[Tensor], ggT: Optional[Tensor]
+    ) -> Tuple[float, float]:
+        """Compute the damping values for the input and gradient covariances.
+
+        Args:
+            aaT: Input covariance matrix.
+            ggT: Gradient covariance matrix.
+
+        Returns:
+            Damping values for the input and gradient covariances.
+        """
+        if self._use_heuristic_damping and aaT is not None and ggT is not None:
+            aaT_eig_mean = aaT.trace() / len(aaT)
+            ggT_eig_mean = ggT.trace() / len(ggT)
+            if aaT_eig_mean >= 0.0 and ggT_eig_mean > 0.0:
+                sqrt_eig_mean_ratio = (aaT_eig_mean / ggT_eig_mean).sqrt()
+                sqrt_damping = sqrt(self._damping)
+                damping_aaT = max(sqrt_damping * sqrt_eig_mean_ratio, self._min_damping)
+                damping_ggT = max(sqrt_damping / sqrt_eig_mean_ratio, self._min_damping)
+                return damping_aaT, damping_ggT
+
+        if isinstance(self._damping, tuple):
+            return self._damping
+
+        return self._damping, self._damping
+
+    def _compute_inverse_factors(
+        self, aaT: Optional[Tensor], ggT: Optional[Tensor]
+    ) -> Tuple[
+        Union[Optional[Tensor], Tuple[Optional[Tensor], Optional[Tensor]]],
+        Union[Optional[Tensor], Tuple[Optional[Tensor], Optional[Tensor]]],
+    ]:
+        """Compute the inverses of the Kronecker factors for a given layer.
+
+        Args:
+            aaT: Input covariance matrix.
+            ggT: Gradient covariance matrix.
+
+        Returns:
+            Tuple of inverses (or eigendecompositions) of the input and gradient
+            covariance Kronecker factors.
+        """
+        if self._use_exact_damping:
+            # Compute eigendecomposition to perform damped preconditioning in
+            # Kronecker-factored eigenbasis (KFE).
+            aaT_eigvals, aaT_eigvecs = (None, None) if aaT is None else eigh(aaT)
+            ggT_eigvals, ggT_eigvecs = (None, None) if ggT is None else eigh(ggT)
+            return (aaT_eigvecs, aaT_eigvals), (ggT_eigvecs, ggT_eigvals)
+        else:
+            damping_aaT, damping_ggT = self._compute_damping(aaT, ggT)
+            aaT_inv = (
+                None
+                if aaT is None
+                else cholesky_inverse(
+                    cholesky(
+                        aaT.add(eye(aaT.shape[0], device=aaT.device), alpha=damping_aaT)
+                    )
+                )
+            )
+            ggT_inv = (
+                None
+                if ggT is None
+                else cholesky_inverse(
+                    cholesky(
+                        ggT.add(eye(ggT.shape[0], device=ggT.device), alpha=damping_ggT)
+                    )
+                )
+            )
+            return aaT_inv, ggT_inv
+
+    def _compute_or_get_cached_inverse(self, name: str) -> Tuple[
+        Union[Optional[Tensor], Tuple[Optional[Tensor], Optional[Tensor]]],
+        Union[Optional[Tensor], Tuple[Optional[Tensor], Optional[Tensor]]],
+    ]:
         """Invert the Kronecker factors of the KFACLinearOperator or retrieve them.
 
         Args:
             name: Name of the layer for which to invert Kronecker factors.
 
         Returns:
-            Tuple of inverses of the input and gradient covariance Kronecker factors.
+            Tuple of inverses (or eigendecompositions) of the input and gradient
+            covariance Kronecker factors.
         """
         if name in self._inverse_input_covariances:
             aaT_inv = self._inverse_input_covariances.get(name)
             ggT_inv = self._inverse_gradient_covariances.get(name)
             return aaT_inv, ggT_inv
+
         aaT = self._A._input_covariances.get(name)
         ggT = self._A._gradient_covariances.get(name)
-        aaT_inv = (
-            None
-            if aaT is None
-            else cholesky_inverse(
-                cholesky(aaT + self._damping[0] * eye(aaT.shape[0], device=aaT.device))
-            )
-        )
-        ggT_inv = (
-            None
-            if ggT is None
-            else cholesky_inverse(
-                cholesky(ggT + self._damping[1] * eye(ggT.shape[0], device=ggT.device))
-            )
-        )
+        aaT_inv, ggT_inv = self._compute_inverse_factors(aaT, ggT)
+
         if self._cache:
             self._inverse_input_covariances[name] = aaT_inv
             self._inverse_gradient_covariances[name] = ggT_inv
+
         return aaT_inv, ggT_inv
 
-    def torch_matmat(
+    def torch_matmat(  # noqa: C901
         self, M_torch: Union[Tensor, List[Tensor]], return_tensor: bool = True
     ) -> Union[Tensor, List[Tensor]]:
         """Apply the inverse of KFAC to a matrix (multiple vectors) in PyTorch.
@@ -309,6 +399,11 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
         for mod_name, param_pos in self._A._mapping.items():
             # retrieve the inverses of the Kronecker factors from cache or invert them
             aaT_inv, ggT_inv = self._compute_or_get_cached_inverse(mod_name)
+            if self._use_exact_damping:
+                # Perform damped preconditioning in KFE, e.g. see equation (21) in
+                # https://arxiv.org/abs/2308.03296.
+                aaT_eigvecs, aaT_eigvals = aaT_inv
+                ggT_eigvecs, ggT_eigvals = ggT_inv
 
             # bias and weights are treated jointly
             if (
@@ -319,7 +414,18 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
                 w_pos, b_pos = param_pos["weight"], param_pos["bias"]
                 M_w = rearrange(M_torch[w_pos], "m c_out ... -> m c_out (...)")
                 M_joint = cat([M_w, M_torch[b_pos].unsqueeze(2)], dim=2)
-                M_joint = einsum(ggT_inv, M_joint, aaT_inv, "i j,m j k, k l -> m i l")
+                if self._use_exact_damping:
+                    M_joint = einsum(
+                        ggT_eigvecs, M_joint, aaT_eigvecs, "i j, m i k, k l -> m j l"
+                    )
+                    M_joint.div_(outer(ggT_eigvals, aaT_eigvals).add_(self._damping))
+                    M_joint = einsum(
+                        ggT_eigvecs, M_joint, aaT_eigvecs, "i j, m j k, l k -> m i l"
+                    )
+                else:
+                    M_joint = einsum(
+                        ggT_inv, M_joint, aaT_inv, "i j, m j k, k l -> m i l"
+                    )
 
                 w_cols = M_w.shape[2]
                 M_torch[w_pos], M_torch[b_pos] = M_joint.split([w_cols, 1], dim=2)
@@ -330,11 +436,30 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
                 for p_name, pos in param_pos.items():
                     if p_name == "weight":
                         M_w = rearrange(M_torch[pos], "m c_out ... -> m c_out (...)")
-                        M_torch[pos] = einsum(M_w, aaT_inv, "m i j, j k -> m i k")
+                        aaT_fac = aaT_eigvecs if self._use_exact_damping else aaT_inv
+                        M_torch[pos] = einsum(M_w, aaT_fac, "m i j, j k -> m i k")
 
-                    M_torch[pos] = einsum(
-                        ggT_inv, M_torch[pos], "i j, m j ... -> m i ..."
+                    ggT_fac = ggT_eigvecs if self._use_exact_damping else ggT_inv
+                    dims = (
+                        "m i ... -> m j ..."
+                        if self._use_exact_damping
+                        else " m j ... -> m i ..."
                     )
+                    M_torch[pos] = einsum(ggT_fac, M_torch[pos], f"i j, {dims}")
+
+                    if self._use_exact_damping:
+                        if p_name == "weight":
+                            M_torch[pos].div_(
+                                outer(ggT_eigvals, aaT_eigvals).add_(self._damping)
+                            )
+                            M_torch[pos] = einsum(
+                                M_torch[pos], aaT_eigvecs, "m i j, k j -> m i k"
+                            )
+                        else:
+                            M_torch[pos].div_(ggT_eigvals.add_(self._damping))
+                        M_torch[pos] = einsum(
+                            ggT_eigvecs, M_torch[pos], "i j, m j ... -> m i ..."
+                        )
 
         if return_tensor:
             M_torch = cat([rearrange(M, "k ... -> (...) k") for M in M_torch], dim=0)
