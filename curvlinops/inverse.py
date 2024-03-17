@@ -248,11 +248,11 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
         self._A = A
         if use_heuristic_damping and use_exact_damping:
             raise ValueError("Either use heuristic damping or exact damping, not both.")
-        if use_heuristic_damping or use_exact_damping:
-            if isinstance(damping, tuple):
-                raise ValueError(
-                    "Heuristic and exact damping require a single damping value."
-                )
+        if (use_heuristic_damping or use_exact_damping) and isinstance(damping, tuple):
+            raise ValueError(
+                "Heuristic and exact damping require a single damping value."
+            )
+
         self._damping = damping
         self._use_heuristic_damping = use_heuristic_damping
         self._min_damping = min_damping
