@@ -254,10 +254,7 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901
     for mod_name in KFAC._mapping.keys():
         aaT = KFAC._input_covariances.get(mod_name)
         ggT = KFAC._gradient_covariances.get(mod_name)
-        if mod_name in heuristic_damping:
-            damping_aaT, damping_ggT = heuristic_damping[mod_name]
-        else:
-            damping_aaT, damping_ggT = delta, delta
+        damping_aaT, damping_ggT = heuristic_damping.get(mod_name, (delta, delta))
         if aaT is not None:
             aaT.sub_(torch.eye(aaT.shape[0], device=aaT.device), alpha=damping_aaT)
         if ggT is not None:
