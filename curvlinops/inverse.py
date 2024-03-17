@@ -486,7 +486,7 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
             ValueError: If the input tensor has the wrong shape.
         """
         M = self.shape[0]
-        if v_torch.shape != (M,) and v_torch.shape != (M, 1):
+        if v_torch.shape not in [(M,), (M, 1)]:
             raise ValueError("dimension mismatch")
         return self.torch_matmat(v_torch.view(-1, 1), return_tensor).squeeze(1)
 
