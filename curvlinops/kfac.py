@@ -255,7 +255,7 @@ class KFACLinearOperator(_LinearOperator):
         Returns:
             Matrix in list format. Each entry has the same shape as a parameter with
             an additional leading dimension of size ``K`` for the columns, i.e.
-            ``[(K,) + p1.shape), (K,) + p2.shape, ...]``.
+            ``[(K,) + p1.shape, (K,) + p2.shape, ...]``.
         """
         num_vectors = M.shape[1]
         # split parameter blocks
@@ -330,7 +330,7 @@ class KFACLinearOperator(_LinearOperator):
             Matrix-multiplication result ``KFAC @ M``. Return type is the same as the
             type of the input. If list of tensors, each entry has the same shape as a
             parameter with an additional leading dimension of size ``K`` for the columns,
-            i.e. ``[(K,) + p1.shape), (K,) + p2.shape, ...]``. If tensor, has shape
+            i.e. ``[(K,) + p1.shape, (K,) + p2.shape, ...]``. If tensor, has shape
             ``[D, K]`` with some ``K``.
         """
         return_tensor, M_torch = self._check_input_type_and_preprocess(M_torch)
@@ -378,7 +378,9 @@ class KFACLinearOperator(_LinearOperator):
 
         return M_torch
 
-    def torch_matvec(self, v_torch: Tensor) -> Union[Tensor, List[Tensor]]:
+    def torch_matvec(
+        self, v_torch: Union[Tensor, List[Tensor]]
+    ) -> Union[Tensor, List[Tensor]]:
         """Apply KFAC to a vector in PyTorch.
 
         This allows for matrix-vector products with the KFAC approximation in PyTorch
@@ -386,18 +388,27 @@ class KFACLinearOperator(_LinearOperator):
         device transfers when working with GPUs and flattening/concatenating.
 
         Args:
-            v_torch: Vector for multiplication. Has shape ``[D]``.
+            v_torch: Vector for multiplication. If list of tensors, each entry has the
+                same shape as a parameter, i.e. ``[p1.shape, p2.shape, ...]``.
+                If tensor, has shape ``[D]``.
 
         Returns:
-            Matrix-multiplication result ``KFAC @ v``. If tensor, has shape ``[D]``.
+            Matrix-multiplication result ``KFAC @ v``. Return type is the same as the
+            type of the input. If list of tensors, each entry has the same shape as a
+            parameter, i.e. ``[p1.shape, p2.shape, ...]``. If tensor, has shape ``[D]``.
 
         Raises:
             ValueError: If the input tensor has the wrong shape.
         """
-        M = self.shape[0]
-        if v_torch.shape != (M,):
-            raise ValueError("The input vector has the wrong shape.")
-        return self.torch_matmat(v_torch.unsqueeze(1)).squeeze(1)
+        if isinstance(v_torch, list):
+            v_torch = [v_torch_i.unsqueeze(0) for v_torch_i in v_torch]
+            result = self.torch_matmat(v_torch)
+            return [res.squeeze(0) for res in result]
+        else:
+            M = self.shape[0]
+            if v_torch.shape != (M,):
+                raise ValueError("The input vector has the wrong shape.")
+            return self.torch_matmat(v_torch.unsqueeze(1)).squeeze(1)
 
     def _matmat(self, M: ndarray) -> ndarray:
         """Apply KFAC to a matrix (multiple vectors).
@@ -423,7 +434,7 @@ class KFACLinearOperator(_LinearOperator):
         return self
 
     def _compute_kfac(self):
-        """Compute and cache KFAC's Kronecker factors for future ``matvec``s."""
+        """Compute and cache KFAC's Kronecker factors for future ``matmat``s."""
         # install forward and backward hooks
         hook_handles: List[RemovableHandle] = []
 
