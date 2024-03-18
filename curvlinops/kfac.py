@@ -258,13 +258,6 @@ class KFACLinearOperator(_LinearOperator):
             an additional leading dimension of size ``K`` for the columns, i.e.
             ``[(K,) + p1.shape), (K,) + p2.shape, ...]``.
         """
-        if M.device != self._device:
-            warn(
-                f"Input matrix is on {M.device}, while linear operator is on "
-                + f"{self._device}. Converting to {self._device}."
-            )
-            M = M.to(self._device)
-
         num_vectors = M.shape[1]
         # split parameter blocks
         dims = [p.numel() for p in self._params]
@@ -272,7 +265,6 @@ class KFACLinearOperator(_LinearOperator):
         # column-index first + unflatten parameter dimension
         shapes = [(num_vectors,) + p.shape for p in self._params]
         result = [res.T.reshape(shape) for res, shape in zip(result, shapes)]
-
         return result
 
     def _check_input_type_and_preprocess(
