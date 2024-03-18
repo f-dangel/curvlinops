@@ -1,6 +1,7 @@
 """Contains tests for ``curvlinops/inverse``."""
 
 import torch
+from einops import rearrange
 from numpy import array, eye, random
 from numpy.linalg import eigh, inv
 from pytest import mark, raises
@@ -206,14 +207,24 @@ def test_KFAC_inverse_damped_torch_matmat(case, delta: float = 1e-2):
     assert inv_KFAC_X.dtype == X.dtype
     assert inv_KFAC_X.device == X.device
     assert inv_KFAC_X.shape == (KFAC.shape[0], num_vectors)
+    inv_KFAC_X = inv_KFAC_X.cpu().numpy()
+
+    # Test list input format
+    x_list = KFAC._torch_preprocess(X)
+    inv_KFAC_x_list = inv_KFAC.torch_matmat(x_list)
+    inv_KFAC_x_list = torch.cat(
+        [rearrange(M, "k ... -> (...) k") for M in inv_KFAC_x_list], dim=0
+    )
+    report_nonclose(inv_KFAC_X, inv_KFAC_x_list.cpu().numpy())
 
     # Test against multiplication with dense matrix
     inv_KFAC_mat = inv_KFAC.torch_matmat(torch.eye(inv_KFAC.shape[1]))
     inv_KFAC_mat_x = inv_KFAC_mat @ X
-    report_nonclose(inv_KFAC_X.cpu().numpy(), inv_KFAC_mat_x.cpu().numpy(), rtol=5e-4)
+    report_nonclose(inv_KFAC_X, inv_KFAC_mat_x.cpu().numpy(), rtol=5e-4)
 
     # Test against _matmat
-    report_nonclose(inv_KFAC @ X, inv_KFAC_X.cpu().numpy())
+    kfac_x_numpy = inv_KFAC @ X.cpu().numpy()
+    report_nonclose(inv_KFAC_X, kfac_x_numpy)
 
 
 def test_KFAC_inverse_damped_torch_matvec(case, delta: float = 1e-2):
@@ -231,15 +242,28 @@ def test_KFAC_inverse_damped_torch_matvec(case, delta: float = 1e-2):
     inv_KFAC = KFACInverseLinearOperator(KFAC, damping=(delta, delta))
 
     x = torch.rand(KFAC.shape[1])
-    inv_KFAC_X = inv_KFAC.torch_matvec(x)
-    assert inv_KFAC_X.dtype == x.dtype
-    assert inv_KFAC_X.device == x.device
-    assert inv_KFAC_X.shape == x.shape
+    inv_KFAC_x = inv_KFAC.torch_matvec(x)
+    assert inv_KFAC_x.dtype == x.dtype
+    assert inv_KFAC_x.device == x.device
+    assert inv_KFAC_x.shape == x.shape
+
+    # Test list input format
+    # split parameter blocks
+    dims = [p.numel() for p in KFAC._params]
+    split_x = x.split(dims)
+    # unflatten parameter dimension
+    assert len(split_x) == len(KFAC._params)
+    x_list = [res.reshape(p.shape) for res, p in zip(split_x, KFAC._params)]
+    inv_kfac_x_list = inv_KFAC.torch_matvec(x_list)
+    inv_kfac_x_list = torch.cat(
+        [rearrange(M, "... -> (...)") for M in inv_kfac_x_list], dim=0
+    )
+    report_nonclose(inv_KFAC_x, inv_kfac_x_list.cpu().numpy())
 
     # Test against multiplication with dense matrix
     inv_KFAC_mat = inv_KFAC.torch_matmat(torch.eye(inv_KFAC.shape[1]))
     inv_KFAC_mat_x = inv_KFAC_mat @ x
-    report_nonclose(inv_KFAC_X.cpu().numpy(), inv_KFAC_mat_x.cpu().numpy(), rtol=5e-5)
+    report_nonclose(inv_KFAC_x.cpu().numpy(), inv_KFAC_mat_x.cpu().numpy(), rtol=5e-5)
 
     # Test against _matmat
-    report_nonclose(inv_KFAC @ x, inv_KFAC_X.cpu().numpy())
+    report_nonclose(inv_KFAC @ x, inv_KFAC_x.cpu().numpy())

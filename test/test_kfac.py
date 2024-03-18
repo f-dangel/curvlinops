@@ -10,11 +10,12 @@ from test.utils import (
 )
 from typing import Dict, Iterable, List, Tuple, Union
 
+from einops import rearrange
 from einops.layers.torch import Rearrange
 from numpy import eye
 from pytest import mark, skip
 from scipy.linalg import block_diag
-from torch import Tensor, cuda, device
+from torch import Tensor, cat, cuda, device
 from torch import eye as torch_eye
 from torch import manual_seed, rand, randperm
 from torch.nn import (
@@ -453,13 +454,22 @@ def test_torch_matmat(dev: device):
     assert x.device == kfac_x.device
     assert x.dtype == kfac_x.dtype
     assert kfac_x.shape == (kfac.shape[0], x.shape[1])
+    kfac_x = kfac_x.cpu().numpy()
 
+    # Test list input format
+    x_list = kfac._torch_preprocess(x)
+    kfac_x_list = kfac.torch_matmat(x_list)
+    kfac_x_list = cat([rearrange(M, "k ... -> (...) k") for M in kfac_x_list], dim=0)
+    report_nonclose(kfac_x, kfac_x_list.cpu().numpy())
+
+    # Test against multiplication with dense matrix
     kfac_mat = kfac.torch_matmat(torch_eye(kfac.shape[1], device=dev))
     kfac_mat_x = kfac_mat @ x
-    report_nonclose(kfac_x.cpu().numpy(), kfac_mat_x.cpu().numpy())
+    report_nonclose(kfac_x, kfac_mat_x.cpu().numpy())
 
+    # Test against _matmat
     kfac_x_numpy = kfac @ x.cpu().numpy()
-    report_nonclose(kfac_x.cpu().numpy(), kfac_x_numpy)
+    report_nonclose(kfac_x, kfac_x_numpy)
 
 
 @mark.parametrize("dev", DEVICES, ids=DEVICES_IDS)
@@ -483,10 +493,24 @@ def test_torch_matvec(dev: device):
     assert x.device == kfac_x.device
     assert x.dtype == kfac_x.dtype
     assert kfac_x.shape == x.shape
+    kfac_x = kfac_x.cpu().numpy()
 
+    # Test list input format
+    # split parameter blocks
+    dims = [p.numel() for p in kfac._params]
+    split_x = x.split(dims)
+    # unflatten parameter dimension
+    assert len(split_x) == len(kfac._params)
+    x_list = [res.reshape(p.shape) for res, p in zip(split_x, kfac._params)]
+    kfac_x_list = kfac.torch_matvec(x_list)
+    kfac_x_list = cat([rearrange(M, "... -> (...)") for M in kfac_x_list], dim=0)
+    report_nonclose(kfac_x, kfac_x_list.cpu().numpy())
+
+    # Test against multiplication with dense matrix
     kfac_mat = kfac.torch_matmat(torch_eye(kfac.shape[1], device=dev))
     kfac_mat_x = kfac_mat @ x
-    report_nonclose(kfac_x.cpu().numpy(), kfac_mat_x.cpu().numpy())
+    report_nonclose(kfac_x, kfac_mat_x.cpu().numpy())
 
+    # Test against _matmat
     kfac_x_numpy = kfac @ x.cpu().numpy()
-    report_nonclose(kfac_x.cpu().numpy(), kfac_x_numpy)
+    report_nonclose(kfac_x, kfac_x_numpy)
