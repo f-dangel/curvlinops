@@ -447,7 +447,8 @@ def test_torch_matmat(dev: device):
         fisher_type="empirical",
     )
 
-    x = rand(kfac.shape[1], 16, device=dev)
+    num_vectors = 16
+    x = rand(kfac.shape[1], num_vectors, device=dev)
     kfac_x = kfac.torch_matmat(x)
     assert x.device == kfac_x.device
     assert x.dtype == kfac_x.dtype
