@@ -21,7 +21,6 @@ from __future__ import annotations
 from functools import partial
 from math import sqrt
 from typing import Dict, Iterable, List, Optional, Tuple, Union
-from warnings import warn
 
 from einops import einsum, rearrange, reduce
 from numpy import ndarray
