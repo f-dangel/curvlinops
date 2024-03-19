@@ -331,7 +331,7 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
                     )
 
         if return_tensor:
-            M_torch = cat([rearrange(M, "k ... -> (...) k") for M in M_torch], dim=0)
+            M_torch = cat([rearrange(M, "k ... -> (...) k") for M in M_torch])
 
         return M_torch
 
@@ -361,11 +361,12 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
             v_torch = [v_torch_i.unsqueeze(0) for v_torch_i in v_torch]
             result = self.torch_matmat(v_torch)
             return [res.squeeze(0) for res in result]
+        elif isinstance(v_torch, Tensor):
+            return self.torch_matmat(v_torch.unsqueeze(-1)).squeeze(-1)
         else:
-            M = self.shape[0]
-            if v_torch.shape != (M,):
-                raise ValueError("The input vector has the wrong shape.")
-            return self.torch_matmat(v_torch.unsqueeze(1)).squeeze(1)
+            raise ValueError(
+                f"Invalid input type: {type(v_torch)}. Expected list of tensors or tensor."
+            )
 
     def _matmat(self, M: ndarray) -> ndarray:
         """Apply the inverse of KFAC to a matrix (multiple vectors).

@@ -13,7 +13,7 @@ from typing import Dict, Iterable, List, Tuple, Union
 from einops import rearrange
 from einops.layers.torch import Rearrange
 from numpy import eye
-from pytest import mark, skip
+from pytest import mark, raises, skip
 from scipy.linalg import block_diag
 from torch import Tensor, cat, cuda, device
 from torch import eye as torch_eye
@@ -459,7 +459,7 @@ def test_torch_matmat(dev: device):
     # Test list input format
     x_list = kfac._torch_preprocess(x)
     kfac_x_list = kfac.torch_matmat(x_list)
-    kfac_x_list = cat([rearrange(M, "k ... -> (...) k") for M in kfac_x_list], dim=0)
+    kfac_x_list = cat([rearrange(M, "k ... -> (...) k") for M in kfac_x_list])
     report_nonclose(kfac_x, kfac_x_list.cpu().numpy())
 
     # Test against multiplication with dense matrix
@@ -488,6 +488,10 @@ def test_torch_matvec(dev: device):
         data,
     )
 
+    with raises(ValueError):
+        # Test that torch_matvec does not accept matrix input
+        kfac.torch_matvec(rand(3, 5, device=dev))
+
     x = rand(kfac.shape[1], device=dev)
     kfac_x = kfac.torch_matvec(x)
     assert x.device == kfac_x.device
@@ -503,7 +507,7 @@ def test_torch_matvec(dev: device):
     assert len(split_x) == len(kfac._params)
     x_list = [res.reshape(p.shape) for res, p in zip(split_x, kfac._params)]
     kfac_x_list = kfac.torch_matvec(x_list)
-    kfac_x_list = cat([rearrange(M, "... -> (...)") for M in kfac_x_list], dim=0)
+    kfac_x_list = cat([rearrange(M, "... -> (...)") for M in kfac_x_list])
     report_nonclose(kfac_x, kfac_x_list.cpu().numpy())
 
     # Test against multiplication with dense matrix

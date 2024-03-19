@@ -263,8 +263,7 @@ class KFACLinearOperator(_LinearOperator):
         result = M.split(dims)
         # column-index first + unflatten parameter dimension
         shapes = [(num_vectors,) + p.shape for p in self._params]
-        result = [res.T.reshape(shape) for res, shape in zip(result, shapes)]
-        return result
+        return [res.T.reshape(shape) for res, shape in zip(result, shapes)]
 
     def _check_input_type_and_preprocess(
         self, M_torch: Union[Tensor, List[Tensor]]
@@ -291,16 +290,22 @@ class KFACLinearOperator(_LinearOperator):
         """
         if isinstance(M_torch, list):
             return_tensor = False
-            K = len(M_torch[0])
-            assert len(M_torch) == len(self._params)
+            if len(M_torch) != len(self._params):
+                raise ValueError(
+                    "Number of input tensors must match the number of parameter tensors."
+                )
+            column_values = {len(M) for M in M_torch}
+            if len(column_values) != 1:
+                raise ValueError(
+                    "Number of columns must be equal for all tensors. "
+                    f"Got {column_values}."
+                )
+            K = column_values.pop()
             for M, p in zip(M_torch, self._params):
-                if len(M) != K:
+                if M.shape != (K,) + p.shape:
                     raise ValueError(
-                        "All input tensors must have the same number of columns."
-                    )
-                if M.shape[1:] != p.shape:
-                    raise ValueError(
-                        "All input tensors must have (K,) + the same shape as the parameters."
+                        "All input tensors must have (K, ) + p.shape. "
+                        f"Got {M.shape}, but expected {(K,) + p.shape}."
                     )
         else:
             return_tensor = True
@@ -404,11 +409,12 @@ class KFACLinearOperator(_LinearOperator):
             v_torch = [v_torch_i.unsqueeze(0) for v_torch_i in v_torch]
             result = self.torch_matmat(v_torch)
             return [res.squeeze(0) for res in result]
+        elif isinstance(v_torch, Tensor):
+            return self.torch_matmat(v_torch.unsqueeze(-1)).squeeze(-1)
         else:
-            M = self.shape[0]
-            if v_torch.shape != (M,):
-                raise ValueError("The input vector has the wrong shape.")
-            return self.torch_matmat(v_torch.unsqueeze(1)).squeeze(1)
+            raise ValueError(
+                f"Invalid input type: {type(v_torch)}. Expected list of tensors or tensor."
+            )
 
     def _matmat(self, M: ndarray) -> ndarray:
         """Apply KFAC to a matrix (multiple vectors).

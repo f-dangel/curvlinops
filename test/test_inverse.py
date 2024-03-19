@@ -213,7 +213,7 @@ def test_KFAC_inverse_damped_torch_matmat(case, delta: float = 1e-2):
     x_list = KFAC._torch_preprocess(X)
     inv_KFAC_x_list = inv_KFAC.torch_matmat(x_list)
     inv_KFAC_x_list = torch.cat(
-        [rearrange(M, "k ... -> (...) k") for M in inv_KFAC_x_list], dim=0
+        [rearrange(M, "k ... -> (...) k") for M in inv_KFAC_x_list]
     )
     report_nonclose(inv_KFAC_X, inv_KFAC_x_list.cpu().numpy())
 
@@ -255,9 +255,7 @@ def test_KFAC_inverse_damped_torch_matvec(case, delta: float = 1e-2):
     assert len(split_x) == len(KFAC._params)
     x_list = [res.reshape(p.shape) for res, p in zip(split_x, KFAC._params)]
     inv_kfac_x_list = inv_KFAC.torch_matvec(x_list)
-    inv_kfac_x_list = torch.cat(
-        [rearrange(M, "... -> (...)") for M in inv_kfac_x_list], dim=0
-    )
+    inv_kfac_x_list = torch.cat([rearrange(M, "... -> (...)") for M in inv_kfac_x_list])
     report_nonclose(inv_KFAC_x, inv_kfac_x_list.cpu().numpy())
 
     # Test against multiplication with dense matrix
