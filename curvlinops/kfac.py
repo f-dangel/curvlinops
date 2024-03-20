@@ -224,6 +224,7 @@ class KFACLinearOperator(_LinearOperator):
 
         # Properties of the full matrix KFAC approximation
         self._trace = None
+        self._frobenius_norm = None
 
         super().__init__(
             model_func,
@@ -446,6 +447,7 @@ class KFACLinearOperator(_LinearOperator):
         """Compute and cache KFAC's Kronecker factors for future ``matmat``s."""
         # Reset properties
         self._trace = None
+        self._frobenius_norm = None
 
         # install forward and backward hooks
         hook_handles: List[RemovableHandle] = []
@@ -799,3 +801,41 @@ class KFACLinearOperator(_LinearOperator):
                         self._trace += tr_mod
 
         return self._trace
+
+    @property
+    def frobenius_norm(self) -> Tensor:
+        r"""Frobenius norm of the KFAC approximation.
+
+        Will call ``_compute_kfac`` if it has not been called before and will cache the
+        Frobenius norm until ``_compute_kfac`` is called again. Uses the property of the
+        Kronecker product that :math:`\|A \otimes B\|_F = \|A\|_F \|B\|_F`.
+
+        Returns:
+            Frobenius norm of the KFAC approximation.
+        """
+        if self._frobenius_norm is None:
+
+            if not self._input_covariances and not self._gradient_covariances:
+                self._compute_kfac()
+
+            self._frobenius_norm = 0.0
+            for mod_name, param_pos in self._mapping.items():
+                squared_frob_ggT = self._gradient_covariances[mod_name].square().sum()
+                if (
+                    not self._separate_weight_and_bias
+                    and "weight" in param_pos.keys()
+                    and "bias" in param_pos.keys()
+                ):
+                    squared_frob_aaT = self._input_covariances[mod_name].square().sum()
+                    self._frobenius_norm += squared_frob_aaT * squared_frob_ggT
+                else:
+                    for p_name in param_pos.keys():
+                        squared_frob_mod = squared_frob_ggT.clone()
+                        if p_name == "weight":
+                            squared_frob_mod *= (
+                                self._input_covariances[mod_name].square().sum()
+                            )
+                        self._frobenius_norm += squared_frob_mod
+            self._frobenius_norm.sqrt_()
+
+        return self._frobenius_norm
