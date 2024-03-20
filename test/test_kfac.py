@@ -431,25 +431,24 @@ def test_bug_device_change_invalidates_parameter_mapping():
     report_nonclose(kfac_x_gpu, kfac_x_cpu)
 
 
-@mark.parametrize("dev", DEVICES, ids=DEVICES_IDS)
-def test_torch_matmat(dev: device):
+def test_torch_matmat(case):
     """Test that the torch_matmat method of KFACLinearOperator works."""
-    manual_seed(0)
+    model, loss_func, params, data = case
 
-    data = [(rand(2, 5, device=dev), regression_targets((2, 4)).to(dev))]
-    model = Sequential(Linear(5, 4), ReLU(), Linear(4, 4)).to(dev)
-    loss_func = MSELoss().to(dev)
-
+    loss_average = None if loss_func.reduction == "sum" else "batch"
     kfac = KFACLinearOperator(
         model,
         loss_func,
-        list(model.parameters()),
+        params,
         data,
-        fisher_type="empirical",
+        loss_average=loss_average,
     )
+    device = kfac._device
+    # KFAC.dtype is a numpy data type
+    dtype = next(kfac._model_func.parameters()).dtype
 
     num_vectors = 16
-    x = rand(kfac.shape[1], num_vectors, device=dev)
+    x = rand(kfac.shape[1], num_vectors, dtype=dtype, device=device)
     kfac_x = kfac.torch_matmat(x)
     assert x.device == kfac_x.device
     assert x.dtype == kfac_x.dtype
@@ -463,7 +462,8 @@ def test_torch_matmat(dev: device):
     report_nonclose(kfac_x, kfac_x_list.cpu().numpy())
 
     # Test against multiplication with dense matrix
-    kfac_mat = kfac.torch_matmat(torch_eye(kfac.shape[1], device=dev))
+    I = torch_eye(kfac.shape[1], dtype=dtype, device=device)
+    kfac_mat = kfac.torch_matmat(I)
     kfac_mat_x = kfac_mat @ x
     report_nonclose(kfac_x, kfac_mat_x.cpu().numpy())
 
@@ -472,27 +472,27 @@ def test_torch_matmat(dev: device):
     report_nonclose(kfac_x, kfac_x_numpy)
 
 
-@mark.parametrize("dev", DEVICES, ids=DEVICES_IDS)
-def test_torch_matvec(dev: device):
+def test_torch_matvec(case):
     """Test that the torch_matvec method of KFACLinearOperator works."""
-    manual_seed(0)
+    model, loss_func, params, data = case
 
-    data = [(rand(2, 5, device=dev), regression_targets((2, 4)).to(dev))]
-    model = Sequential(Linear(5, 4), ReLU(), Linear(4, 4)).to(dev)
-    loss_func = MSELoss().to(dev)
-
+    loss_average = None if loss_func.reduction == "sum" else "batch"
     kfac = KFACLinearOperator(
         model,
         loss_func,
-        list(model.parameters()),
+        params,
         data,
+        loss_average=loss_average,
     )
+    device = kfac._device
+    # KFAC.dtype is a numpy data type
+    dtype = next(kfac._model_func.parameters()).dtype
 
     with raises(ValueError):
         # Test that torch_matvec does not accept matrix input
-        kfac.torch_matvec(rand(3, 5, device=dev))
+        kfac.torch_matvec(rand(3, 5, dtype=dtype, device=device))
 
-    x = rand(kfac.shape[1], device=dev)
+    x = rand(kfac.shape[1], dtype=dtype, device=device)
     kfac_x = kfac.torch_matvec(x)
     assert x.device == kfac_x.device
     assert x.dtype == kfac_x.dtype
@@ -511,7 +511,8 @@ def test_torch_matvec(dev: device):
     report_nonclose(kfac_x, kfac_x_list.cpu().numpy())
 
     # Test against multiplication with dense matrix
-    kfac_mat = kfac.torch_matmat(torch_eye(kfac.shape[1], device=dev))
+    I = torch_eye(kfac.shape[1], dtype=dtype, device=device)
+    kfac_mat = kfac.torch_matmat(I)
     kfac_mat_x = kfac_mat @ x
     report_nonclose(kfac_x, kfac_mat_x.cpu().numpy())
 

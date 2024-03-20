@@ -200,9 +200,12 @@ def test_KFAC_inverse_damped_torch_matmat(case, delta: float = 1e-2):
         loss_average=loss_average,
     )
     inv_KFAC = KFACInverseLinearOperator(KFAC, damping=(delta, delta))
+    device = KFAC._device
+    # KFAC.dtype is a numpy data type
+    dtype = next(KFAC._model_func.parameters()).dtype
 
     num_vectors = 2
-    X = torch.rand(KFAC.shape[1], num_vectors)
+    X = torch.rand(KFAC.shape[1], num_vectors, dtype=dtype, device=device)
     inv_KFAC_X = inv_KFAC.torch_matmat(X)
     assert inv_KFAC_X.dtype == X.dtype
     assert inv_KFAC_X.device == X.device
@@ -218,7 +221,8 @@ def test_KFAC_inverse_damped_torch_matmat(case, delta: float = 1e-2):
     report_nonclose(inv_KFAC_X, inv_KFAC_x_list.cpu().numpy())
 
     # Test against multiplication with dense matrix
-    inv_KFAC_mat = inv_KFAC.torch_matmat(torch.eye(inv_KFAC.shape[1]))
+    I = torch.eye(inv_KFAC.shape[1], dtype=dtype, device=device)
+    inv_KFAC_mat = inv_KFAC.torch_matmat(I)
     inv_KFAC_mat_x = inv_KFAC_mat @ X
     report_nonclose(inv_KFAC_X, inv_KFAC_mat_x.cpu().numpy(), rtol=5e-4)
 
@@ -240,8 +244,11 @@ def test_KFAC_inverse_damped_torch_matvec(case, delta: float = 1e-2):
         loss_average=loss_average,
     )
     inv_KFAC = KFACInverseLinearOperator(KFAC, damping=(delta, delta))
+    device = KFAC._device
+    # KFAC.dtype is a numpy data type
+    dtype = next(KFAC._model_func.parameters()).dtype
 
-    x = torch.rand(KFAC.shape[1])
+    x = torch.rand(KFAC.shape[1], dtype=dtype, device=device)
     inv_KFAC_x = inv_KFAC.torch_matvec(x)
     assert inv_KFAC_x.dtype == x.dtype
     assert inv_KFAC_x.device == x.device
@@ -259,7 +266,8 @@ def test_KFAC_inverse_damped_torch_matvec(case, delta: float = 1e-2):
     report_nonclose(inv_KFAC_x, inv_kfac_x_list.cpu().numpy())
 
     # Test against multiplication with dense matrix
-    inv_KFAC_mat = inv_KFAC.torch_matmat(torch.eye(inv_KFAC.shape[1]))
+    I = torch.eye(inv_KFAC.shape[1], dtype=dtype, device=device)
+    inv_KFAC_mat = inv_KFAC.torch_matmat(I)
     inv_KFAC_mat_x = inv_KFAC_mat @ x
     report_nonclose(inv_KFAC_x.cpu().numpy(), inv_KFAC_mat_x.cpu().numpy(), rtol=5e-5)
 

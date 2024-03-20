@@ -379,7 +379,7 @@ class KFACLinearOperator(_LinearOperator):
                     )
 
         if return_tensor:
-            M_torch = cat([rearrange(M, "k ... -> (...) k") for M in M_torch], dim=0)
+            M_torch = cat([rearrange(M, "k ... -> (...) k") for M in M_torch])
 
         return M_torch
 
@@ -403,7 +403,7 @@ class KFACLinearOperator(_LinearOperator):
             parameter, i.e. ``[p1.shape, p2.shape, ...]``. If tensor, has shape ``[D]``.
 
         Raises:
-            ValueError: If the input tensor has the wrong shape.
+            ValueError: If the input tensor has the wrong data type.
         """
         if isinstance(v_torch, list):
             v_torch = [v_torch_i.unsqueeze(0) for v_torch_i in v_torch]
