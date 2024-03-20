@@ -824,19 +824,24 @@ class KFACLinearOperator(_LinearOperator):
 
             self._det = 1.0
             for mod_name, param_pos in self._mapping.items():
+                m = len(self._gradient_covariances[mod_name])
                 det_ggT = self._gradient_covariances[mod_name].det()
                 if (
                     not self._separate_weight_and_bias
                     and "weight" in param_pos.keys()
                     and "bias" in param_pos.keys()
                 ):
-                    self._det *= self._input_covariances[mod_name].det() * det_ggT
+                    n = len(self._input_covariances[mod_name])
+                    det_aaT = self._input_covariances[mod_name].det()
+                    self._det *= det_aaT.pow(m) * det_ggT.pow(n)
                 else:
                     for p_name in param_pos.keys():
-                        self._det *= det_ggT
                         if p_name == "weight":
-                            self._det *= self._input_covariances[mod_name].det()
-
+                            n = len(self._input_covariances[mod_name])
+                            self._det *= self._input_covariances[mod_name].det().pow(m)
+                        else:
+                            n = 1
+                        self._det *= det_ggT.pow(n)
         return self._det
 
     @property
