@@ -462,8 +462,8 @@ def test_torch_matmat(case):
     report_nonclose(kfac_x, kfac_x_list.cpu().numpy())
 
     # Test against multiplication with dense matrix
-    I = torch_eye(kfac.shape[1], dtype=dtype, device=device)
-    kfac_mat = kfac.torch_matmat(I)
+    identity = torch_eye(kfac.shape[1], dtype=dtype, device=device)
+    kfac_mat = kfac.torch_matmat(identity)
     kfac_mat_x = kfac_mat @ x
     report_nonclose(kfac_x, kfac_mat_x.cpu().numpy())
 
@@ -511,8 +511,8 @@ def test_torch_matvec(case):
     report_nonclose(kfac_x, kfac_x_list.cpu().numpy())
 
     # Test against multiplication with dense matrix
-    I = torch_eye(kfac.shape[1], dtype=dtype, device=device)
-    kfac_mat = kfac.torch_matmat(I)
+    identity = torch_eye(kfac.shape[1], dtype=dtype, device=device)
+    kfac_mat = kfac.torch_matmat(identity)
     kfac_mat_x = kfac_mat @ x
     report_nonclose(kfac_x, kfac_mat_x.cpu().numpy())
 

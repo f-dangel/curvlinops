@@ -221,8 +221,8 @@ def test_KFAC_inverse_damped_torch_matmat(case, delta: float = 1e-2):
     report_nonclose(inv_KFAC_X, inv_KFAC_x_list.cpu().numpy())
 
     # Test against multiplication with dense matrix
-    I = torch.eye(inv_KFAC.shape[1], dtype=dtype, device=device)
-    inv_KFAC_mat = inv_KFAC.torch_matmat(I)
+    identity = torch.eye(inv_KFAC.shape[1], dtype=dtype, device=device)
+    inv_KFAC_mat = inv_KFAC.torch_matmat(identity)
     inv_KFAC_mat_x = inv_KFAC_mat @ X
     report_nonclose(inv_KFAC_X, inv_KFAC_mat_x.cpu().numpy(), rtol=5e-4)
 
@@ -266,8 +266,8 @@ def test_KFAC_inverse_damped_torch_matvec(case, delta: float = 1e-2):
     report_nonclose(inv_KFAC_x, inv_kfac_x_list.cpu().numpy())
 
     # Test against multiplication with dense matrix
-    I = torch.eye(inv_KFAC.shape[1], dtype=dtype, device=device)
-    inv_KFAC_mat = inv_KFAC.torch_matmat(I)
+    identity = torch.eye(inv_KFAC.shape[1], dtype=dtype, device=device)
+    inv_KFAC_mat = inv_KFAC.torch_matmat(identity)
     inv_KFAC_mat_x = inv_KFAC_mat @ x
     report_nonclose(inv_KFAC_x.cpu().numpy(), inv_KFAC_mat_x.cpu().numpy(), rtol=5e-5)
 
