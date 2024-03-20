@@ -222,9 +222,8 @@ class KFACLinearOperator(_LinearOperator):
         self._gradient_covariances: Dict[str, Tensor] = {}
         self._mapping = self.compute_parameter_mapping(params, model_func)
 
-        # Properties of the full matrix KFAC approximation
-        self._trace = None
-        self._frobenius_norm = None
+        # Properties of the full matrix KFAC approximation are initialized to `None`
+        self._reset_matrix_properties()
 
         super().__init__(
             model_func,
@@ -236,6 +235,12 @@ class KFACLinearOperator(_LinearOperator):
             shape=shape,
             num_data=num_data,
         )
+
+    def _reset_matrix_properties(self):
+        """Reset matrix properties."""
+        self._trace = None
+        self._det = None
+        self._frobenius_norm = None
 
     def to_device(self, device: device):
         """Load the linear operator to another device.
@@ -445,9 +450,7 @@ class KFACLinearOperator(_LinearOperator):
 
     def _compute_kfac(self):
         """Compute and cache KFAC's Kronecker factors for future ``matmat``s."""
-        # Reset properties
-        self._trace = None
-        self._frobenius_norm = None
+        self._reset_matrix_properties()
 
         # install forward and backward hooks
         hook_handles: List[RemovableHandle] = []
@@ -785,22 +788,56 @@ class KFACLinearOperator(_LinearOperator):
 
             self._trace = 0.0
             for mod_name, param_pos in self._mapping.items():
+                tr_ggT = self._gradient_covariances[mod_name].trace()
                 if (
                     not self._separate_weight_and_bias
                     and "weight" in param_pos.keys()
                     and "bias" in param_pos.keys()
                 ):
-                    tr_aaT = self._input_covariances[mod_name].trace()
-                    tr_ggT = self._gradient_covariances[mod_name].trace()
-                    self._trace += tr_aaT * tr_ggT
+                    self._trace += self._input_covariances[mod_name].trace() * tr_ggT
                 else:
                     for p_name in param_pos.keys():
-                        tr_mod = self._gradient_covariances[mod_name].trace()
+                        tr_mod = tr_ggT.clone()
                         if p_name == "weight":
                             tr_mod *= self._input_covariances[mod_name].trace()
                         self._trace += tr_mod
 
         return self._trace
+
+    @property
+    def det(self) -> Tensor:
+        r"""Determinant of the KFAC approximation.
+
+        Will call ``_compute_kfac`` if it has not been called before and will cache the
+        determinant until ``_compute_kfac`` is called again. Uses the property of the
+        Kronecker product that :math:`\det(A \otimes B) = \det(A)^{m} \det(B)^{n}`,
+        where
+        :math:`A \in \mathbb{R}^{n \times n}` and :math:`B \in \mathbb{R}^{m \times m}`.
+
+        Returns:
+            Determinant of the KFAC approximation.
+        """
+        if self._det is None:
+
+            if not self._input_covariances and not self._gradient_covariances:
+                self._compute_kfac()
+
+            self._det = 1.0
+            for mod_name, param_pos in self._mapping.items():
+                det_ggT = self._gradient_covariances[mod_name].det()
+                if (
+                    not self._separate_weight_and_bias
+                    and "weight" in param_pos.keys()
+                    and "bias" in param_pos.keys()
+                ):
+                    self._det *= self._input_covariances[mod_name].det() * det_ggT
+                else:
+                    for p_name in param_pos.keys():
+                        self._det *= det_ggT
+                        if p_name == "weight":
+                            self._det *= self._input_covariances[mod_name].det()
+
+        return self._det
 
     @property
     def frobenius_norm(self) -> Tensor:
