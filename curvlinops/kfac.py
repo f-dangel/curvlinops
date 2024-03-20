@@ -222,6 +222,9 @@ class KFACLinearOperator(_LinearOperator):
         self._gradient_covariances: Dict[str, Tensor] = {}
         self._mapping = self.compute_parameter_mapping(params, model_func)
 
+        # Properties of the full matrix KFAC approximation
+        self._trace = None
+
         super().__init__(
             model_func,
             loss_func,
@@ -441,6 +444,9 @@ class KFACLinearOperator(_LinearOperator):
 
     def _compute_kfac(self):
         """Compute and cache KFAC's Kronecker factors for future ``matmat``s."""
+        # Reset properties
+        self._trace = None
+
         # install forward and backward hooks
         hook_handles: List[RemovableHandle] = []
 
@@ -757,3 +763,39 @@ class KFACLinearOperator(_LinearOperator):
             raise NotImplementedError("Found parameters in un-supported layers.")
 
         return positions
+
+    @property
+    def trace(self) -> Tensor:
+        """Trace of the KFAC approximation.
+
+        Will call ``_compute_kfac`` if it has not been called before and will cache the
+        trace until ``_compute_kfac`` is called again. Uses the property of the
+        Kronecker product that
+        :math:`\text{tr}(A \otimes B) = \text{tr}(A) \text{tr}(B)`.
+
+        Returns:
+            Trace of the KFAC approximation.
+        """
+        if self._trace is None:
+
+            if not self._input_covariances and not self._gradient_covariances:
+                self._compute_kfac()
+
+            self._trace = 0.0
+            for mod_name, param_pos in self._mapping.items():
+                if (
+                    not self._separate_weight_and_bias
+                    and "weight" in param_pos.keys()
+                    and "bias" in param_pos.keys()
+                ):
+                    tr_aaT = self._input_covariances[mod_name].trace()
+                    tr_ggT = self._gradient_covariances[mod_name].trace()
+                    self._trace += tr_aaT * tr_ggT
+                else:
+                    for p_name in param_pos.keys():
+                        tr_mod = self._gradient_covariances[mod_name].trace()
+                        if p_name == "weight":
+                            tr_mod *= self._input_covariances[mod_name].trace()
+                        self._trace += tr_mod
+
+        return self._trace
