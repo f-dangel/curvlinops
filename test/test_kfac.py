@@ -10,11 +10,14 @@ from test.utils import (
 )
 from typing import Dict, Iterable, List, Tuple, Union
 
+from einops import rearrange
 from einops.layers.torch import Rearrange
 from numpy import eye
-from pytest import mark, skip
+from pytest import mark, raises, skip
 from scipy.linalg import block_diag
-from torch import Tensor, cuda, device, manual_seed, rand, randperm
+from torch import Tensor, cat, cuda, device
+from torch import eye as torch_eye
+from torch import manual_seed, rand, randperm
 from torch.nn import (
     CrossEntropyLoss,
     Flatten,
@@ -426,3 +429,93 @@ def test_bug_device_change_invalidates_parameter_mapping():
     kfac_x_cpu = kfac @ x
 
     report_nonclose(kfac_x_gpu, kfac_x_cpu)
+
+
+def test_torch_matmat(case):
+    """Test that the torch_matmat method of KFACLinearOperator works."""
+    model, loss_func, params, data = case
+
+    loss_average = None if loss_func.reduction == "sum" else "batch"
+    kfac = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        loss_average=loss_average,
+    )
+    device = kfac._device
+    # KFAC.dtype is a numpy data type
+    dtype = next(kfac._model_func.parameters()).dtype
+
+    num_vectors = 16
+    x = rand(kfac.shape[1], num_vectors, dtype=dtype, device=device)
+    kfac_x = kfac.torch_matmat(x)
+    assert x.device == kfac_x.device
+    assert x.dtype == kfac_x.dtype
+    assert kfac_x.shape == (kfac.shape[0], x.shape[1])
+    kfac_x = kfac_x.cpu().numpy()
+
+    # Test list input format
+    x_list = kfac._torch_preprocess(x)
+    kfac_x_list = kfac.torch_matmat(x_list)
+    kfac_x_list = cat([rearrange(M, "k ... -> (...) k") for M in kfac_x_list])
+    report_nonclose(kfac_x, kfac_x_list.cpu().numpy())
+
+    # Test against multiplication with dense matrix
+    identity = torch_eye(kfac.shape[1], dtype=dtype, device=device)
+    kfac_mat = kfac.torch_matmat(identity)
+    kfac_mat_x = kfac_mat @ x
+    report_nonclose(kfac_x, kfac_mat_x.cpu().numpy())
+
+    # Test against _matmat
+    kfac_x_numpy = kfac @ x.cpu().numpy()
+    report_nonclose(kfac_x, kfac_x_numpy)
+
+
+def test_torch_matvec(case):
+    """Test that the torch_matvec method of KFACLinearOperator works."""
+    model, loss_func, params, data = case
+
+    loss_average = None if loss_func.reduction == "sum" else "batch"
+    kfac = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        loss_average=loss_average,
+    )
+    device = kfac._device
+    # KFAC.dtype is a numpy data type
+    dtype = next(kfac._model_func.parameters()).dtype
+
+    with raises(ValueError):
+        # Test that torch_matvec does not accept matrix input
+        kfac.torch_matvec(rand(3, 5, dtype=dtype, device=device))
+
+    x = rand(kfac.shape[1], dtype=dtype, device=device)
+    kfac_x = kfac.torch_matvec(x)
+    assert x.device == kfac_x.device
+    assert x.dtype == kfac_x.dtype
+    assert kfac_x.shape == x.shape
+    kfac_x = kfac_x.cpu().numpy()
+
+    # Test list input format
+    # split parameter blocks
+    dims = [p.numel() for p in kfac._params]
+    split_x = x.split(dims)
+    # unflatten parameter dimension
+    assert len(split_x) == len(kfac._params)
+    x_list = [res.reshape(p.shape) for res, p in zip(split_x, kfac._params)]
+    kfac_x_list = kfac.torch_matvec(x_list)
+    kfac_x_list = cat([rearrange(M, "... -> (...)") for M in kfac_x_list])
+    report_nonclose(kfac_x, kfac_x_list.cpu().numpy())
+
+    # Test against multiplication with dense matrix
+    identity = torch_eye(kfac.shape[1], dtype=dtype, device=device)
+    kfac_mat = kfac.torch_matmat(identity)
+    kfac_mat_x = kfac_mat @ x
+    report_nonclose(kfac_x, kfac_mat_x.cpu().numpy())
+
+    # Test against _matmat
+    kfac_x_numpy = kfac @ x.cpu().numpy()
+    report_nonclose(kfac_x, kfac_x_numpy)

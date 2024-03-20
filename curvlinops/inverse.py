@@ -1,6 +1,6 @@
 """Implements linear operator inverses."""
 
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 from einops import einsum, rearrange
 from numpy import allclose, column_stack, ndarray
@@ -274,19 +274,31 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
             self._inverse_gradient_covariances[name] = ggT_inv
         return aaT_inv, ggT_inv
 
-    def _matmat(self, M: ndarray) -> ndarray:
-        """Multiply a matrix ``M`` x by the inverse of KFAC.
+    def torch_matmat(
+        self, M_torch: Union[Tensor, List[Tensor]]
+    ) -> Union[Tensor, List[Tensor]]:
+        """Apply the inverse of KFAC to a matrix (multiple vectors) in PyTorch.
+
+        This allows for matrix-matrix products with the inverse KFAC approximation in
+        PyTorch without converting tensors to numpy arrays, which avoids unnecessary
+        device transfers when working with GPUs and flattening/concatenating.
 
         Args:
-             M: Matrix for multiplication.
+            M_torch: Matrix for multiplication. If list of tensors, each entry has the
+                same shape as a parameter with an additional leading dimension of size
+                ``K`` for the columns, i.e. ``[(K,) + p1.shape), (K,) + p2.shape, ...]``.
+                If tensor, has shape ``[D, K]`` with some ``K``.
 
         Returns:
-             Result of inverse matrix-matrixmultiplication, ``KFAC⁻¹ @ M``.
+            Matrix-multiplication result ``KFAC @ M``. Return type is the same as the
+            type of the input. If list of tensors, each entry has the same shape as a
+            parameter with an additional leading dimension of size ``K`` for the columns,
+            i.e. ``[(K,) + p1.shape, (K,) + p2.shape, ...]``. If tensor, has shape
+            ``[D, K]`` with some ``K``.
         """
+        return_tensor, M_torch = self._A._check_input_type_and_preprocess(M_torch)
         if not self._A._input_covariances and not self._A._gradient_covariances:
             self._A._compute_kfac()
-
-        M_torch = self._A._preprocess(M)
 
         for mod_name, param_pos in self._A._mapping.items():
             # retrieve the inverses of the Kronecker factors from cache or invert them
@@ -318,4 +330,53 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
                         ggT_inv, M_torch[pos], "i j, m j ... -> m i ..."
                     )
 
+        if return_tensor:
+            M_torch = cat([rearrange(M, "k ... -> (...) k") for M in M_torch])
+
+        return M_torch
+
+    def torch_matvec(
+        self, v_torch: Union[Tensor, List[Tensor]]
+    ) -> Union[Tensor, List[Tensor]]:
+        """Apply the inverse of KFAC to a vector in PyTorch.
+
+        This allows for matrix-vector products with the inverse KFAC approximation in
+        PyTorch without converting tensors to numpy arrays, which avoids unnecessary
+        device transfers when working with GPUs and flattening/concatenating.
+
+        Args:
+            v_torch: Vector for multiplication. If list of tensors, each entry has the
+                same shape as a parameter, i.e. ``[p1.shape, p2.shape, ...]``.
+                If tensor, has shape ``[D]``.
+
+        Returns:
+            Matrix-multiplication result ``KFAC⁻¹ @ v``. Return type is the same as the
+            type of the input. If list of tensors, each entry has the same shape as a
+            parameter, i.e. ``[p1.shape, p2.shape, ...]``. If tensor, has shape ``[D]``.
+
+        Raises:
+            ValueError: If the input tensor has the wrong data type.
+        """
+        if isinstance(v_torch, list):
+            v_torch = [v_torch_i.unsqueeze(0) for v_torch_i in v_torch]
+            result = self.torch_matmat(v_torch)
+            return [res.squeeze(0) for res in result]
+        elif isinstance(v_torch, Tensor):
+            return self.torch_matmat(v_torch.unsqueeze(-1)).squeeze(-1)
+        else:
+            raise ValueError(
+                f"Invalid input type: {type(v_torch)}. Expected list of tensors or tensor."
+            )
+
+    def _matmat(self, M: ndarray) -> ndarray:
+        """Apply the inverse of KFAC to a matrix (multiple vectors).
+
+        Args:
+            M: Matrix for multiplication. Has shape ``[D, K]`` with some ``K``.
+
+        Returns:
+            Matrix-multiplication result ``KFAC⁻¹ @ M``. Has shape ``[D, K]``.
+        """
+        M_torch = self._A._preprocess(M)
+        M_torch = self.torch_matmat(M_torch)
         return self._A._postprocess(M_torch)
