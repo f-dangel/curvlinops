@@ -766,7 +766,7 @@ class KFACLinearOperator(_LinearOperator):
 
     @property
     def trace(self) -> Tensor:
-        """Trace of the KFAC approximation.
+        r"""Trace of the KFAC approximation.
 
         Will call ``_compute_kfac`` if it has not been called before and will cache the
         trace until ``_compute_kfac`` is called again. Uses the property of the
