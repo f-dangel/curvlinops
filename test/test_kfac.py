@@ -13,6 +13,7 @@ from typing import Dict, Iterable, List, Tuple, Union
 from einops import rearrange
 from einops.layers.torch import Rearrange
 from numpy import eye
+from numpy.linalg import norm
 from pytest import mark, raises, skip
 from scipy.linalg import block_diag
 from torch import Tensor, cat, cuda, device
@@ -560,3 +561,44 @@ def test_trace(case, exclude, separate_weight_and_bias, check_deterministic):
     assert kfac._trace == trace
     kfac._compute_kfac()
     assert kfac._trace is None
+
+
+@mark.parametrize(
+    "check_deterministic",
+    [True, False],
+    ids=["check_deterministic", "dont_check_deterministic"],
+)
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+@mark.parametrize(
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
+def test_frobenius_norm(case, exclude, separate_weight_and_bias, check_deterministic):
+    """Test that the Frobenius norm property of KFACLinearOperator works."""
+    model, loss_func, params, data = case
+
+    if exclude is not None:
+        names = {p.data_ptr(): name for name, p in model.named_parameters()}
+        params = [p for p in params if exclude not in names[p.data_ptr()]]
+
+    loss_average = None if loss_func.reduction == "sum" else "batch"
+    kfac = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        separate_weight_and_bias=separate_weight_and_bias,
+        loss_average=loss_average,
+        check_deterministic=check_deterministic,
+    )
+
+    # Check for equivalence of trace property and naive trace computation
+    frobenius_norm = kfac.frobenius_norm
+    frobenius_norm_naive = norm(kfac @ eye(kfac.shape[1]))
+    report_nonclose(frobenius_norm.cpu().numpy(), frobenius_norm_naive)
+
+    # Check that the trace property is properly cached and reset
+    assert kfac._frobenius_norm == frobenius_norm
+    kfac._compute_kfac()
+    assert kfac._frobenius_norm is None
