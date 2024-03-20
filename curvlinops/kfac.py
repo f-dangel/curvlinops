@@ -21,7 +21,6 @@ from __future__ import annotations
 from functools import partial
 from math import sqrt
 from typing import Dict, Iterable, List, Optional, Tuple, Union
-from warnings import warn
 
 from einops import einsum, rearrange, reduce
 from numpy import ndarray
@@ -256,54 +255,90 @@ class KFACLinearOperator(_LinearOperator):
         Returns:
             Matrix in list format. Each entry has the same shape as a parameter with
             an additional leading dimension of size ``K`` for the columns, i.e.
-            ``[(K,) + p1.shape), (K,) + p2.shape, ...]``.
+            ``[(K,) + p1.shape, (K,) + p2.shape, ...]``.
         """
-        if M.device != self._device:
-            warn(
-                f"Input matrix is on {M.device}, while linear operator is on "
-                + f"{self._device}. Converting to {self._device}."
-            )
-            M = M.to(self._device)
-
         num_vectors = M.shape[1]
         # split parameter blocks
         dims = [p.numel() for p in self._params]
         result = M.split(dims)
         # column-index first + unflatten parameter dimension
         shapes = [(num_vectors,) + p.shape for p in self._params]
-        result = [res.T.reshape(shape) for res, shape in zip(result, shapes)]
+        return [res.T.reshape(shape) for res, shape in zip(result, shapes)]
 
-        return result
+    def _check_input_type_and_preprocess(
+        self, M_torch: Union[Tensor, List[Tensor]]
+    ) -> Tuple[bool, List[Tensor]]:
+        """Check input type and maybe preprocess to list format.
 
-    def torch_matmat(
-        self, M_torch: Union[Tensor, List[Tensor]], return_tensor: bool = True
-    ) -> Union[Tensor, List[Tensor]]:
-        """Apply KFAC to a matrix (multiple vectors) in PyTorch.
-
-        This allows for matrix-matrix products with the KFAC approximation in PyTorch
-        without converting tensors to numpy arrays, which avoids unnecessary
-        device transfers when working with GPUs.
+        Check whether the input is a tensor or a list of tensors. If it is a tensor,
+        preprocess to list format.
 
         Args:
-            M_torch: Matrix for multiplication. If tensor, has shape ``[D, K]`` with
-                some ``K``.
-            return_tensor: Whether to return the result as a tensor or list of tensors.
+            M_torch: Input to check.
 
         Returns:
-            Matrix-multiplication result ``KFAC @ M``. If tensor, has shape ``[D, K]``.
+            ``True`` if the input is a tensor, ``False`` if it is a list of tensors.
 
         Raises:
-            ValueError: If the input tensor has the wrong shape.
-            ValueError: If the input tensor's shape is incompatible with the KFAC
-                approximation's shape.
+            ValueError: If the input is a list of tensors that have a different number
+                of columns.
+            ValueError: If the input is a list of tensors that have incompatible shapes
+                with the parameters.
+            ValueError: If the input is a tensor and has the wrong shape.
+            ValueError: If the input is a tensor and its shape is incompatible with the
+                KFAC approximation's shape.
         """
-        if not isinstance(M_torch, list):
+        if isinstance(M_torch, list):
+            return_tensor = False
+            if len(M_torch) != len(self._params):
+                raise ValueError(
+                    "Number of input tensors must match the number of parameter tensors."
+                )
+            column_values = {len(M) for M in M_torch}
+            if len(column_values) != 1:
+                raise ValueError(
+                    "Number of columns must be equal for all tensors. "
+                    f"Got {column_values}."
+                )
+            K = column_values.pop()
+            for M, p in zip(M_torch, self._params):
+                if M.shape != (K,) + p.shape:
+                    raise ValueError(
+                        "All input tensors must have (K, ) + p.shape. "
+                        f"Got {M.shape}, but expected {(K,) + p.shape}."
+                    )
+        else:
+            return_tensor = True
             if M_torch.ndim != 2:
                 raise ValueError(f"expected 2-d tensor, not {M_torch.ndim}-d")
             if M_torch.shape[0] != self.shape[1]:
                 raise ValueError(f"dimension mismatch: {self.shape}, {M_torch.shape}")
             M_torch = self._torch_preprocess(M_torch)
+        return return_tensor, M_torch
 
+    def torch_matmat(
+        self, M_torch: Union[Tensor, List[Tensor]]
+    ) -> Union[Tensor, List[Tensor]]:
+        """Apply KFAC to a matrix (multiple vectors) in PyTorch.
+
+        This allows for matrix-matrix products with the KFAC approximation in PyTorch
+        without converting tensors to numpy arrays, which avoids unnecessary
+        device transfers when working with GPUs and flattening/concatenating.
+
+        Args:
+            M_torch: Matrix for multiplication. If list of tensors, each entry has the
+                same shape as a parameter with an additional leading dimension of size
+                ``K`` for the columns, i.e. ``[(K,) + p1.shape), (K,) + p2.shape, ...]``.
+                If tensor, has shape ``[D, K]`` with some ``K``.
+
+        Returns:
+            Matrix-multiplication result ``KFAC @ M``. Return type is the same as the
+            type of the input. If list of tensors, each entry has the same shape as a
+            parameter with an additional leading dimension of size ``K`` for the columns,
+            i.e. ``[(K,) + p1.shape, (K,) + p2.shape, ...]``. If tensor, has shape
+            ``[D, K]`` with some ``K``.
+        """
+        return_tensor, M_torch = self._check_input_type_and_preprocess(M_torch)
         if not self._input_covariances and not self._gradient_covariances:
             self._compute_kfac()
 
@@ -344,33 +379,42 @@ class KFACLinearOperator(_LinearOperator):
                     )
 
         if return_tensor:
-            M_torch = cat([rearrange(M, "k ... -> (...) k") for M in M_torch], dim=0)
+            M_torch = cat([rearrange(M, "k ... -> (...) k") for M in M_torch])
 
         return M_torch
 
     def torch_matvec(
-        self, v_torch: Tensor, return_tensor: bool = True
+        self, v_torch: Union[Tensor, List[Tensor]]
     ) -> Union[Tensor, List[Tensor]]:
         """Apply KFAC to a vector in PyTorch.
 
         This allows for matrix-vector products with the KFAC approximation in PyTorch
         without converting tensors to numpy arrays, which avoids unnecessary
-        device transfers when working with GPUs.
+        device transfers when working with GPUs and flattening/concatenating.
 
         Args:
-            v_torch: Vector for multiplication. Has shape ``[D]``.
-            return_tensor: Whether to return the result as a tensor or list of tensors.
+            v_torch: Vector for multiplication. If list of tensors, each entry has the
+                same shape as a parameter, i.e. ``[p1.shape, p2.shape, ...]``.
+                If tensor, has shape ``[D]``.
 
         Returns:
-            Matrix-multiplication result ``KFAC @ v``. If tensor, has shape ``[D]``.
+            Matrix-multiplication result ``KFAC @ v``. Return type is the same as the
+            type of the input. If list of tensors, each entry has the same shape as a
+            parameter, i.e. ``[p1.shape, p2.shape, ...]``. If tensor, has shape ``[D]``.
 
         Raises:
-            ValueError: If the input tensor has the wrong shape.
+            ValueError: If the input tensor has the wrong data type.
         """
-        M = self.shape[0]
-        if v_torch.shape not in [(M,), (M, 1)]:
-            raise ValueError("dimension mismatch")
-        return self.torch_matmat(v_torch.view(-1, 1), return_tensor).squeeze(1)
+        if isinstance(v_torch, list):
+            v_torch = [v_torch_i.unsqueeze(0) for v_torch_i in v_torch]
+            result = self.torch_matmat(v_torch)
+            return [res.squeeze(0) for res in result]
+        elif isinstance(v_torch, Tensor):
+            return self.torch_matmat(v_torch.unsqueeze(-1)).squeeze(-1)
+        else:
+            raise ValueError(
+                f"Invalid input type: {type(v_torch)}. Expected list of tensors or tensor."
+            )
 
     def _matmat(self, M: ndarray) -> ndarray:
         """Apply KFAC to a matrix (multiple vectors).
@@ -382,7 +426,7 @@ class KFACLinearOperator(_LinearOperator):
             Matrix-multiplication result ``KFAC @ M``. Has shape ``[D, K]``.
         """
         M_torch = super()._preprocess(M)
-        M_torch = self.torch_matmat(M_torch, return_tensor=False)
+        M_torch = self.torch_matmat(M_torch)
         return self._postprocess(M_torch)
 
     def _adjoint(self) -> KFACLinearOperator:
@@ -396,7 +440,7 @@ class KFACLinearOperator(_LinearOperator):
         return self
 
     def _compute_kfac(self):
-        """Compute and cache KFAC's Kronecker factors for future ``matvec``s."""
+        """Compute and cache KFAC's Kronecker factors for future ``matmat``s."""
         # install forward and backward hooks
         hook_handles: List[RemovableHandle] = []
 
