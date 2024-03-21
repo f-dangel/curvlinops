@@ -782,27 +782,28 @@ class KFACLinearOperator(_LinearOperator):
         Returns:
             Trace of the KFAC approximation.
         """
-        if self._trace is None:
+        if self._trace is not None:
+            return self._trace
 
-            if not self._input_covariances and not self._gradient_covariances:
-                self._compute_kfac()
+        if not self._input_covariances and not self._gradient_covariances:
+            self._compute_kfac()
 
-            self._trace = 0.0
-            for mod_name, param_pos in self._mapping.items():
-                tr_ggT = self._gradient_covariances[mod_name].trace()
-                if (
-                    not self._separate_weight_and_bias
-                    and "weight" in param_pos.keys()
-                    and "bias" in param_pos.keys()
-                ):
-                    self._trace += self._input_covariances[mod_name].trace() * tr_ggT
-                else:
-                    for p_name in param_pos.keys():
-                        tr_mod = tr_ggT.clone()
-                        if p_name == "weight":
-                            tr_mod *= self._input_covariances[mod_name].trace()
-                        self._trace += tr_mod
-
+        self._trace = 0.0
+        for mod_name, param_pos in self._mapping.items():
+            tr_ggT = self._gradient_covariances[mod_name].trace()
+            if (
+                not self._separate_weight_and_bias
+                and "weight" in param_pos.keys()
+                and "bias" in param_pos.keys()
+            ):
+                self._trace += self._input_covariances[mod_name].trace() * tr_ggT
+            else:
+                for p_name in param_pos.keys():
+                    self._trace += tr_ggT * (
+                        self._input_covariances[mod_name].trace()
+                        if p_name == "weight"
+                        else 1
+                    )
         return self._trace
 
     @property
@@ -818,76 +819,82 @@ class KFACLinearOperator(_LinearOperator):
         Returns:
             Determinant of the KFAC approximation.
         """
-        if self._det is None:
+        if self._det is not None:
+            return self._det
 
-            if not self._input_covariances and not self._gradient_covariances:
-                self._compute_kfac()
+        if not self._input_covariances and not self._gradient_covariances:
+            self._compute_kfac()
 
-            self._det = 1.0
-            for mod_name, param_pos in self._mapping.items():
-                m = len(self._gradient_covariances[mod_name])
-                det_ggT = self._gradient_covariances[mod_name].det()
-                if (
-                    not self._separate_weight_and_bias
-                    and "weight" in param_pos.keys()
-                    and "bias" in param_pos.keys()
-                ):
-                    n = len(self._input_covariances[mod_name])
-                    det_aaT = self._input_covariances[mod_name].det()
-                    self._det *= det_aaT.pow(m) * det_ggT.pow(n)
-                else:
-                    for p_name in param_pos.keys():
-                        if p_name == "weight":
-                            n = len(self._input_covariances[mod_name])
-                            self._det *= self._input_covariances[mod_name].det().pow(m)
-                        else:
-                            n = 1
-                        self._det *= det_ggT.pow(n)
-
+        self._det = 1.0
+        for mod_name, param_pos in self._mapping.items():
+            m = len(self._gradient_covariances[mod_name])
+            det_ggT = self._gradient_covariances[mod_name].det()
+            if (
+                not self._separate_weight_and_bias
+                and "weight" in param_pos.keys()
+                and "bias" in param_pos.keys()
+            ):
+                n = len(self._input_covariances[mod_name])
+                det_aaT = self._input_covariances[mod_name].det()
+                self._det *= det_aaT.pow(m) * det_ggT.pow(n)
+            else:
+                for p_name in param_pos.keys():
+                    n = (
+                        len(self._input_covariances[mod_name])
+                        if p_name == "weight"
+                        else 1
+                    )
+                    self._det *= det_ggT.pow(n) * (
+                        self._input_covariances[mod_name].det().pow(m)
+                        if p_name == "weight"
+                        else 1
+                    )
         return self._det
 
     @property
     def logdet(self) -> Tensor:
         r"""Log determinant of the KFAC approximation.
 
+        More numerically stable than the ``det`` property.
         Will call ``_compute_kfac`` if it has not been called before and will cache the
         log determinant until ``_compute_kfac`` is called again. Uses the property of
         the Kronecker product that
         :math:`\log \det(A \otimes B) = m \log \det(A) + n \log \det(B)`, where
         :math:`A \in \mathbb{R}^{n \times n}` and :math:`B \in \mathbb{R}^{m \times m}`.
-        More numerically stable than the ``det`` property.
 
         Returns:
             Log determinant of the KFAC approximation.
         """
-        if self._logdet is None:
+        if self._logdet is not None:
+            return self._logdet
 
-            if not self._input_covariances and not self._gradient_covariances:
-                self._compute_kfac()
+        if not self._input_covariances and not self._gradient_covariances:
+            self._compute_kfac()
 
-            self._logdet = 0.0
-            for mod_name, param_pos in self._mapping.items():
-                m = len(self._gradient_covariances[mod_name])
-                logdet_ggT = self._gradient_covariances[mod_name].logdet()
-                if (
-                    not self._separate_weight_and_bias
-                    and "weight" in param_pos.keys()
-                    and "bias" in param_pos.keys()
-                ):
-                    n = len(self._input_covariances[mod_name])
-                    logdet_aaT = self._input_covariances[mod_name].logdet()
-                    self._logdet += m * logdet_aaT + n * logdet_ggT
-                else:
-                    for p_name in param_pos.keys():
-                        if p_name == "weight":
-                            n = len(self._input_covariances[mod_name])
-                            self._logdet += (
-                                m * self._input_covariances[mod_name].logdet()
-                            )
-                        else:
-                            n = 1
-                        self._logdet += n * logdet_ggT
-
+        self._logdet = 0.0
+        for mod_name, param_pos in self._mapping.items():
+            m = len(self._gradient_covariances[mod_name])
+            logdet_ggT = self._gradient_covariances[mod_name].logdet()
+            if (
+                not self._separate_weight_and_bias
+                and "weight" in param_pos.keys()
+                and "bias" in param_pos.keys()
+            ):
+                n = len(self._input_covariances[mod_name])
+                logdet_aaT = self._input_covariances[mod_name].logdet()
+                self._logdet += m * logdet_aaT + n * logdet_ggT
+            else:
+                for p_name in param_pos.keys():
+                    n = (
+                        len(self._input_covariances[mod_name])
+                        if p_name == "weight"
+                        else 1
+                    )
+                    self._logdet += n * logdet_ggT + (
+                        m * self._input_covariances[mod_name].logdet()
+                        if p_name == "weight"
+                        else 0
+                    )
         return self._logdet
 
     @property
@@ -901,29 +908,28 @@ class KFACLinearOperator(_LinearOperator):
         Returns:
             Frobenius norm of the KFAC approximation.
         """
-        if self._frobenius_norm is None:
+        if self._frobenius_norm is not None:
+            return self._frobenius_norm
 
-            if not self._input_covariances and not self._gradient_covariances:
-                self._compute_kfac()
+        if not self._input_covariances and not self._gradient_covariances:
+            self._compute_kfac()
 
-            self._frobenius_norm = 0.0
-            for mod_name, param_pos in self._mapping.items():
-                squared_frob_ggT = self._gradient_covariances[mod_name].square().sum()
-                if (
-                    not self._separate_weight_and_bias
-                    and "weight" in param_pos.keys()
-                    and "bias" in param_pos.keys()
-                ):
-                    squared_frob_aaT = self._input_covariances[mod_name].square().sum()
-                    self._frobenius_norm += squared_frob_aaT * squared_frob_ggT
-                else:
-                    for p_name in param_pos.keys():
-                        squared_frob_mod = squared_frob_ggT.clone()
-                        if p_name == "weight":
-                            squared_frob_mod *= (
-                                self._input_covariances[mod_name].square().sum()
-                            )
-                        self._frobenius_norm += squared_frob_mod
-            self._frobenius_norm.sqrt_()
-
+        self._frobenius_norm = 0.0
+        for mod_name, param_pos in self._mapping.items():
+            squared_frob_ggT = self._gradient_covariances[mod_name].square().sum()
+            if (
+                not self._separate_weight_and_bias
+                and "weight" in param_pos.keys()
+                and "bias" in param_pos.keys()
+            ):
+                squared_frob_aaT = self._input_covariances[mod_name].square().sum()
+                self._frobenius_norm += squared_frob_aaT * squared_frob_ggT
+            else:
+                for p_name in param_pos.keys():
+                    self._frobenius_norm += squared_frob_ggT * (
+                        self._input_covariances[mod_name].square().sum()
+                        if p_name == "weight"
+                        else 1
+                    )
+        self._frobenius_norm.sqrt_()
         return self._frobenius_norm

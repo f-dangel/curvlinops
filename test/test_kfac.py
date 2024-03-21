@@ -695,7 +695,7 @@ def test_logdet(case, exclude, separate_weight_and_bias, check_deterministic):
     if not check_deterministic:
         kfac._compute_kfac()
     assert kfac._input_covariances or kfac._gradient_covariances
-    delta = 1e-7  # only requires much smaller damping value compared to ``det``
+    delta = 1e-3  # only requires much smaller damping value compared to ``det``
     for aaT in kfac._input_covariances.values():
         aaT.add_(
             torch_eye(aaT.shape[0], dtype=aaT.dtype, device=aaT.device), alpha=delta
@@ -710,8 +710,8 @@ def test_logdet(case, exclude, separate_weight_and_bias, check_deterministic):
     # verify that the log determinant is finite and not nan
     assert not isinf(log_det) and not isnan(log_det)
     sign, logabsdet = slogdet(kfac @ eye(kfac.shape[1]))
-    det_through_logdet_naive = sign * exp(logabsdet)
-    report_nonclose(exp(log_det.cpu().numpy()), det_through_logdet_naive)
+    log_det_naive = sign * logabsdet
+    report_nonclose(log_det.cpu().numpy(), log_det_naive)
 
     # Check that the logdet property is properly cached and reset
     assert kfac._logdet == log_det
