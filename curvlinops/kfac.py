@@ -240,6 +240,7 @@ class KFACLinearOperator(_LinearOperator):
         """Reset matrix properties."""
         self._trace = None
         self._det = None
+        self._logdet = None
         self._frobenius_norm = None
 
     def to_device(self, device: device):
@@ -842,7 +843,52 @@ class KFACLinearOperator(_LinearOperator):
                         else:
                             n = 1
                         self._det *= det_ggT.pow(n)
+
         return self._det
+
+    @property
+    def logdet(self) -> Tensor:
+        r"""Log determinant of the KFAC approximation.
+
+        Will call ``_compute_kfac`` if it has not been called before and will cache the
+        log determinant until ``_compute_kfac`` is called again. Uses the property of
+        the Kronecker product that
+        :math:`\log \det(A \otimes B) = m \log \det(A) + n \log \det(B)`, where
+        :math:`A \in \mathbb{R}^{n \times n}` and :math:`B \in \mathbb{R}^{m \times m}`.
+        More numerically stable than the ``det`` property.
+
+        Returns:
+            Log determinant of the KFAC approximation.
+        """
+        if self._logdet is None:
+
+            if not self._input_covariances and not self._gradient_covariances:
+                self._compute_kfac()
+
+            self._logdet = 0.0
+            for mod_name, param_pos in self._mapping.items():
+                m = len(self._gradient_covariances[mod_name])
+                logdet_ggT = self._gradient_covariances[mod_name].logdet()
+                if (
+                    not self._separate_weight_and_bias
+                    and "weight" in param_pos.keys()
+                    and "bias" in param_pos.keys()
+                ):
+                    n = len(self._input_covariances[mod_name])
+                    logdet_aaT = self._input_covariances[mod_name].logdet()
+                    self._logdet += m * logdet_aaT + n * logdet_ggT
+                else:
+                    for p_name in param_pos.keys():
+                        if p_name == "weight":
+                            n = len(self._input_covariances[mod_name])
+                            self._logdet += (
+                                m * self._input_covariances[mod_name].logdet()
+                            )
+                        else:
+                            n = 1
+                        self._logdet += n * logdet_ggT
+
+        return self._logdet
 
     @property
     def frobenius_norm(self) -> Tensor:
