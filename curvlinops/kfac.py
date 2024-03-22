@@ -886,7 +886,7 @@ class KFACLinearOperator(_LinearOperator):
             else:
                 for p_name in param_pos.keys():
                     n = (
-                        self._input_covariances[mod_name][0]
+                        self._input_covariances[mod_name].shape[0]
                         if p_name == "weight"
                         else 1
                     )

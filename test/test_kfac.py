@@ -12,7 +12,7 @@ from typing import Dict, Iterable, List, Tuple, Union
 
 from einops import rearrange
 from einops.layers.torch import Rearrange
-from numpy import exp, eye
+from numpy import eye
 from numpy.linalg import det, norm, slogdet
 from pytest import mark, raises, skip
 from scipy.linalg import block_diag
