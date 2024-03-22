@@ -304,7 +304,7 @@ class KFACLinearOperator(_LinearOperator):
                 raise ValueError(
                     "Number of input tensors must match the number of parameter tensors."
                 )
-            column_values = {len(M) for M in M_torch}
+            column_values = {M.shape[0] for M in M_torch}
             if len(column_values) != 1:
                 raise ValueError(
                     "Number of columns must be equal for all tensors. "
@@ -827,20 +827,20 @@ class KFACLinearOperator(_LinearOperator):
 
         self._det = 1.0
         for mod_name, param_pos in self._mapping.items():
-            m = len(self._gradient_covariances[mod_name])
+            m = self._gradient_covariances[mod_name].shape[0]
             det_ggT = self._gradient_covariances[mod_name].det()
             if (
                 not self._separate_weight_and_bias
                 and "weight" in param_pos.keys()
                 and "bias" in param_pos.keys()
             ):
-                n = len(self._input_covariances[mod_name])
+                n = self._input_covariances[mod_name].shape[0]
                 det_aaT = self._input_covariances[mod_name].det()
                 self._det *= det_aaT.pow(m) * det_ggT.pow(n)
             else:
                 for p_name in param_pos.keys():
                     n = (
-                        len(self._input_covariances[mod_name])
+                        self._input_covariances[mod_name].shape[0]
                         if p_name == "weight"
                         else 1
                     )
@@ -873,20 +873,20 @@ class KFACLinearOperator(_LinearOperator):
 
         self._logdet = 0.0
         for mod_name, param_pos in self._mapping.items():
-            m = len(self._gradient_covariances[mod_name])
+            m = self._gradient_covariances[mod_name].shape[0]
             logdet_ggT = self._gradient_covariances[mod_name].logdet()
             if (
                 not self._separate_weight_and_bias
                 and "weight" in param_pos.keys()
                 and "bias" in param_pos.keys()
             ):
-                n = len(self._input_covariances[mod_name])
+                n = self._input_covariances[mod_name].shape[0]
                 logdet_aaT = self._input_covariances[mod_name].logdet()
                 self._logdet += m * logdet_aaT + n * logdet_ggT
             else:
                 for p_name in param_pos.keys():
                     n = (
-                        len(self._input_covariances[mod_name])
+                        self._input_covariances[mod_name][0]
                         if p_name == "weight"
                         else 1
                     )
