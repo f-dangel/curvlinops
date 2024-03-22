@@ -222,6 +222,9 @@ class KFACLinearOperator(_LinearOperator):
         self._gradient_covariances: Dict[str, Tensor] = {}
         self._mapping = self.compute_parameter_mapping(params, model_func)
 
+        # Properties of the full matrix KFAC approximation are initialized to `None`
+        self._reset_matrix_properties()
+
         super().__init__(
             model_func,
             loss_func,
@@ -232,6 +235,13 @@ class KFACLinearOperator(_LinearOperator):
             shape=shape,
             num_data=num_data,
         )
+
+    def _reset_matrix_properties(self):
+        """Reset matrix properties."""
+        self._trace = None
+        self._det = None
+        self._logdet = None
+        self._frobenius_norm = None
 
     def to_device(self, device: device):
         """Load the linear operator to another device.
@@ -294,7 +304,7 @@ class KFACLinearOperator(_LinearOperator):
                 raise ValueError(
                     "Number of input tensors must match the number of parameter tensors."
                 )
-            column_values = {len(M) for M in M_torch}
+            column_values = {M.shape[0] for M in M_torch}
             if len(column_values) != 1:
                 raise ValueError(
                     "Number of columns must be equal for all tensors. "
@@ -441,6 +451,8 @@ class KFACLinearOperator(_LinearOperator):
 
     def _compute_kfac(self):
         """Compute and cache KFAC's Kronecker factors for future ``matmat``s."""
+        self._reset_matrix_properties()
+
         # install forward and backward hooks
         hook_handles: List[RemovableHandle] = []
 
@@ -757,3 +769,167 @@ class KFACLinearOperator(_LinearOperator):
             raise NotImplementedError("Found parameters in un-supported layers.")
 
         return positions
+
+    @property
+    def trace(self) -> Tensor:
+        r"""Trace of the KFAC approximation.
+
+        Will call ``_compute_kfac`` if it has not been called before and will cache the
+        trace until ``_compute_kfac`` is called again. Uses the property of the
+        Kronecker product that
+        :math:`\text{tr}(A \otimes B) = \text{tr}(A) \text{tr}(B)`.
+
+        Returns:
+            Trace of the KFAC approximation.
+        """
+        if self._trace is not None:
+            return self._trace
+
+        if not self._input_covariances and not self._gradient_covariances:
+            self._compute_kfac()
+
+        self._trace = 0.0
+        for mod_name, param_pos in self._mapping.items():
+            tr_ggT = self._gradient_covariances[mod_name].trace()
+            if (
+                not self._separate_weight_and_bias
+                and "weight" in param_pos.keys()
+                and "bias" in param_pos.keys()
+            ):
+                self._trace += self._input_covariances[mod_name].trace() * tr_ggT
+            else:
+                for p_name in param_pos.keys():
+                    self._trace += tr_ggT * (
+                        self._input_covariances[mod_name].trace()
+                        if p_name == "weight"
+                        else 1
+                    )
+        return self._trace
+
+    @property
+    def det(self) -> Tensor:
+        r"""Determinant of the KFAC approximation.
+
+        Will call ``_compute_kfac`` if it has not been called before and will cache the
+        determinant until ``_compute_kfac`` is called again. Uses the property of the
+        Kronecker product that :math:`\det(A \otimes B) = \det(A)^{m} \det(B)^{n}`,
+        where
+        :math:`A \in \mathbb{R}^{n \times n}` and :math:`B \in \mathbb{R}^{m \times m}`.
+
+        Returns:
+            Determinant of the KFAC approximation.
+        """
+        if self._det is not None:
+            return self._det
+
+        if not self._input_covariances and not self._gradient_covariances:
+            self._compute_kfac()
+
+        self._det = 1.0
+        for mod_name, param_pos in self._mapping.items():
+            m = self._gradient_covariances[mod_name].shape[0]
+            det_ggT = self._gradient_covariances[mod_name].det()
+            if (
+                not self._separate_weight_and_bias
+                and "weight" in param_pos.keys()
+                and "bias" in param_pos.keys()
+            ):
+                n = self._input_covariances[mod_name].shape[0]
+                det_aaT = self._input_covariances[mod_name].det()
+                self._det *= det_aaT.pow(m) * det_ggT.pow(n)
+            else:
+                for p_name in param_pos.keys():
+                    n = (
+                        self._input_covariances[mod_name].shape[0]
+                        if p_name == "weight"
+                        else 1
+                    )
+                    self._det *= det_ggT.pow(n) * (
+                        self._input_covariances[mod_name].det().pow(m)
+                        if p_name == "weight"
+                        else 1
+                    )
+        return self._det
+
+    @property
+    def logdet(self) -> Tensor:
+        r"""Log determinant of the KFAC approximation.
+
+        More numerically stable than the ``det`` property.
+        Will call ``_compute_kfac`` if it has not been called before and will cache the
+        log determinant until ``_compute_kfac`` is called again. Uses the property of
+        the Kronecker product that
+        :math:`\log \det(A \otimes B) = m \log \det(A) + n \log \det(B)`, where
+        :math:`A \in \mathbb{R}^{n \times n}` and :math:`B \in \mathbb{R}^{m \times m}`.
+
+        Returns:
+            Log determinant of the KFAC approximation.
+        """
+        if self._logdet is not None:
+            return self._logdet
+
+        if not self._input_covariances and not self._gradient_covariances:
+            self._compute_kfac()
+
+        self._logdet = 0.0
+        for mod_name, param_pos in self._mapping.items():
+            m = self._gradient_covariances[mod_name].shape[0]
+            logdet_ggT = self._gradient_covariances[mod_name].logdet()
+            if (
+                not self._separate_weight_and_bias
+                and "weight" in param_pos.keys()
+                and "bias" in param_pos.keys()
+            ):
+                n = self._input_covariances[mod_name].shape[0]
+                logdet_aaT = self._input_covariances[mod_name].logdet()
+                self._logdet += m * logdet_aaT + n * logdet_ggT
+            else:
+                for p_name in param_pos.keys():
+                    n = (
+                        self._input_covariances[mod_name].shape[0]
+                        if p_name == "weight"
+                        else 1
+                    )
+                    self._logdet += n * logdet_ggT + (
+                        m * self._input_covariances[mod_name].logdet()
+                        if p_name == "weight"
+                        else 0
+                    )
+        return self._logdet
+
+    @property
+    def frobenius_norm(self) -> Tensor:
+        r"""Frobenius norm of the KFAC approximation.
+
+        Will call ``_compute_kfac`` if it has not been called before and will cache the
+        Frobenius norm until ``_compute_kfac`` is called again. Uses the property of the
+        Kronecker product that :math:`\|A \otimes B\|_F = \|A\|_F \|B\|_F`.
+
+        Returns:
+            Frobenius norm of the KFAC approximation.
+        """
+        if self._frobenius_norm is not None:
+            return self._frobenius_norm
+
+        if not self._input_covariances and not self._gradient_covariances:
+            self._compute_kfac()
+
+        self._frobenius_norm = 0.0
+        for mod_name, param_pos in self._mapping.items():
+            squared_frob_ggT = self._gradient_covariances[mod_name].square().sum()
+            if (
+                not self._separate_weight_and_bias
+                and "weight" in param_pos.keys()
+                and "bias" in param_pos.keys()
+            ):
+                squared_frob_aaT = self._input_covariances[mod_name].square().sum()
+                self._frobenius_norm += squared_frob_aaT * squared_frob_ggT
+            else:
+                for p_name in param_pos.keys():
+                    self._frobenius_norm += squared_frob_ggT * (
+                        self._input_covariances[mod_name].square().sum()
+                        if p_name == "weight"
+                        else 1
+                    )
+        self._frobenius_norm.sqrt_()
+        return self._frobenius_norm
