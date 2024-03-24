@@ -566,7 +566,7 @@ class KFACLinearOperator(_LinearOperator):
             # We choose to set the gradient covariance to the identity explicitly for
             # the sake of simplicity, such that the rest of the code here and for
             # `KFACInverseLinearOperator` does not have to be adapted. This could be
-            # decrease to improve the memory costs.
+            # adopted to decrease the memory costs.
             for mod_name, param_pos in self._mapping.items():
                 param = self._params[next(iter(param_pos.values()))]
                 self._gradient_covariances[mod_name] = eye(
