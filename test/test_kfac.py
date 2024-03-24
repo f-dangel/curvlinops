@@ -316,7 +316,7 @@ def test_kfac_inplace_activations(dev: device):
     report_nonclose(ggn, ggn_no_inplace)
 
 
-@mark.parametrize("fisher_type", ["type-2", "mc", "empirical"])
+@mark.parametrize("fisher_type", KFACLinearOperator._SUPPORTED_FISHER_TYPE)
 @mark.parametrize("loss", [MSELoss, CrossEntropyLoss], ids=["mse", "ce"])
 @mark.parametrize("reduction", ["mean", "sum"])
 @mark.parametrize("dev", DEVICES, ids=DEVICES_IDS)
@@ -717,3 +717,79 @@ def test_logdet(case, exclude, separate_weight_and_bias, check_deterministic):
     assert kfac._logdet == log_det
     kfac._compute_kfac()
     assert kfac._logdet is None
+
+
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+@mark.parametrize(
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
+@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
+def test_forward_only_fisher_type(
+    case: Tuple[Module, MSELoss, List[Parameter], Iterable[Tuple[Tensor, Tensor]]],
+    shuffle: bool,
+    exclude: str,
+    separate_weight_and_bias: bool,
+):
+    """Test the KFAC with forward-only Fisher (used for FOOF) implementation.
+
+    Args:
+        case: A fixture that returns a model, loss function, list of parameters, and
+            data.
+        shuffle: Whether to shuffle the parameters before computing the KFAC matrix.
+        exclude: Which parameters to exclude. Can be ``'weight'``, ``'bias'``,
+            or ``None``.
+        separate_weight_and_bias: Whether to treat weight and bias as separate blocks in
+            the KFAC matrix.
+    """
+    assert exclude in [None, "weight", "bias"]
+    model, loss_func, params, data = case
+    loss_average = None if loss_func.reduction == "sum" else "batch"
+
+    if exclude is not None:
+        names = {p.data_ptr(): name for name, p in model.named_parameters()}
+        params = [p for p in params if exclude not in names[p.data_ptr()]]
+
+    if shuffle:
+        permutation = randperm(len(params))
+        params = [params[i] for i in permutation]
+
+    # Compute KFAC with `fisher_type="empirical"` (could be any but "forward-only")
+    foof_simulated = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        loss_average=loss_average,
+        separate_weight_and_bias=separate_weight_and_bias,
+        fisher_type="empirical",
+    )
+    # Manually set all gradient covariances to the identity to simulate FOOF
+    for name, block in foof_simulated._gradient_covariances.items():
+        foof_simulated._gradient_covariances[name] = torch_eye(
+            block.shape[0], dtype=block.dtype, device=block.device
+        )
+    simulated_foof_mat = foof_simulated @ eye(foof_simulated.shape[1])
+
+    # Compute KFAC with `fisher_type="forward-only"`
+    foof = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        loss_average=loss_average,
+        separate_weight_and_bias=separate_weight_and_bias,
+        fisher_type="forward-only",
+    )
+    foof_mat = foof @ eye(foof.shape[1])
+
+    # Check for equivalence
+    assert len(foof_simulated._input_covariances) == len(foof._input_covariances)
+    assert len(foof_simulated._gradient_covariances) == len(foof._gradient_covariances)
+    report_nonclose(simulated_foof_mat, foof_mat)
+
+    # Check that input covariances were not computed
+    if exclude == "weight":
+        assert len(foof_simulated._input_covariances) == 0
+        assert len(foof._input_covariances) == 0
