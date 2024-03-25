@@ -569,6 +569,10 @@ class KFACLinearOperator(_LinearOperator):
             # `KFACInverseLinearOperator` does not have to be adapted. This could be
             # changed to decrease the memory costs.
             for mod_name, param_pos in self._mapping.items():
+                # We iterate over _mapping to get the module names corresponding to the
+                # parameters. We only need the output dimension of the module, but
+                # don't know whether the parameter is a weight or bias; therefore, we
+                # just call `next(iter(param_pos.values()))` to get the first parameter.
                 param = self._params[next(iter(param_pos.values()))]
                 self._gradient_covariances[mod_name] = eye(
                     param.shape[0], dtype=param.dtype, device=self._device
