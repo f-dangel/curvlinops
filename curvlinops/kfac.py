@@ -155,7 +155,8 @@ class KFACLinearOperator(_LinearOperator):
                 used which corresponds to the uncentered gradient covariance, or
                 the empirical Fisher. If ``'forward-only'``, the gradient covariances
                 will be identity matrices, see the FOOF method in
-                `Benzing, 2022 <https://arxiv.org/abs/2201.12250>`_.
+                `Benzing, 2022 <https://arxiv.org/abs/2201.12250>`_ or ISAAC in
+                `Petersen et al., 2023 <https://arxiv.org/abs/2305.00604>`_.
                 Defaults to ``'mc'``.
             mc_samples: The number of Monte-Carlo samples to use per data point.
                 Has to be set to ``1`` when ``fisher_type != 'mc'``.
