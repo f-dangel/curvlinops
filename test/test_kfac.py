@@ -793,3 +793,81 @@ def test_forward_only_fisher_type(
     if exclude == "weight":
         assert len(foof_simulated._input_covariances) == 0
         assert len(foof._input_covariances) == 0
+
+
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+@mark.parametrize(
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
+@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
+def test_forward_only_fisher_type_exact_case(
+    single_layer_case: Tuple[
+        Module, MSELoss, List[Parameter], Iterable[Tuple[Tensor, Tensor]]
+    ],
+    shuffle: bool,
+    exclude: str,
+    separate_weight_and_bias: bool,
+):
+    """Test KFAC with forward-only Fisher (FOOF) against exact GGN for one-layer model.
+
+    Consider linear regression with square loss, L =  R * \sum_n^N || W x_n - y_n ||^2,
+    where R is the reduction factor from the MSELoss. Per definition,
+    FOOF(W) = I \otimes (\sum_n x_n x_n^T / N). Hence, if R = 1 [reduction='sum'], we
+    have that GGN(W) = 2 * [I \otimes (\sum_n x_n x_n^T)] = 2 * N * FOOF(W).
+    If R = 1 / (N * C) [reduction='mean'], where C is the output dimension, we have
+    GGN(W) = 2 * R * [I \otimes (\sum_n x_n x_n^T)] = 2 / C * FOOF(W).
+
+    Args:
+        kfac_exact_case: A fixture that returns a model, loss function, list of
+            parameters, and data.
+        shuffle: Whether to shuffle the parameters before computing the KFAC matrix.
+        exclude: Which parameters to exclude. Can be ``'weight'``, ``'bias'``,
+            or ``None``.
+        separate_weight_and_bias: Whether to treat weight and bias as separate blocks in
+            the KFAC matrix.
+    """
+    assert exclude in [None, "weight", "bias"]
+    model, loss_func, params, data = single_layer_case
+    loss_average = None if loss_func.reduction == "sum" else "batch"
+
+    if exclude is not None:
+        names = {p.data_ptr(): name for name, p in model.named_parameters()}
+        params = [p for p in params if exclude not in names[p.data_ptr()]]
+
+    if shuffle:
+        permutation = randperm(len(params))
+        params = [params[i] for i in permutation]
+
+    # Compute exact block-diagonal GGN
+    ggn = ggn_block_diagonal(
+        model,
+        loss_func,
+        params,
+        data,
+        separate_weight_and_bias=separate_weight_and_bias,
+    )
+
+    # Compute KFAC with `fisher_type="forward-only"`
+    foof = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        loss_average=loss_average,
+        separate_weight_and_bias=separate_weight_and_bias,
+        fisher_type="forward-only",
+    )
+    foof_mat = foof @ eye(foof.shape[1])
+
+    # Check for equivalence
+    num_data = sum(X.shape[0] for X, _ in data)
+    out_dim = data[0][1].shape[1]
+    # See the docstring for the explanation of the scale
+    scale = num_data if loss_average is None else 1 / out_dim
+    report_nonclose(ggn, 2 * scale * foof_mat)
+
+    # Check that input covariances were not computed
+    if exclude == "weight":
+        assert len(foof._input_covariances) == 0

@@ -5,6 +5,7 @@ from test.kfac_cases import (
     KFAC_EXACT_CASES,
     KFAC_EXACT_ONE_DATUM_CASES,
     KFAC_WEIGHT_SHARING_EXACT_CASES,
+    SINGLE_LAYER_CASES,
 )
 from typing import Callable, Dict, Iterable, List, Tuple
 
@@ -112,6 +113,25 @@ def kfac_exact_one_datum_case(
     Iterable[Tuple[Tensor, Tensor]],
 ]:
     """Prepare a test case for which KFAC equals the GGN and one datum is used.
+
+    Yields:
+        A neural network, loss function, a list of parameters, and
+        a data set with a single datum.
+    """
+    case = request.param
+    yield initialize_case(case)
+
+
+@fixture(params=SINGLE_LAYER_CASES)
+def single_layer_case(
+    request,
+) -> Tuple[
+    Module,
+    Module,
+    List[Tensor],
+    Iterable[Tuple[Tensor, Tensor]],
+]:
+    """Prepare a test case with a single-layer model for which FOOF is exact.
 
     Yields:
         A neural network, loss function, a list of parameters, and

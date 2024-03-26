@@ -128,3 +128,41 @@ for case in KFAC_EXACT_ONE_DATUM_CASES_NO_DEVICE:
             "device": device,
         }
         KFAC_EXACT_ONE_DATUM_CASES.append(case_with_device)
+
+
+# Add test cases here, devices and loss function with different reductions will be
+# added automatically below
+SINGLE_LAYER_CASES_NO_DEVICE_NO_LOSS_FUNC = [
+    ###############################################################################
+    #                                  REGRESSION                                 #
+    ###############################################################################
+    # single-layer linear network with scalar output
+    {
+        "model_func": lambda: Linear(6, 1),
+        "data": lambda: [
+            (rand(5, 6), regression_targets((5, 1))),
+            (rand(5, 6), regression_targets((5, 1))),
+        ],
+        "seed": 0,
+    },
+    # single-layer linear network with vector output
+    {
+        "model_func": lambda: Linear(5, 3),
+        "data": lambda: [
+            (rand(7, 5), regression_targets((7, 3))),
+            (rand(7, 5), regression_targets((7, 3))),
+        ],
+        "seed": 0,
+    },
+]
+
+SINGLE_LAYER_CASES = []
+for case in SINGLE_LAYER_CASES_NO_DEVICE_NO_LOSS_FUNC:
+    for device in get_available_devices():
+        for reduction in ["mean", "sum"]:
+            case_with_device_and_loss_func = {
+                **case,
+                "device": device,
+                "loss_func": partial(MSELoss, reduction=reduction),
+            }
+            SINGLE_LAYER_CASES.append(case_with_device_and_loss_func)
