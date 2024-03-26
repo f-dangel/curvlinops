@@ -6,6 +6,7 @@ from test.kfac_cases import (
     KFAC_EXACT_ONE_DATUM_CASES,
     KFAC_WEIGHT_SHARING_EXACT_CASES,
     SINGLE_LAYER_CASES,
+    SINGLE_LAYER_WEIGHT_SHARING_CASES,
 )
 from typing import Callable, Dict, Iterable, List, Tuple
 
@@ -132,6 +133,25 @@ def single_layer_case(
     Iterable[Tuple[Tensor, Tensor]],
 ]:
     """Prepare a test case with a single-layer model for which FOOF is exact.
+
+    Yields:
+        A neural network, loss function, a list of parameters, and
+        a data set with a single datum.
+    """
+    case = request.param
+    yield initialize_case(case)
+
+
+@fixture(params=SINGLE_LAYER_WEIGHT_SHARING_CASES)
+def single_layer_weight_sharing_case(
+    request,
+) -> Tuple[
+    Module,
+    Module,
+    List[Tensor],
+    Iterable[Tuple[Tensor, Tensor]],
+]:
+    """Test case with a single-layer model with weight-sharing for which FOOF is exact.
 
     Yields:
         A neural network, loss function, a list of parameters, and
