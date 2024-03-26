@@ -810,7 +810,7 @@ def test_forward_only_fisher_type_exact_case(
     exclude: str,
     separate_weight_and_bias: bool,
 ):
-    """Test KFAC with forward-only Fisher (FOOF) against exact GGN for one-layer model.
+    r"""Test KFAC with forward-only Fisher (FOOF) against exact GGN for one-layer model.
 
     Consider linear regression with square loss, L =  R * \sum_n^N || W x_n - y_n ||^2,
     where R is the reduction factor from the MSELoss. Per definition,
