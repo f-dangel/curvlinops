@@ -863,9 +863,128 @@ def test_forward_only_fisher_type_exact_case(
 
     # Check for equivalence
     num_data = sum(X.shape[0] for X, _ in data)
-    out_dim = data[0][1].shape[1]
+    y: Tensor = data[0][1]
+    out_dim = y.shape[1]
     # See the docstring for the explanation of the scale
     scale = num_data if loss_average is None else 1 / out_dim
+    report_nonclose(ggn, 2 * scale * foof_mat)
+
+    # Check that input covariances were not computed
+    if exclude == "weight":
+        assert len(foof._input_covariances) == 0
+
+
+@mark.parametrize("setting", ["expand", "reduce"])
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+@mark.parametrize(
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
+@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
+def test_forward_only_fisher_type_exact_weight_sharing_case(
+    single_layer_weight_sharing_case: Tuple[
+        Union[WeightShareModel, Conv2dModel],
+        MSELoss,
+        List[Parameter],
+        Dict[str, Iterable[Tuple[Tensor, Tensor]]],
+    ],
+    setting: str,
+    shuffle: bool,
+    exclude: str,
+    separate_weight_and_bias: bool,
+):
+    r"""Test KFAC with forward-only Fisher (FOOF) against GGN for weight-sharing models.
+
+    Expand setting: Consider linear regression with square loss,
+    L =  R * \sum_n^N \sum_s^S || W x_{n,s} - y_{n,s} ||^2, where R is the reduction
+    factor from the MSELoss and S is the weight-sharing dimension size. Per definition,
+    FOOF(W) = I \otimes (\sum_n \sum_s^S x_{n,s} x_{n,s}^T / (N * S)).
+    Hence, if R = 1 [reduction='sum'], we have that
+    GGN(W) = 2 * [I \otimes (\sum_n \sum_s^S x_{n,s} x_{n,s}^T)] = 2 * N * S * FOOF(W).
+    If R = 1 / (N * C * S) [reduction='mean'], where C is the output dimension, we have
+    GGN(W) = 2 * R * [I \otimes (\sum_n \sum_s^S x_{n,s} x_{n,s}^T)] = 2 / C * FOOF(W).
+
+    Reduce setting: Consider linear regression with square loss,
+    L =  R * \sum_n^N || W x_n - y_n ||^2, where R is the reduction factor from the
+    MSELoss. Per definition,
+    FOOF(W) = I \otimes (\sum_n (\sum_s^S x_{n,s} \sum_s^S x_{n,s}^T) / (N * S^2)),
+    where S is the weight-sharing dimension size. Hence, if R = 1 [reduction='sum'], we
+    have that
+    GGN(W) = 2 * [I \otimes (\sum_n \sum_s^S x_{n,s} \sum_s^S x_{n,s}^T) / S^2]
+    = 2 * N * FOOF(W) (assumes the mean/average pooling as reduction function).
+    If R = 1 / (N * C) [reduction='mean'], where C is the output dimension, we have
+    GGN(W) = 2 * R * [I \otimes (\sum_n \sum_s^S x_{n,s} \sum_s^S x_{n,s}^T) / S^2]
+    = 2 / C * FOOF(W) (assumes the mean/average pooling as reduction function).
+
+    Args:
+        single_layer_weight_sharing_case: A fixture that returns a model, loss function,
+            list of parameters, and data.
+        setting: The weight-sharing setting to use. Can be ``'expand'`` or ``'reduce'``.
+        shuffle: Whether to shuffle the parameters before computing the KFAC matrix.
+        exclude: Which parameters to exclude. Can be ``'weight'``, ``'bias'``,
+            or ``None``.
+        separate_weight_and_bias: Whether to treat weight and bias as separate blocks in
+            the KFAC matrix.
+    """
+    assert exclude in [None, "weight", "bias"]
+    model, loss_func, params, data = single_layer_weight_sharing_case
+    model.setting = setting
+    if isinstance(model, Conv2dModel):
+        # parameters are only initialized after the setting property is set
+        params = [p for p in model.parameters() if p.requires_grad]
+    data = data[setting]
+
+    # set appropriate loss_average argument based on loss reduction and setting
+    if loss_func.reduction == "mean":
+        if setting == "expand":
+            loss_average = "batch+sequence"
+        else:
+            loss_average = "batch"
+    else:
+        loss_average = None
+
+    if exclude is not None:
+        names = {p.data_ptr(): name for name, p in model.named_parameters()}
+        params = [p for p in params if exclude not in names[p.data_ptr()]]
+
+    if shuffle:
+        permutation = randperm(len(params))
+        params = [params[i] for i in permutation]
+
+    ggn = ggn_block_diagonal(
+        model,
+        loss_func,
+        params,
+        data,
+        separate_weight_and_bias=separate_weight_and_bias,
+    )
+    foof = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        fisher_type="forward-only",
+        kfac_approx=setting,  # choose KFAC approximation consistent with setting
+        loss_average=loss_average,
+        separate_weight_and_bias=separate_weight_and_bias,
+    )
+    foof_mat = foof @ eye(foof.shape[1])
+
+    # Check for equivalence
+    num_data = sum(X.shape[0] for X, _ in data)
+    y: Tensor = data[0][1]
+    out_dim = y.shape[-1]
+    # See the docstring for the explanation of the scale
+    scale = num_data if loss_average is None else 1 / out_dim
+    if loss_average is None and setting == "expand":
+        X: Tensor = data[0][0]
+        sequence_length = (
+            (X.shape[-2] + 1) * (X.shape[-1] + 1)
+            if isinstance(model, Conv2dModel)
+            else X.shape[1:-1].numel()
+        )
+        scale *= sequence_length
     report_nonclose(ggn, 2 * scale * foof_mat)
 
     # Check that input covariances were not computed
