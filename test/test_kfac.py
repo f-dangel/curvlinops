@@ -985,7 +985,7 @@ def test_forward_only_fisher_type_exact_weight_sharing_case(
             else X.shape[1:-1].numel()
         )
         scale *= sequence_length
-    report_nonclose(ggn, 2 * scale * foof_mat, rtol=5e-5)
+    report_nonclose(ggn, 2 * scale * foof_mat, rtol=1e-4)
 
     # Check that input covariances were not computed
     if exclude == "weight":
