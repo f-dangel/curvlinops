@@ -286,7 +286,7 @@ class FisherMCLinearOperator(_LinearOperator):
             if not unique.issubset({0, 1}):
                 raise NotImplementedError(
                     "Only binary targets (0, 1) are currently supported with"
-                    + f"BCEWithLogitsLoss. Got {unique}."
+                    + f" BCEWithLogitsLoss. Got {unique}."
                 )
             prob = output.sigmoid()
             # repeat ``num_sample`` times along a new leading axis
