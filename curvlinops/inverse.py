@@ -11,6 +11,8 @@ from torch.linalg import cholesky, eigh
 
 from curvlinops.kfac import KFACLinearOperator
 
+KFAC_INV_TYPE = Union[Optional[Tensor], Tuple[Optional[Tensor], Optional[Tensor]]]
+
 
 class _InverseLinearOperator(LinearOperator):
     """Base class for (approximate) inverses of linear operators."""
@@ -258,12 +260,8 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
         self._min_damping = min_damping
         self._use_exact_damping = use_exact_damping
         self._cache = cache
-        self._inverse_input_covariances: Dict[
-            str, Union[Optional[Tensor], Tuple[Optional[Tensor], Optional[Tensor]]]
-        ] = {}
-        self._inverse_gradient_covariances: Dict[
-            str, Union[Optional[Tensor], Tuple[Optional[Tensor], Optional[Tensor]]]
-        ] = {}
+        self._inverse_input_covariances: Dict[str, KFAC_INV_TYPE] = {}
+        self._inverse_gradient_covariances: Dict[str, KFAC_INV_TYPE] = {}
 
     def _compute_damping(
         self, aaT: Optional[Tensor], ggT: Optional[Tensor]
@@ -294,10 +292,7 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
 
     def _compute_inverse_factors(
         self, aaT: Optional[Tensor], ggT: Optional[Tensor]
-    ) -> Tuple[
-        Union[Optional[Tensor], Tuple[Optional[Tensor], Optional[Tensor]]],
-        Union[Optional[Tensor], Tuple[Optional[Tensor], Optional[Tensor]]],
-    ]:
+    ) -> Tuple[KFAC_INV_TYPE, KFAC_INV_TYPE]:
         """Compute the inverses of the Kronecker factors for a given layer.
 
         Args:
@@ -336,10 +331,9 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
             )
             return aaT_inv, ggT_inv
 
-    def _compute_or_get_cached_inverse(self, name: str) -> Tuple[
-        Union[Optional[Tensor], Tuple[Optional[Tensor], Optional[Tensor]]],
-        Union[Optional[Tensor], Tuple[Optional[Tensor], Optional[Tensor]]],
-    ]:
+    def _compute_or_get_cached_inverse(
+        self, name: str
+    ) -> Tuple[KFAC_INV_TYPE, KFAC_INV_TYPE]:
         """Invert the Kronecker factors of the KFACLinearOperator or retrieve them.
 
         Args:
@@ -364,7 +358,92 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
 
         return aaT_inv, ggT_inv
 
-    def torch_matmat(  # noqa: C901
+    def _left_and_right_multiply(
+        self, M_joint: Tensor, aaT_inv: KFAC_INV_TYPE, ggT_inv: KFAC_INV_TYPE
+    ) -> Tensor:
+        """Left and right multiply matrix with inverse Kronecker factors.
+
+        Args:
+            M_joint: Matrix for multiplication.
+            aaT_inv: Inverse of the input covariance Kronecker factor.
+            ggT_inv: Inverse of the gradient covariance Kronecker factor.
+
+        Returns:
+            Matrix-multiplication result ``KFAC⁻¹ @ M_joint``.
+        """
+        if self._use_exact_damping:
+            # Perform damped preconditioning in KFE, e.g. see equation (21) in
+            # https://arxiv.org/abs/2308.03296.
+            aaT_eigvecs, aaT_eigvals = aaT_inv
+            ggT_eigvecs, ggT_eigvals = ggT_inv
+            M_joint = einsum(
+                ggT_eigvecs, M_joint, aaT_eigvecs, "i j, m i k, k l -> m j l"
+            )
+            M_joint.div_(outer(ggT_eigvals, aaT_eigvals).add_(self._damping))
+            M_joint = einsum(
+                ggT_eigvecs, M_joint, aaT_eigvecs, "i j, m j k, l k -> m i l"
+            )
+        else:
+            M_joint = einsum(ggT_inv, M_joint, aaT_inv, "i j, m j k, k l -> m i l")
+        return M_joint
+
+    def _separate_left_and_right_multiply(
+        self,
+        M_torch: Tensor,
+        param_pos: Dict[str, int],
+        aaT_inv: KFAC_INV_TYPE,
+        ggT_inv: KFAC_INV_TYPE,
+    ) -> Tensor:
+        """Multiply matrix with inverse Kronecker factors for separated weight and bias.
+
+        Args:
+            M_torch: Matrix for multiplication.
+            param_pos: Dictionary with positions of the weight and bias parameters.
+            aaT_inv: Inverse of the input covariance Kronecker factor.
+            ggT_inv: Inverse of the gradient covariance Kronecker factor.
+
+        Returns:
+            Matrix-multiplication result ``KFAC⁻¹ @ M_torch``.
+        """
+        if self._use_exact_damping:
+            # Perform damped preconditioning in KFE, e.g. see equation (21) in
+            # https://arxiv.org/abs/2308.03296.
+            aaT_eigvecs, aaT_eigvals = aaT_inv
+            ggT_eigvecs, ggT_eigvals = ggT_inv
+
+        for p_name, pos in param_pos.items():
+            # for weights we need to multiply from the right with aaT
+            # for weights and biases we need to multiply from the left with ggT
+            if p_name == "weight":
+                M_w = rearrange(M_torch[pos], "m c_out ... -> m c_out (...)")
+                aaT_fac = aaT_eigvecs if self._use_exact_damping else aaT_inv
+                M_torch[pos] = einsum(M_w, aaT_fac, "m i j, j k -> m i k")
+
+            ggT_fac = ggT_eigvecs if self._use_exact_damping else ggT_inv
+            dims = (
+                "m i ... -> m j ..."
+                if self._use_exact_damping
+                else " m j ... -> m i ..."
+            )
+            M_torch[pos] = einsum(ggT_fac, M_torch[pos], f"i j, {dims}")
+
+            if self._use_exact_damping:
+                if p_name == "weight":
+                    M_torch[pos].div_(
+                        outer(ggT_eigvals, aaT_eigvals).add_(self._damping)
+                    )
+                    M_torch[pos] = einsum(
+                        M_torch[pos], aaT_eigvecs, "m i j, k j -> m i k"
+                    )
+                else:
+                    M_torch[pos].div_(ggT_eigvals.add_(self._damping))
+                M_torch[pos] = einsum(
+                    ggT_eigvecs, M_torch[pos], "i j, m j ... -> m i ..."
+                )
+
+        return M_torch
+
+    def torch_matmat(
         self, M_torch: Union[Tensor, List[Tensor]]
     ) -> Union[Tensor, List[Tensor]]:
         """Apply the inverse of KFAC to a matrix (multiple vectors) in PyTorch.
@@ -380,7 +459,7 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
                 If tensor, has shape ``[D, K]`` with some ``K``.
 
         Returns:
-            Matrix-multiplication result ``KFAC @ M``. Return type is the same as the
+            Matrix-multiplication result ``KFAC⁻¹ @ M``. Return type is the same as the
             type of the input. If list of tensors, each entry has the same shape as a
             parameter with an additional leading dimension of size ``K`` for the columns,
             i.e. ``[(K,) + p1.shape, (K,) + p2.shape, ...]``. If tensor, has shape
@@ -393,11 +472,6 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
         for mod_name, param_pos in self._A._mapping.items():
             # retrieve the inverses of the Kronecker factors from cache or invert them
             aaT_inv, ggT_inv = self._compute_or_get_cached_inverse(mod_name)
-            if self._use_exact_damping:
-                # Perform damped preconditioning in KFE, e.g. see equation (21) in
-                # https://arxiv.org/abs/2308.03296.
-                aaT_eigvecs, aaT_eigvals = aaT_inv
-                ggT_eigvecs, ggT_eigvals = ggT_inv
 
             # bias and weights are treated jointly
             if (
@@ -408,52 +482,13 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
                 w_pos, b_pos = param_pos["weight"], param_pos["bias"]
                 M_w = rearrange(M_torch[w_pos], "m c_out ... -> m c_out (...)")
                 M_joint = cat([M_w, M_torch[b_pos].unsqueeze(2)], dim=2)
-                if self._use_exact_damping:
-                    M_joint = einsum(
-                        ggT_eigvecs, M_joint, aaT_eigvecs, "i j, m i k, k l -> m j l"
-                    )
-                    M_joint.div_(outer(ggT_eigvals, aaT_eigvals).add_(self._damping))
-                    M_joint = einsum(
-                        ggT_eigvecs, M_joint, aaT_eigvecs, "i j, m j k, l k -> m i l"
-                    )
-                else:
-                    M_joint = einsum(
-                        ggT_inv, M_joint, aaT_inv, "i j, m j k, k l -> m i l"
-                    )
-
+                M_joint = self._left_and_right_multiply(M_joint, aaT_inv, ggT_inv)
                 w_cols = M_w.shape[2]
                 M_torch[w_pos], M_torch[b_pos] = M_joint.split([w_cols, 1], dim=2)
-
-            # for weights we need to multiply from the right with aaT
-            # for weights and biases we need to multiply from the left with ggT
             else:
-                for p_name, pos in param_pos.items():
-                    if p_name == "weight":
-                        M_w = rearrange(M_torch[pos], "m c_out ... -> m c_out (...)")
-                        aaT_fac = aaT_eigvecs if self._use_exact_damping else aaT_inv
-                        M_torch[pos] = einsum(M_w, aaT_fac, "m i j, j k -> m i k")
-
-                    ggT_fac = ggT_eigvecs if self._use_exact_damping else ggT_inv
-                    dims = (
-                        "m i ... -> m j ..."
-                        if self._use_exact_damping
-                        else " m j ... -> m i ..."
-                    )
-                    M_torch[pos] = einsum(ggT_fac, M_torch[pos], f"i j, {dims}")
-
-                    if self._use_exact_damping:
-                        if p_name == "weight":
-                            M_torch[pos].div_(
-                                outer(ggT_eigvals, aaT_eigvals).add_(self._damping)
-                            )
-                            M_torch[pos] = einsum(
-                                M_torch[pos], aaT_eigvecs, "m i j, k j -> m i k"
-                            )
-                        else:
-                            M_torch[pos].div_(ggT_eigvals.add_(self._damping))
-                        M_torch[pos] = einsum(
-                            ggT_eigvecs, M_torch[pos], "i j, m j ... -> m i ..."
-                        )
+                M_torch = self._separate_left_and_right_multiply(
+                    M_torch, param_pos, aaT_inv, ggT_inv
+                )
 
         if return_tensor:
             M_torch = cat([rearrange(M, "k ... -> (...) k") for M in M_torch])
