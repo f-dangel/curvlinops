@@ -1,10 +1,16 @@
 """Contains test cases for linear operators."""
 
-from test.utils import classification_targets, get_available_devices, regression_targets
+from test.utils import (
+    binary_classification_targets,
+    classification_targets,
+    get_available_devices,
+    regression_targets,
+)
 
 from torch import rand, rand_like
 from torch.nn import (
     BatchNorm1d,
+    BCEWithLogitsLoss,
     CrossEntropyLoss,
     Dropout,
     Linear,
@@ -22,6 +28,7 @@ CASES_NO_DEVICE = [
     ###############################################################################
     #                                CLASSIFICATION                               #
     ###############################################################################
+    # softmax cross-entropy loss
     {
         "model_func": lambda: Sequential(Linear(10, 5), ReLU(), Linear(5, 2)),
         "loss_func": lambda: CrossEntropyLoss(reduction="mean"),
@@ -38,6 +45,36 @@ CASES_NO_DEVICE = [
         "data": lambda: [
             (rand(3, 10), classification_targets((3,), 2)),
             (rand(4, 10), classification_targets((4,), 2)),
+        ],
+        "seed": 0,
+    },
+    # binary softmax cross-entropy loss, one output
+    {
+        "model_func": lambda: Sequential(Linear(10, 5), ReLU(), Linear(5, 1)),
+        "loss_func": lambda: BCEWithLogitsLoss(reduction="mean"),
+        "data": lambda: [
+            (rand(3, 10), binary_classification_targets((3, 1))),
+            (rand(4, 10), binary_classification_targets((4, 1))),
+        ],
+        "seed": 0,
+    },
+    # binary softmax cross-entropy loss, multiple outputs (tests the reduction factor)
+    {
+        "model_func": lambda: Sequential(Linear(10, 5), ReLU(), Linear(5, 2)),
+        "loss_func": lambda: BCEWithLogitsLoss(reduction="mean"),
+        "data": lambda: [
+            (rand(3, 10), binary_classification_targets((3, 2))),
+            (rand(4, 10), binary_classification_targets((4, 2))),
+        ],
+        "seed": 0,
+    },
+    # binary softmax cross-entropy loss, multiple outputs and sum reduction
+    {
+        "model_func": lambda: Sequential(Linear(10, 5), ReLU(), Linear(5, 2)),
+        "loss_func": lambda: BCEWithLogitsLoss(reduction="sum"),
+        "data": lambda: [
+            (rand(3, 10), binary_classification_targets((3, 2))),
+            (rand(4, 10), binary_classification_targets((4, 2))),
         ],
         "seed": 0,
     },
