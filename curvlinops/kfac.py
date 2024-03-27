@@ -25,7 +25,15 @@ from typing import Dict, Iterable, List, Optional, Tuple, Union
 from einops import einsum, rearrange, reduce
 from numpy import ndarray
 from torch import Generator, Tensor, cat, device, eye, randn, stack
-from torch.nn import Conv2d, CrossEntropyLoss, Linear, Module, MSELoss, Parameter
+from torch.nn import (
+    BCEWithLogitsLoss,
+    Conv2d,
+    CrossEntropyLoss,
+    Linear,
+    Module,
+    MSELoss,
+    Parameter,
+)
 from torch.utils.hooks import RemovableHandle
 
 from curvlinops._base import _LinearOperator
@@ -83,7 +91,7 @@ class KFACLinearOperator(_LinearOperator):
         _SUPPORTED_MODULES: Tuple of supported layers.
     """
 
-    _SUPPORTED_LOSSES = (MSELoss, CrossEntropyLoss)
+    _SUPPORTED_LOSSES = (MSELoss, CrossEntropyLoss, BCEWithLogitsLoss)
     _SUPPORTED_MODULES = (Linear, Conv2d)
     _SUPPORTED_LOSS_AVERAGE: Tuple[Union[None, str], ...] = (
         None,
@@ -533,8 +541,8 @@ class KFACLinearOperator(_LinearOperator):
             # Result has shape `(batch_size, num_classes, num_classes)`
             hessian_sqrts = stack(
                 [
-                    loss_hessian_matrix_sqrt(out.detach(), self._loss_func)
-                    for out in output.split(1)
+                    loss_hessian_matrix_sqrt(out.detach(), target, self._loss_func)
+                    for out, target in zip(output.split(1), y.split(1))
                 ]
             )
 
@@ -555,6 +563,18 @@ class KFACLinearOperator(_LinearOperator):
             for mc in range(self._mc_samples):
                 y_sampled = self.draw_label(output)
                 loss = self._loss_func(output, y_sampled)
+
+                if (
+                    isinstance(self._loss_func, BCEWithLogitsLoss)
+                    and self._loss_func.reduction == "mean"
+                ):
+                    # ``BCEWithLogitsLoss`` averages over all dimensions,
+                    # just like ``MSELoss``. However, there is no way to compensate the
+                    # additional 1 / C factor in ``y_sampled``, so we have to scale the
+                    # loss as a workaround to achieve the correct scaling
+                    C = output.shape[1:].numel()
+                    loss *= sqrt(C)
+
                 loss.backward(retain_graph=mc != self._mc_samples - 1)
 
         elif self._fisher_type == "empirical":
@@ -627,6 +647,11 @@ class KFACLinearOperator(_LinearOperator):
             labels = probs.multinomial(
                 num_samples=1, generator=self._generator
             ).squeeze(-1)
+            return labels
+
+        elif isinstance(self._loss_func, BCEWithLogitsLoss):
+            probs = output.sigmoid()
+            labels = probs.bernoulli(generator=self._generator)
             return labels
 
         else:

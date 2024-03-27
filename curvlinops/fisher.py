@@ -8,17 +8,8 @@ from typing import Callable, Iterable, List, Optional, Tuple, Union
 from backpack.hessianfree.ggnvp import ggn_vector_product_from_plist
 from einops import einsum, rearrange
 from numpy import ndarray
-from torch import (
-    Generator,
-    Tensor,
-    as_tensor,
-    multinomial,
-    normal,
-    softmax,
-    zeros,
-    zeros_like,
-)
-from torch.nn import CrossEntropyLoss, MSELoss, Parameter
+from torch import Generator, Tensor, as_tensor, normal, softmax, zeros, zeros_like
+from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss, Parameter
 from torch.nn.functional import one_hot
 
 from curvlinops._base import _LinearOperator
@@ -111,7 +102,7 @@ class FisherMCLinearOperator(_LinearOperator):
     seed argument.
     """
 
-    supported_losses = (MSELoss, CrossEntropyLoss)
+    supported_losses = (MSELoss, CrossEntropyLoss, BCEWithLogitsLoss)
 
     def __init__(
         self,
@@ -214,7 +205,7 @@ class FisherMCLinearOperator(_LinearOperator):
         # compute ∂ℓₙ(yₙₘ)/∂fₙ where fₙ is the prediction for datum n and
         # yₙₘ is the m-th sampled label for datum n
         output = self._model_func(X)
-        grad_output = self.sample_grad_output(output, self._mc_samples)
+        grad_output = self.sample_grad_output(output, self._mc_samples, y)
 
         # Compute the pseudo-loss L' := 0.5 / (M * c) ∑ₙ ∑ₘ fₙᵀ (gₙₘ gₙₘᵀ) fₙ where
         # gₙₘ = ∂ℓₙ(yₙₘ)/∂fₙ (detached) and M is the number of MC samples.
@@ -241,7 +232,7 @@ class FisherMCLinearOperator(_LinearOperator):
 
         return tuple(result_list)
 
-    def sample_grad_output(self, output: Tensor, num_samples: int) -> Tensor:
+    def sample_grad_output(self, output: Tensor, num_samples: int, y: Tensor) -> Tensor:
         """Draw would-be gradients ``∇_f log p(·|f)``.
 
         For a single data point, the would-be gradient's outer product equals the
@@ -253,6 +244,7 @@ class FisherMCLinearOperator(_LinearOperator):
             output: model prediction ``f`` for multiple data with batch axis as
                 0th dimension.
             num_samples: Number of samples to draw.
+            y: Ground truth.
 
         Returns:
             Samples of the gradient w.r.t. the model prediction.
@@ -261,6 +253,7 @@ class FisherMCLinearOperator(_LinearOperator):
         Raises:
             NotImplementedError: For unsupported loss functions.
             NotImplementedError: If the prediction does not have two dimensions.
+            NotImplementedError: If binary classification labels are not binary.
         """
         if output.ndim != 2:
             raise NotImplementedError(f"Only 2d outputs supported. Got {output.shape}")
@@ -279,17 +272,32 @@ class FisherMCLinearOperator(_LinearOperator):
 
         elif isinstance(self._loss_func, CrossEntropyLoss):
             prob = softmax(output, dim=1)
-            sample = multinomial(
-                prob,
-                num_samples=num_samples,
-                replacement=True,
-                generator=self._generator,
+            sample = prob.multinomial(
+                num_samples=num_samples, replacement=True, generator=self._generator
             )
             sample = rearrange(sample, "batch s -> s batch")
             onehot_sample = one_hot(sample, num_classes=C)
             # repeat ``num_sample`` times along a new leading axis to avoid broadcasting
             prob = prob.unsqueeze(0).expand_as(onehot_sample)
             return prob - onehot_sample
+
+        elif isinstance(self._loss_func, BCEWithLogitsLoss):
+            unique = set(y.unique().flatten().tolist())
+            if not unique.issubset({0, 1}):
+                raise NotImplementedError(
+                    "Only binary targets (0, 1) are currently supported with"
+                    + f"BCEWithLogitsLoss. Got {unique}."
+                )
+            prob = output.sigmoid()
+            # repeat ``num_sample`` times along a new leading axis
+            prob = prob.unsqueeze(0).expand(num_samples, -1, -1)
+            sample = prob.bernoulli(generator=self._generator)
+
+            # With ``reduction="mean"``, BCEWithLogitsLoss averages over all
+            # dimensions, like ``MSELoss``. We need to incorporate this scaling
+            # into the backpropagated gradient
+            scale = {"sum": 1.0, "mean": sqrt(1.0 / C)}[self._loss_func.reduction]
+            return (prob - sample) * scale
 
         else:
             raise NotImplementedError(f"Supported losses: {self.supported_losses}")

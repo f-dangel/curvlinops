@@ -7,13 +7,15 @@ from einconv import index_pattern
 from einconv.utils import get_conv_paddings
 from einops import einsum, rearrange, reduce
 from torch import Tensor, diag, eye
-from torch.nn import CrossEntropyLoss, MSELoss
+from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from torch.nn.functional import unfold
 from torch.nn.modules.utils import _pair
 
 
 def loss_hessian_matrix_sqrt(
-    output_one_datum: Tensor, loss_func: Union[MSELoss, CrossEntropyLoss]
+    output_one_datum: Tensor,
+    target_one_datum: Tensor,
+    loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
 ) -> Tensor:
     r"""Compute the loss function's matrix square root for a sample's output.
 
@@ -21,6 +23,7 @@ def loss_hessian_matrix_sqrt(
         output_one_datum: The model's prediction on a single datum. Has shape
             ``[1, C]`` where ``C`` is the number of classes (outputs of the neural
             network).
+        target_one_datum: The label of the single datum.
         loss_func: The loss function.
 
     Returns:
@@ -71,14 +74,41 @@ def loss_hessian_matrix_sqrt(
        `this thesis <https://d-nb.info/1280233206/34>`_ or equations (5) and (6) of
        `this paper <https://arxiv.org/abs/1901.08244>`_.
 
+    Note:
+        For :class:`torch.nn.BCEWithLogitsLoss` (with :math:`c = 1` for ``reduction='sum'``
+        and :math:`c = 1/C` for ``reduction='mean'``) we have (:math:`\sigma` is the sigmoid
+        function, and assuming binary labels):
+
+        .. math::
+            \ell(\mathbf{f})
+            &=
+            c \sum_{i=1}^C - y_i \log(\sigma(f_i)) - (1 - y_i) \log(1 - \sigma(f_i))
+            \\
+            \nabla^2_{\mathbf{f}} \ell(\mathbf{f}, \mathbf{y})
+            &=
+            c \mathrm{diag}( \sigma(f_i) \odot (1 - \sigma(f_i)) )
+            \\
+            \mathbf{S}
+            &=
+            \sqrt{c} \mathrm{diag}(\sqrt{\sigma(f_i) \odot (1 - \sigma(f_i))})\,,
+
+        where the square root is applied element-wise.
+
     Raises:
         ValueError: If the batch size is not one, or the output is not 2d.
         NotImplementedError: If the loss function is not supported.
+        NotImplementedError: If the loss function is ``BCEWithLogitsLoss`` but the
+            target is not binary.
     """
     if output_one_datum.ndim != 2 or output_one_datum.shape[0] != 1:
         raise ValueError(
             f"Expected 'output_one_datum' to be 2d with shape [1, C], got "
             f"{output_one_datum.shape}"
+        )
+    if target_one_datum.shape[0] != 1:  # targets for 2d predictions are sometimes 1d
+        raise ValueError(
+            "Expected 'target_one_datum' to have batch_size 1."
+            + f" Got {target_one_datum.shape}."
         )
     output = output_one_datum.squeeze(0)
     output_dim = output.numel()
@@ -88,11 +118,25 @@ def loss_hessian_matrix_sqrt(
         return eye(output_dim, device=output.device, dtype=output.dtype).mul_(
             sqrt(2 * c)
         )
+
     elif isinstance(loss_func, CrossEntropyLoss):
         c = 1.0
         p = output_one_datum.softmax(dim=1).squeeze()
         p_sqrt = p.sqrt()
         return (diag(p_sqrt) - einsum(p, p_sqrt, "i, j -> i j")).mul_(sqrt(c))
+
+    elif isinstance(loss_func, BCEWithLogitsLoss):
+        unique = set(target_one_datum.unique().flatten().tolist())
+        if not unique.issubset({0, 1}):
+            raise NotImplementedError(
+                "Only binary targets (0, 1) are currently supported with"
+                + f"BCEWithLogitsLoss. Got {unique}."
+            )
+
+        c = {"sum": 1.0, "mean": 1.0 / output_dim}[loss_func.reduction]
+        p = output_one_datum.sigmoid().squeeze(0)
+        hess_diag = sqrt(c) * (p * (1 - p)).sqrt()
+        return hess_diag.diag()
     else:
         raise NotImplementedError(f"Loss function {loss_func} not supported.")
 
