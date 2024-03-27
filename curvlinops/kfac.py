@@ -24,7 +24,7 @@ from typing import Dict, Iterable, List, Optional, Tuple, Union
 
 from einops import einsum, rearrange, reduce
 from numpy import ndarray
-from torch import Generator, Tensor, cat, device, randn, stack
+from torch import Generator, Tensor, cat, device, eye, randn, stack
 from torch.nn import Conv2d, CrossEntropyLoss, Linear, Module, MSELoss, Parameter
 from torch.utils.hooks import RemovableHandle
 
@@ -90,6 +90,12 @@ class KFACLinearOperator(_LinearOperator):
         "batch",
         "batch+sequence",
     )
+    _SUPPORTED_FISHER_TYPE: Tuple[str, ...] = (
+        "type-2",
+        "mc",
+        "empirical",
+        "forward-only",
+    )
     _SUPPORTED_KFAC_APPROX: Tuple[str, ...] = ("expand", "reduce")
 
     def __init__(
@@ -147,7 +153,11 @@ class KFACLinearOperator(_LinearOperator):
                 by sampling ``mc_samples`` labels from the model's predictive
                 distribution. If ``'empirical'``, the empirical gradients are
                 used which corresponds to the uncentered gradient covariance, or
-                the empirical Fisher. Defaults to ``'mc'``.
+                the empirical Fisher. If ``'forward-only'``, the gradient covariances
+                will be identity matrices, see the FOOF method in
+                `Benzing, 2022 <https://arxiv.org/abs/2201.12250>`_ or ISAAC in
+                `Petersen et al., 2023 <https://arxiv.org/abs/2305.00604>`_.
+                Defaults to ``'mc'``.
             mc_samples: The number of Monte-Carlo samples to use per data point.
                 Has to be set to ``1`` when ``fisher_type != 'mc'``.
                 Defaults to ``1``.
@@ -199,6 +209,11 @@ class KFACLinearOperator(_LinearOperator):
             raise ValueError(
                 f"Loss function uses reduction='sum', but loss_average={loss_average}."
                 " Set loss_average to None if you want to use reduction='sum'."
+            )
+        if fisher_type not in self._SUPPORTED_FISHER_TYPE:
+            raise ValueError(
+                f"Invalid fisher_type: {fisher_type}. "
+                f"Supported: {self._SUPPORTED_FISHER_TYPE}."
             )
         if fisher_type != "mc" and mc_samples != 1:
             raise ValueError(
@@ -546,10 +561,27 @@ class KFACLinearOperator(_LinearOperator):
             loss = self._loss_func(output, y)
             loss.backward()
 
+        elif self._fisher_type == "forward-only":
+            # Since FOOF sets the gradient covariance Kronecker factors to the identity,
+            # we don't need to do a backward pass. See https://arxiv.org/abs/2201.12250.
+            # We choose to set the gradient covariance to the identity explicitly for
+            # the sake of simplicity, such that the rest of the code here and for
+            # `KFACInverseLinearOperator` does not have to be adapted. This could be
+            # changed to decrease the memory costs.
+            for mod_name, param_pos in self._mapping.items():
+                # We iterate over _mapping to get the module names corresponding to the
+                # parameters. We only need the output dimension of the module, but
+                # don't know whether the parameter is a weight or bias; therefore, we
+                # just call `next(iter(param_pos.values()))` to get the first parameter.
+                param = self._params[next(iter(param_pos.values()))]
+                self._gradient_covariances[mod_name] = eye(
+                    param.shape[0], dtype=param.dtype, device=self._device
+                )
+
         else:
             raise ValueError(
                 f"Invalid fisher_type: {self._fisher_type}. "
-                + "Supported: 'type-2', 'mc', 'empirical'."
+                + f"Supported: {self._SUPPORTED_FISHER_TYPE}."
             )
 
     def draw_label(self, output: Tensor) -> Tensor:
