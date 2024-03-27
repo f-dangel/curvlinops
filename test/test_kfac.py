@@ -969,9 +969,7 @@ def test_forward_only_fisher_type_exact_weight_sharing_case(
 
     # Check for equivalence
     num_data = sum(X.shape[0] for X, _ in data)
-    X: Tensor
-    y: Tensor
-    X, y = data[0]
+    X, y = next(iter(data))
     out_dim = y.shape[-1]
     # See the docstring for the explanation of the scale
     scale = num_data if loss_average is None else 1 / out_dim
