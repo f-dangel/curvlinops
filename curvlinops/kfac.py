@@ -565,13 +565,11 @@ class KFACLinearOperator(_LinearOperator):
                 loss = self._loss_func(output, y_sampled)
 
                 if (
-                    isinstance(self._loss_func, BCEWithLogitsLoss)
+                    isinstance(self._loss_func, (BCEWithLogitsLoss, MSELoss))
                     and self._loss_func.reduction == "mean"
                 ):
-                    # ``BCEWithLogitsLoss`` averages over all dimensions,
-                    # just like ``MSELoss``. However, there is no way to compensate the
-                    # additional 1 / C factor in ``y_sampled``, so we have to scale the
-                    # loss as a workaround to achieve the correct scaling
+                    # ``BCEWithLogitsLoss`` and ``MSELoss`` also average over non-batch dimensions.
+                    # We have to scale the loss to incorporate this scaling into the drawn sample.
                     C = output.shape[1:].numel()
                     loss *= sqrt(C)
 
@@ -630,10 +628,7 @@ class KFACLinearOperator(_LinearOperator):
             raise ValueError("Only a 2d output is supported.")
 
         if isinstance(self._loss_func, MSELoss):
-            std = {
-                "sum": sqrt(1.0 / 2.0),
-                "mean": sqrt(output.shape[1] / 2.0),
-            }[self._loss_func.reduction]
+            std = sqrt(0.5)
             perturbation = std * randn(
                 output.shape,
                 device=output.device,
