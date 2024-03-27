@@ -568,8 +568,10 @@ class KFACLinearOperator(_LinearOperator):
                     isinstance(self._loss_func, (BCEWithLogitsLoss, MSELoss))
                     and self._loss_func.reduction == "mean"
                 ):
-                    # ``BCEWithLogitsLoss`` and ``MSELoss`` also average over non-batch dimensions.
-                    # We have to scale the loss to incorporate this scaling into the drawn sample.
+                    # ``BCEWithLogitsLoss`` and ``MSELoss`` also average over non-batch
+                    # dimensions. We have to scale the loss to incorporate this scaling
+                    # as we cannot generally achieve it by incorporating it into the
+                    # drawn sample.
                     C = output.shape[1:].numel()
                     loss *= sqrt(C)
 
