@@ -135,6 +135,7 @@ def test_NeumannInverseLinearOperator_toy():
     report_nonclose(inv_neumann @ y, inv_ground_truth @ y, rtol=1e-3, atol=1e-5)
 
 
+@mark.parametrize("fisher_type", KFACLinearOperator._SUPPORTED_FISHER_TYPE)
 @mark.parametrize("cache", [True, False], ids=["cached", "uncached"])
 @mark.parametrize(
     "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
@@ -143,7 +144,12 @@ def test_NeumannInverseLinearOperator_toy():
     "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
 )
 def test_KFAC_inverse_damped_matmat(
-    case, cache: bool, exclude: str, separate_weight_and_bias: bool, delta: float = 1e-2
+    case,
+    fisher_type: str,
+    cache: bool,
+    exclude: str,
+    separate_weight_and_bias: bool,
+    delta: float = 1e-2,
 ):
     """Test matrix-matrix multiplication by an inverse damped KFAC approximation."""
     model_func, loss_func, params, data = case
@@ -160,6 +166,7 @@ def test_KFAC_inverse_damped_matmat(
         data,
         loss_average=loss_average,
         separate_weight_and_bias=separate_weight_and_bias,
+        fisher_type=fisher_type,
     )
 
     # add damping manually

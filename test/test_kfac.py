@@ -13,11 +13,12 @@ from typing import Dict, Iterable, List, Tuple, Union
 from einops import rearrange
 from einops.layers.torch import Rearrange
 from numpy import eye
+from numpy.linalg import det, norm, slogdet
 from pytest import mark, raises, skip
 from scipy.linalg import block_diag
 from torch import Tensor, cat, cuda, device
 from torch import eye as torch_eye
-from torch import manual_seed, rand, randperm
+from torch import isinf, isnan, manual_seed, rand, randperm
 from torch.nn import (
     CrossEntropyLoss,
     Flatten,
@@ -138,13 +139,11 @@ def test_kfac_type2_weight_sharing(
     data = data[setting]
 
     # set appropriate loss_average argument based on loss reduction and setting
-    if loss_func.reduction == "mean":
-        if setting == "expand":
-            loss_average = "batch+sequence"
-        else:
-            loss_average = "batch"
-    else:
-        loss_average = None
+    loss_average = (
+        ("batch+sequence" if setting == "expand" else "batch")
+        if loss_func.reduction == "mean"
+        else None
+    )
 
     if exclude is not None:
         names = {p.data_ptr(): name for name, p in model.named_parameters()}
@@ -315,7 +314,7 @@ def test_kfac_inplace_activations(dev: device):
     report_nonclose(ggn, ggn_no_inplace)
 
 
-@mark.parametrize("fisher_type", ["type-2", "mc", "empirical"])
+@mark.parametrize("fisher_type", KFACLinearOperator._SUPPORTED_FISHER_TYPE)
 @mark.parametrize("loss", [MSELoss, CrossEntropyLoss], ids=["mse", "ce"])
 @mark.parametrize("reduction", ["mean", "sum"])
 @mark.parametrize("dev", DEVICES, ids=DEVICES_IDS)
@@ -519,3 +518,470 @@ def test_torch_matvec(case):
     # Test against _matmat
     kfac_x_numpy = kfac @ x.cpu().numpy()
     report_nonclose(kfac_x, kfac_x_numpy)
+
+
+@mark.parametrize(
+    "check_deterministic",
+    [True, False],
+    ids=["check_deterministic", "dont_check_deterministic"],
+)
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+@mark.parametrize(
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
+def test_trace(case, exclude, separate_weight_and_bias, check_deterministic):
+    """Test that the trace property of KFACLinearOperator works."""
+    model, loss_func, params, data = case
+
+    if exclude is not None:
+        names = {p.data_ptr(): name for name, p in model.named_parameters()}
+        params = [p for p in params if exclude not in names[p.data_ptr()]]
+
+    loss_average = None if loss_func.reduction == "sum" else "batch"
+    kfac = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        separate_weight_and_bias=separate_weight_and_bias,
+        loss_average=loss_average,
+        check_deterministic=check_deterministic,
+    )
+
+    # Check for equivalence of trace property and naive trace computation
+    trace = kfac.trace
+    trace_naive = (kfac @ eye(kfac.shape[1])).trace()
+    report_nonclose(trace.cpu().numpy(), trace_naive)
+
+    # Check that the trace property is properly cached and reset
+    assert kfac._trace == trace
+    kfac._compute_kfac()
+    assert kfac._trace is None
+
+
+@mark.parametrize(
+    "check_deterministic",
+    [True, False],
+    ids=["check_deterministic", "dont_check_deterministic"],
+)
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+@mark.parametrize(
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
+def test_frobenius_norm(case, exclude, separate_weight_and_bias, check_deterministic):
+    """Test that the Frobenius norm property of KFACLinearOperator works."""
+    model, loss_func, params, data = case
+
+    if exclude is not None:
+        names = {p.data_ptr(): name for name, p in model.named_parameters()}
+        params = [p for p in params if exclude not in names[p.data_ptr()]]
+
+    loss_average = None if loss_func.reduction == "sum" else "batch"
+    kfac = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        separate_weight_and_bias=separate_weight_and_bias,
+        loss_average=loss_average,
+        check_deterministic=check_deterministic,
+    )
+
+    # Check for equivalence of frobenius_norm property and the naive computation
+    frobenius_norm = kfac.frobenius_norm
+    frobenius_norm_naive = norm(kfac @ eye(kfac.shape[1]))
+    report_nonclose(frobenius_norm.cpu().numpy(), frobenius_norm_naive)
+
+    # Check that the frobenius_norm property is properly cached and reset
+    assert kfac._frobenius_norm == frobenius_norm
+    kfac._compute_kfac()
+    assert kfac._frobenius_norm is None
+
+
+@mark.parametrize(
+    "check_deterministic",
+    [True, False],
+    ids=["check_deterministic", "dont_check_deterministic"],
+)
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+@mark.parametrize(
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
+def test_det(case, exclude, separate_weight_and_bias, check_deterministic):
+    """Test that the determinant property of KFACLinearOperator works."""
+    model, loss_func, params, data = case
+
+    if exclude is not None:
+        names = {p.data_ptr(): name for name, p in model.named_parameters()}
+        params = [p for p in params if exclude not in names[p.data_ptr()]]
+
+    loss_average = None if loss_func.reduction == "sum" else "batch"
+    kfac = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        separate_weight_and_bias=separate_weight_and_bias,
+        loss_average=loss_average,
+        check_deterministic=check_deterministic,
+    )
+
+    # add damping manually to avoid singular matrices
+    if not check_deterministic:
+        kfac._compute_kfac()
+    assert kfac._input_covariances or kfac._gradient_covariances
+    delta = 1.0  # requires much larger damping value compared to ``logdet``
+    for aaT in kfac._input_covariances.values():
+        aaT.add_(
+            torch_eye(aaT.shape[0], dtype=aaT.dtype, device=aaT.device), alpha=delta
+        )
+    for ggT in kfac._gradient_covariances.values():
+        ggT.add_(
+            torch_eye(ggT.shape[0], dtype=ggT.dtype, device=ggT.device), alpha=delta
+        )
+
+    # Check for equivalence of the det property and naive determinant computation
+    determinant = kfac.det
+    # verify that the determinant is not trivial as this would make the test useless
+    assert determinant != 0.0 and determinant != 1.0
+    det_naive = det(kfac @ eye(kfac.shape[1]))
+    report_nonclose(determinant.cpu().numpy(), det_naive)
+
+    # Check that the det property is properly cached and reset
+    assert kfac._det == determinant
+    kfac._compute_kfac()
+    assert kfac._det is None
+
+
+@mark.parametrize(
+    "check_deterministic",
+    [True, False],
+    ids=["check_deterministic", "dont_check_deterministic"],
+)
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+@mark.parametrize(
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
+def test_logdet(case, exclude, separate_weight_and_bias, check_deterministic):
+    """Test that the log determinant property of KFACLinearOperator works."""
+    model, loss_func, params, data = case
+
+    if exclude is not None:
+        names = {p.data_ptr(): name for name, p in model.named_parameters()}
+        params = [p for p in params if exclude not in names[p.data_ptr()]]
+
+    loss_average = None if loss_func.reduction == "sum" else "batch"
+    kfac = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        separate_weight_and_bias=separate_weight_and_bias,
+        loss_average=loss_average,
+        check_deterministic=check_deterministic,
+    )
+
+    # add damping manually to avoid singular matrices
+    if not check_deterministic:
+        kfac._compute_kfac()
+    assert kfac._input_covariances or kfac._gradient_covariances
+    delta = 1e-3  # only requires much smaller damping value compared to ``det``
+    for aaT in kfac._input_covariances.values():
+        aaT.add_(
+            torch_eye(aaT.shape[0], dtype=aaT.dtype, device=aaT.device), alpha=delta
+        )
+    for ggT in kfac._gradient_covariances.values():
+        ggT.add_(
+            torch_eye(ggT.shape[0], dtype=ggT.dtype, device=ggT.device), alpha=delta
+        )
+
+    # Check for equivalence of the logdet property and naive log determinant computation
+    log_det = kfac.logdet
+    # verify that the log determinant is finite and not nan
+    assert not isinf(log_det) and not isnan(log_det)
+    sign, logabsdet = slogdet(kfac @ eye(kfac.shape[1]))
+    log_det_naive = sign * logabsdet
+    report_nonclose(log_det.cpu().numpy(), log_det_naive)
+
+    # Check that the logdet property is properly cached and reset
+    assert kfac._logdet == log_det
+    kfac._compute_kfac()
+    assert kfac._logdet is None
+
+
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+@mark.parametrize(
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
+@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
+def test_forward_only_fisher_type(
+    case: Tuple[Module, MSELoss, List[Parameter], Iterable[Tuple[Tensor, Tensor]]],
+    shuffle: bool,
+    exclude: str,
+    separate_weight_and_bias: bool,
+):
+    """Test the KFAC with forward-only Fisher (used for FOOF) implementation.
+
+    Args:
+        case: A fixture that returns a model, loss function, list of parameters, and
+            data.
+        shuffle: Whether to shuffle the parameters before computing the KFAC matrix.
+        exclude: Which parameters to exclude. Can be ``'weight'``, ``'bias'``,
+            or ``None``.
+        separate_weight_and_bias: Whether to treat weight and bias as separate blocks in
+            the KFAC matrix.
+    """
+    assert exclude in [None, "weight", "bias"]
+    model, loss_func, params, data = case
+    loss_average = None if loss_func.reduction == "sum" else "batch"
+
+    if exclude is not None:
+        names = {p.data_ptr(): name for name, p in model.named_parameters()}
+        params = [p for p in params if exclude not in names[p.data_ptr()]]
+
+    if shuffle:
+        permutation = randperm(len(params))
+        params = [params[i] for i in permutation]
+
+    # Compute KFAC with `fisher_type="empirical"` (could be any but "forward-only")
+    foof_simulated = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        loss_average=loss_average,
+        separate_weight_and_bias=separate_weight_and_bias,
+        fisher_type="empirical",
+    )
+    # Manually set all gradient covariances to the identity to simulate FOOF
+    for name, block in foof_simulated._gradient_covariances.items():
+        foof_simulated._gradient_covariances[name] = torch_eye(
+            block.shape[0], dtype=block.dtype, device=block.device
+        )
+    simulated_foof_mat = foof_simulated @ eye(foof_simulated.shape[1])
+
+    # Compute KFAC with `fisher_type="forward-only"`
+    foof = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        loss_average=loss_average,
+        separate_weight_and_bias=separate_weight_and_bias,
+        fisher_type="forward-only",
+    )
+    foof_mat = foof @ eye(foof.shape[1])
+
+    # Check for equivalence
+    assert len(foof_simulated._input_covariances) == len(foof._input_covariances)
+    assert len(foof_simulated._gradient_covariances) == len(foof._gradient_covariances)
+    report_nonclose(simulated_foof_mat, foof_mat)
+
+    # Check that input covariances were not computed
+    if exclude == "weight":
+        assert len(foof_simulated._input_covariances) == 0
+        assert len(foof._input_covariances) == 0
+
+
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+@mark.parametrize(
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
+@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
+def test_forward_only_fisher_type_exact_case(
+    single_layer_case: Tuple[
+        Module, MSELoss, List[Parameter], Iterable[Tuple[Tensor, Tensor]]
+    ],
+    shuffle: bool,
+    exclude: str,
+    separate_weight_and_bias: bool,
+):
+    r"""Test KFAC with forward-only Fisher (FOOF) against exact GGN for one-layer model.
+
+    Consider linear regression with square loss, L =  R * \sum_n^N || W x_n - y_n ||^2,
+    where R is the reduction factor from the MSELoss. Per definition,
+    FOOF(W) = I \otimes (\sum_n x_n x_n^T / N). Hence, if R = 1 [reduction='sum'], we
+    have that GGN(W) = 2 * [I \otimes (\sum_n x_n x_n^T)] = 2 * N * FOOF(W).
+    If R = 1 / (N * C) [reduction='mean'], where C is the output dimension, we have
+    GGN(W) = 2 * R * [I \otimes (\sum_n x_n x_n^T)] = 2 / C * FOOF(W).
+
+    Args:
+        kfac_exact_case: A fixture that returns a model, loss function, list of
+            parameters, and data.
+        shuffle: Whether to shuffle the parameters before computing the KFAC matrix.
+        exclude: Which parameters to exclude. Can be ``'weight'``, ``'bias'``,
+            or ``None``.
+        separate_weight_and_bias: Whether to treat weight and bias as separate blocks in
+            the KFAC matrix.
+    """
+    assert exclude in [None, "weight", "bias"]
+    model, loss_func, params, data = single_layer_case
+    loss_average = None if loss_func.reduction == "sum" else "batch"
+
+    if exclude is not None:
+        names = {p.data_ptr(): name for name, p in model.named_parameters()}
+        params = [p for p in params if exclude not in names[p.data_ptr()]]
+
+    if shuffle:
+        permutation = randperm(len(params))
+        params = [params[i] for i in permutation]
+
+    # Compute exact block-diagonal GGN
+    ggn = ggn_block_diagonal(
+        model,
+        loss_func,
+        params,
+        data,
+        separate_weight_and_bias=separate_weight_and_bias,
+    )
+
+    # Compute KFAC with `fisher_type="forward-only"`
+    foof = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        loss_average=loss_average,
+        separate_weight_and_bias=separate_weight_and_bias,
+        fisher_type="forward-only",
+    )
+    foof_mat = foof @ eye(foof.shape[1])
+
+    # Check for equivalence
+    num_data = sum(X.shape[0] for X, _ in data)
+    y: Tensor = data[0][1]
+    out_dim = y.shape[1]
+    # See the docstring for the explanation of the scale
+    scale = num_data if loss_average is None else 1 / out_dim
+    report_nonclose(ggn, 2 * scale * foof_mat)
+
+    # Check that input covariances were not computed
+    if exclude == "weight":
+        assert len(foof._input_covariances) == 0
+
+
+@mark.parametrize("setting", ["expand", "reduce"])
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+@mark.parametrize(
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
+@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
+def test_forward_only_fisher_type_exact_weight_sharing_case(
+    single_layer_weight_sharing_case: Tuple[
+        Union[WeightShareModel, Conv2dModel],
+        MSELoss,
+        List[Parameter],
+        Dict[str, Iterable[Tuple[Tensor, Tensor]]],
+    ],
+    setting: str,
+    shuffle: bool,
+    exclude: str,
+    separate_weight_and_bias: bool,
+):
+    r"""Test KFAC with forward-only Fisher (FOOF) against GGN for weight-sharing models.
+
+    Expand setting: Consider linear regression with square loss,
+    L =  R * \sum_n^N \sum_s^S || W x_{n,s} - y_{n,s} ||^2, where R is the reduction
+    factor from the MSELoss and S is the weight-sharing dimension size. Per definition,
+    FOOF(W) = I \otimes (\sum_n^N \sum_s^S x_{n,s} x_{n,s}^T / (N * S)).
+    Hence, if R = 1 [reduction='sum'], we have that
+    GGN(W) = 2 * [I \otimes (\sum_n^N \sum_s^S x_{n,s} x_{n,s}^T)] = 2 * N * S * FOOF(W).
+    If R = 1 / (N * C * S) [reduction='mean'], where C is the output dimension, we have
+    GGN(W) = 2 * R * [I \otimes (\sum_n^N \sum_s^S x_{n,s} x_{n,s}^T)] = 2 / C * FOOF(W).
+
+    Reduce setting: Consider linear regression with square loss,
+    L =  R * \sum_n^N || W x_n - y_n ||^2, where R is the reduction factor from the
+    MSELoss. Per definition,
+    FOOF(W) = I \otimes (\sum_n^N (\sum_s^S x_{n,s} \sum_s^S x_{n,s}^T) / (N * S^2)),
+    where S is the weight-sharing dimension size. Hence, if R = 1 [reduction='sum'], we
+    have that
+    GGN(W) = 2 * [I \otimes (\sum_n^N \sum_s^S x_{n,s} \sum_s^S x_{n,s}^T) / S^2]
+    = 2 * N * FOOF(W) (assumes the mean/average pooling as reduction function).
+    If R = 1 / (N * C) [reduction='mean'], where C is the output dimension, we have
+    GGN(W) = 2 * R * [I \otimes (\sum_n^N \sum_s^S x_{n,s} \sum_s^S x_{n,s}^T) / S^2]
+    = 2 / C * FOOF(W) (assumes the mean/average pooling as reduction function).
+
+    Args:
+        single_layer_weight_sharing_case: A fixture that returns a model, loss function,
+            list of parameters, and data.
+        setting: The weight-sharing setting to use. Can be ``'expand'`` or ``'reduce'``.
+        shuffle: Whether to shuffle the parameters before computing the KFAC matrix.
+        exclude: Which parameters to exclude. Can be ``'weight'``, ``'bias'``,
+            or ``None``.
+        separate_weight_and_bias: Whether to treat weight and bias as separate blocks in
+            the KFAC matrix.
+    """
+    assert exclude in [None, "weight", "bias"]
+    model, loss_func, params, data = single_layer_weight_sharing_case
+    model.setting = setting
+    if isinstance(model, Conv2dModel):
+        # parameters are only initialized after the setting property is set
+        params = [p for p in model.parameters() if p.requires_grad]
+    data = data[setting]
+
+    # set appropriate loss_average argument based on loss reduction and setting
+    loss_average = (
+        ("batch+sequence" if setting == "expand" else "batch")
+        if loss_func.reduction == "mean"
+        else None
+    )
+
+    if exclude is not None:
+        names = {p.data_ptr(): name for name, p in model.named_parameters()}
+        params = [p for p in params if exclude not in names[p.data_ptr()]]
+
+    if shuffle:
+        permutation = randperm(len(params))
+        params = [params[i] for i in permutation]
+
+    ggn = ggn_block_diagonal(
+        model,
+        loss_func,
+        params,
+        data,
+        separate_weight_and_bias=separate_weight_and_bias,
+    )
+    foof = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        fisher_type="forward-only",
+        kfac_approx=setting,  # choose KFAC approximation consistent with setting
+        loss_average=loss_average,
+        separate_weight_and_bias=separate_weight_and_bias,
+    )
+    foof_mat = foof @ eye(foof.shape[1])
+
+    # Check for equivalence
+    num_data = sum(X.shape[0] for X, _ in data)
+    X, y = next(iter(data))
+    out_dim = y.shape[-1]
+    # See the docstring for the explanation of the scale
+    scale = num_data if loss_average is None else 1 / out_dim
+    if loss_average is None and setting == "expand":
+        sequence_length = (
+            (X.shape[-2] + 1) * (X.shape[-1] + 1)
+            if isinstance(model, Conv2dModel)
+            else X.shape[1:-1].numel()
+        )
+        scale *= sequence_length
+    report_nonclose(ggn, 2 * scale * foof_mat, rtol=1e-4)
+
+    # Check that input covariances were not computed
+    if exclude == "weight":
+        assert len(foof._input_covariances) == 0
