@@ -139,13 +139,11 @@ def test_kfac_type2_weight_sharing(
     data = data[setting]
 
     # set appropriate loss_average argument based on loss reduction and setting
-    if loss_func.reduction == "mean":
-        if setting == "expand":
-            loss_average = "batch+sequence"
-        else:
-            loss_average = "batch"
-    else:
-        loss_average = None
+    loss_average = (
+        ("batch+sequence" if setting == "expand" else "batch")
+        if loss_func.reduction == "mean"
+        else None
+    )
 
     if exclude is not None:
         names = {p.data_ptr(): name for name, p in model.named_parameters()}
@@ -899,22 +897,22 @@ def test_forward_only_fisher_type_exact_weight_sharing_case(
     Expand setting: Consider linear regression with square loss,
     L =  R * \sum_n^N \sum_s^S || W x_{n,s} - y_{n,s} ||^2, where R is the reduction
     factor from the MSELoss and S is the weight-sharing dimension size. Per definition,
-    FOOF(W) = I \otimes (\sum_n \sum_s^S x_{n,s} x_{n,s}^T / (N * S)).
+    FOOF(W) = I \otimes (\sum_n^N \sum_s^S x_{n,s} x_{n,s}^T / (N * S)).
     Hence, if R = 1 [reduction='sum'], we have that
-    GGN(W) = 2 * [I \otimes (\sum_n \sum_s^S x_{n,s} x_{n,s}^T)] = 2 * N * S * FOOF(W).
+    GGN(W) = 2 * [I \otimes (\sum_n^N \sum_s^S x_{n,s} x_{n,s}^T)] = 2 * N * S * FOOF(W).
     If R = 1 / (N * C * S) [reduction='mean'], where C is the output dimension, we have
-    GGN(W) = 2 * R * [I \otimes (\sum_n \sum_s^S x_{n,s} x_{n,s}^T)] = 2 / C * FOOF(W).
+    GGN(W) = 2 * R * [I \otimes (\sum_n^N \sum_s^S x_{n,s} x_{n,s}^T)] = 2 / C * FOOF(W).
 
     Reduce setting: Consider linear regression with square loss,
     L =  R * \sum_n^N || W x_n - y_n ||^2, where R is the reduction factor from the
     MSELoss. Per definition,
-    FOOF(W) = I \otimes (\sum_n (\sum_s^S x_{n,s} \sum_s^S x_{n,s}^T) / (N * S^2)),
+    FOOF(W) = I \otimes (\sum_n^N (\sum_s^S x_{n,s} \sum_s^S x_{n,s}^T) / (N * S^2)),
     where S is the weight-sharing dimension size. Hence, if R = 1 [reduction='sum'], we
     have that
-    GGN(W) = 2 * [I \otimes (\sum_n \sum_s^S x_{n,s} \sum_s^S x_{n,s}^T) / S^2]
+    GGN(W) = 2 * [I \otimes (\sum_n^N \sum_s^S x_{n,s} \sum_s^S x_{n,s}^T) / S^2]
     = 2 * N * FOOF(W) (assumes the mean/average pooling as reduction function).
     If R = 1 / (N * C) [reduction='mean'], where C is the output dimension, we have
-    GGN(W) = 2 * R * [I \otimes (\sum_n \sum_s^S x_{n,s} \sum_s^S x_{n,s}^T) / S^2]
+    GGN(W) = 2 * R * [I \otimes (\sum_n^N \sum_s^S x_{n,s} \sum_s^S x_{n,s}^T) / S^2]
     = 2 / C * FOOF(W) (assumes the mean/average pooling as reduction function).
 
     Args:
@@ -936,13 +934,11 @@ def test_forward_only_fisher_type_exact_weight_sharing_case(
     data = data[setting]
 
     # set appropriate loss_average argument based on loss reduction and setting
-    if loss_func.reduction == "mean":
-        if setting == "expand":
-            loss_average = "batch+sequence"
-        else:
-            loss_average = "batch"
-    else:
-        loss_average = None
+    loss_average = (
+        ("batch+sequence" if setting == "expand" else "batch")
+        if loss_func.reduction == "mean"
+        else None
+    )
 
     if exclude is not None:
         names = {p.data_ptr(): name for name, p in model.named_parameters()}
@@ -973,12 +969,13 @@ def test_forward_only_fisher_type_exact_weight_sharing_case(
 
     # Check for equivalence
     num_data = sum(X.shape[0] for X, _ in data)
-    y: Tensor = data[0][1]
+    X: Tensor
+    y: Tensor
+    X, y = data[0]
     out_dim = y.shape[-1]
     # See the docstring for the explanation of the scale
     scale = num_data if loss_average is None else 1 / out_dim
     if loss_average is None and setting == "expand":
-        X: Tensor = data[0][0]
         sequence_length = (
             (X.shape[-2] + 1) * (X.shape[-1] + 1)
             if isinstance(model, Conv2dModel)
