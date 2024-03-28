@@ -244,7 +244,9 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
                 is ``True``. Default: ``1e-8``.
             use_exact_damping: Whether to use exact damping, i.e. to invert
                 :math:`(A \otimes B) + \text{damping} \mathbf{I}`. This is implemented
-                via eigendecompositions of the Kronecker factors. Default: ``False``.
+                via eigendecompositions of the Kronecker factors, e.g. see equation (21)
+                in `Grosse et al., 2023 <https://arxiv.org/abs/2308.03296>`_.
+                Default: ``False``.
             cache: Whether to cache the inverses of the Kronecker factors.
                 Default: ``True``.
 
