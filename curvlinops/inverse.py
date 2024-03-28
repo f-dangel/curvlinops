@@ -289,8 +289,8 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
         """
         if self._use_heuristic_damping and aaT is not None and ggT is not None:
             # Martens and Grosse, 2015 (https://arxiv.org/abs/1503.05671) (Section 6.3)
-            aaT_eig_mean = aaT.trace() / len(aaT)
-            ggT_eig_mean = ggT.trace() / len(ggT)
+            aaT_eig_mean = aaT.trace() / aaT.shape[0]
+            ggT_eig_mean = ggT.trace() / ggT.shape[0]
             if aaT_eig_mean >= 0.0 and ggT_eig_mean > 0.0:
                 sqrt_eig_mean_ratio = (aaT_eig_mean / ggT_eig_mean).sqrt()
                 sqrt_damping = sqrt(self._damping)

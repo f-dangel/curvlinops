@@ -174,7 +174,9 @@ def test_KFAC_inverse_damped_matmat(
         aaT.add_(torch.eye(aaT.shape[0], device=aaT.device), alpha=delta)
     for ggT in KFAC._gradient_covariances.values():
         ggT.add_(torch.eye(ggT.shape[0], device=ggT.device), alpha=delta)
-    inv_KFAC_naive = torch.inverse(torch.as_tensor(KFAC @ eye(KFAC.shape[0])))
+    inv_KFAC_naive = (
+        torch.inverse(torch.as_tensor(KFAC @ eye(KFAC.shape[0]))).cpu().numpy()
+    )
 
     # remove damping and pass it on as an argument instead
     for aaT in KFAC._input_covariances.values():
@@ -191,6 +193,7 @@ def test_KFAC_inverse_damped_matmat(
     num_vectors = 2
     X = random.rand(KFAC.shape[1], num_vectors)
     report_nonclose(inv_KFAC @ X, inv_KFAC_naive @ X, rtol=5e-2)
+    report_nonclose(inv_KFAC_tuple @ X, inv_KFAC_naive @ X, rtol=5e-2)
     report_nonclose(inv_KFAC_tuple @ X, inv_KFAC @ X, rtol=5e-2)
 
     assert inv_KFAC._cache == cache
@@ -238,8 +241,8 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901
         aaT = KFAC._input_covariances.get(mod_name)
         ggT = KFAC._gradient_covariances.get(mod_name)
         if aaT is not None and ggT is not None:
-            aaT_eig_mean = aaT.trace() / len(aaT)
-            ggT_eig_mean = ggT.trace() / len(ggT)
+            aaT_eig_mean = aaT.trace() / aaT.shape[0]
+            ggT_eig_mean = ggT.trace() / ggT.shape[0]
             if aaT_eig_mean >= 0.0 and ggT_eig_mean > 0.0:
                 sqrt_eig_mean_ratio = (aaT_eig_mean / ggT_eig_mean).sqrt()
                 sqrt_damping = sqrt(delta)
@@ -256,7 +259,9 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901
             ggT.add_(torch.eye(ggT.shape[0], device=ggT.device), alpha=damping_ggT)
 
     # manual heuristically damped inverse
-    inv_KFAC_naive = torch.inverse(torch.as_tensor(KFAC @ eye(KFAC.shape[0])))
+    inv_KFAC_naive = (
+        torch.inverse(torch.as_tensor(KFAC @ eye(KFAC.shape[0]))).cpu().numpy()
+    )
 
     # remove heuristic damping
     for mod_name in KFAC._mapping.keys():
@@ -327,8 +332,13 @@ def test_KFAC_inverse_exactly_damped_matmat(
     )
 
     # manual exactly damped inverse
-    inv_KFAC_naive = torch.inverse(
-        KFAC.torch_matmat(torch.eye(KFAC.shape[0])) + delta * torch.eye(KFAC.shape[0])
+    inv_KFAC_naive = (
+        torch.inverse(
+            KFAC.torch_matmat(torch.eye(KFAC.shape[0]))
+            + delta * torch.eye(KFAC.shape[0])
+        )
+        .cpu()
+        .numpy()
     )
 
     # check that passing a tuple for exact damping will fail
