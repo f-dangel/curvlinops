@@ -283,7 +283,7 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
         """Compute the damping values for the input and gradient covariances.
 
         Args:
-            aaT: Input covariance matrix.
+            aaT: Input covariance matrix. ``None`` for biases.
             ggT: Gradient covariance matrix.
 
         Returns:
@@ -332,7 +332,10 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
                 if aaT is None
                 else cholesky_inverse(
                     cholesky(
-                        aaT.add(eye(aaT.shape[0], device=aaT.device), alpha=damping_aaT)
+                        aaT.add(
+                            eye(aaT.shape[0], dtype=aaT.dtype, device=aaT.device),
+                            alpha=damping_aaT,
+                        )
                     )
                 )
             )
@@ -341,7 +344,10 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
                 if ggT is None
                 else cholesky_inverse(
                     cholesky(
-                        ggT.add(eye(ggT.shape[0], device=ggT.device), alpha=damping_ggT)
+                        ggT.add(
+                            eye(ggT.shape[0], dtype=ggT.dtype, device=ggT.device),
+                            alpha=damping_ggT,
+                        )
                     )
                 )
             )

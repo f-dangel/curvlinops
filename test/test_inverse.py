@@ -1,14 +1,16 @@
 """Contains tests for ``curvlinops/inverse``."""
 
 from math import sqrt
+from typing import Iterable, List, Tuple, Union
 
 import torch
 from einops import rearrange
-from numpy import array, eye, random
+from numpy import array, eye, float64, random
 from numpy.linalg import eigh, inv
 from pytest import mark, raises
 from scipy import sparse
 from scipy.sparse.linalg import aslinearoperator
+from torch.nn import CrossEntropyLoss, Module, MSELoss, Parameter
 
 from curvlinops import (
     CGInverseLinearOperator,
@@ -144,7 +146,12 @@ def test_NeumannInverseLinearOperator_toy():
     "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
 )
 def test_KFAC_inverse_damped_matmat(
-    case,
+    case: Tuple[
+        Module,
+        Union[MSELoss, CrossEntropyLoss],
+        List[Parameter],
+        Iterable[Tuple[torch.Tensor, torch.Tensor]],
+    ],
     fisher_type: str,
     cache: bool,
     exclude: str,
@@ -153,6 +160,18 @@ def test_KFAC_inverse_damped_matmat(
 ):
     """Test matrix-matrix multiplication by an inverse damped KFAC approximation."""
     model_func, loss_func, params, data = case
+    dtype = torch.float64  # use double precision for better numerical stability
+    model_func = model_func.to(dtype=dtype)
+    loss_func = loss_func.to(dtype=dtype)
+    params = [p.to(dtype=dtype) for p in params]
+    data = [
+        (
+            (x.to(dtype=dtype), y)
+            if isinstance(loss_func, CrossEntropyLoss)
+            else (x.to(dtype=dtype), y.to(dtype=dtype))
+        )
+        for x, y in data
+    ]
 
     if exclude is not None:
         names = {p.data_ptr(): name for name, p in model_func.named_parameters()}
@@ -167,22 +186,33 @@ def test_KFAC_inverse_damped_matmat(
         loss_average=loss_average,
         separate_weight_and_bias=separate_weight_and_bias,
         fisher_type=fisher_type,
+        check_deterministic=False,
     )
+    KFAC.dtype = float64
+    KFAC._compute_kfac()
 
     # add damping manually
     for aaT in KFAC._input_covariances.values():
-        aaT.add_(torch.eye(aaT.shape[0], device=aaT.device), alpha=delta)
+        aaT.add_(
+            torch.eye(aaT.shape[0], dtype=aaT.dtype, device=aaT.device), alpha=delta
+        )
     for ggT in KFAC._gradient_covariances.values():
-        ggT.add_(torch.eye(ggT.shape[0], device=ggT.device), alpha=delta)
+        ggT.add_(
+            torch.eye(ggT.shape[0], dtype=ggT.dtype, device=ggT.device), alpha=delta
+        )
     inv_KFAC_naive = (
         torch.inverse(torch.as_tensor(KFAC @ eye(KFAC.shape[0]))).cpu().numpy()
     )
 
     # remove damping and pass it on as an argument instead
     for aaT in KFAC._input_covariances.values():
-        aaT.sub_(torch.eye(aaT.shape[0], device=aaT.device), alpha=delta)
+        aaT.sub_(
+            torch.eye(aaT.shape[0], dtype=aaT.dtype, device=aaT.device), alpha=delta
+        )
     for ggT in KFAC._gradient_covariances.values():
-        ggT.sub_(torch.eye(ggT.shape[0], device=ggT.device), alpha=delta)
+        ggT.sub_(
+            torch.eye(ggT.shape[0], dtype=ggT.dtype, device=ggT.device), alpha=delta
+        )
     # as a single scalar
     inv_KFAC = KFACInverseLinearOperator(KFAC, damping=delta, cache=cache)
     # and as a tuple
@@ -192,9 +222,9 @@ def test_KFAC_inverse_damped_matmat(
 
     num_vectors = 2
     X = random.rand(KFAC.shape[1], num_vectors)
-    report_nonclose(inv_KFAC @ X, inv_KFAC_naive @ X, rtol=5e-2)
-    report_nonclose(inv_KFAC_tuple @ X, inv_KFAC_naive @ X, rtol=5e-2)
-    report_nonclose(inv_KFAC_tuple @ X, inv_KFAC @ X, rtol=5e-2)
+    report_nonclose(inv_KFAC @ X, inv_KFAC_naive @ X)
+    report_nonclose(inv_KFAC_tuple @ X, inv_KFAC_naive @ X)
+    report_nonclose(inv_KFAC_tuple @ X, inv_KFAC @ X)
 
     assert inv_KFAC._cache == cache
     if cache:
@@ -215,11 +245,32 @@ def test_KFAC_inverse_damped_matmat(
     "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
 )
 def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901
-    case, cache: bool, exclude: str, separate_weight_and_bias: bool, delta: float = 1e-2
+    case: Tuple[
+        Module,
+        Union[MSELoss, CrossEntropyLoss],
+        List[Parameter],
+        Iterable[Tuple[torch.Tensor, torch.Tensor]],
+    ],
+    cache: bool,
+    exclude: str,
+    separate_weight_and_bias: bool,
+    delta: float = 1e-2,
 ):
     """Test matrix-matrix multiplication by an inverse (heuristically) damped KFAC
     approximation."""
     model_func, loss_func, params, data = case
+    dtype = torch.float64  # use double precision for better numerical stability
+    model_func = model_func.to(dtype=dtype)
+    loss_func = loss_func.to(dtype=dtype)
+    params = [p.to(dtype=dtype) for p in params]
+    data = [
+        (
+            (x.to(dtype=dtype), y)
+            if isinstance(loss_func, CrossEntropyLoss)
+            else (x.to(dtype=dtype), y.to(dtype=dtype))
+        )
+        for x, y in data
+    ]
 
     if exclude is not None:
         names = {p.data_ptr(): name for name, p in model_func.named_parameters()}
@@ -233,7 +284,10 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901
         data,
         loss_average=loss_average,
         separate_weight_and_bias=separate_weight_and_bias,
+        check_deterministic=False,
     )
+    KFAC.dtype = float64
+    KFAC._compute_kfac()
 
     # add heuristic damping manually
     heuristic_damping = {}
@@ -254,9 +308,15 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901
         else:
             damping_aaT, damping_ggT = delta, delta
         if aaT is not None:
-            aaT.add_(torch.eye(aaT.shape[0], device=aaT.device), alpha=damping_aaT)
+            aaT.add_(
+                torch.eye(aaT.shape[0], dtype=aaT.dtype, device=aaT.device),
+                alpha=damping_aaT,
+            )
         if ggT is not None:
-            ggT.add_(torch.eye(ggT.shape[0], device=ggT.device), alpha=damping_ggT)
+            ggT.add_(
+                torch.eye(ggT.shape[0], dtype=ggT.dtype, device=ggT.device),
+                alpha=damping_ggT,
+            )
 
     # manual heuristically damped inverse
     inv_KFAC_naive = (
@@ -269,9 +329,15 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901
         ggT = KFAC._gradient_covariances.get(mod_name)
         damping_aaT, damping_ggT = heuristic_damping.get(mod_name, (delta, delta))
         if aaT is not None:
-            aaT.sub_(torch.eye(aaT.shape[0], device=aaT.device), alpha=damping_aaT)
+            aaT.sub_(
+                torch.eye(aaT.shape[0], dtype=aaT.dtype, device=aaT.device),
+                alpha=damping_aaT,
+            )
         if ggT is not None:
-            ggT.sub_(torch.eye(ggT.shape[0], device=ggT.device), alpha=damping_ggT)
+            ggT.sub_(
+                torch.eye(ggT.shape[0], dtype=ggT.dtype, device=ggT.device),
+                alpha=damping_ggT,
+            )
 
     # check that passing a tuple for heuristic damping will fail
     with raises(ValueError):
@@ -291,7 +357,7 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901
     num_vectors = 2
     X = random.rand(KFAC.shape[1], num_vectors)
     # test for equivalence
-    report_nonclose(inv_KFAC @ X, inv_KFAC_naive @ X, rtol=5e-2)
+    report_nonclose(inv_KFAC @ X, inv_KFAC_naive @ X)
 
     assert inv_KFAC._cache == cache
     if cache:
@@ -312,10 +378,31 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901
     "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
 )
 def test_KFAC_inverse_exactly_damped_matmat(
-    case, cache: bool, exclude: str, separate_weight_and_bias: bool, delta: float = 1e-2
+    case: Tuple[
+        Module,
+        Union[MSELoss, CrossEntropyLoss],
+        List[Parameter],
+        Iterable[Tuple[torch.Tensor, torch.Tensor]],
+    ],
+    cache: bool,
+    exclude: str,
+    separate_weight_and_bias: bool,
+    delta: float = 1e-2,
 ):
     """Test matrix-matrix multiplication by an inverse (exactly) damped KFAC approximation."""
     model_func, loss_func, params, data = case
+    dtype = torch.float64  # use double precision for better numerical stability
+    model_func = model_func.to(dtype=dtype)
+    loss_func = loss_func.to(dtype=dtype)
+    params = [p.to(dtype=dtype) for p in params]
+    data = [
+        (
+            (x.to(dtype=dtype), y)
+            if isinstance(loss_func, CrossEntropyLoss)
+            else (x.to(dtype=dtype), y.to(dtype=dtype))
+        )
+        for x, y in data
+    ]
 
     if exclude is not None:
         names = {p.data_ptr(): name for name, p in model_func.named_parameters()}
@@ -329,13 +416,17 @@ def test_KFAC_inverse_exactly_damped_matmat(
         data,
         loss_average=loss_average,
         separate_weight_and_bias=separate_weight_and_bias,
+        check_deterministic=False,
     )
+    KFAC.dtype = float64
 
     # manual exactly damped inverse
     inv_KFAC_naive = (
         torch.inverse(
-            KFAC.torch_matmat(torch.eye(KFAC.shape[0]))
-            + delta * torch.eye(KFAC.shape[0])
+            KFAC.torch_matmat(
+                torch.eye(KFAC.shape[0], dtype=dtype, device=KFAC._device)
+            )
+            + delta * torch.eye(KFAC.shape[0], dtype=dtype, device=KFAC._device)
         )
         .cpu()
         .numpy()
@@ -355,7 +446,7 @@ def test_KFAC_inverse_exactly_damped_matmat(
     num_vectors = 2
     X = random.rand(KFAC.shape[1], num_vectors)
     # test for equivalence
-    report_nonclose(inv_KFAC @ X, inv_KFAC_naive @ X, rtol=5e-2)
+    report_nonclose(inv_KFAC @ X, inv_KFAC_naive @ X)
 
     assert inv_KFAC._cache == cache
     if cache:
@@ -368,9 +459,29 @@ def test_KFAC_inverse_exactly_damped_matmat(
         assert len(inv_KFAC._inverse_gradient_covariances) == 0
 
 
-def test_KFAC_inverse_damped_torch_matmat(case, delta: float = 1e-2):
+def test_KFAC_inverse_damped_torch_matmat(
+    case: Tuple[
+        Module,
+        Union[MSELoss, CrossEntropyLoss],
+        List[Parameter],
+        Iterable[Tuple[torch.Tensor, torch.Tensor]],
+    ],
+    delta: float = 1e-2,
+):
     """Test torch matrix-matrix multiplication by an inverse damped KFAC approximation."""
     model_func, loss_func, params, data = case
+    dtype = torch.float64  # use double precision for better numerical stability
+    model_func = model_func.to(dtype=dtype)
+    loss_func = loss_func.to(dtype=dtype)
+    params = [p.to(dtype=dtype) for p in params]
+    data = [
+        (
+            (x.to(dtype=dtype), y)
+            if isinstance(loss_func, CrossEntropyLoss)
+            else (x.to(dtype=dtype), y.to(dtype=dtype))
+        )
+        for x, y in data
+    ]
 
     loss_average = "batch" if loss_func.reduction == "mean" else None
     KFAC = KFACLinearOperator(
@@ -379,11 +490,11 @@ def test_KFAC_inverse_damped_torch_matmat(case, delta: float = 1e-2):
         params,
         data,
         loss_average=loss_average,
+        check_deterministic=False,
     )
+    KFAC.dtype = float64
     inv_KFAC = KFACInverseLinearOperator(KFAC, damping=(delta, delta))
     device = KFAC._device
-    # KFAC.dtype is a numpy data type
-    dtype = next(KFAC._model_func.parameters()).dtype
 
     num_vectors = 2
     X = torch.rand(KFAC.shape[1], num_vectors, dtype=dtype, device=device)
@@ -405,16 +516,36 @@ def test_KFAC_inverse_damped_torch_matmat(case, delta: float = 1e-2):
     identity = torch.eye(inv_KFAC.shape[1], dtype=dtype, device=device)
     inv_KFAC_mat = inv_KFAC.torch_matmat(identity)
     inv_KFAC_mat_x = inv_KFAC_mat @ X
-    report_nonclose(inv_KFAC_X, inv_KFAC_mat_x.cpu().numpy(), rtol=5e-4)
+    report_nonclose(inv_KFAC_X, inv_KFAC_mat_x.cpu().numpy())
 
     # Test against _matmat
     kfac_x_numpy = inv_KFAC @ X.cpu().numpy()
     report_nonclose(inv_KFAC_X, kfac_x_numpy)
 
 
-def test_KFAC_inverse_damped_torch_matvec(case, delta: float = 1e-2):
+def test_KFAC_inverse_damped_torch_matvec(
+    case: Tuple[
+        Module,
+        Union[MSELoss, CrossEntropyLoss],
+        List[Parameter],
+        Iterable[Tuple[torch.Tensor, torch.Tensor]],
+    ],
+    delta: float = 1e-2,
+):
     """Test torch matrix-vector multiplication by an inverse damped KFAC approximation."""
     model_func, loss_func, params, data = case
+    dtype = torch.float64  # use double precision for better numerical stability
+    model_func = model_func.to(dtype=dtype)
+    loss_func = loss_func.to(dtype=dtype)
+    params = [p.to(dtype=dtype) for p in params]
+    data = [
+        (
+            (x.to(dtype=dtype), y)
+            if isinstance(loss_func, CrossEntropyLoss)
+            else (x.to(dtype=dtype), y.to(dtype=dtype))
+        )
+        for x, y in data
+    ]
 
     loss_average = "batch" if loss_func.reduction == "mean" else None
     KFAC = KFACLinearOperator(
@@ -423,11 +554,11 @@ def test_KFAC_inverse_damped_torch_matvec(case, delta: float = 1e-2):
         params,
         data,
         loss_average=loss_average,
+        check_deterministic=False,
     )
+    KFAC.dtype = float64
     inv_KFAC = KFACInverseLinearOperator(KFAC, damping=(delta, delta))
     device = KFAC._device
-    # KFAC.dtype is a numpy data type
-    dtype = next(KFAC._model_func.parameters()).dtype
 
     x = torch.rand(KFAC.shape[1], dtype=dtype, device=device)
     inv_KFAC_x = inv_KFAC.torch_matvec(x)
@@ -450,7 +581,7 @@ def test_KFAC_inverse_damped_torch_matvec(case, delta: float = 1e-2):
     identity = torch.eye(inv_KFAC.shape[1], dtype=dtype, device=device)
     inv_KFAC_mat = inv_KFAC.torch_matmat(identity)
     inv_KFAC_mat_x = inv_KFAC_mat @ x
-    report_nonclose(inv_KFAC_x.cpu().numpy(), inv_KFAC_mat_x.cpu().numpy(), rtol=5e-5)
+    report_nonclose(inv_KFAC_x.cpu().numpy(), inv_KFAC_mat_x.cpu().numpy())
 
     # Test against _matmat
     report_nonclose(inv_KFAC @ x, inv_KFAC_x.cpu().numpy())
