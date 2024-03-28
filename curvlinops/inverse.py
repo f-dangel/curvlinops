@@ -221,18 +221,30 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
         use_exact_damping: bool = False,
         cache: bool = True,
     ):
-        """Store the linear operator whose inverse should be represented.
+        r"""Store the linear operator whose inverse should be represented.
 
         Args:
             A: ``KFACLinearOperator`` whose inverse is formed.
-            damping: Damping value(s) for all input and gradient covariances.
-                Default: ``0.``.
-            use_heuristic_damping: Whether to use a heuristic damping strategy.
+            damping: Damping value(s) for all input and gradient covariances. If tuple,
+                the first value is used for the input covariances and the second value
+                for the gradient covariances. Note that if heuristic or exact damping is
+                used the damping cannot be a tuple. Default: ``0.``.
+            use_heuristic_damping: Whether to use a heuristic damping strategy by
+                `Martens and Grosse, 2015 <https://arxiv.org/abs/1503.05671>`_
+                (Section 6.3). For input covariances
+                :math:`A \in \mathbb{R}^{n \times n}` and gradient covariances
+                :math:`B \in \mathbb{R}^{m \times m}`, we define
+                :math:`\pi := \sqrt{m \frac{\text{tr}(A)}{n \text{tr}(B)}}` and set the
+                damping for the input covariances :math:`A` to
+                :math:`\max(\sqrt{\text{damping}} \pi, \text{min_damping})` and for the
+                gradient covariances :math:`B` to
+                :math:`\max(\sqrt{\text{damping}} / \pi, \text{min_damping})`.
                 Default: ``False``.
-            min_damping: Minimum damping value. Default: ``1e-8``. Only used if
-                ``use_heuristic_damping`` is ``True``.
-            use_exact_damping: Whether to use exact damping.
-                Default: ``False``.
+            min_damping: Minimum damping value. Only used if ``use_heuristic_damping``
+                is ``True``. Default: ``1e-8``.
+            use_exact_damping: Whether to use exact damping, i.e. to invert
+                :math:`(A \otimes B) + \text{damping} \mathbf{I}`. This is implemented
+                via eigendecompositions of the Kronecker factors. Default: ``False``.
             cache: Whether to cache the inverses of the Kronecker factors.
                 Default: ``True``.
 
@@ -276,6 +288,7 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
             Damping values for the input and gradient covariances.
         """
         if self._use_heuristic_damping and aaT is not None and ggT is not None:
+            # Martens and Grosse, 2015 (https://arxiv.org/abs/1503.05671) (Section 6.3)
             aaT_eig_mean = aaT.trace() / len(aaT)
             ggT_eig_mean = ggT.trace() / len(ggT)
             if aaT_eig_mean >= 0.0 and ggT_eig_mean > 0.0:
@@ -301,7 +314,8 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
 
         Returns:
             Tuple of inverses (or eigendecompositions) of the input and gradient
-            covariance Kronecker factors.
+            covariance Kronecker factors. Can be ``None`` if the input or gradient
+            covariance is ``None`` (e.g. for a bias or if weights are excluded).
         """
         if self._use_exact_damping:
             # Compute eigendecomposition to perform damped preconditioning in
@@ -376,10 +390,13 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
             # https://arxiv.org/abs/2308.03296.
             aaT_eigvecs, aaT_eigvals = aaT_inv
             ggT_eigvecs, ggT_eigvals = ggT_inv
+            # Transform in eigenbasis.
             M_joint = einsum(
                 ggT_eigvecs, M_joint, aaT_eigvecs, "i j, m i k, k l -> m j l"
             )
+            # Divide by damped eigenvalues to perform the inversion.
             M_joint.div_(outer(ggT_eigvals, aaT_eigvals).add_(self._damping))
+            # Transform back to standard basis.
             M_joint = einsum(
                 ggT_eigvecs, M_joint, aaT_eigvecs, "i j, m j k, l k -> m i l"
             )
@@ -417,6 +434,7 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
             if p_name == "weight":
                 M_w = rearrange(M_torch[pos], "m c_out ... -> m c_out (...)")
                 aaT_fac = aaT_eigvecs if self._use_exact_damping else aaT_inv
+                # If `use_exact_damping` is `True`, we transform to eigenbasis
                 M_torch[pos] = einsum(M_w, aaT_fac, "m i j, j k -> m i k")
 
             ggT_fac = ggT_eigvecs if self._use_exact_damping else ggT_inv
@@ -425,9 +443,12 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
                 if self._use_exact_damping
                 else " m j ... -> m i ..."
             )
+            # If `use_exact_damping` is `True`, we transform to eigenbasis
             M_torch[pos] = einsum(ggT_fac, M_torch[pos], f"i j, {dims}")
 
             if self._use_exact_damping:
+                # Divide by damped eigenvalues to perform the inversion and transform
+                # back to standard basis.
                 if p_name == "weight":
                     M_torch[pos].div_(
                         outer(ggT_eigvals, aaT_eigvals).add_(self._damping)
