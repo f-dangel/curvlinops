@@ -311,13 +311,13 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
         """Compute the inverses of the Kronecker factors for a given layer.
 
         Args:
-            aaT: Input covariance matrix.
+            aaT: Input covariance matrix. ``None`` for biases.
             ggT: Gradient covariance matrix.
 
         Returns:
             Tuple of inverses (or eigendecompositions) of the input and gradient
             covariance Kronecker factors. Can be ``None`` if the input or gradient
-            covariance is ``None`` (e.g. for a bias or if weights are excluded).
+            covariance is ``None`` (e.g. the input covariances for biases).
         """
         if self._use_exact_damping:
             # Compute eigendecomposition to perform damped preconditioning in
@@ -363,7 +363,8 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
 
         Returns:
             Tuple of inverses (or eigendecompositions) of the input and gradient
-            covariance Kronecker factors.
+            covariance Kronecker factors. Can be ``None`` if the input or gradient
+            covariance is ``None`` (e.g. the input covariances for biases).
         """
         if name in self._inverse_input_covariances:
             aaT_inv = self._inverse_input_covariances.get(name)
@@ -387,7 +388,8 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
 
         Args:
             M_joint: Matrix for multiplication.
-            aaT_inv: Inverse of the input covariance Kronecker factor.
+            aaT_inv: Inverse of the input covariance Kronecker factor. ``None`` for
+                biases.
             ggT_inv: Inverse of the gradient covariance Kronecker factor.
 
         Returns:
@@ -424,7 +426,8 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
         Args:
             M_torch: Matrix for multiplication.
             param_pos: Dictionary with positions of the weight and bias parameters.
-            aaT_inv: Inverse of the input covariance Kronecker factor.
+            aaT_inv: Inverse of the input covariance Kronecker factor. ``None`` for
+                biases.
             ggT_inv: Inverse of the gradient covariance Kronecker factor.
 
         Returns:

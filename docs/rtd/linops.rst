@@ -47,6 +47,9 @@ Inverses
 .. autoclass:: curvlinops.NeumannInverseLinearOperator
    :members: __init__, set_neumann_hyperparameters
 
+.. autoclass:: curvlinops.KFACInverseLinearOperator
+   :members: __init__
+
 Sub-matrices
 ------------
 
