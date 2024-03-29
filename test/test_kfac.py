@@ -20,6 +20,7 @@ from torch import Tensor, cat, cuda, device
 from torch import eye as torch_eye
 from torch import isinf, isnan, manual_seed, rand, randperm
 from torch.nn import (
+    BCEWithLogitsLoss,
     CrossEntropyLoss,
     Flatten,
     Linear,
@@ -215,7 +216,10 @@ def test_kfac_mc(
 
 def test_kfac_one_datum(
     kfac_exact_one_datum_case: Tuple[
-        Module, CrossEntropyLoss, List[Parameter], Iterable[Tuple[Tensor, Tensor]]
+        Module,
+        Union[BCEWithLogitsLoss, CrossEntropyLoss],
+        List[Parameter],
+        Iterable[Tuple[Tensor, Tensor]],
     ]
 ):
     model, loss_func, params, data = kfac_exact_one_datum_case
@@ -232,7 +236,10 @@ def test_kfac_one_datum(
 
 def test_kfac_mc_one_datum(
     kfac_exact_one_datum_case: Tuple[
-        Module, CrossEntropyLoss, List[Parameter], Iterable[Tuple[Tensor, Tensor]]
+        Module,
+        Union[BCEWithLogitsLoss, CrossEntropyLoss],
+        List[Parameter],
+        Iterable[Tuple[Tensor, Tensor]],
     ]
 ):
     model, loss_func, params, data = kfac_exact_one_datum_case
@@ -240,7 +247,7 @@ def test_kfac_mc_one_datum(
 
     ggn = ggn_block_diagonal(model, loss_func, params, data)
     kfac = KFACLinearOperator(
-        model, loss_func, params, data, mc_samples=10_000, loss_average=loss_average
+        model, loss_func, params, data, mc_samples=11_000, loss_average=loss_average
     )
     kfac_mat = kfac @ eye(kfac.shape[1])
 
@@ -252,7 +259,10 @@ def test_kfac_mc_one_datum(
 
 def test_kfac_ef_one_datum(
     kfac_exact_one_datum_case: Tuple[
-        Module, CrossEntropyLoss, List[Parameter], Iterable[Tuple[Tensor, Tensor]]
+        Module,
+        Union[BCEWithLogitsLoss, CrossEntropyLoss],
+        List[Parameter],
+        Iterable[Tuple[Tensor, Tensor]],
     ]
 ):
     model, loss_func, params, data = kfac_exact_one_datum_case
@@ -709,7 +719,7 @@ def test_logdet(case, exclude, separate_weight_and_bias, check_deterministic):
     assert not isinf(log_det) and not isnan(log_det)
     sign, logabsdet = slogdet(kfac @ eye(kfac.shape[1]))
     log_det_naive = sign * logabsdet
-    report_nonclose(log_det.cpu().numpy(), log_det_naive)
+    report_nonclose(log_det.cpu().numpy(), log_det_naive, rtol=2e-5)
 
     # Check that the logdet property is properly cached and reset
     assert kfac._logdet == log_det

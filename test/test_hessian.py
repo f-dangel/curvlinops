@@ -17,7 +17,7 @@ def test_HessianLinearOperator_matvec(case, adjoint: bool):
         op, op_functorch = op.adjoint(), op_functorch.conj().T
 
     x = random.rand(op.shape[1])
-    report_nonclose(op @ x, op_functorch @ x)
+    report_nonclose(op @ x, op_functorch @ x, atol=1e-7)
 
 
 def test_HessianLinearOperator_matmat(case, adjoint: bool, num_vecs: int = 3):

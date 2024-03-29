@@ -4,13 +4,14 @@ from functools import partial
 from test.utils import (
     Conv2dModel,
     WeightShareModel,
+    binary_classification_targets,
     classification_targets,
     get_available_devices,
     regression_targets,
 )
 
 from torch import rand
-from torch.nn import CrossEntropyLoss, Linear, MSELoss, Sequential
+from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, Linear, MSELoss, Sequential
 
 # Add test cases here, devices and loss function with different reductions will be
 # added automatically below
@@ -116,6 +117,19 @@ KFAC_EXACT_ONE_DATUM_CASES_NO_DEVICE = [
         "model_func": lambda: Sequential(Linear(5, 4), Linear(4, 3)),
         "loss_func": lambda: CrossEntropyLoss(reduction="sum"),
         "data": lambda: [(rand(1, 5), classification_targets((1,), 3))],
+        "seed": 0,
+    },
+    # deep linear network with vector output and BCEWithLogitsLoss (both reductions)
+    {
+        "model_func": lambda: Sequential(Linear(4, 3), Linear(3, 2)),
+        "loss_func": lambda: BCEWithLogitsLoss(reduction="mean"),
+        "data": lambda: [(rand(1, 4), binary_classification_targets((1, 2)))],
+        "seed": 0,
+    },
+    {
+        "model_func": lambda: Sequential(Linear(4, 3), Linear(3, 2)),
+        "loss_func": lambda: BCEWithLogitsLoss(reduction="sum"),
+        "data": lambda: [(rand(1, 4), binary_classification_targets((1, 2)))],
         "seed": 0,
     },
 ]
