@@ -572,7 +572,7 @@ class KFACLinearOperator(_LinearOperator):
                     # dimensions. We have to scale the loss to incorporate this scaling
                     # as we cannot generally achieve it by incorporating it into the
                     # drawn sample.
-                    C = output.shape[1:].numel()
+                    _, C = output.shape
                     loss *= sqrt(C)
 
                 loss.backward(retain_graph=mc != self._mc_samples - 1)

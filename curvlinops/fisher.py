@@ -244,7 +244,7 @@ class FisherMCLinearOperator(_LinearOperator):
             output: model prediction ``f`` for multiple data with batch axis as
                 0th dimension.
             num_samples: Number of samples to draw.
-            y: Ground truth.
+            y: Labels of the data on which output was produced.
 
         Returns:
             Samples of the gradient w.r.t. the model prediction.
