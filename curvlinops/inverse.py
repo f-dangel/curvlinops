@@ -234,16 +234,16 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
                 (Section 6.3). For input covariances
                 :math:`A \in \mathbb{R}^{n \times n}` and gradient covariances
                 :math:`B \in \mathbb{R}^{m \times m}`, we define
-                :math:`\pi := \sqrt{\frac{m; \text{tr}(A)}{n; \text{tr}(B)}}` and set the
+                :math:`\pi := \sqrt{\frac{m\; \text{tr}(A)}{n\; \text{tr}(B)}}` and set the
                 damping for the input covariances :math:`A` to
-                :math:`\max(\pi; \sqrt{\text{damping}}, \text{min_damping})` and for the
+                :math:`\max(\pi\; \sqrt{\text{damping}}, \text{min_damping})` and for the
                 gradient covariances :math:`B` to
-                :math:`\max(\frac{1}{\pi}; \sqrt{\text{damping}}, \text{min_damping})`.
+                :math:`\max(\frac{1}{\pi}\; \sqrt{\text{damping}}, \text{min_damping})`.
                 Default: ``False``.
             min_damping: Minimum damping value. Only used if ``use_heuristic_damping``
                 is ``True``. Default: ``1e-8``.
             use_exact_damping: Whether to use exact damping, i.e. to invert
-                :math:`(A \otimes B) + \text{damping}; \mathbf{I}`. This is implemented
+                :math:`(A \otimes B) + \text{damping}\; \mathbf{I}`. This is implemented
                 via eigendecompositions of the Kronecker factors, e.g. see equation (21)
                 in `Grosse et al., 2023 <https://arxiv.org/abs/2308.03296>`_.
                 Default: ``False``.
