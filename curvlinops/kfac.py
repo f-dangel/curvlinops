@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from functools import partial
 from math import sqrt
-from typing import Dict, Iterable, List, Optional, Tuple, Union
+from typing import Dict, Iterable, List, Optional, Tuple, Union, Callable, Any
 
 from einops import einsum, rearrange, reduce
 from numpy import ndarray
@@ -122,6 +122,7 @@ class KFACLinearOperator(_LinearOperator):
         loss_average: Union[None, str] = "batch",
         separate_weight_and_bias: bool = True,
         num_data: Optional[int] = None,
+        batch_size_fn: Optional[Callable[[Any], int]] = None
     ):
         """Kronecker-factored approximate curvature (KFAC) proxy of the Fisher/GGN.
 
@@ -189,6 +190,8 @@ class KFACLinearOperator(_LinearOperator):
                 Defaults to ``True``.
             num_data: Number of data points. If ``None``, it is inferred from the data
                 at the cost of one traversal through the data loader.
+            batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
+                needs to be specified.
 
         Raises:
             ValueError: If the loss function is not supported.
@@ -257,6 +260,7 @@ class KFACLinearOperator(_LinearOperator):
             check_deterministic=check_deterministic,
             shape=shape,
             num_data=num_data,
+            batch_size_fn=batch_size_fn
         )
 
     def _reset_matrix_properties(self):

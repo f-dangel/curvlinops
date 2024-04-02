@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from math import sqrt
-from typing import Callable, Iterable, List, Optional, Tuple, Union
+from typing import Callable, Iterable, List, Optional, Tuple, Union, Any
 
 from backpack.hessianfree.ggnvp import ggn_vector_product_from_plist
 from einops import einsum, rearrange
@@ -115,6 +115,7 @@ class FisherMCLinearOperator(_LinearOperator):
         seed: int = 2147483647,
         mc_samples: int = 1,
         num_data: Optional[int] = None,
+        batch_size_fn: Optional[Callable[[Any], int]] = None
     ):
         """Linear operator for the MC approximation of the Fisher.
 
@@ -146,6 +147,8 @@ class FisherMCLinearOperator(_LinearOperator):
             mc_samples: Number of samples to use. Default: ``1``.
             num_data: Number of data points. If ``None``, it is inferred from the data
                 at the cost of one traversal through the data loader.
+            batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
+                needs to be specified.
 
         Raises:
             NotImplementedError: If the loss function differs from ``MSELoss`` or
@@ -166,6 +169,7 @@ class FisherMCLinearOperator(_LinearOperator):
             progressbar=progressbar,
             check_deterministic=check_deterministic,
             num_data=num_data,
+            batch_size_fn=batch_size_fn
         )
 
     def _matmat(self, M: ndarray) -> ndarray:

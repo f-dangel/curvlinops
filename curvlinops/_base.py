@@ -1,6 +1,6 @@
 """Contains functionality to analyze Hessian & GGN via matrix-free multiplication."""
 
-from typing import Callable, Iterable, List, Optional, Tuple, Union
+from typing import Callable, Iterable, List, Optional, Tuple, Union, Any
 from warnings import warn
 
 from einops import rearrange
@@ -12,7 +12,10 @@ from torch import device as torch_device
 from torch import from_numpy, tensor, zeros_like
 from torch.autograd import grad
 from torch.nn import Module, Parameter
+from torch.utils.data import DataLoader
 from tqdm import tqdm
+from collections import UserDict
+import collections.abc as cols_abc
 
 
 class _LinearOperator(LinearOperator):
@@ -33,12 +36,13 @@ class _LinearOperator(LinearOperator):
         model_func: Callable[[Tensor], Tensor],
         loss_func: Union[Callable[[Tensor, Tensor], Tensor], None],
         params: List[Parameter],
-        data: Iterable[Tuple[Tensor, Tensor]],
+        data: Union[Iterable[Tuple[Tensor, Tensor]], UserDict, dict, DataLoader],
         progressbar: bool = False,
         check_deterministic: bool = True,
         shape: Optional[Tuple[int, int]] = None,
         num_data: Optional[int] = None,
         block_sizes: Optional[List[int]] = None,
+        batch_size_fn: Optional[Callable[[Any], int]] = None
     ):
         """Linear operator for DNN matrices.
 
@@ -73,6 +77,8 @@ class _LinearOperator(LinearOperator):
                 For instance ``[len(params)]`` considers the full matrix, while
                 ``[1, 1, ...]`` corresponds to a block diagonal approximation where
                 each parameter forms its own block.
+            batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
+                needs to be specified.
 
         Raises:
             RuntimeError: If the check for deterministic behavior fails.
@@ -81,6 +87,10 @@ class _LinearOperator(LinearOperator):
             ValueError: If the sum of blocks does not equal the number of parameters.
             ValueError: If any block size is not positive.
         """
+        if isinstance(next(iter(data))[0], (dict, UserDict)):
+            if batch_size_fn is None:
+                raise ValueError("When using dict-based custom data, `batch_size_fn` is required.")
+
         if shape is None:
             dim = sum(p.numel() for p in params)
             shape = (dim, dim)
@@ -103,9 +113,10 @@ class _LinearOperator(LinearOperator):
         self._data = data
         self._device = self._infer_device(self._params)
         self._progressbar = progressbar
+        self._batch_size_fn = batch_size_fn if batch_size_fn is not None else lambda X: X.shape[0]
 
         self._N_data = (
-            sum(X.shape[0] for (X, _) in self._loop_over_data(desc="_N_data"))
+            sum(self._batch_size_fn(X) for (X, _) in self._loop_over_data(desc="_N_data"))
             if num_data is None
             else num_data
         )
@@ -328,7 +339,11 @@ class _LinearOperator(LinearOperator):
             data_iter = tqdm(data_iter, desc=desc)
 
         for X, y in data_iter:
-            X, y = X.to(self._device), y.to(self._device)
+            # Assume everything is handled by the model
+            # if `X` is a custom data format
+            if isinstance(X, Tensor):
+                X = X.to(self._device)
+            y.to(self._device)
             yield (X, y)
 
     def gradient_and_loss(self) -> Tuple[List[Tensor], Tensor]:
@@ -368,7 +383,7 @@ class _LinearOperator(LinearOperator):
         Returns:
             Normalization factor
         """
-        return {"sum": 1.0, "mean": X.shape[0] / self._N_data}[
+        return {"sum": 1.0, "mean": self._batch_size_fn(X) / self._N_data}[
             self._loss_func.reduction
         ]
 
