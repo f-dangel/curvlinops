@@ -14,6 +14,8 @@ from torch.nn.functional import one_hot
 
 from curvlinops._base import _LinearOperator
 
+from collections import UserDict
+
 
 class FisherMCLinearOperator(_LinearOperator):
     r"""Monte-Carlo approximation of the Fisher as SciPy linear operator.
@@ -109,7 +111,7 @@ class FisherMCLinearOperator(_LinearOperator):
         model_func: Callable[[Tensor], Tensor],
         loss_func: Union[MSELoss, CrossEntropyLoss],
         params: List[Parameter],
-        data: Iterable[Tuple[Tensor, Tensor]],
+        data: Union[Iterable[Tuple[Tensor, Tensor]], Iterable[Tuple[UserDict, Tensor]], Iterable[Tuple[dict, Tensor]]],
         progressbar: bool = False,
         check_deterministic: bool = True,
         seed: int = 2147483647,

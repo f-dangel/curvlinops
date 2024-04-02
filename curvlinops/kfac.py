@@ -43,6 +43,8 @@ from curvlinops.kfac_utils import (
     loss_hessian_matrix_sqrt,
 )
 
+from collections import UserDict
+
 
 class KFACLinearOperator(_LinearOperator):
     r"""Linear operator to multiply with the Fisher/GGN's KFAC approximation.
@@ -111,7 +113,7 @@ class KFACLinearOperator(_LinearOperator):
         model_func: Module,
         loss_func: MSELoss,
         params: List[Parameter],
-        data: Iterable[Tuple[Tensor, Tensor]],
+        data: Union[Iterable[Tuple[Tensor, Tensor]], Iterable[Tuple[UserDict, Tensor]], Iterable[Tuple[dict, Tensor]]],
         progressbar: bool = False,
         check_deterministic: bool = True,
         shape: Union[Tuple[int, int], None] = None,

@@ -36,7 +36,7 @@ class _LinearOperator(LinearOperator):
         model_func: Callable[[Tensor], Tensor],
         loss_func: Union[Callable[[Tensor, Tensor], Tensor], None],
         params: List[Parameter],
-        data: Union[Iterable[Tuple[Tensor, Tensor]], UserDict, dict, DataLoader],
+        data: Union[Iterable[Tuple[Tensor, Tensor]], Iterable[Tuple[UserDict, Tensor]], Iterable[Tuple[dict, Tensor]]],
         progressbar: bool = False,
         check_deterministic: bool = True,
         shape: Optional[Tuple[int, int]] = None,
