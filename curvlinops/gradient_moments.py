@@ -11,6 +11,8 @@ from torch.autograd import grad
 
 from curvlinops._base import _LinearOperator
 
+from collections import UserDict
+
 
 class EFLinearOperator(_LinearOperator):
     r"""Uncentered gradient covariance as SciPy linear operator.
@@ -45,7 +47,7 @@ class EFLinearOperator(_LinearOperator):
     """
 
     def _matmat_batch(
-        self, X: Tensor, y: Tensor, M_list: List[Tensor]
+        self, X: Union[Tensor, UserDict, dict], y: Tensor, M_list: List[Tensor]
     ) -> Tuple[Tensor, ...]:
         """Apply the mini-batch empirical Fisher to a matrix.
 
@@ -62,7 +64,7 @@ class EFLinearOperator(_LinearOperator):
             leading dimension of matrix columns.
         """
         output = self._model_func(X)
-        reduction_factor = {"mean": X.shape[0], "sum": 1.0}[self._loss_func.reduction]
+        reduction_factor = {"mean": self._batch_size_fn(X), "sum": 1.0}[self._loss_func.reduction]
 
         # compute ∂ℓₙ/∂fₙ without reduction factor of L
         (grad_output,) = grad(self._loss_func(output, y), output)

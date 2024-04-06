@@ -1,6 +1,6 @@
 """Contains pytest fixtures that are visible by other files."""
 
-from test.cases import ADJOINT_CASES, CASES, NON_DETERMINISTIC_CASES
+from test.cases import ADJOINT_CASES, CASES, DICT_CASES, NON_DETERMINISTIC_CASES
 from test.kfac_cases import (
     KFAC_EXACT_CASES,
     KFAC_EXACT_ONE_DATUM_CASES,
@@ -152,6 +152,25 @@ def single_layer_weight_sharing_case(
     Iterable[Tuple[Tensor, Tensor]],
 ]:
     """Test case with a single-layer model with weight-sharing for which FOOF is exact.
+
+    Yields:
+        A neural network, loss function, a list of parameters, and
+        a data set with a single datum.
+    """
+    case = request.param
+    yield initialize_case(case)
+
+
+@fixture(params=DICT_CASES)
+def dict_case(
+    request,
+) -> Tuple[
+    Module,
+    Module,
+    List[Tensor],
+    Iterable[Tuple[Tensor, Tensor]],
+]:
+    """Test case with dict or UserDict x's.
 
     Yields:
         A neural network, loss function, a list of parameters, and

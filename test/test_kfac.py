@@ -995,3 +995,17 @@ def test_forward_only_fisher_type_exact_weight_sharing_case(
     # Check that input covariances were not computed
     if exclude == "weight":
         assert len(foof._input_covariances) == 0
+
+
+def test_KFACLinearOperator_dict(dict_case):
+    model_func, loss_func, params, data = dict_case
+    n_params = sum([p.numel() for p in params])
+
+    with raises(ValueError):
+        op = KFACLinearOperator(model_func, loss_func, params, data)
+
+    batch_size_fn = lambda data: data["x"].shape[0]
+    op = KFACLinearOperator(
+        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
+    )
+    assert(op.shape == (n_params, n_params))

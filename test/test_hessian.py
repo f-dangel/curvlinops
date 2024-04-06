@@ -1,7 +1,7 @@
 """Contains tests for ``curvlinops/hessian``."""
 
 from numpy import random
-from pytest import mark
+from pytest import mark, raises
 from torch import block_diag
 
 from curvlinops import HessianLinearOperator
@@ -67,3 +67,17 @@ def test_blocked_HessianLinearOperator_matmat(
 
     X = random.rand(op.shape[1], num_vecs)
     report_nonclose(op @ X, op_functorch @ X, atol=1e-6, rtol=5e-4)
+
+
+def test_HessianLinearOperator_dict(dict_case):
+    model_func, loss_func, params, data = dict_case
+    n_params = sum([p.numel() for p in params])
+
+    with raises(ValueError):
+        op = HessianLinearOperator(model_func, loss_func, params, data)
+
+    batch_size_fn = lambda data: data["x"].shape[0]
+    op = HessianLinearOperator(
+        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
+    )
+    assert(op.shape == (n_params, n_params))

@@ -3,7 +3,7 @@
 from contextlib import suppress
 
 from numpy import random, zeros_like
-from pytest import mark
+from pytest import mark, raises
 
 from curvlinops import FisherMCLinearOperator
 from curvlinops.examples.functorch import functorch_ggn
@@ -78,3 +78,17 @@ def test_LinearOperator_matmat_expectation(
                 return
 
     report_nonclose(FX, GX, rtol=rtol, atol=atol)
+
+
+def test_FisherLinearOperator_dict(dict_case):
+    model_func, loss_func, params, data = dict_case
+    n_params = sum([p.numel() for p in params])
+
+    with raises(ValueError):
+        op = FisherMCLinearOperator(model_func, loss_func, params, data)
+
+    batch_size_fn = lambda data: data["x"].shape[0]
+    op = FisherMCLinearOperator(
+        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
+    )
+    assert(op.shape == (n_params, n_params))

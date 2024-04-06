@@ -1,5 +1,6 @@
 """Contains tests for ``curvlinops/ggn``."""
 
+from pytest import raises
 from numpy import random
 
 from curvlinops import GGNLinearOperator
@@ -33,3 +34,17 @@ def test_GGNLinearOperator_matmat(case, adjoint: bool, num_vecs: int = 3):
 
     X = random.rand(op.shape[1], num_vecs)
     report_nonclose(op @ X, op_functorch @ X)
+
+
+def test_GGNLinearOperator_dict(dict_case):
+    model_func, loss_func, params, data = dict_case
+    n_params = sum([p.numel() for p in params])
+
+    with raises(ValueError):
+        op = GGNLinearOperator(model_func, loss_func, params, data)
+
+    batch_size_fn = lambda data: data["x"].shape[0]
+    op = GGNLinearOperator(
+        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
+    )
+    assert(op.shape == (n_params, n_params))

@@ -12,10 +12,8 @@ from torch import device as torch_device
 from torch import from_numpy, tensor, zeros_like
 from torch.autograd import grad
 from torch.nn import Module, Parameter
-from torch.utils.data import DataLoader
 from tqdm import tqdm
 from collections import UserDict
-import collections.abc as cols_abc
 
 
 class _LinearOperator(LinearOperator):

@@ -192,7 +192,7 @@ class FisherMCLinearOperator(_LinearOperator):
         return super()._matmat(M)
 
     def _matmat_batch(
-        self, X: Tensor, y: Tensor, M_list: List[Tensor]
+        self, X: Union[Tensor, UserDict, dict], y: Tensor, M_list: List[Tensor]
     ) -> Tuple[Tensor, ...]:
         """Apply the mini-batch MC-Fisher to a matrix.
 
@@ -217,7 +217,7 @@ class FisherMCLinearOperator(_LinearOperator):
         # gₙₘ = ∂ℓₙ(yₙₘ)/∂fₙ (detached) and M is the number of MC samples.
         # The GGN of L' linearized at fₙ is the MC Fisher.
         # We can thus multiply with it by computing the GGN-vector products of L'.
-        reduction_factor = {"mean": X.shape[0], "sum": 1.0}[self._loss_func.reduction]
+        reduction_factor = {"mean": self._batch_size_fn(X), "sum": 1.0}[self._loss_func.reduction]
         loss = (
             0.5
             / reduction_factor
