@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from math import sqrt
-from typing import Callable, Iterable, List, Optional, Tuple, Union, Any
+from typing import Callable, Iterable, List, Optional, Tuple, Union
 
 from backpack.hessianfree.ggnvp import ggn_vector_product_from_plist
 from einops import einsum, rearrange
@@ -14,7 +14,7 @@ from torch.nn.functional import one_hot
 
 from curvlinops._base import _LinearOperator
 
-from collections import UserDict
+from collections import MutableMapping
 
 
 class FisherMCLinearOperator(_LinearOperator):
@@ -111,13 +111,13 @@ class FisherMCLinearOperator(_LinearOperator):
         model_func: Callable[[Tensor], Tensor],
         loss_func: Union[MSELoss, CrossEntropyLoss],
         params: List[Parameter],
-        data: Union[Iterable[Tuple[Tensor, Tensor]], Iterable[Tuple[UserDict, Tensor]], Iterable[Tuple[dict, Tensor]]],
+        data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
         seed: int = 2147483647,
         mc_samples: int = 1,
         num_data: Optional[int] = None,
-        batch_size_fn: Optional[Callable[[Any], int]] = None
+        batch_size_fn: Optional[Callable[[MutableMapping], int]] = None,
     ):
         """Linear operator for the MC approximation of the Fisher.
 
@@ -133,9 +133,13 @@ class FisherMCLinearOperator(_LinearOperator):
                 to a scalar value.
             params: List of differentiable parameters used by the prediction function.
             data: Source from which mini-batches can be drawn, for instance a list of
-                mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``. Due to the
-                sequential internal Monte-Carlo sampling, batches must be presented
-                in the same deterministic order (no shuffling!).
+                mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``. Note that ``X``
+                could be a ``dict`` or ``UserDict``; this is useful for custom models.
+                In this case, you must (i) specify the ``batch_size_fn`` argument, and
+                (ii) take care of preprocessing like ``X.to(device)`` inside of your
+                ``model.forward()`` function. Due to the sequential internal Monte-Carlo
+                sampling, batches must be presented in the same deterministic
+                order (no shuffling!).
             progressbar: Show a progressbar during matrix-multiplication.
                 Default: ``False``.
             check_deterministic: Probe that model and data are deterministic, i.e.
@@ -150,11 +154,13 @@ class FisherMCLinearOperator(_LinearOperator):
             num_data: Number of data points. If ``None``, it is inferred from the data
                 at the cost of one traversal through the data loader.
             batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
-                needs to be specified.
+                needs to be specified. The intended behavior is to consume the first
+                entry of the iterates from ``data`` and returns their batch size.
 
         Raises:
             NotImplementedError: If the loss function differs from ``MSELoss`` or
                 ``CrossEntropyLoss``.
+            ValueError: If ``X`` is not a tensor and ``batch_size_fn`` is not specified.
         """
         if not isinstance(loss_func, self.supported_losses):
             raise NotImplementedError(
@@ -171,7 +177,7 @@ class FisherMCLinearOperator(_LinearOperator):
             progressbar=progressbar,
             check_deterministic=check_deterministic,
             num_data=num_data,
-            batch_size_fn=batch_size_fn
+            batch_size_fn=batch_size_fn,
         )
 
     def _matmat(self, M: ndarray) -> ndarray:
@@ -192,7 +198,7 @@ class FisherMCLinearOperator(_LinearOperator):
         return super()._matmat(M)
 
     def _matmat_batch(
-        self, X: Union[Tensor, UserDict, dict], y: Tensor, M_list: List[Tensor]
+        self, X: Union[Tensor, MutableMapping], y: Tensor, M_list: List[Tensor]
     ) -> Tuple[Tensor, ...]:
         """Apply the mini-batch MC-Fisher to a matrix.
 
@@ -217,7 +223,9 @@ class FisherMCLinearOperator(_LinearOperator):
         # gₙₘ = ∂ℓₙ(yₙₘ)/∂fₙ (detached) and M is the number of MC samples.
         # The GGN of L' linearized at fₙ is the MC Fisher.
         # We can thus multiply with it by computing the GGN-vector products of L'.
-        reduction_factor = {"mean": self._batch_size_fn(X), "sum": 1.0}[self._loss_func.reduction]
+        reduction_factor = {"mean": self._batch_size_fn(X), "sum": 1.0}[
+            self._loss_func.reduction
+        ]
         loss = (
             0.5
             / reduction_factor
