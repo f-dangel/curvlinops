@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import List, Tuple, Union
 
 from backpack.hessianfree.ggnvp import ggn_vector_product_from_plist
 from einops import einsum
@@ -11,7 +11,7 @@ from torch.autograd import grad
 
 from curvlinops._base import _LinearOperator
 
-from collections import UserDict
+from collections.abc import MutableMapping
 
 
 class EFLinearOperator(_LinearOperator):
@@ -47,7 +47,7 @@ class EFLinearOperator(_LinearOperator):
     """
 
     def _matmat_batch(
-        self, X: Union[Tensor, UserDict, dict], y: Tensor, M_list: List[Tensor]
+        self, X: Union[Tensor, MutableMapping], y: Tensor, M_list: List[Tensor]
     ) -> Tuple[Tensor, ...]:
         """Apply the mini-batch empirical Fisher to a matrix.
 
@@ -64,7 +64,9 @@ class EFLinearOperator(_LinearOperator):
             leading dimension of matrix columns.
         """
         output = self._model_func(X)
-        reduction_factor = {"mean": self._batch_size_fn(X), "sum": 1.0}[self._loss_func.reduction]
+        reduction_factor = {"mean": self._batch_size_fn(X), "sum": 1.0}[
+            self._loss_func.reduction
+        ]
 
         # compute ∂ℓₙ/∂fₙ without reduction factor of L
         (grad_output,) = grad(self._loss_func(output, y), output)

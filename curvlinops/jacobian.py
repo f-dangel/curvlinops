@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Callable, Iterable, List, Optional, Tuple
+from collections.abc import MutableMapping
+from typing import Callable, Iterable, List, Optional, Tuple, Union
 
 from backpack.hessianfree.lop import transposed_jacobian_vector_product as vjp
 from backpack.hessianfree.rop import jacobian_vector_product as jvp
@@ -23,7 +24,7 @@ class JacobianLinearOperator(_LinearOperator):
         self,
         model_func: Callable[[Tensor], Tensor],
         params: List[Parameter],
-        data: Iterable[Tuple[Tensor, Tensor]],
+        data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
         num_data: Optional[int] = None,
@@ -163,7 +164,7 @@ class TransposedJacobianLinearOperator(_LinearOperator):
         self,
         model_func: Callable[[Tensor], Tensor],
         params: List[Parameter],
-        data: Iterable[Tuple[Tensor, Tensor]],
+        data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
         num_data: Optional[int] = None,

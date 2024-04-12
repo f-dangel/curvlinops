@@ -43,7 +43,7 @@ from curvlinops.kfac_utils import (
     loss_hessian_matrix_sqrt,
 )
 
-from collections import MutableMapping
+from collections.abc import MutableMapping
 
 
 class KFACLinearOperator(_LinearOperator):

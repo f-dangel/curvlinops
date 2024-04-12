@@ -14,7 +14,7 @@ from torch.nn.functional import one_hot
 
 from curvlinops._base import _LinearOperator
 
-from collections import MutableMapping
+from collections.abc import MutableMapping
 
 
 class FisherMCLinearOperator(_LinearOperator):

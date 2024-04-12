@@ -4,9 +4,10 @@ r"""Usage with Huggingface LLMs
 This example demonstrates how to work with Huggingface (HF) language models.
 
 As always, let's first import the required functionality.
-Remember to run `pip install -U transformers datasets`
+Remember to run :code:`pip install -U transformers datasets`
 """
 
+from collections.abc import MutableMapping
 import numpy
 import torch
 from torch import nn
@@ -19,6 +20,7 @@ from transformers import (
     GPT2ForSequenceClassification,
     GPT2Tokenizer,
     DataCollatorWithPadding,
+    PreTrainedTokenizer,
 )
 from datasets import Dataset
 
@@ -33,8 +35,8 @@ numpy.random.seed(0)
 # Data
 # ----
 #
-# We will use synthetic data for simplicty. But obviously this can
-# be replace with any HF dataloader.
+# We will use synthetic data for simplicity. But obviously this can
+# be replaced with any HF dataloader.
 
 tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
 tokenizer.pad_token_id = tokenizer.eos_token_id
@@ -61,7 +63,8 @@ dataloader = data_utils.DataLoader(
 # %%
 #
 # Let's check the batch emitted by HF. We will see that it a :code:`UserDict`,
-# containing the input and label tensors.
+# containing the input and label tensors. Note that :code:`UserDict` is
+# :code:`MutableMapping`, so it is compatible with :code:`curvlinops`.
 
 data = next(iter(dataloader))
 print(f"Is the data a UserDict? {isinstance(data, UserDict)}")
@@ -75,14 +78,22 @@ for k, v in data.items():
 # -----
 #
 # Curvlinops supports general :code:`UserDict` inputs. However, everything must
-# be handled inside inside the :code:`forward` function of the model. This gives
+# be handled inside the :code:`forward` function of the model. This gives
 # the users the most flexibility, without much overhead.
 #
 # Let's wrap the HF model to conform this requirement then.
 
 
 class MyGPT2(nn.Module):
-    def __init__(self, tokenizer):
+    """
+    Huggingface LLM wrapper.
+
+    Args:
+        tokenizer: The tokenizer used for preprocessing the text data. Needed
+            since the model needs to know the padding token id.
+    """
+
+    def __init__(self, tokenizer: PreTrainedTokenizer) -> None:
         super().__init__()
         config = GPT2Config.from_pretrained("gpt2")
         config.pad_token_id = tokenizer.pad_token_id
@@ -98,9 +109,19 @@ class MyGPT2(nn.Module):
         for p in self.hf_model.score.parameters():
             p.requires_grad = True
 
-    def forward(self, data: UserDict):
-        # Handle things like moving the input tensor to the correct device
-        # inside `forward`
+    def forward(self, data: MutableMapping) -> torch.Tensor:
+        """
+        Custom forward function. Handles things like moving the
+        input tensor to the correct device inside.
+
+        Args:
+            data: A dict-like data structure with `input_ids` inside.
+                This is the default data structure assumed by Huggingface
+                dataloaders.
+
+        Returns:
+            logits: An `(batch_size, n_classes)`-sized tensor of logits.
+        """
         device = next(self.parameters()).device
         input_ids = data["input_ids"].to(device)
         output_dict = self.hf_model(input_ids)
@@ -111,7 +132,7 @@ model = MyGPT2(tokenizer).to(torch.bfloat16)
 
 with torch.no_grad():
     logits = model(data)
-    print(logits.shape)
+    print(f"Logits shape: {logits.shape}")
 
 
 # %%
@@ -124,7 +145,11 @@ with torch.no_grad():
 # batch size of the :code:`UserDict` input batch. Everything else is unchanged
 # from the standard usage of Curvlinops!
 
-batch_size_fn = lambda x: x["input_ids"].shape[0]
+
+def batch_size_fn(x: MutableMapping):
+    return x["input_ids"].shape[0]
+
+
 params = [p for p in model.parameters() if p.requires_grad]
 
 ggn = GGNLinearOperator(
@@ -138,7 +163,7 @@ ggn = GGNLinearOperator(
 
 G = ggn @ torch.eye(ggn.shape[0])
 
-print(G.shape)
+print(f"GGN shape: {G.shape}")
 
 
 # %%
@@ -146,5 +171,6 @@ print(G.shape)
 # Conclusion
 # ----------
 #
-# This :code:`UserDict` specification is very flexible. This doesn't stop
-# at HF models. You can leverage this for any custom models!
+# This :code:`UserDict` (or any other dict-like data structure) specification
+# is very flexible. This doesn't stop at HF models. You can leverage this
+# for any custom models!
