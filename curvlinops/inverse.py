@@ -324,6 +324,10 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
             Tuple of inverses (or eigendecompositions) of the input and gradient
             covariance Kronecker factors. Can be ``None`` if the input or gradient
             covariance is ``None`` (e.g. the input covariances for biases).
+        
+        Raises:
+            Exception: If a Cholesky decomposition (and optionally the retry in double
+                precision) fails.
         """
         if self._use_exact_damping:
             # Compute eigendecomposition to perform damped preconditioning in
