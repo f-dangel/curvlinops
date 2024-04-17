@@ -248,6 +248,7 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
                 :math:`(A \otimes B) + \text{damping}\; \mathbf{I}`. This is implemented
                 via eigendecompositions of the Kronecker factors, e.g. see equation (21)
                 in `Grosse et al., 2023 <https://arxiv.org/abs/2308.03296>`_.
+                Note that the eigendecomposition synchronizes the device with the CPU.
                 Default: ``False``.
             cache: Whether to cache the inverses of the Kronecker factors.
                 Default: ``True``.
