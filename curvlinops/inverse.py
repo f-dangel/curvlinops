@@ -2,11 +2,12 @@
 
 from math import sqrt
 from typing import Dict, List, Optional, Tuple, Union
+from warnings import warn
 
 from einops import einsum, rearrange
 from numpy import allclose, column_stack, ndarray
 from scipy.sparse.linalg import LinearOperator, cg
-from torch import Tensor, cat, cholesky_inverse, eye, outer
+from torch import Tensor, cat, cholesky_inverse, eye, float64, outer
 from torch.linalg import cholesky, eigh
 
 from curvlinops.kfac import KFACLinearOperator
@@ -220,6 +221,7 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
         min_damping: float = 1e-8,
         use_exact_damping: bool = False,
         cache: bool = True,
+        retry_double_precision: bool = True,
     ):
         r"""Store the linear operator whose inverse should be represented.
 
@@ -249,6 +251,8 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
                 Default: ``False``.
             cache: Whether to cache the inverses of the Kronecker factors.
                 Default: ``True``.
+            retry_double_precision: Whether to retry Cholesky decomposition used for
+                inversion in double precision. Default: ``True``.
 
         Raises:
             ValueError: If the linear operator is not a ``KFACLinearOperator``.
@@ -274,6 +278,7 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
         self._min_damping = min_damping
         self._use_exact_damping = use_exact_damping
         self._cache = cache
+        self._retry_double_precision = retry_double_precision
         self._inverse_input_covariances: Dict[str, KFAC_INV_TYPE] = {}
         self._inverse_gradient_covariances: Dict[str, KFAC_INV_TYPE] = {}
 
@@ -327,30 +332,69 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
             return (aaT_eigvecs, aaT_eigvals), (ggT_eigvecs, ggT_eigvals)
         else:
             damping_aaT, damping_ggT = self._compute_damping(aaT, ggT)
-            aaT_inv = (
-                None
-                if aaT is None
-                else cholesky_inverse(
-                    cholesky(
+
+            # Compute inverse of aaT via Cholesky decomposition
+            try:
+                aaT_chol = (
+                    None
+                    if aaT is None
+                    else cholesky(
                         aaT.add(
                             eye(aaT.shape[0], dtype=aaT.dtype, device=aaT.device),
                             alpha=damping_aaT,
                         )
                     )
                 )
-            )
-            ggT_inv = (
-                None
-                if ggT is None
-                else cholesky_inverse(
-                    cholesky(
+            except Exception as exception:
+                if self._retry_double_precision and aaT.dtype != float64:
+                    warn(
+                        f"Failed to compute Cholesky decomposition in {aaT.dtype} "
+                        f"precision with exception {exception}. "
+                        "Retrying in double precision..."
+                    )
+                    # Retry in double precision
+                    aaT = aaT.to(float64)
+                    aaT_chol = cholesky(
+                        aaT.add(
+                            eye(aaT.shape[0], dtype=aaT.dtype, device=aaT.device),
+                            alpha=damping_aaT,
+                        )
+                    )
+                else:
+                    raise exception
+            aaT_inv = None if aaT_chol is None else cholesky_inverse(aaT_chol)
+
+            # Compute inverse of ggT via Cholesky decomposition
+            try:
+                ggT_chol = (
+                    None
+                    if ggT is None
+                    else cholesky(
                         ggT.add(
                             eye(ggT.shape[0], dtype=ggT.dtype, device=ggT.device),
                             alpha=damping_ggT,
                         )
                     )
                 )
-            )
+            except Exception as exception:
+                if self._retry_double_precision and ggT.dtype != float64:
+                    warn(
+                        f"Failed to compute Cholesky decomposition in {ggT.dtype} "
+                        f"precision with exception {exception}. "
+                        "Retrying in double precision..."
+                    )
+                    # Retry in double precision
+                    ggT = ggT.to(float64)
+                    ggT_chol = cholesky(
+                        ggT.add(
+                            eye(ggT.shape[0], dtype=ggT.dtype, device=ggT.device),
+                            alpha=damping_ggT,
+                        )
+                    )
+                else:
+                    raise exception
+            ggT_inv = None if ggT_chol is None else cholesky_inverse(ggT_chol)
+
             return aaT_inv, ggT_inv
 
     def _compute_or_get_cached_inverse(
