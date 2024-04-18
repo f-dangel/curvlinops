@@ -34,7 +34,8 @@ class ModelWithDictInput(Module):
         self.net = Sequential(Linear(10, 5), nonlin(), Linear(5, num_classes))
 
     def forward(self, data: MutableMapping):
-        x = data["x"]
+        device = next(self.parameters()).device
+        x = data["x"].to(device)
         return self.net(x)
 
 
