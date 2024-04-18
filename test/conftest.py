@@ -176,23 +176,3 @@ def single_layer_weight_sharing_case(
     """
     case = request.param
     yield initialize_case(case)
-
-
-# @fixture(params=DICT_CASES)
-# def dict_case(
-#     request,
-# ) -> Tuple[
-#     Module,
-#     Module,
-#     List[Tensor],
-#     Iterable[Tuple[Tensor, Tensor]],
-#     Optional[Callable[[MutableMapping], int]],
-# ]:
-#     """Test case with dict or UserDict x's.
-#
-#     Yields:
-#         A neural network, loss function, a list of parameters, and
-#         a data set with a single datum.
-#     """
-#     case = request.param
-#     yield initialize_case(case)
