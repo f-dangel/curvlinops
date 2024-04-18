@@ -1,12 +1,13 @@
 """Utility functions to test ``curvlinops``."""
 
+from collections.abc import Callable, MutableMapping
 from itertools import product
-from typing import Iterable, List, Tuple
+from typing import Iterable, List, Optional, Tuple, Union
 
 from einops import reduce
 from einops.layers.torch import Rearrange
 from numpy import eye, ndarray
-from torch import Tensor, cat, cuda, device, from_numpy, rand, randint
+from torch import Tensor, cat, cuda, device, dtype, from_numpy, rand, randint
 from torch.nn import AdaptiveAvgPool2d, Conv2d, Flatten, Module, Parameter, Sequential
 
 from curvlinops import GGNLinearOperator
@@ -67,7 +68,8 @@ def ggn_block_diagonal(
     model: Module,
     loss_func: Module,
     params: List[Parameter],
-    data: Iterable[Tuple[Tensor, Tensor]],
+    data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
+    batch_size_fn: Optional[Callable[[MutableMapping], int]] = None,
     separate_weight_and_bias: bool = True,
 ) -> ndarray:
     """Compute the block-diagonal GGN.
@@ -77,6 +79,7 @@ def ggn_block_diagonal(
         loss_func: The loss function.
         params: The parameters w.r.t. which the GGN block-diagonals will be computed.
         data: A data loader.
+        batch_size_fn: A function that returns the batch size of given a dict-like ``X``.
         separate_weight_and_bias: Whether to treat weight and bias of a layer as
             separate blocks in the block-diagonal GGN. Default: ``True``.
 
@@ -84,7 +87,7 @@ def ggn_block_diagonal(
         The block-diagonal GGN.
     """
     # compute the full GGN then zero out the off-diagonal blocks
-    ggn = GGNLinearOperator(model, loss_func, params, data)
+    ggn = GGNLinearOperator(model, loss_func, params, data, batch_size_fn=batch_size_fn)
     ggn = from_numpy(ggn @ eye(ggn.shape[1]))
     sizes = [p.numel() for p in params]
     # ggn_blocks[i, j] corresponds to the block of (params[i], params[j])
@@ -254,3 +257,24 @@ class Conv2dModel(Module):
             Output of the sequential model.
         """
         return self._model(x)
+
+
+def cast_input(
+    X: Union[Tensor, MutableMapping], target_dtype: dtype
+) -> Union[Tensor, MutableMapping]:
+    """Cast an input tensor ``X`` (can be inside a dict-like object under the key "x")
+        into ``target_dtype``.
+
+    Args:
+        X: The input tensor.
+        target_dtype: Target ``torch`` data type.
+
+    Returns:
+        The casted tensor, preserved under the dict-like object, if applicable.
+    """
+    if isinstance(X, MutableMapping):
+        X["x"] = X["x"].to(target_dtype)
+    else:
+        X = X.to(target_dtype)
+
+    return X

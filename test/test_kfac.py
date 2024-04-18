@@ -63,7 +63,7 @@ def test_kfac_type2(
             the KFAC matrix.
     """
     assert exclude in [None, "weight", "bias"]
-    model, loss_func, params, data = kfac_exact_case
+    model, loss_func, params, data, batch_size_fn = kfac_exact_case
     loss_average = None if loss_func.reduction == "sum" else "batch"
 
     if exclude is not None:
@@ -79,6 +79,7 @@ def test_kfac_type2(
         loss_func,
         params,
         data,
+        batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
     )
     kfac = KFACLinearOperator(
@@ -86,6 +87,7 @@ def test_kfac_type2(
         loss_func,
         params,
         data,
+        batch_size_fn=batch_size_fn,
         fisher_type="type-2",
         loss_average=loss_average,
         separate_weight_and_bias=separate_weight_and_bias,
@@ -132,7 +134,7 @@ def test_kfac_type2_weight_sharing(
             the KFAC matrix.
     """
     assert exclude in [None, "weight", "bias"]
-    model, loss_func, params, data = kfac_weight_sharing_exact_case
+    model, loss_func, params, data, batch_size_fn = kfac_weight_sharing_exact_case
     model.setting = setting
     if isinstance(model, Conv2dModel):
         # parameters are only initialized after the setting property is set
@@ -159,6 +161,7 @@ def test_kfac_type2_weight_sharing(
         loss_func,
         params,
         data,
+        batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
     )
     kfac = KFACLinearOperator(
@@ -166,6 +169,7 @@ def test_kfac_type2_weight_sharing(
         loss_func,
         params,
         data,
+        batch_size_fn=batch_size_fn,
         fisher_type="type-2",
         kfac_approx=setting,  # choose KFAC approximation consistent with setting
         loss_average=loss_average,
@@ -194,16 +198,24 @@ def test_kfac_mc(
             parameters, and data.
         shuffle: Whether to shuffle the parameters before computing the KFAC matrix.
     """
-    model, loss_func, params, data = kfac_exact_case
+    model, loss_func, params, data, batch_size_fn = kfac_exact_case
     loss_average = None if loss_func.reduction == "sum" else "batch"
 
     if shuffle:
         permutation = randperm(len(params))
         params = [params[i] for i in permutation]
 
-    ggn = ggn_block_diagonal(model, loss_func, params, data)
+    ggn = ggn_block_diagonal(
+        model, loss_func, params, data, batch_size_fn=batch_size_fn
+    )
     kfac = KFACLinearOperator(
-        model, loss_func, params, data, mc_samples=2_000, loss_average=loss_average
+        model,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        mc_samples=2_000,
+        loss_average=loss_average,
     )
 
     kfac_mat = kfac @ eye(kfac.shape[1])
@@ -222,12 +234,20 @@ def test_kfac_one_datum(
         Iterable[Tuple[Tensor, Tensor]],
     ]
 ):
-    model, loss_func, params, data = kfac_exact_one_datum_case
+    model, loss_func, params, data, batch_size_fn = kfac_exact_one_datum_case
     loss_average = None if loss_func.reduction == "sum" else "batch"
 
-    ggn = ggn_block_diagonal(model, loss_func, params, data)
+    ggn = ggn_block_diagonal(
+        model, loss_func, params, data, batch_size_fn=batch_size_fn
+    )
     kfac = KFACLinearOperator(
-        model, loss_func, params, data, fisher_type="type-2", loss_average=loss_average
+        model,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        fisher_type="type-2",
+        loss_average=loss_average,
     )
     kfac_mat = kfac @ eye(kfac.shape[1])
 
@@ -242,12 +262,20 @@ def test_kfac_mc_one_datum(
         Iterable[Tuple[Tensor, Tensor]],
     ]
 ):
-    model, loss_func, params, data = kfac_exact_one_datum_case
+    model, loss_func, params, data, batch_size_fn = kfac_exact_one_datum_case
     loss_average = None if loss_func.reduction == "sum" else "batch"
 
-    ggn = ggn_block_diagonal(model, loss_func, params, data)
+    ggn = ggn_block_diagonal(
+        model, loss_func, params, data, batch_size_fn=batch_size_fn
+    )
     kfac = KFACLinearOperator(
-        model, loss_func, params, data, mc_samples=11_000, loss_average=loss_average
+        model,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        mc_samples=11_000,
+        loss_average=loss_average,
     )
     kfac_mat = kfac @ eye(kfac.shape[1])
 
@@ -265,12 +293,14 @@ def test_kfac_ef_one_datum(
         Iterable[Tuple[Tensor, Tensor]],
     ]
 ):
-    model, loss_func, params, data = kfac_exact_one_datum_case
+    model, loss_func, params, data, batch_size_fn = kfac_exact_one_datum_case
     loss_average = None if loss_func.reduction == "sum" else "batch"
 
     ef_blocks = []  # list of per-parameter EFs
     for param in params:
-        ef = EFLinearOperator(model, loss_func, [param], data)
+        ef = EFLinearOperator(
+            model, loss_func, [param], data, batch_size_fn=batch_size_fn
+        )
         ef_blocks.append(ef @ eye(ef.shape[1]))
     ef = block_diag(*ef_blocks)
 
@@ -279,6 +309,7 @@ def test_kfac_ef_one_datum(
         loss_func,
         params,
         data,
+        batch_size_fn=batch_size_fn,
         fisher_type="empirical",
         loss_average=loss_average,
     )
@@ -442,7 +473,7 @@ def test_bug_device_change_invalidates_parameter_mapping():
 
 def test_torch_matmat(case):
     """Test that the torch_matmat method of KFACLinearOperator works."""
-    model, loss_func, params, data = case
+    model, loss_func, params, data, batch_size_fn = case
 
     loss_average = None if loss_func.reduction == "sum" else "batch"
     kfac = KFACLinearOperator(
@@ -450,6 +481,7 @@ def test_torch_matmat(case):
         loss_func,
         params,
         data,
+        batch_size_fn=batch_size_fn,
         loss_average=loss_average,
     )
     device = kfac._device
@@ -483,7 +515,7 @@ def test_torch_matmat(case):
 
 def test_torch_matvec(case):
     """Test that the torch_matvec method of KFACLinearOperator works."""
-    model, loss_func, params, data = case
+    model, loss_func, params, data, batch_size_fn = case
 
     loss_average = None if loss_func.reduction == "sum" else "batch"
     kfac = KFACLinearOperator(
@@ -491,6 +523,7 @@ def test_torch_matvec(case):
         loss_func,
         params,
         data,
+        batch_size_fn=batch_size_fn,
         loss_average=loss_average,
     )
     device = kfac._device
@@ -543,7 +576,7 @@ def test_torch_matvec(case):
 )
 def test_trace(case, exclude, separate_weight_and_bias, check_deterministic):
     """Test that the trace property of KFACLinearOperator works."""
-    model, loss_func, params, data = case
+    model, loss_func, params, data, batch_size_fn = case
 
     if exclude is not None:
         names = {p.data_ptr(): name for name, p in model.named_parameters()}
@@ -555,6 +588,7 @@ def test_trace(case, exclude, separate_weight_and_bias, check_deterministic):
         loss_func,
         params,
         data,
+        batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
         loss_average=loss_average,
         check_deterministic=check_deterministic,
@@ -584,7 +618,7 @@ def test_trace(case, exclude, separate_weight_and_bias, check_deterministic):
 )
 def test_frobenius_norm(case, exclude, separate_weight_and_bias, check_deterministic):
     """Test that the Frobenius norm property of KFACLinearOperator works."""
-    model, loss_func, params, data = case
+    model, loss_func, params, data, batch_size_fn = case
 
     if exclude is not None:
         names = {p.data_ptr(): name for name, p in model.named_parameters()}
@@ -596,6 +630,7 @@ def test_frobenius_norm(case, exclude, separate_weight_and_bias, check_determini
         loss_func,
         params,
         data,
+        batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
         loss_average=loss_average,
         check_deterministic=check_deterministic,
@@ -625,7 +660,7 @@ def test_frobenius_norm(case, exclude, separate_weight_and_bias, check_determini
 )
 def test_det(case, exclude, separate_weight_and_bias, check_deterministic):
     """Test that the determinant property of KFACLinearOperator works."""
-    model, loss_func, params, data = case
+    model, loss_func, params, data, batch_size_fn = case
 
     if exclude is not None:
         names = {p.data_ptr(): name for name, p in model.named_parameters()}
@@ -637,6 +672,7 @@ def test_det(case, exclude, separate_weight_and_bias, check_deterministic):
         loss_func,
         params,
         data,
+        batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
         loss_average=loss_average,
         check_deterministic=check_deterministic,
@@ -682,7 +718,7 @@ def test_det(case, exclude, separate_weight_and_bias, check_deterministic):
 )
 def test_logdet(case, exclude, separate_weight_and_bias, check_deterministic):
     """Test that the log determinant property of KFACLinearOperator works."""
-    model, loss_func, params, data = case
+    model, loss_func, params, data, batch_size_fn = case
 
     if exclude is not None:
         names = {p.data_ptr(): name for name, p in model.named_parameters()}
@@ -694,6 +730,7 @@ def test_logdet(case, exclude, separate_weight_and_bias, check_deterministic):
         loss_func,
         params,
         data,
+        batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
         loss_average=loss_average,
         check_deterministic=check_deterministic,
@@ -752,7 +789,7 @@ def test_forward_only_fisher_type(
             the KFAC matrix.
     """
     assert exclude in [None, "weight", "bias"]
-    model, loss_func, params, data = case
+    model, loss_func, params, data, batch_size_fn = case
     loss_average = None if loss_func.reduction == "sum" else "batch"
 
     if exclude is not None:
@@ -769,6 +806,7 @@ def test_forward_only_fisher_type(
         loss_func,
         params,
         data,
+        batch_size_fn=batch_size_fn,
         loss_average=loss_average,
         separate_weight_and_bias=separate_weight_and_bias,
         fisher_type="empirical",
@@ -786,6 +824,7 @@ def test_forward_only_fisher_type(
         loss_func,
         params,
         data,
+        batch_size_fn=batch_size_fn,
         loss_average=loss_average,
         separate_weight_and_bias=separate_weight_and_bias,
         fisher_type="forward-only",
@@ -837,7 +876,7 @@ def test_forward_only_fisher_type_exact_case(
             the KFAC matrix.
     """
     assert exclude in [None, "weight", "bias"]
-    model, loss_func, params, data = single_layer_case
+    model, loss_func, params, data, batch_size_fn = single_layer_case
     loss_average = None if loss_func.reduction == "sum" else "batch"
 
     if exclude is not None:
@@ -854,6 +893,7 @@ def test_forward_only_fisher_type_exact_case(
         loss_func,
         params,
         data,
+        batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
     )
 
@@ -863,6 +903,7 @@ def test_forward_only_fisher_type_exact_case(
         loss_func,
         params,
         data,
+        batch_size_fn=batch_size_fn,
         loss_average=loss_average,
         separate_weight_and_bias=separate_weight_and_bias,
         fisher_type="forward-only",
@@ -936,7 +977,7 @@ def test_forward_only_fisher_type_exact_weight_sharing_case(
             the KFAC matrix.
     """
     assert exclude in [None, "weight", "bias"]
-    model, loss_func, params, data = single_layer_weight_sharing_case
+    model, loss_func, params, data, batch_size_fn = single_layer_weight_sharing_case
     model.setting = setting
     if isinstance(model, Conv2dModel):
         # parameters are only initialized after the setting property is set
@@ -963,6 +1004,7 @@ def test_forward_only_fisher_type_exact_weight_sharing_case(
         loss_func,
         params,
         data,
+        batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
     )
     foof = KFACLinearOperator(
@@ -970,6 +1012,7 @@ def test_forward_only_fisher_type_exact_weight_sharing_case(
         loss_func,
         params,
         data,
+        batch_size_fn=batch_size_fn,
         fisher_type="forward-only",
         kfac_approx=setting,  # choose KFAC approximation consistent with setting
         loss_average=loss_average,
@@ -995,17 +1038,3 @@ def test_forward_only_fisher_type_exact_weight_sharing_case(
     # Check that input covariances were not computed
     if exclude == "weight":
         assert len(foof._input_covariances) == 0
-
-
-def test_KFACLinearOperator_dict(dict_case):
-    model_func, loss_func, params, data = dict_case
-    n_params = sum([p.numel() for p in params])
-
-    with raises(ValueError):
-        op = KFACLinearOperator(model_func, loss_func, params, data)
-
-    batch_size_fn = lambda data: data["x"].shape[0]
-    op = KFACLinearOperator(
-        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
-    )
-    assert(op.shape == (n_params, n_params))

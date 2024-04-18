@@ -1,5 +1,6 @@
 """Contains tests for ``curvlinops/fisher.py``."""
 
+from collections.abc import MutableMapping
 from contextlib import suppress
 
 from numpy import random, zeros_like
@@ -23,8 +24,33 @@ CHECK_EVERY = 1_000
 def test_LinearOperator_matvec_expectation(
     case, adjoint: bool, max_repeats: int, mc_samples: int
 ):
-    F = FisherMCLinearOperator(*case, mc_samples=mc_samples)
-    G_functorch = functorch_ggn(*case).detach().cpu().numpy()
+    model_func, loss_func, params, data, batch_size_fn = case
+
+    # Test when X is dict-like but batch_size_fn = None (default)
+    if isinstance(data[0][0], MutableMapping):
+        with raises(ValueError):
+            F = FisherMCLinearOperator(
+                model_func,
+                loss_func,
+                params,
+                data,
+                mc_samples=mc_samples,
+            )
+
+    F = FisherMCLinearOperator(
+        model_func,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        mc_samples=mc_samples,
+    )
+    G_functorch = (
+        functorch_ggn(model_func, loss_func, params, data, input_key="x")
+        .detach()
+        .cpu()
+        .numpy()
+    )
     if adjoint:
         F, G_functorch = F.adjoint(), G_functorch.conj().T
 
@@ -55,8 +81,22 @@ def test_LinearOperator_matvec_expectation(
 def test_LinearOperator_matmat_expectation(
     case, adjoint: bool, max_repeats: int, mc_samples: int, num_vecs: int = 2
 ):
-    F = FisherMCLinearOperator(*case, mc_samples=mc_samples)
-    G_functorch = functorch_ggn(*case).detach().cpu().numpy()
+    model_func, loss_func, params, data, batch_size_fn = case
+
+    F = FisherMCLinearOperator(
+        model_func,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        mc_samples=mc_samples,
+    )
+    G_functorch = (
+        functorch_ggn(model_func, loss_func, params, data, input_key="x")
+        .detach()
+        .cpu()
+        .numpy()
+    )
     if adjoint:
         F, G_functorch = F.adjoint(), G_functorch.conj().T
 
@@ -78,17 +118,3 @@ def test_LinearOperator_matmat_expectation(
                 return
 
     report_nonclose(FX, GX, rtol=rtol, atol=atol)
-
-
-def test_FisherLinearOperator_dict(dict_case):
-    model_func, loss_func, params, data = dict_case
-    n_params = sum([p.numel() for p in params])
-
-    with raises(ValueError):
-        op = FisherMCLinearOperator(model_func, loss_func, params, data)
-
-    batch_size_fn = lambda data: data["x"].shape[0]
-    op = FisherMCLinearOperator(
-        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
-    )
-    assert(op.shape == (n_params, n_params))

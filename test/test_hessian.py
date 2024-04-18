@@ -1,5 +1,6 @@
 """Contains tests for ``curvlinops/hessian``."""
 
+from collections.abc import MutableMapping
 from numpy import random
 from pytest import mark, raises
 from torch import block_diag
@@ -11,8 +12,22 @@ from curvlinops.utils import split_list
 
 
 def test_HessianLinearOperator_matvec(case, adjoint: bool):
-    op = HessianLinearOperator(*case)
-    op_functorch = functorch_hessian(*case).detach().cpu().numpy()
+    model_func, loss_func, params, data, batch_size_fn = case
+
+    # Test when X is dict-like but batch_size_fn = None (default)
+    if isinstance(data[0][0], MutableMapping):
+        with raises(ValueError):
+            op = HessianLinearOperator(model_func, loss_func, params, data)
+
+    op = HessianLinearOperator(
+        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
+    )
+    op_functorch = (
+        functorch_hessian(model_func, loss_func, params, data, "x")
+        .detach()
+        .cpu()
+        .numpy()
+    )
     if adjoint:
         op, op_functorch = op.adjoint(), op_functorch.conj().T
 
@@ -21,8 +36,17 @@ def test_HessianLinearOperator_matvec(case, adjoint: bool):
 
 
 def test_HessianLinearOperator_matmat(case, adjoint: bool, num_vecs: int = 3):
-    op = HessianLinearOperator(*case)
-    op_functorch = functorch_hessian(*case).detach().cpu().numpy()
+    model_func, loss_func, params, data, batch_size_fn = case
+
+    op = HessianLinearOperator(
+        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
+    )
+    op_functorch = (
+        functorch_hessian(model_func, loss_func, params, data, "x")
+        .detach()
+        .cpu()
+        .numpy()
+    )
     if adjoint:
         op, op_functorch = op.adjoint(), op_functorch.conj().T
 
@@ -50,14 +74,21 @@ def test_blocked_HessianLinearOperator_matmat(
         blocking: Blocking scheme.
         num_vecs: Number of vectors to multiply with. Default is ``2``.
     """
-    model, loss_func, params, data = case
+    model_func, loss_func, params, data, batch_size_fn = case
     block_sizes = BLOCKING_FNS[blocking](params)
 
-    op = HessianLinearOperator(model, loss_func, params, data, block_sizes=block_sizes)
+    op = HessianLinearOperator(
+        model_func,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        block_sizes=block_sizes,
+    )
 
     # compute the blocks with functorch and build the block diagonal matrix
     op_functorch = [
-        functorch_hessian(model, loss_func, params_block, data).detach()
+        functorch_hessian(model_func, loss_func, params_block, data, "x").detach()
         for params_block in split_list(params, block_sizes)
     ]
     op_functorch = block_diag(*op_functorch).cpu().numpy()
@@ -67,17 +98,3 @@ def test_blocked_HessianLinearOperator_matmat(
 
     X = random.rand(op.shape[1], num_vecs)
     report_nonclose(op @ X, op_functorch @ X, atol=1e-6, rtol=5e-4)
-
-
-def test_HessianLinearOperator_dict(dict_case):
-    model_func, loss_func, params, data = dict_case
-    n_params = sum([p.numel() for p in params])
-
-    with raises(ValueError):
-        op = HessianLinearOperator(model_func, loss_func, params, data)
-
-    batch_size_fn = lambda data: data["x"].shape[0]
-    op = HessianLinearOperator(
-        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
-    )
-    assert(op.shape == (n_params, n_params))
