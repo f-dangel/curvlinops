@@ -1,5 +1,6 @@
 """Contains functionality to analyze Hessian & GGN via matrix-free multiplication."""
 
+from collections.abc import MutableMapping
 from typing import Callable, Iterable, List, Optional, Tuple, Union
 from warnings import warn
 
@@ -13,7 +14,6 @@ from torch import from_numpy, tensor, zeros_like
 from torch.autograd import grad
 from torch.nn import Module, Parameter
 from tqdm import tqdm
-from collections.abc import MutableMapping
 
 
 class _LinearOperator(LinearOperator):

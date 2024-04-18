@@ -1,8 +1,9 @@
 """Contains tests for ``curvlinops/ggn``."""
 
 from collections.abc import MutableMapping
-from pytest import raises
+
 from numpy import random
+from pytest import raises
 
 from curvlinops import GGNLinearOperator
 from curvlinops.examples.functorch import functorch_ggn

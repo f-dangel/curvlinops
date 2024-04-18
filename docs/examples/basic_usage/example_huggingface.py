@@ -7,24 +7,23 @@ As always, let's first import the required functionality.
 Remember to run :code:`pip install -U transformers datasets`
 """
 
+from collections import UserDict
 from collections.abc import MutableMapping
+
 import numpy
 import torch
-from torch import nn
 import torch.utils.data as data_utils
-
-from curvlinops import GGNLinearOperator
-
+from datasets import Dataset
+from torch import nn
 from transformers import (
+    DataCollatorWithPadding,
     GPT2Config,
     GPT2ForSequenceClassification,
     GPT2Tokenizer,
-    DataCollatorWithPadding,
     PreTrainedTokenizer,
 )
-from datasets import Dataset
 
-from collections import UserDict
+from curvlinops import GGNLinearOperator
 
 # make deterministic
 torch.manual_seed(0)

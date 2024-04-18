@@ -1,5 +1,6 @@
 """Contains test cases for linear operators."""
 
+from collections import UserDict
 from collections.abc import MutableMapping
 from test.utils import (
     binary_classification_targets,
@@ -10,19 +11,17 @@ from test.utils import (
 
 from torch import rand, rand_like
 from torch.nn import (
-    Module,
     BatchNorm1d,
     BCEWithLogitsLoss,
     CrossEntropyLoss,
     Dropout,
     Linear,
+    Module,
     MSELoss,
     ReLU,
     Sequential,
 )
 from torch.utils.data import DataLoader, TensorDataset
-
-from collections import UserDict
 
 DEVICES = get_available_devices()
 DEVICES_IDS = [f"dev={d}" for d in DEVICES]

@@ -18,9 +18,10 @@ and generalized to all linear layers with weight sharing in
 
 from __future__ import annotations
 
+from collections.abc import MutableMapping
 from functools import partial
 from math import sqrt
-from typing import Dict, Iterable, List, Optional, Tuple, Union, Callable
+from typing import Callable, Dict, Iterable, List, Optional, Tuple, Union
 
 from einops import einsum, rearrange, reduce
 from numpy import ndarray
@@ -42,8 +43,6 @@ from curvlinops.kfac_utils import (
     extract_patches,
     loss_hessian_matrix_sqrt,
 )
-
-from collections.abc import MutableMapping
 
 
 class KFACLinearOperator(_LinearOperator):

@@ -2,7 +2,7 @@
 
 from collections.abc import MutableMapping
 from math import sqrt
-from typing import Dict, Iterable, List, Tuple, Union, Optional, Callable
+from typing import Callable, Dict, Iterable, List, Optional, Tuple, Union
 
 from torch import Tensor, cat, einsum
 from torch.func import functional_call, grad, hessian, jacrev, jvp, vmap

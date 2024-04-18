@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import MutableMapping
 from typing import List, Tuple, Union
 
 from backpack.hessianfree.ggnvp import ggn_vector_product_from_plist
@@ -10,8 +11,6 @@ from torch import Tensor, zeros_like
 from torch.autograd import grad
 
 from curvlinops._base import _LinearOperator
-
-from collections.abc import MutableMapping
 
 
 class EFLinearOperator(_LinearOperator):

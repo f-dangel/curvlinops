@@ -2,6 +2,7 @@
 
 from collections import UserDict
 from functools import partial
+from test.cases import ModelWithDictInput
 from test.utils import (
     Conv2dModel,
     WeightShareModel,
@@ -10,16 +11,15 @@ from test.utils import (
     get_available_devices,
     regression_targets,
 )
-from test.cases import ModelWithDictInput
 
 from torch import rand
 from torch.nn import (
     BCEWithLogitsLoss,
     CrossEntropyLoss,
+    Identity,
     Linear,
     MSELoss,
     Sequential,
-    Identity,
 )
 
 # Add test cases here, devices and loss function with different reductions will be

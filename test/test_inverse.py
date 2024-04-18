@@ -1,6 +1,7 @@
 """Contains tests for ``curvlinops/inverse``."""
 
 from math import sqrt
+from test.utils import cast_input
 from typing import Iterable, List, Tuple, Union
 
 import torch
@@ -21,7 +22,6 @@ from curvlinops import (
 )
 from curvlinops.examples.functorch import functorch_ggn
 from curvlinops.examples.utils import report_nonclose
-from test.utils import cast_input
 
 KFAC_MIN_DAMPING = 1e-8
 

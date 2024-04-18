@@ -1,6 +1,7 @@
 """Contains tests for ``curvlinops/hessian``."""
 
 from collections.abc import MutableMapping
+
 from numpy import random
 from pytest import mark, raises
 from torch import block_diag

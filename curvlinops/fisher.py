@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import MutableMapping
 from math import sqrt
 from typing import Callable, Iterable, List, Optional, Tuple, Union
 
@@ -13,8 +14,6 @@ from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss, Parameter
 from torch.nn.functional import one_hot
 
 from curvlinops._base import _LinearOperator
-
-from collections.abc import MutableMapping
 
 
 class FisherMCLinearOperator(_LinearOperator):

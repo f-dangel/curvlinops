@@ -1,6 +1,7 @@
 """Contains tests for ``curvlinops/jacobian``."""
 
 from collections.abc import MutableMapping
+
 from numpy import random
 from pytest import raises
 

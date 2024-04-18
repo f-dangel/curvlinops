@@ -1,13 +1,13 @@
 """Contains tests for ``curvlinops/gradient_moments.py``."""
 
 from collections.abc import MutableMapping
+
 from numpy import random
+from pytest import raises
 
 from curvlinops import EFLinearOperator
 from curvlinops.examples.functorch import functorch_empirical_fisher
 from curvlinops.examples.utils import report_nonclose
-
-from pytest import raises
 
 
 def test_EFLinearOperator_matvec(case, adjoint: bool):
