@@ -1,8 +1,8 @@
 """Utility functions to test ``curvlinops``."""
 
-from collections.abc import Callable, MutableMapping
+from collections.abc import MutableMapping
 from itertools import product
-from typing import Iterable, List, Optional, Tuple, Union
+from typing import Callable, Iterable, List, Optional, Tuple, Union
 
 from einops import reduce
 from einops.layers.torch import Rearrange
