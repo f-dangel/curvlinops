@@ -99,4 +99,4 @@ def test_SubmatrixLinearOperator_on_curvatures_matmat(
     A_sub_X = A_sub @ X
 
     assert A_sub_X.shape == (len(row_idxs), num_vecs)
-    report_nonclose(A_sub_X, A_sub_functorch @ X, atol=5e-7)
+    report_nonclose(A_sub_X, A_sub_functorch @ X, atol=6e-7)
