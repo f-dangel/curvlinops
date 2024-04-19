@@ -35,12 +35,13 @@ def initialize_case(
     params = [p for p in model_func.parameters() if p.requires_grad]
     data = case["data"]()
 
-    batch_size_fn = None
-
-    try:
-        if isinstance(next(iter(data))[0], MutableMapping):
-            batch_size_fn = test.utils.batch_size_fn
-    except KeyError:  # The case of KFAC, where there are expand and reduce keys
+    # In some KFAC cases, ``data = {"expand": [(X, y), ...], "reduce": [(X, y), ...]}``
+    # unlike the standard ``data = [(X: Tensor | MutableMapping, y), ...]``.
+    # We ignore the former since the latter is included in KFAC cases, and thus the
+    # feature of ``MutableMapping`` inputs is sufficiently covered already.
+    if not isinstance(data, dict) and isinstance(next(iter(data))[0], MutableMapping):
+        batch_size_fn = test.utils.batch_size_fn
+    else:
         batch_size_fn = None
 
     return model_func, loss_func, params, data, batch_size_fn
