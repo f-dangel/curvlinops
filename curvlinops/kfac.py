@@ -25,6 +25,7 @@ from typing import Dict, Iterable, List, Optional, Tuple, Union
 from einops import einsum, rearrange, reduce
 from numpy import ndarray
 from torch import Generator, Tensor, cat, device, eye, randn, stack
+from torch.autograd import grad
 from torch.nn import (
     BCEWithLogitsLoss,
     Conv2d,
@@ -536,6 +537,10 @@ class KFACLinearOperator(_LinearOperator):
             output = rearrange(output, "batch ... c -> (batch ...) c")
             y = rearrange(y, "batch ... c -> (batch ...) c")
 
+        # we will differentiate w.r.t. the model parameters to trigger the backward
+        # hooks that compute the grad-output based Kronecker factors
+        params = [p for p in self._model_func.parameters() if p.requires_grad]
+
         if self._fisher_type == "type-2":
             # Compute per-sample Hessian square root, then concatenate over samples.
             # Result has shape `(batch_size, num_classes, num_classes)`
@@ -557,7 +562,11 @@ class KFACLinearOperator(_LinearOperator):
             num_cols = hessian_sqrts.shape[-1]
             for c in range(num_cols):
                 batched_column = hessian_sqrts[:, :, c]
-                (output * batched_column).sum().backward(retain_graph=c < num_cols - 1)
+                grad(
+                    (output * batched_column).sum(),
+                    params,
+                    retain_graph=c < num_cols - 1,
+                )
 
         elif self._fisher_type == "mc":
             for mc in range(self._mc_samples):
@@ -575,11 +584,11 @@ class KFACLinearOperator(_LinearOperator):
                     _, C = output.shape
                     loss *= sqrt(C)
 
-                loss.backward(retain_graph=mc != self._mc_samples - 1)
+                grad(loss, params, retain_graph=mc != self._mc_samples - 1)
 
         elif self._fisher_type == "empirical":
             loss = self._loss_func(output, y)
-            loss.backward()
+            grad(loss, params)
 
         elif self._fisher_type == "forward-only":
             # Since FOOF sets the gradient covariance Kronecker factors to the identity,
