@@ -4,6 +4,7 @@ from collections.abc import MutableMapping
 from math import sqrt
 from typing import Callable, Dict, Iterable, List, Optional, Tuple, Union
 
+import torch
 from torch import Tensor, cat, einsum
 from torch.func import functional_call, grad, hessian, jacrev, jvp, vmap
 from torch.nn import Module
@@ -54,7 +55,8 @@ def functorch_hessian(
     Returns:
         Square matrix containing the Hessian.
     """
-    X, y = _concatenate_batches(data, input_key)
+    (dev,) = {p.device for p in params}
+    X, y = _concatenate_batches(data, input_key, device=dev)
     params_dict = _make_params_dict(model_func, params)
 
     def loss(
@@ -98,7 +100,8 @@ def functorch_ggn(
     Returns:
         Square matrix containing the GGN.
     """
-    X, y = _concatenate_batches(data, input_key)
+    (dev,) = {p.device for p in params}
+    X, y = _concatenate_batches(data, input_key, device=dev)
     params_dict = _make_params_dict(model_func, params)
 
     def linearized_model(
@@ -169,7 +172,8 @@ def functorch_gradient(
     Returns:
         Gradient in same format as the parameters.
     """
-    X, y = _concatenate_batches(data, input_key)
+    (dev,) = {p.device for p in params}
+    X, y = _concatenate_batches(data, input_key, device=dev)
     params_dict = _make_params_dict(model_func, params)
 
     def loss(
@@ -217,7 +221,8 @@ def functorch_empirical_fisher(
     Raises:
         ValueError: If the loss function's reduction cannot be determined.
     """
-    X, y = _concatenate_batches(data, input_key)
+    (dev,) = {p.device for p in params}
+    X, y = _concatenate_batches(data, input_key, device=dev)
     params_dict = _make_params_dict(model_func, params)
 
     # compute batched gradients
@@ -275,7 +280,8 @@ def functorch_jacobian(
         total number of parameters, ``N`` the total number of data points, and ``C``
         the model's output space dimension.
     """
-    X, _ = _concatenate_batches(data, input_key)
+    (dev,) = {p.device for p in params}
+    X, _ = _concatenate_batches(data, input_key, device=dev)
     params_dict = _make_params_dict(model_func, params)
 
     def model_fn_params_only(params_dict: Dict[str, Tensor]) -> Tensor:
@@ -295,12 +301,14 @@ def functorch_jacobian(
 def _concatenate_batches(
     data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
     input_key: Optional[str] = None,
+    device: Optional[torch.device] = None,
 ) -> Tuple[Tensor, Tensor]:
     """Concatenate all batches in the dataset along the batch dimension.
 
     Args:
         data: A dataloader or iterable of batches.
         input_key: Key to obtain the input tensor when ``X`` is a dict-like object.
+        device: The device the data should live in.
 
     Returns:
         Concatenated model inputs.
@@ -311,15 +319,16 @@ def _concatenate_batches(
             not provided.
     """
     X, y = list(zip(*list(data)))
-    y = cat(y)
+    device = y[0].device if device is None else device
+    y = cat(y).to(device)
 
     if isinstance(X[0], MutableMapping) and input_key is None:
         raise ValueError("input_key must be provided for dict-like X!")
 
     if isinstance(X[0], Tensor):
-        return cat(X), y
+        return cat(X).to(device), y
     else:
-        X = {input_key: cat([d[input_key] for d in X])}
+        X = {input_key: cat([d[input_key] for d in X]).to(device)}
         return X, y
 
 
