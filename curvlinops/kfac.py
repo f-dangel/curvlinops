@@ -193,7 +193,7 @@ class KFACLinearOperator(_LinearOperator):
                 at the cost of one traversal through the data loader.
             batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
                 needs to be specified. The intended behavior is to consume the first
-                entry of the iterates from ``data`` and returns their batch size.
+                entry of the iterates from ``data`` and return their batch size.
 
         Raises:
             ValueError: If the loss function is not supported.

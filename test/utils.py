@@ -79,7 +79,7 @@ def ggn_block_diagonal(
         loss_func: The loss function.
         params: The parameters w.r.t. which the GGN block-diagonals will be computed.
         data: A data loader.
-        batch_size_fn: A function that returns the batch size of given a dict-like ``X``.
+        batch_size_fn: A function that returns the batch size given a dict-like ``X``.
         separate_weight_and_bias: Whether to treat weight and bias of a layer as
             separate blocks in the block-diagonal GGN. Default: ``True``.
 
@@ -278,3 +278,17 @@ def cast_input(
         X = X.to(target_dtype)
 
     return X
+
+
+def batch_size_fn(X: MutableMapping) -> int:
+    """Get the batch size of a tensor wrapped in a dict-like object.
+
+    Assumes that the key to that tensor is "x".
+
+    Args:
+        X: The dict-like object with key "x" and a corresponding tensor value.
+
+    Returns:
+        batch_size: The first dimension size of the tensor.
+    """
+    return X["x"].shape[0]

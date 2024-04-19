@@ -23,7 +23,12 @@ def test_EFLinearOperator_matvec(case, adjoint: bool):
     )
     op_functorch = (
         functorch_empirical_fisher(
-            model_func, loss_func, params, data, batch_size_fn, "x"
+            model_func,
+            loss_func,
+            params,
+            data,
+            batch_size_fn=batch_size_fn,
+            input_key="x",
         )
         .detach()
         .cpu()
@@ -44,7 +49,12 @@ def test_EFLinearOperator_matmat(case, adjoint: bool, num_vecs: int = 3):
     )
     op_functorch = (
         functorch_empirical_fisher(
-            model_func, loss_func, params, data, batch_size_fn, "x"
+            model_func,
+            loss_func,
+            params,
+            data,
+            batch_size_fn=batch_size_fn,
+            input_key="x",
         )
         .detach()
         .cpu()

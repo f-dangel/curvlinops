@@ -10,7 +10,7 @@ Remember to run :code:`pip install -U transformers datasets`
 from collections import UserDict
 from collections.abc import MutableMapping
 
-import numpy
+import numpy as np
 import torch
 import torch.utils.data as data_utils
 from datasets import Dataset
@@ -27,7 +27,7 @@ from curvlinops import GGNLinearOperator
 
 # make deterministic
 torch.manual_seed(0)
-numpy.random.seed(0)
+np.random.seed(0)
 
 # %%
 #
@@ -61,7 +61,7 @@ dataloader = data_utils.DataLoader(
 
 # %%
 #
-# Let's check the batch emitted by HF. We will see that it a :code:`UserDict`,
+# Let's check the batch emitted by HF. We will see that it is a :code:`UserDict`,
 # containing the input and label tensors. Note that :code:`UserDict` is
 # :code:`MutableMapping`, so it is compatible with :code:`curvlinops`.
 
@@ -160,7 +160,7 @@ ggn = GGNLinearOperator(
     batch_size_fn=batch_size_fn,  # Remember to specify this!
 )
 
-G = ggn @ torch.eye(ggn.shape[0])
+G = ggn @ np.eye(ggn.shape[0])
 
 print(f"GGN shape: {G.shape}")
 

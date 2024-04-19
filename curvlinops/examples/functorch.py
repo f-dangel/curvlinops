@@ -234,11 +234,7 @@ def functorch_empirical_fisher(
 
     params_argnum = 2
     batch_grad_fn = vmap(grad(loss_n, argnums=params_argnum))
-
-    if batch_size_fn is None:
-        N = X.shape[0]
-    else:
-        N = batch_size_fn(X)
+    N = X.shape[0] if batch_size_fn is None else batch_size_fn(X)
 
     params_replicated_dict = {
         name: p.unsqueeze(0).expand(N, *(p.dim() * [-1]))
@@ -315,11 +311,10 @@ def _concatenate_batches(
             not provided.
     """
     X, y = list(zip(*list(data)))
+    y = cat(y)
 
     if isinstance(X[0], MutableMapping) and input_key is None:
         raise ValueError("input_key must be provided for dict-like X!")
-
-    y = cat(y)
 
     if isinstance(X[0], Tensor):
         return cat(X), y

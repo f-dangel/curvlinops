@@ -20,7 +20,10 @@ def test_JacobianLinearOperator_matvec(case, adjoint: bool):
 
     op = JacobianLinearOperator(model_func, params, data, batch_size_fn=batch_size_fn)
     op_functorch = (
-        functorch_jacobian(model_func, params, data, "x").detach().cpu().numpy()
+        functorch_jacobian(model_func, params, data, input_key="x")
+        .detach()
+        .cpu()
+        .numpy()
     )
     if adjoint:
         op, op_functorch = op.adjoint(), op_functorch.conj().T
@@ -34,7 +37,10 @@ def test_JacobianLinearOperator_matmat(case, adjoint: bool, num_vecs: int = 3):
 
     op = JacobianLinearOperator(model_func, params, data, batch_size_fn=batch_size_fn)
     op_functorch = (
-        functorch_jacobian(model_func, params, data, "x").detach().cpu().numpy()
+        functorch_jacobian(model_func, params, data, input_key="x")
+        .detach()
+        .cpu()
+        .numpy()
     )
     if adjoint:
         op, op_functorch = op.adjoint(), op_functorch.conj().T
@@ -55,7 +61,11 @@ def test_TransposedJacobianLinearOperator_matvec(case, adjoint: bool):
         model_func, params, data, batch_size_fn=batch_size_fn
     )
     op_functorch = (
-        functorch_jacobian(model_func, params, data, "x").detach().cpu().numpy().T
+        functorch_jacobian(model_func, params, data, input_key="x")
+        .detach()
+        .cpu()
+        .numpy()
+        .T
     )
     if adjoint:
         op, op_functorch = op.adjoint(), op_functorch.conj().T
@@ -73,7 +83,11 @@ def test_TransposedJacobianLinearOperator_matmat(
         model_func, params, data, batch_size_fn=batch_size_fn
     )
     op_functorch = (
-        functorch_jacobian(model_func, params, data, "x").detach().cpu().numpy().T
+        functorch_jacobian(model_func, params, data, input_key="x")
+        .detach()
+        .cpu()
+        .numpy()
+        .T
     )
     if adjoint:
         op, op_functorch = op.adjoint(), op_functorch.conj().T

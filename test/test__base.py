@@ -11,5 +11,10 @@ def test_check_deterministic(non_deterministic_case):
 
     with raises(RuntimeError):
         _LinearOperator(
-            model_func, loss_func, params, data, batch_size_fn, check_deterministic=True
+            model_func,
+            loss_func,
+            params,
+            data,
+            batch_size_fn=batch_size_fn,
+            check_deterministic=True,
         )

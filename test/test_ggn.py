@@ -22,7 +22,10 @@ def test_GGNLinearOperator_matvec(case, adjoint: bool):
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn
     )
     op_functorch = (
-        functorch_ggn(model_func, loss_func, params, data, "x").detach().cpu().numpy()
+        functorch_ggn(model_func, loss_func, params, data, input_key="x")
+        .detach()
+        .cpu()
+        .numpy()
     )
     if adjoint:
         op, op_functorch = op.adjoint(), op_functorch.conj().T
@@ -38,7 +41,10 @@ def test_GGNLinearOperator_matmat(case, adjoint: bool, num_vecs: int = 3):
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn
     )
     op_functorch = (
-        functorch_ggn(model_func, loss_func, params, data, "x").detach().cpu().numpy()
+        functorch_ggn(model_func, loss_func, params, data, input_key="x")
+        .detach()
+        .cpu()
+        .numpy()
     )
     if adjoint:
         op, op_functorch = op.adjoint(), op_functorch.conj().T

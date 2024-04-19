@@ -1,5 +1,6 @@
 """Contains pytest fixtures that are visible by other files."""
 
+import test.utils
 from collections.abc import MutableMapping
 from test.cases import ADJOINT_CASES, CASES, NON_DETERMINISTIC_CASES
 from test.kfac_cases import (
@@ -38,7 +39,7 @@ def initialize_case(
 
     try:
         if isinstance(next(iter(data))[0], MutableMapping):
-            batch_size_fn = lambda datum: datum["x"].shape[0]
+            batch_size_fn = test.utils.batch_size_fn
     except KeyError:  # The case of KFAC, where there are expand and reduce keys
         batch_size_fn = None
 

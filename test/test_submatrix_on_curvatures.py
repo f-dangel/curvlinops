@@ -68,7 +68,12 @@ def setup_submatrix_linear_operator(case, operator_case, submatrix_case):
 
     if operator_case == EFLinearOperator:
         A_functorch = CURVATURE_IN_FUNCTORCH[operator_case](
-            model_func, loss_func, params, data, batch_size_fn, "x"
+            model_func,
+            loss_func,
+            params,
+            data,
+            batch_size_fn=batch_size_fn,
+            input_key="x",
         )
     else:
         A_functorch = CURVATURE_IN_FUNCTORCH[operator_case](

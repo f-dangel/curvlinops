@@ -59,7 +59,7 @@ class JacobianLinearOperator(_LinearOperator):
                 at the cost of one traversal through the data loader.
             batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
                 needs to be specified. The intended behavior is to consume the first
-                entry of the iterates from ``data`` and returns their batch size.
+                entry of the iterates from ``data`` and return their batch size.
         """
         _batch_size_fn = (
             (lambda X: X.shape[0]) if batch_size_fn is None else batch_size_fn
@@ -214,7 +214,7 @@ class TransposedJacobianLinearOperator(_LinearOperator):
 
         Note that the data must be supplied in deterministic order.
 
-            Args:
+        Args:
             model_func: Neural network function.
             params: Neural network parameters.
             data: Iterable of batched input-target pairs.
@@ -224,7 +224,7 @@ class TransposedJacobianLinearOperator(_LinearOperator):
                 at the cost of one traversal through the data loader.
             batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
                 needs to be specified. The intended behavior is to consume the first
-                entry of the iterates from ``data`` and returns their batch size.
+                entry of the iterates from ``data`` and return their batch size.
         """
         _batch_size_fn = (
             (lambda X: X.shape[0]) if batch_size_fn is None else batch_size_fn

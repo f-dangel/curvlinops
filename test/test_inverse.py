@@ -37,7 +37,10 @@ def test_CG_inverse_damped_GGN_matvec(case, delta: float = 2e-2):
 
     inv_GGN = CGInverseLinearOperator(GGN + damping)
     inv_GGN_functorch = inv(
-        functorch_ggn(model_func, loss_func, params, data, "x").detach().cpu().numpy()
+        functorch_ggn(model_func, loss_func, params, data, input_key="x")
+        .detach()
+        .cpu()
+        .numpy()
         + delta * eye(GGN.shape[1])
     )
 
@@ -74,7 +77,7 @@ def test_Neumann_inverse_damped_GGN_matvec(case, delta: float = 1e-2):
     damping = aslinearoperator(delta * sparse.eye(GGN.shape[0]))
 
     damped_GGN_functorch = functorch_ggn(
-        model_func, loss_func, params, data, "x"
+        model_func, loss_func, params, data, input_key="x"
     ).detach().cpu().numpy() + delta * eye(GGN.shape[1])
     inv_GGN_functorch = inv(damped_GGN_functorch)
 

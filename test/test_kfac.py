@@ -232,7 +232,7 @@ def test_kfac_one_datum(
         Union[BCEWithLogitsLoss, CrossEntropyLoss],
         List[Parameter],
         Iterable[Tuple[Tensor, Tensor]],
-    ]
+    ],
 ):
     model, loss_func, params, data, batch_size_fn = kfac_exact_one_datum_case
     loss_average = None if loss_func.reduction == "sum" else "batch"
@@ -260,7 +260,7 @@ def test_kfac_mc_one_datum(
         Union[BCEWithLogitsLoss, CrossEntropyLoss],
         List[Parameter],
         Iterable[Tuple[Tensor, Tensor]],
-    ]
+    ],
 ):
     model, loss_func, params, data, batch_size_fn = kfac_exact_one_datum_case
     loss_average = None if loss_func.reduction == "sum" else "batch"
@@ -291,7 +291,7 @@ def test_kfac_ef_one_datum(
         Union[BCEWithLogitsLoss, CrossEntropyLoss],
         List[Parameter],
         Iterable[Tuple[Tensor, Tensor]],
-    ]
+    ],
 ):
     model, loss_func, params, data, batch_size_fn = kfac_exact_one_datum_case
     loss_average = None if loss_func.reduction == "sum" else "batch"

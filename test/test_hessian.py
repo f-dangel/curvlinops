@@ -24,7 +24,7 @@ def test_HessianLinearOperator_matvec(case, adjoint: bool):
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn
     )
     op_functorch = (
-        functorch_hessian(model_func, loss_func, params, data, "x")
+        functorch_hessian(model_func, loss_func, params, data, input_key="x")
         .detach()
         .cpu()
         .numpy()
@@ -43,7 +43,7 @@ def test_HessianLinearOperator_matmat(case, adjoint: bool, num_vecs: int = 3):
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn
     )
     op_functorch = (
-        functorch_hessian(model_func, loss_func, params, data, "x")
+        functorch_hessian(model_func, loss_func, params, data, input_key="x")
         .detach()
         .cpu()
         .numpy()
@@ -89,7 +89,9 @@ def test_blocked_HessianLinearOperator_matmat(
 
     # compute the blocks with functorch and build the block diagonal matrix
     op_functorch = [
-        functorch_hessian(model_func, loss_func, params_block, data, "x").detach()
+        functorch_hessian(
+            model_func, loss_func, params_block, data, input_key="x"
+        ).detach()
         for params_block in split_list(params, block_sizes)
     ]
     op_functorch = block_diag(*op_functorch).cpu().numpy()
