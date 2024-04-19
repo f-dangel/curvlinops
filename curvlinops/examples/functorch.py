@@ -51,7 +51,9 @@ def functorch_hessian(
     Returns:
         Square matrix containing the Hessian.
     """
+    (dev,) = {p.device for p in params}
     X, y = _concatenate_batches(data)
+    X, y = X.to(dev), y.to(dev)
     params_dict = _make_params_dict(model_func, params)
 
     def loss(X: Tensor, y: Tensor, params_dict: Dict[str, Tensor]) -> Tensor:
@@ -91,7 +93,9 @@ def functorch_ggn(
     Returns:
         Square matrix containing the GGN.
     """
+    (dev,) = {p.device for p in params}
     X, y = _concatenate_batches(data)
+    X, y = X.to(dev), y.to(dev)
     params_dict = _make_params_dict(model_func, params)
 
     def linearized_model(
@@ -199,7 +203,9 @@ def functorch_empirical_fisher(
     Raises:
         ValueError: If the loss function's reduction cannot be determined.
     """
+    (dev,) = {p.device for p in params}
     X, y = _concatenate_batches(data)
+    X, y = X.to(dev), y.to(dev)
     params_dict = _make_params_dict(model_func, params)
 
     # compute batched gradients
@@ -253,7 +259,9 @@ def functorch_jacobian(
         total number of parameters, ``N`` the total number of data points, and ``C``
         the model's output space dimension.
     """
+    (dev,) = {p.device for p in params}
     X, _ = _concatenate_batches(data)
+    X = X.to(dev)
     params_dict = _make_params_dict(model_func, params)
 
     def model_fn_params_only(params_dict: Dict[str, Tensor]) -> Tensor:
