@@ -353,7 +353,7 @@ class _LinearOperator(LinearOperator):
             # if `X` is a custom data format
             if isinstance(X, Tensor):
                 X = X.to(self._device)
-            y.to(self._device)
+            y = y.to(self._device)
             yield (X, y)
 
     def gradient_and_loss(self) -> Tuple[List[Tensor], Tensor]:
