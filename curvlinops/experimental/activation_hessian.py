@@ -109,7 +109,7 @@ class ActivationHessianLinearOperator(_LinearOperator):
         # Compute shape of activation and ensure there is only one batch
         data_iter = iter(data)
         X, _ = next(data_iter)
-        (dev, ) = {p.device for p in model_func.parameters()}
+        (dev,) = {p.device for p in model_func.parameters()}
         X = X.to(dev)
         activation_storage = []
         with store_activation(model_func, *activation, activation_storage):
