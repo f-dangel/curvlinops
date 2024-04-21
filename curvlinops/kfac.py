@@ -513,7 +513,6 @@ class KFACLinearOperator(_LinearOperator):
             self._compute_loss_and_backward(output, y)
 
         # clean up
-        self._model_func.zero_grad()
         for handle in hook_handles:
             handle.remove()
 
