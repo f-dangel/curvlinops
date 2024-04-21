@@ -537,10 +537,6 @@ class KFACLinearOperator(_LinearOperator):
             output = rearrange(output, "batch ... c -> (batch ...) c")
             y = rearrange(y, "batch ... c -> (batch ...) c")
 
-        # we will differentiate w.r.t. the model parameters to trigger the backward
-        # hooks that compute the grad-output based Kronecker factors
-        params = [p for p in self._model_func.parameters() if p.requires_grad]
-
         if self._fisher_type == "type-2":
             # Compute per-sample Hessian square root, then concatenate over samples.
             # Result has shape `(batch_size, num_classes, num_classes)`
@@ -564,7 +560,7 @@ class KFACLinearOperator(_LinearOperator):
                 batched_column = hessian_sqrts[:, :, c]
                 grad(
                     (output * batched_column).sum(),
-                    params,
+                    self._params,
                     retain_graph=c < num_cols - 1,
                 )
 
@@ -584,11 +580,11 @@ class KFACLinearOperator(_LinearOperator):
                     _, C = output.shape
                     loss *= sqrt(C)
 
-                grad(loss, params, retain_graph=mc != self._mc_samples - 1)
+                grad(loss, self._params, retain_graph=mc != self._mc_samples - 1)
 
         elif self._fisher_type == "empirical":
             loss = self._loss_func(output, y)
-            grad(loss, params)
+            grad(loss, self._params)
 
         elif self._fisher_type == "forward-only":
             # Since FOOF sets the gradient covariance Kronecker factors to the identity,
