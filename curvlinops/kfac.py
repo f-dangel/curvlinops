@@ -25,6 +25,7 @@ from typing import Dict, Iterable, List, Optional, Tuple, Union
 from einops import einsum, rearrange, reduce
 from numpy import ndarray
 from torch import Generator, Tensor, cat, device, eye, randn, stack
+from torch.autograd import grad
 from torch.nn import (
     BCEWithLogitsLoss,
     Conv2d,
@@ -512,7 +513,6 @@ class KFACLinearOperator(_LinearOperator):
             self._compute_loss_and_backward(output, y)
 
         # clean up
-        self._model_func.zero_grad()
         for handle in hook_handles:
             handle.remove()
 
@@ -557,7 +557,11 @@ class KFACLinearOperator(_LinearOperator):
             num_cols = hessian_sqrts.shape[-1]
             for c in range(num_cols):
                 batched_column = hessian_sqrts[:, :, c]
-                (output * batched_column).sum().backward(retain_graph=c < num_cols - 1)
+                grad(
+                    (output * batched_column).sum(),
+                    self._params,
+                    retain_graph=c < num_cols - 1,
+                )
 
         elif self._fisher_type == "mc":
             for mc in range(self._mc_samples):
@@ -575,11 +579,11 @@ class KFACLinearOperator(_LinearOperator):
                     _, C = output.shape
                     loss *= sqrt(C)
 
-                loss.backward(retain_graph=mc != self._mc_samples - 1)
+                grad(loss, self._params, retain_graph=mc != self._mc_samples - 1)
 
         elif self._fisher_type == "empirical":
             loss = self._loss_func(output, y)
-            loss.backward()
+            grad(loss, self._params)
 
         elif self._fisher_type == "forward-only":
             # Since FOOF sets the gradient covariance Kronecker factors to the identity,

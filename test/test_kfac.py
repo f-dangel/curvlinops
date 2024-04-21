@@ -16,9 +16,9 @@ from numpy import eye
 from numpy.linalg import det, norm, slogdet
 from pytest import mark, raises, skip
 from scipy.linalg import block_diag
-from torch import Tensor, cat, cuda, device
+from torch import Tensor, allclose, cat, cuda, device
 from torch import eye as torch_eye
-from torch import isinf, isnan, manual_seed, rand, randperm
+from torch import isinf, isnan, manual_seed, rand, rand_like, randperm
 from torch.nn import (
     BCEWithLogitsLoss,
     CrossEntropyLoss,
@@ -995,3 +995,34 @@ def test_forward_only_fisher_type_exact_weight_sharing_case(
     # Check that input covariances were not computed
     if exclude == "weight":
         assert len(foof._input_covariances) == 0
+
+
+def test_kfac_does_affect_grad():
+    """Make sure KFAC computation does not write to `.grad`."""
+    manual_seed(0)
+    batch_size, D_in, D_out = 4, 3, 2
+    X = rand(batch_size, D_in)
+    y = rand(batch_size, D_out)
+    model = Linear(D_in, D_out)
+
+    params = list(model.parameters())
+    # set gradients to random numbers
+    for p in params:
+        p.grad = rand_like(p)
+    # make independent copies
+    grads_before = [p.grad.clone() for p in params]
+
+    # create and compute KFAC
+    kfac = KFACLinearOperator(
+        model,
+        MSELoss(),
+        params,
+        [(X, y)],
+        # suppress computation of KFAC matrices
+        check_deterministic=False,
+    )
+    kfac._compute_kfac()
+
+    # make sure gradients are unchanged
+    for grad_before, p in zip(grads_before, params):
+        assert allclose(grad_before, p.grad)
