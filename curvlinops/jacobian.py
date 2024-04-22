@@ -124,9 +124,12 @@ class JacobianLinearOperator(_LinearOperator):
                     X1, X2 = X1.cpu().numpy(), X2.cpu().numpy()
                     check_X_y(X1, X2, y1, y2)
                 else:  # X is a MutableMapping
-                    for (k1, v1), (k2, v2) in zip(X1.items(), X2.items()):
+                    for k in X1.keys():
+                        v1, v2 = X1[k], X2[k]
+
                         if isinstance(v1, Tensor) or isinstance(v2, Tensor):
                             X1, X2 = v1.cpu().numpy(), v2.cpu().numpy()
+
                         check_X_y(X1, X2, y1, y2)
 
                 if not allclose(pred1, pred2):
@@ -297,9 +300,12 @@ class TransposedJacobianLinearOperator(_LinearOperator):
                             X1, X2 = X1.cpu().numpy(), X2.cpu().numpy()
                             check_X_y(X1, X2, y1, y2)
                         else:  # X is a MutableMapping
-                            for (k1, v1), (k2, v2) in zip(X1.items(), X2.items()):
+                            for k in X1.keys():
+                                v1, v2 = X1[k], X2[k]
+
                                 if isinstance(v1, Tensor) or isinstance(v2, Tensor):
                                     X1, X2 = v1.cpu().numpy(), v2.cpu().numpy()
+
                                 check_X_y(X1, X2, y1, y2)
 
                 if not allclose(pred1, pred2):
