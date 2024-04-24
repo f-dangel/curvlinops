@@ -1,5 +1,6 @@
 """Contains functionality to analyze Hessian & GGN via matrix-free multiplication."""
 
+from collections.abc import MutableMapping
 from typing import Callable, Iterable, List, Optional, Tuple, Union
 from warnings import warn
 
@@ -33,12 +34,13 @@ class _LinearOperator(LinearOperator):
         model_func: Callable[[Tensor], Tensor],
         loss_func: Union[Callable[[Tensor, Tensor], Tensor], None],
         params: List[Parameter],
-        data: Iterable[Tuple[Tensor, Tensor]],
+        data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
         shape: Optional[Tuple[int, int]] = None,
         num_data: Optional[int] = None,
         block_sizes: Optional[List[int]] = None,
+        batch_size_fn: Optional[Callable[[MutableMapping], int]] = None,
     ):
         """Linear operator for DNN matrices.
 
@@ -55,7 +57,11 @@ class _LinearOperator(LinearOperator):
                 represented matrix is independent of the loss function.
             params: List of differentiable parameters used by the prediction function.
             data: Source from which mini-batches can be drawn, for instance a list of
-                mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
+                mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``. Note that ``X``
+                could be a ``dict`` or ``UserDict``; this is useful for custom models.
+                In this case, you must (i) specify the ``batch_size_fn`` argument, and
+                (ii) take care of preprocessing like ``X.to(device)`` inside of your
+                ``model.forward()`` function.
             progressbar: Show a progressbar during matrix-multiplication.
                 Default: ``False``.
             check_deterministic: Probe that model and data are deterministic, i.e.
@@ -73,6 +79,9 @@ class _LinearOperator(LinearOperator):
                 For instance ``[len(params)]`` considers the full matrix, while
                 ``[1, 1, ...]`` corresponds to a block diagonal approximation where
                 each parameter forms its own block.
+            batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
+                needs to be specified. The intended behavior is to consume the first
+                entry of the iterates from ``data`` and return their batch size.
 
         Raises:
             RuntimeError: If the check for deterministic behavior fails.
@@ -80,7 +89,13 @@ class _LinearOperator(LinearOperator):
                 support blocks.
             ValueError: If the sum of blocks does not equal the number of parameters.
             ValueError: If any block size is not positive.
+            ValueError: If ``X`` is not a tensor and ``batch_size_fn`` is not specified.
         """
+        if isinstance(next(iter(data))[0], MutableMapping) and batch_size_fn is None:
+            raise ValueError(
+                "When using dict-like custom data, `batch_size_fn` is required."
+            )
+
         if shape is None:
             dim = sum(p.numel() for p in params)
             shape = (dim, dim)
@@ -103,9 +118,15 @@ class _LinearOperator(LinearOperator):
         self._data = data
         self._device = self._infer_device(self._params)
         self._progressbar = progressbar
+        self._batch_size_fn = (
+            (lambda X: X.shape[0]) if batch_size_fn is None else batch_size_fn
+        )
 
         self._N_data = (
-            sum(X.shape[0] for (X, _) in self._loop_over_data(desc="_N_data"))
+            sum(
+                self._batch_size_fn(X)
+                for (X, _) in self._loop_over_data(desc="_N_data")
+            )
             if num_data is None
             else num_data
         )
@@ -328,7 +349,11 @@ class _LinearOperator(LinearOperator):
             data_iter = tqdm(data_iter, desc=desc)
 
         for X, y in data_iter:
-            X, y = X.to(self._device), y.to(self._device)
+            # Assume everything is handled by the model
+            # if `X` is a custom data format
+            if isinstance(X, Tensor):
+                X = X.to(self._device)
+            y = y.to(self._device)
             yield (X, y)
 
     def gradient_and_loss(self) -> Tuple[List[Tensor], Tensor]:
@@ -368,7 +393,7 @@ class _LinearOperator(LinearOperator):
         Returns:
             Normalization factor
         """
-        return {"sum": 1.0, "mean": X.shape[0] / self._N_data}[
+        return {"sum": 1.0, "mean": self._batch_size_fn(X) / self._N_data}[
             self._loss_func.reduction
         ]
 

@@ -1,5 +1,7 @@
 """Contains test cases for linear operators."""
 
+from collections import UserDict
+from collections.abc import MutableMapping
 from test.utils import (
     binary_classification_targets,
     classification_targets,
@@ -14,6 +16,7 @@ from torch.nn import (
     CrossEntropyLoss,
     Dropout,
     Linear,
+    Module,
     MSELoss,
     ReLU,
     Sequential,
@@ -22,6 +25,18 @@ from torch.utils.data import DataLoader, TensorDataset
 
 DEVICES = get_available_devices()
 DEVICES_IDS = [f"dev={d}" for d in DEVICES]
+
+
+class ModelWithDictInput(Module):
+    def __init__(self, num_classes=2, nonlin=ReLU):
+        super().__init__()
+        self.net = Sequential(Linear(10, 5), nonlin(), Linear(5, num_classes))
+
+    def forward(self, data: MutableMapping):
+        device = next(self.parameters()).device
+        x = data["x"].to(device)
+        return self.net(x)
+
 
 # Add test cases here
 CASES_NO_DEVICE = [
@@ -97,6 +112,39 @@ CASES_NO_DEVICE = [
         "data": lambda: [
             (rand(2, 8), regression_targets((2, 3))),
             (rand(6, 8), regression_targets((6, 3))),
+        ],
+        "seed": 0,
+    },
+    ###############################################################################
+    #                               DICT-LIKE X                                   #
+    ###############################################################################
+    # Cross entropy
+    {
+        "model_func": lambda: ModelWithDictInput(num_classes=2),
+        "loss_func": lambda: CrossEntropyLoss(reduction="mean"),
+        "data": lambda: [
+            (UserDict({"x": rand(3, 10)}), classification_targets((3,), 2)),
+            ({"x": rand(4, 10)}, classification_targets((4,), 2)),
+        ],
+        "seed": 0,
+    },
+    # BCE
+    {
+        "model_func": lambda: ModelWithDictInput(num_classes=1),
+        "loss_func": lambda: BCEWithLogitsLoss(reduction="mean"),
+        "data": lambda: [
+            (UserDict({"x": rand(3, 10)}), binary_classification_targets((3, 1))),
+            ({"x": rand(4, 10)}, binary_classification_targets((4, 1))),
+        ],
+        "seed": 0,
+    },
+    # MSE
+    {
+        "model_func": lambda: ModelWithDictInput(num_classes=2),
+        "loss_func": lambda: MSELoss(reduction="mean"),
+        "data": lambda: [
+            (UserDict({"x": rand(3, 10)}), regression_targets((3, 2))),
+            ({"x": rand(4, 10)}, regression_targets((4, 2))),
         ],
         "seed": 0,
     },

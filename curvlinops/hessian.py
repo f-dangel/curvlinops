@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import List, Tuple
+from collections.abc import MutableMapping
+from typing import List, Tuple, Union
 
 from backpack.hessianfree.hvp import hessian_vector_product
 from torch import Tensor, zeros_like
@@ -41,7 +42,7 @@ class HessianLinearOperator(_LinearOperator):
     SUPPORTS_BLOCKS: bool = True
 
     def _matmat_batch(
-        self, X: Tensor, y: Tensor, M_list: List[Tensor]
+        self, X: Union[Tensor, MutableMapping], y: Tensor, M_list: List[Tensor]
     ) -> Tuple[Tensor, ...]:
         """Apply the mini-batch Hessian to a matrix.
 

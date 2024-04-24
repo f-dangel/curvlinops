@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Callable, Iterable, List, Optional, Tuple
+from collections.abc import MutableMapping
+from typing import Callable, Iterable, List, Optional, Tuple, Union
 
 from backpack.hessianfree.lop import transposed_jacobian_vector_product as vjp
 from backpack.hessianfree.rop import jacobian_vector_product as jvp
@@ -23,10 +24,11 @@ class JacobianLinearOperator(_LinearOperator):
         self,
         model_func: Callable[[Tensor], Tensor],
         params: List[Parameter],
-        data: Iterable[Tuple[Tensor, Tensor]],
+        data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
         num_data: Optional[int] = None,
+        batch_size_fn: Optional[Callable[[MutableMapping], int]] = None,
     ):
         r"""Linear operator for the Jacobian as SciPy linear operator.
 
@@ -55,11 +57,24 @@ class JacobianLinearOperator(_LinearOperator):
             check_deterministic: Check if model and data are deterministic.
             num_data: Number of data points. If ``None``, it is inferred from the data
                 at the cost of one traversal through the data loader.
+            batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
+                needs to be specified. The intended behavior is to consume the first
+                entry of the iterates from ``data`` and return their batch size.
         """
-        num_data = sum(t.shape[0] for t, _ in data) if num_data is None else num_data
-        x = next(iter(data))[0].to(self._infer_device(params))
+        _batch_size_fn = (
+            (lambda X: X.shape[0]) if batch_size_fn is None else batch_size_fn
+        )
+        num_data = (
+            sum(_batch_size_fn(t) for t, _ in data) if num_data is None else num_data
+        )
+        x = next(iter(data))[0]
+
+        if isinstance(x, Tensor):
+            x = x.to(self._infer_device(params))
+
         num_outputs = model_func(x).shape[1:].numel()
         num_params = sum(p.numel() for p in params)
+
         super().__init__(
             model_func,
             None,
@@ -69,6 +84,7 @@ class JacobianLinearOperator(_LinearOperator):
             check_deterministic=check_deterministic,
             shape=(num_data * num_outputs, num_params),
             num_data=num_data,
+            batch_size_fn=batch_size_fn,
         )
 
     def _check_deterministic(self):
@@ -90,6 +106,12 @@ class JacobianLinearOperator(_LinearOperator):
 
         rtol, atol = 5e-5, 1e-6
 
+        def check_X_y(X1, X2, y1, y2):
+            if not allclose(X1, X2) or not allclose(y1, y2):
+                self.print_nonclose(X1, X2, rtol=rtol, atol=atol)
+                self.print_nonclose(y1, y2, rtol=rtol, atol=atol)
+                raise RuntimeError("Non-deterministic data loading detected.")
+
         with no_grad():
             for (X1, y1), (X2, y2) in zip(
                 self._loop_over_data(desc="_check_deterministic_data_pred"),
@@ -97,12 +119,18 @@ class JacobianLinearOperator(_LinearOperator):
             ):
                 pred1, y1 = self._model_func(X1).cpu().numpy(), y1.cpu().numpy()
                 pred2, y2 = self._model_func(X2).cpu().numpy(), y2.cpu().numpy()
-                X1, X2 = X1.cpu().numpy(), X2.cpu().numpy()
 
-                if not allclose(X1, X2) or not allclose(y1, y2):
-                    self.print_nonclose(X1, X2, rtol=rtol, atol=atol)
-                    self.print_nonclose(y1, y2, rtol=rtol, atol=atol)
-                    raise RuntimeError("Non-deterministic data loading detected.")
+                if isinstance(X1, Tensor) or isinstance(X2, Tensor):
+                    X1, X2 = X1.cpu().numpy(), X2.cpu().numpy()
+                    check_X_y(X1, X2, y1, y2)
+                else:  # X is a MutableMapping
+                    for k in X1.keys():
+                        v1, v2 = X1[k], X2[k]
+
+                        if isinstance(v1, Tensor) or isinstance(v2, Tensor):
+                            X1, X2 = v1.cpu().numpy(), v2.cpu().numpy()
+
+                        check_X_y(X1, X2, y1, y2)
 
                 if not allclose(pred1, pred2):
                     self.print_nonclose(pred1, pred2, rtol=rtol, atol=atol)
@@ -150,6 +178,7 @@ class JacobianLinearOperator(_LinearOperator):
             self._data,
             progressbar=self._progressbar,
             check_deterministic=False,
+            batch_size_fn=self._batch_size_fn,
         )
 
 
@@ -163,10 +192,11 @@ class TransposedJacobianLinearOperator(_LinearOperator):
         self,
         model_func: Callable[[Tensor], Tensor],
         params: List[Parameter],
-        data: Iterable[Tuple[Tensor, Tensor]],
+        data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
         num_data: Optional[int] = None,
+        batch_size_fn: Optional[Callable[[MutableMapping], int]] = None,
     ):
         r"""Linear operator for the transpose Jacobian as SciPy linear operator.
 
@@ -195,11 +225,24 @@ class TransposedJacobianLinearOperator(_LinearOperator):
             check_deterministic: Check if model and data are deterministic.
             num_data: Number of data points. If ``None``, it is inferred from the data
                 at the cost of one traversal through the data loader.
+            batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
+                needs to be specified. The intended behavior is to consume the first
+                entry of the iterates from ``data`` and return their batch size.
         """
-        num_data = sum(t.shape[0] for t, _ in data) if num_data is None else num_data
-        x = next(iter(data))[0].to(self._infer_device(params))
+        _batch_size_fn = (
+            (lambda X: X.shape[0]) if batch_size_fn is None else batch_size_fn
+        )
+        num_data = (
+            sum(_batch_size_fn(t) for t, _ in data) if num_data is None else num_data
+        )
+        x = next(iter(data))[0]
+
+        if isinstance(x, Tensor):
+            x = x.to(self._infer_device(params))
+
         num_outputs = model_func(x).shape[1:].numel()
         num_params = sum(p.numel() for p in params)
+
         super().__init__(
             model_func,
             None,
@@ -209,6 +252,7 @@ class TransposedJacobianLinearOperator(_LinearOperator):
             check_deterministic=check_deterministic,
             shape=(num_params, num_data * num_outputs),
             num_data=num_data,
+            batch_size_fn=batch_size_fn,
         )
 
     def _check_deterministic(self):
@@ -237,12 +281,32 @@ class TransposedJacobianLinearOperator(_LinearOperator):
             ):
                 pred1, y1 = self._model_func(X1).cpu().numpy(), y1.cpu().numpy()
                 pred2, y2 = self._model_func(X2).cpu().numpy(), y2.cpu().numpy()
-                X1, X2 = X1.cpu().numpy(), X2.cpu().numpy()
 
-                if not allclose(X1, X2) or not allclose(y1, y2):
-                    self.print_nonclose(X1, X2, rtol=rtol, atol=atol)
-                    self.print_nonclose(y1, y2, rtol=rtol, atol=atol)
-                    raise RuntimeError("Non-deterministic data loading detected.")
+                def check_X_y(X1, X2, y1, y2):
+                    if not allclose(X1, X2) or not allclose(y1, y2):
+                        self.print_nonclose(X1, X2, rtol=rtol, atol=atol)
+                        self.print_nonclose(y1, y2, rtol=rtol, atol=atol)
+                        raise RuntimeError("Non-deterministic data loading detected.")
+
+                with no_grad():
+                    for (X1, y1), (X2, y2) in zip(
+                        self._loop_over_data(desc="_check_deterministic_data_pred"),
+                        self._loop_over_data(desc="_check_deterministic_data_pred2"),
+                    ):
+                        pred1, y1 = self._model_func(X1).cpu().numpy(), y1.cpu().numpy()
+                        pred2, y2 = self._model_func(X2).cpu().numpy(), y2.cpu().numpy()
+
+                        if isinstance(X1, Tensor) or isinstance(X2, Tensor):
+                            X1, X2 = X1.cpu().numpy(), X2.cpu().numpy()
+                            check_X_y(X1, X2, y1, y2)
+                        else:  # X is a MutableMapping
+                            for k in X1.keys():
+                                v1, v2 = X1[k], X2[k]
+
+                                if isinstance(v1, Tensor) or isinstance(v2, Tensor):
+                                    X1, X2 = v1.cpu().numpy(), v2.cpu().numpy()
+
+                                check_X_y(X1, X2, y1, y2)
 
                 if not allclose(pred1, pred2):
                     self.print_nonclose(pred1, pred2, rtol=rtol, atol=atol)
@@ -294,4 +358,5 @@ class TransposedJacobianLinearOperator(_LinearOperator):
             self._data,
             progressbar=self._progressbar,
             check_deterministic=False,
+            batch_size_fn=self._batch_size_fn,
         )

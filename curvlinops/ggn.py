@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import List, Tuple
+from collections.abc import MutableMapping
+from typing import List, Tuple, Union
 
 from backpack.hessianfree.ggnvp import ggn_vector_product_from_plist
 from torch import Tensor, zeros_like
@@ -41,7 +42,7 @@ class GGNLinearOperator(_LinearOperator):
     """
 
     def _matmat_batch(
-        self, X: Tensor, y: Tensor, M_list: List[Tensor]
+        self, X: Union[Tensor, MutableMapping], y: Tensor, M_list: List[Tensor]
     ) -> Tuple[Tensor, ...]:
         """Apply the mini-batch GGN to a matrix.
 

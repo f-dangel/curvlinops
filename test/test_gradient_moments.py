@@ -1,6 +1,9 @@
 """Contains tests for ``curvlinops/gradient_moments.py``."""
 
+from collections.abc import MutableMapping
+
 from numpy import random
+from pytest import raises
 
 from curvlinops import EFLinearOperator
 from curvlinops.examples.functorch import functorch_empirical_fisher
@@ -8,8 +11,29 @@ from curvlinops.examples.utils import report_nonclose
 
 
 def test_EFLinearOperator_matvec(case, adjoint: bool):
-    op = EFLinearOperator(*case)
-    op_functorch = functorch_empirical_fisher(*case).detach().cpu().numpy()
+    model_func, loss_func, params, data, batch_size_fn = case
+
+    # Test when X is dict-like but batch_size_fn = None (default)
+    if isinstance(data[0][0], MutableMapping):
+        with raises(ValueError):
+            op = EFLinearOperator(model_func, loss_func, params, data)
+
+    op = EFLinearOperator(
+        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
+    )
+    op_functorch = (
+        functorch_empirical_fisher(
+            model_func,
+            loss_func,
+            params,
+            data,
+            batch_size_fn=batch_size_fn,
+            input_key="x",
+        )
+        .detach()
+        .cpu()
+        .numpy()
+    )
     if adjoint:
         op, op_functorch = op.adjoint(), op_functorch.conj().T
 
@@ -18,8 +42,24 @@ def test_EFLinearOperator_matvec(case, adjoint: bool):
 
 
 def test_EFLinearOperator_matmat(case, adjoint: bool, num_vecs: int = 3):
-    op = EFLinearOperator(*case)
-    op_functorch = functorch_empirical_fisher(*case).detach().cpu().numpy()
+    model_func, loss_func, params, data, batch_size_fn = case
+
+    op = EFLinearOperator(
+        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
+    )
+    op_functorch = (
+        functorch_empirical_fisher(
+            model_func,
+            loss_func,
+            params,
+            data,
+            batch_size_fn=batch_size_fn,
+            input_key="x",
+        )
+        .detach()
+        .cpu()
+        .numpy()
+    )
     if adjoint:
         op, op_functorch = op.adjoint(), op_functorch.conj().T
 

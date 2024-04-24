@@ -1,6 +1,7 @@
 """Contains tests for ``curvlinops/inverse``."""
 
 from math import sqrt
+from test.utils import cast_input
 from typing import Iterable, List, Tuple, Union
 
 import torch
@@ -27,14 +28,19 @@ KFAC_MIN_DAMPING = 1e-8
 
 def test_CG_inverse_damped_GGN_matvec(case, delta: float = 2e-2):
     """Test matrix-vector multiplication by the inverse damped GGN with CG."""
-    model_func, loss_func, params, data = case
+    model_func, loss_func, params, data, batch_size_fn = case
 
-    GGN = GGNLinearOperator(model_func, loss_func, params, data)
+    GGN = GGNLinearOperator(
+        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
+    )
     damping = aslinearoperator(delta * sparse.eye(GGN.shape[0]))
 
     inv_GGN = CGInverseLinearOperator(GGN + damping)
     inv_GGN_functorch = inv(
-        functorch_ggn(model_func, loss_func, params, data).detach().cpu().numpy()
+        functorch_ggn(model_func, loss_func, params, data, input_key="x")
+        .detach()
+        .cpu()
+        .numpy()
         + delta * eye(GGN.shape[1])
     )
 
@@ -44,14 +50,16 @@ def test_CG_inverse_damped_GGN_matvec(case, delta: float = 2e-2):
 
 def test_CG_inverse_damped_GGN_matmat(case, delta: float = 1e-2, num_vecs: int = 3):
     """Test matrix-matrix multiplication by the inverse damped GGN with CG."""
-    model_func, loss_func, params, data = case
+    model_func, loss_func, params, data, batch_size_fn = case
 
-    GGN = GGNLinearOperator(model_func, loss_func, params, data)
+    GGN = GGNLinearOperator(
+        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
+    )
     damping = aslinearoperator(delta * sparse.eye(GGN.shape[0]))
 
     inv_GGN = CGInverseLinearOperator(GGN + damping)
     inv_GGN_functorch = inv(
-        functorch_ggn(model_func, loss_func, params, data).detach().cpu().numpy()
+        functorch_ggn(model_func, loss_func, params, data, "x").detach().cpu().numpy()
         + delta * eye(GGN.shape[1])
     )
 
@@ -61,13 +69,15 @@ def test_CG_inverse_damped_GGN_matmat(case, delta: float = 1e-2, num_vecs: int =
 
 def test_Neumann_inverse_damped_GGN_matvec(case, delta: float = 1e-2):
     """Test matrix-vector multiplication by the inverse damped GGN with Neumann."""
-    model_func, loss_func, params, data = case
+    model_func, loss_func, params, data, batch_size_fn = case
 
-    GGN = GGNLinearOperator(model_func, loss_func, params, data)
+    GGN = GGNLinearOperator(
+        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
+    )
     damping = aslinearoperator(delta * sparse.eye(GGN.shape[0]))
 
     damped_GGN_functorch = functorch_ggn(
-        model_func, loss_func, params, data
+        model_func, loss_func, params, data, input_key="x"
     ).detach().cpu().numpy() + delta * eye(GGN.shape[1])
     inv_GGN_functorch = inv(damped_GGN_functorch)
 
@@ -159,16 +169,16 @@ def test_KFAC_inverse_damped_matmat(
     delta: float = 1e-2,
 ):
     """Test matrix-matrix multiplication by an inverse damped KFAC approximation."""
-    model_func, loss_func, params, data = case
+    model_func, loss_func, params, data, batch_size_fn = case
     dtype = torch.float64  # use double precision for better numerical stability
     model_func = model_func.to(dtype=dtype)
     loss_func = loss_func.to(dtype=dtype)
     params = [p.to(dtype=dtype) for p in params]
     data = [
         (
-            (x.to(dtype=dtype), y)
+            (cast_input(x, dtype), y)
             if isinstance(loss_func, CrossEntropyLoss)
-            else (x.to(dtype=dtype), y.to(dtype=dtype))
+            else (cast_input(x, dtype), y.to(dtype=dtype))
         )
         for x, y in data
     ]
@@ -183,6 +193,7 @@ def test_KFAC_inverse_damped_matmat(
         loss_func,
         params,
         data,
+        batch_size_fn=batch_size_fn,
         loss_average=loss_average,
         separate_weight_and_bias=separate_weight_and_bias,
         fisher_type=fisher_type,
@@ -258,16 +269,16 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901
 ):
     """Test matrix-matrix multiplication by an inverse (heuristically) damped KFAC
     approximation."""
-    model_func, loss_func, params, data = case
+    model_func, loss_func, params, data, batch_size_fn = case
     dtype = torch.float64  # use double precision for better numerical stability
     model_func = model_func.to(dtype=dtype)
     loss_func = loss_func.to(dtype=dtype)
     params = [p.to(dtype=dtype) for p in params]
     data = [
         (
-            (x.to(dtype=dtype), y)
+            (cast_input(x, dtype), y)
             if isinstance(loss_func, CrossEntropyLoss)
-            else (x.to(dtype=dtype), y.to(dtype=dtype))
+            else (cast_input(x, dtype), y.to(dtype=dtype))
         )
         for x, y in data
     ]
@@ -282,6 +293,7 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901
         loss_func,
         params,
         data,
+        batch_size_fn=batch_size_fn,
         loss_average=loss_average,
         separate_weight_and_bias=separate_weight_and_bias,
         check_deterministic=False,
@@ -390,16 +402,16 @@ def test_KFAC_inverse_exactly_damped_matmat(
     delta: float = 1e-2,
 ):
     """Test matrix-matrix multiplication by an inverse (exactly) damped KFAC approximation."""
-    model_func, loss_func, params, data = case
+    model_func, loss_func, params, data, batch_size_fn = case
     dtype = torch.float64  # use double precision for better numerical stability
     model_func = model_func.to(dtype=dtype)
     loss_func = loss_func.to(dtype=dtype)
     params = [p.to(dtype=dtype) for p in params]
     data = [
         (
-            (x.to(dtype=dtype), y)
+            (cast_input(x, dtype), y)
             if isinstance(loss_func, CrossEntropyLoss)
-            else (x.to(dtype=dtype), y.to(dtype=dtype))
+            else (cast_input(x, dtype), y.to(dtype=dtype))
         )
         for x, y in data
     ]
@@ -414,6 +426,7 @@ def test_KFAC_inverse_exactly_damped_matmat(
         loss_func,
         params,
         data,
+        batch_size_fn=batch_size_fn,
         loss_average=loss_average,
         separate_weight_and_bias=separate_weight_and_bias,
         check_deterministic=False,
@@ -469,16 +482,16 @@ def test_KFAC_inverse_damped_torch_matmat(
     delta: float = 1e-2,
 ):
     """Test torch matrix-matrix multiplication by an inverse damped KFAC approximation."""
-    model_func, loss_func, params, data = case
+    model_func, loss_func, params, data, batch_size_fn = case
     dtype = torch.float64  # use double precision for better numerical stability
     model_func = model_func.to(dtype=dtype)
     loss_func = loss_func.to(dtype=dtype)
     params = [p.to(dtype=dtype) for p in params]
     data = [
         (
-            (x.to(dtype=dtype), y)
+            (cast_input(x, dtype), y)
             if isinstance(loss_func, CrossEntropyLoss)
-            else (x.to(dtype=dtype), y.to(dtype=dtype))
+            else (cast_input(x, dtype), y.to(dtype=dtype))
         )
         for x, y in data
     ]
@@ -489,6 +502,7 @@ def test_KFAC_inverse_damped_torch_matmat(
         loss_func,
         params,
         data,
+        batch_size_fn=batch_size_fn,
         loss_average=loss_average,
         check_deterministic=False,
     )
@@ -533,16 +547,16 @@ def test_KFAC_inverse_damped_torch_matvec(
     delta: float = 1e-2,
 ):
     """Test torch matrix-vector multiplication by an inverse damped KFAC approximation."""
-    model_func, loss_func, params, data = case
+    model_func, loss_func, params, data, batch_size_fn = case
     dtype = torch.float64  # use double precision for better numerical stability
     model_func = model_func.to(dtype=dtype)
     loss_func = loss_func.to(dtype=dtype)
     params = [p.to(dtype=dtype) for p in params]
     data = [
         (
-            (x.to(dtype=dtype), y)
+            (cast_input(x, dtype), y)
             if isinstance(loss_func, CrossEntropyLoss)
-            else (x.to(dtype=dtype), y.to(dtype=dtype))
+            else (cast_input(x, dtype), y.to(dtype=dtype))
         )
         for x, y in data
     ]
@@ -553,6 +567,7 @@ def test_KFAC_inverse_damped_torch_matvec(
         loss_func,
         params,
         data,
+        batch_size_fn=batch_size_fn,
         loss_average=loss_average,
         check_deterministic=False,
     )

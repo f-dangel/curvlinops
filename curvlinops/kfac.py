@@ -18,9 +18,10 @@ and generalized to all linear layers with weight sharing in
 
 from __future__ import annotations
 
+from collections.abc import MutableMapping
 from functools import partial
 from math import sqrt
-from typing import Dict, Iterable, List, Optional, Tuple, Union
+from typing import Callable, Dict, Iterable, List, Optional, Tuple, Union
 
 from einops import einsum, rearrange, reduce
 from numpy import ndarray
@@ -112,7 +113,7 @@ class KFACLinearOperator(_LinearOperator):
         model_func: Module,
         loss_func: MSELoss,
         params: List[Parameter],
-        data: Iterable[Tuple[Tensor, Tensor]],
+        data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
         shape: Union[Tuple[int, int], None] = None,
@@ -123,6 +124,7 @@ class KFACLinearOperator(_LinearOperator):
         loss_average: Union[None, str] = "batch",
         separate_weight_and_bias: bool = True,
         num_data: Optional[int] = None,
+        batch_size_fn: Optional[Callable[[MutableMapping], int]] = None,
     ):
         """Kronecker-factored approximate curvature (KFAC) proxy of the Fisher/GGN.
 
@@ -190,6 +192,9 @@ class KFACLinearOperator(_LinearOperator):
                 Defaults to ``True``.
             num_data: Number of data points. If ``None``, it is inferred from the data
                 at the cost of one traversal through the data loader.
+            batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
+                needs to be specified. The intended behavior is to consume the first
+                entry of the iterates from ``data`` and return their batch size.
 
         Raises:
             ValueError: If the loss function is not supported.
@@ -199,6 +204,7 @@ class KFACLinearOperator(_LinearOperator):
             ValueError: If the loss average is not ``None`` and the loss function's
                 reduction is ``'sum'``.
             ValueError: If ``fisher_type != 'mc'`` and ``mc_samples != 1``.
+            ValueError: If ``X`` is not a tensor and ``batch_size_fn`` is not specified.
         """
         if not isinstance(loss_func, self._SUPPORTED_LOSSES):
             raise ValueError(
@@ -258,6 +264,7 @@ class KFACLinearOperator(_LinearOperator):
             check_deterministic=check_deterministic,
             shape=shape,
             num_data=num_data,
+            batch_size_fn=batch_size_fn,
         )
 
     def _reset_matrix_properties(self):

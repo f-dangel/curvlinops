@@ -1,5 +1,7 @@
 """Contains pytest fixtures that are visible by other files."""
 
+import test.utils
+from collections.abc import MutableMapping
 from test.cases import ADJOINT_CASES, CASES, NON_DETERMINISTIC_CASES
 from test.kfac_cases import (
     KFAC_EXACT_CASES,
@@ -8,7 +10,7 @@ from test.kfac_cases import (
     SINGLE_LAYER_CASES,
     SINGLE_LAYER_WEIGHT_SHARING_CASES,
 )
-from typing import Callable, Dict, Iterable, List, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 from numpy import random
 from pytest import fixture
@@ -23,6 +25,7 @@ def initialize_case(
     Callable[[Tensor, Tensor], Tensor],
     List[Tensor],
     Iterable[Tuple[Tensor, Tensor]],
+    Optional[Callable[[MutableMapping], int]],
 ]:
     random.seed(case["seed"])
     manual_seed(case["seed"])
@@ -32,7 +35,16 @@ def initialize_case(
     params = [p for p in model_func.parameters() if p.requires_grad]
     data = case["data"]()
 
-    return model_func, loss_func, params, data
+    # In some KFAC cases, ``data = {"expand": [(X, y), ...], "reduce": [(X, y), ...]}``
+    # unlike the standard ``data = [(X: Tensor | MutableMapping, y), ...]``.
+    # We ignore the former since the latter is included in KFAC cases, and thus the
+    # feature of ``MutableMapping`` inputs is sufficiently covered already.
+    if not isinstance(data, dict) and isinstance(next(iter(data))[0], MutableMapping):
+        batch_size_fn = test.utils.batch_size_fn
+    else:
+        batch_size_fn = None
+
+    return model_func, loss_func, params, data, batch_size_fn
 
 
 @fixture(params=CASES)
@@ -43,6 +55,7 @@ def case(
     Callable[[Tensor, Tensor], Tensor],
     List[Tensor],
     Iterable[Tuple[Tensor, Tensor]],
+    Optional[Callable[[MutableMapping], int]],
 ]:
     case = request.param
     yield initialize_case(case)
@@ -56,6 +69,7 @@ def non_deterministic_case(
     Callable[[Tensor, Tensor], Tensor],
     List[Tensor],
     Iterable[Tuple[Tensor, Tensor]],
+    Optional[Callable[[MutableMapping], int]],
 ]:
     case = request.param
     yield initialize_case(case)
@@ -74,6 +88,7 @@ def kfac_exact_case(
     MSELoss,
     List[Tensor],
     Iterable[Tuple[Tensor, Tensor]],
+    Optional[Callable[[MutableMapping], int]],
 ]:
     """Prepare a test case for which KFAC equals the GGN.
 
@@ -93,6 +108,7 @@ def kfac_weight_sharing_exact_case(
     MSELoss,
     List[Tensor],
     Iterable[Tuple[Tensor, Tensor]],
+    Optional[Callable[[MutableMapping], int]],
 ]:
     """Prepare a test case with weight-sharing for which KFAC equals the GGN.
 
@@ -112,6 +128,7 @@ def kfac_exact_one_datum_case(
     Module,
     List[Tensor],
     Iterable[Tuple[Tensor, Tensor]],
+    Optional[Callable[[MutableMapping], int]],
 ]:
     """Prepare a test case for which KFAC equals the GGN and one datum is used.
 
@@ -131,6 +148,7 @@ def single_layer_case(
     Module,
     List[Tensor],
     Iterable[Tuple[Tensor, Tensor]],
+    Optional[Callable[[MutableMapping], int]],
 ]:
     """Prepare a test case with a single-layer model for which FOOF is exact.
 
@@ -150,6 +168,7 @@ def single_layer_weight_sharing_case(
     Module,
     List[Tensor],
     Iterable[Tuple[Tensor, Tensor]],
+    Optional[Callable[[MutableMapping], int]],
 ]:
     """Test case with a single-layer model with weight-sharing for which FOOF is exact.
 

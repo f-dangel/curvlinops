@@ -1,6 +1,8 @@
 """Contains test cases for the KFAC linear operator."""
 
+from collections import UserDict
 from functools import partial
+from test.cases import ModelWithDictInput
 from test.utils import (
     Conv2dModel,
     WeightShareModel,
@@ -11,7 +13,14 @@ from test.utils import (
 )
 
 from torch import rand
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, Linear, MSELoss, Sequential
+from torch.nn import (
+    BCEWithLogitsLoss,
+    CrossEntropyLoss,
+    Identity,
+    Linear,
+    MSELoss,
+    Sequential,
+)
 
 # Add test cases here, devices and loss function with different reductions will be
 # added automatically below
@@ -34,6 +43,15 @@ KFAC_EXACT_CASES_NO_DEVICE_NO_LOSS_FUNC = [
         "data": lambda: [
             (rand(1, 5), regression_targets((1, 3))),
             (rand(7, 5), regression_targets((7, 3))),
+        ],
+        "seed": 0,
+    },
+    # deep linear network with dict-like input
+    {
+        "model_func": lambda: ModelWithDictInput(num_classes=3, nonlin=Identity),
+        "data": lambda: [
+            (UserDict({"x": rand(1, 10)}), regression_targets((1, 3))),
+            ({"x": rand(7, 10)}, regression_targets((7, 3))),
         ],
         "seed": 0,
     },

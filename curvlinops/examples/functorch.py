@@ -1,8 +1,10 @@
 """Contains functorch functionality for the examples."""
 
+from collections.abc import MutableMapping
 from math import sqrt
-from typing import Dict, Iterable, List, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Tuple, Union
 
+import torch
 from torch import Tensor, cat, einsum
 from torch.func import functional_call, grad, hessian, jacrev, jvp, vmap
 from torch.nn import Module
@@ -35,7 +37,8 @@ def functorch_hessian(
     model_func: Module,
     loss_func: Module,
     params: List[Tensor],
-    data: Iterable[Tuple[Tensor, Tensor]],
+    data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
+    input_key: Optional[str] = None,
 ) -> Tensor:
     """Compute the Hessian with functorch.
 
@@ -47,16 +50,18 @@ def functorch_hessian(
         params: List of differentiable parameters used by the prediction function.
         data: Source from which mini-batches can be drawn, for instance a list of
             mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
+        input_key: Key to obtain the input tensor when ``X`` is a dict-like object.
 
     Returns:
         Square matrix containing the Hessian.
     """
     (dev,) = {p.device for p in params}
-    X, y = _concatenate_batches(data)
-    X, y = X.to(dev), y.to(dev)
+    X, y = _concatenate_batches(data, input_key, device=dev)
     params_dict = _make_params_dict(model_func, params)
 
-    def loss(X: Tensor, y: Tensor, params_dict: Dict[str, Tensor]) -> Tensor:
+    def loss(
+        X: Union[Tensor, MutableMapping], y: Tensor, params_dict: Dict[str, Tensor]
+    ) -> Tensor:
         """Compute the loss given a mini-batch and the neural network parameters.
 
         # noqa: DAR101
@@ -75,7 +80,8 @@ def functorch_ggn(
     model_func: Module,
     loss_func: Module,
     params: List[Tensor],
-    data: Iterable[Tuple[Tensor, Tensor]],
+    data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
+    input_key: Optional[str] = None,
 ) -> Tensor:
     """Compute the GGN with functorch.
 
@@ -89,17 +95,19 @@ def functorch_ggn(
         params: List of differentiable parameters used by the prediction function.
         data: Source from which mini-batches can be drawn, for instance a list of
             mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
+        input_key: Key to obtain the input tensor when ``X`` is a dict-like object.
 
     Returns:
         Square matrix containing the GGN.
     """
     (dev,) = {p.device for p in params}
-    X, y = _concatenate_batches(data)
-    X, y = X.to(dev), y.to(dev)
+    X, y = _concatenate_batches(data, input_key, device=dev)
     params_dict = _make_params_dict(model_func, params)
 
     def linearized_model(
-        anchor_dict: Dict[str, Tensor], params_dict: Dict[str, Tensor], X: Tensor
+        anchor_dict: Dict[str, Tensor],
+        params_dict: Dict[str, Tensor],
+        X: Union[Tensor, MutableMapping],
     ) -> Tensor:
         """Evaluate the model at params, using its linearization around anchor.
 
@@ -118,7 +126,7 @@ def functorch_ggn(
         return model_at_anchor + jvp_diff
 
     def linearized_loss(
-        X: Tensor,
+        X: Union[Tensor, MutableMapping],
         y: Tensor,
         anchor_dict: Dict[str, Tensor],
         params_dict: Dict[str, Tensor],
@@ -146,7 +154,8 @@ def functorch_gradient(
     model_func: Module,
     loss_func: Module,
     params: List[Tensor],
-    data: Iterable[Tuple[Tensor, Tensor]],
+    data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
+    input_key: Optional[str] = None,
 ) -> Tuple[Tensor]:
     """Compute the gradient with functorch.
 
@@ -158,14 +167,18 @@ def functorch_gradient(
         params: List of differentiable parameters used by the prediction function.
         data: Source from which mini-batches can be drawn, for instance a list of
             mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
+        input_key: Key to obtain the input tensor when ``X`` is a dict-like object.
 
     Returns:
         Gradient in same format as the parameters.
     """
-    X, y = _concatenate_batches(data)
+    (dev,) = {p.device for p in params}
+    X, y = _concatenate_batches(data, input_key, device=dev)
     params_dict = _make_params_dict(model_func, params)
 
-    def loss(X: Tensor, y: Tensor, params_dict: Dict[str, Tensor]) -> Tensor:
+    def loss(
+        X: Union[Tensor, MutableMapping], y: Tensor, params_dict: Dict[str, Tensor]
+    ) -> Tensor:
         """Compute the loss given a mini-batch and the neural network parameters.
 
         # noqa: DAR101
@@ -184,7 +197,9 @@ def functorch_empirical_fisher(
     model_func: Module,
     loss_func: Module,
     params: List[Tensor],
-    data: Iterable[Tuple[Tensor, Tensor]],
+    data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
+    batch_size_fn: Optional[Callable[[MutableMapping], int]] = None,
+    input_key: Optional[str] = None,
 ) -> Tensor:
     """Compute the empirical Fisher with functorch.
 
@@ -196,6 +211,9 @@ def functorch_empirical_fisher(
         params: List of differentiable parameters used by the prediction function.
         data: Source from which mini-batches can be drawn, for instance a list of
             mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
+        batch_size_fn: Given an input ``X``, tells the batch size. When ``None``,
+            defaults to ``lambda X: X.shape[0]``.
+        input_key: Key to obtain the input tensor when ``X`` is a dict-like object.
 
     Returns:
         Square matrix containing the empirical Fisher.
@@ -204,12 +222,13 @@ def functorch_empirical_fisher(
         ValueError: If the loss function's reduction cannot be determined.
     """
     (dev,) = {p.device for p in params}
-    X, y = _concatenate_batches(data)
-    X, y = X.to(dev), y.to(dev)
+    X, y = _concatenate_batches(data, input_key, device=dev)
     params_dict = _make_params_dict(model_func, params)
 
     # compute batched gradients
-    def loss_n(X_n: Tensor, y_n: Tensor, params_dict: Dict[str, Tensor]) -> Tensor:
+    def loss_n(
+        X_n: Union[Tensor, MutableMapping], y_n: Tensor, params_dict: Dict[str, Tensor]
+    ) -> Tensor:
         """Compute the gradient for a single sample.
 
         # noqa: DAR101
@@ -220,8 +239,8 @@ def functorch_empirical_fisher(
 
     params_argnum = 2
     batch_grad_fn = vmap(grad(loss_n, argnums=params_argnum))
+    N = X.shape[0] if batch_size_fn is None else batch_size_fn(X)
 
-    N = X.shape[0]
     params_replicated_dict = {
         name: p.unsqueeze(0).expand(N, *(p.dim() * [-1]))
         for name, p in params_dict.items()
@@ -243,7 +262,8 @@ def functorch_empirical_fisher(
 def functorch_jacobian(
     model_func: Module,
     params: List[Tensor],
-    data: Iterable[Tuple[Tensor, Tensor]],
+    data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
+    input_key: Optional[str] = None,
 ) -> Tensor:
     """Compute the Jacobian with functorch.
 
@@ -253,6 +273,7 @@ def functorch_jacobian(
         params: List of differentiable parameters used by the prediction function.
         data: Source from which mini-batches can be drawn, for instance a list of
             mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
+        input_key: Key to obtain the input tensor when ``X`` is a dict-like object.
 
     Returns:
         Matrix containing the Jacobian. Has shape ``[N * C, D]`` where ``D`` is the
@@ -260,8 +281,7 @@ def functorch_jacobian(
         the model's output space dimension.
     """
     (dev,) = {p.device for p in params}
-    X, _ = _concatenate_batches(data)
-    X = X.to(dev)
+    X, _ = _concatenate_batches(data, input_key, device=dev)
     params_dict = _make_params_dict(model_func, params)
 
     def model_fn_params_only(params_dict: Dict[str, Tensor]) -> Tensor:
@@ -279,19 +299,37 @@ def functorch_jacobian(
 
 
 def _concatenate_batches(
-    data: Iterable[Tuple[Tensor, Tensor]]
+    data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
+    input_key: Optional[str] = None,
+    device: Optional[torch.device] = None,
 ) -> Tuple[Tensor, Tensor]:
     """Concatenate all batches in the dataset along the batch dimension.
 
     Args:
         data: A dataloader or iterable of batches.
+        input_key: Key to obtain the input tensor when ``X`` is a dict-like object.
+        device: The device the data should live in.
 
     Returns:
         Concatenated model inputs.
         Concatenated targets.
+
+    Raises:
+        ValueError: If ``X`` in ``data`` is a dict-like object and ``input_key`` is
+            not provided.
     """
     X, y = list(zip(*list(data)))
-    return cat(X), cat(y)
+    device = y[0].device if device is None else device
+    y = cat(y).to(device)
+
+    if isinstance(X[0], MutableMapping) and input_key is None:
+        raise ValueError("input_key must be provided for dict-like X!")
+
+    if isinstance(X[0], Tensor):
+        return cat(X).to(device), y
+    else:
+        X = {input_key: cat([d[input_key] for d in X]).to(device)}
+        return X, y
 
 
 def _make_params_dict(model_func: Module, params: List[Tensor]) -> Dict[str, Tensor]:
