@@ -52,8 +52,8 @@ class CGInverseLinearOperator(_InverseLinearOperator):
         maxiter: Optional[int] = None,
         M: Optional[Union[ndarray, LinearOperator]] = None,
         callback: Optional[Callable] = None,
-        atol: Optional[float] = 0.0,
-        rtol: Optional[float] = 1e-5,
+        atol: Optional[float] = None,
+        tol: Optional[float] = 1e-5,
     ):
         """Store hyperparameters for CG.
 
@@ -70,7 +70,7 @@ class CGInverseLinearOperator(_InverseLinearOperator):
             "M": M,
             "callback": callback,
             "atol": atol,
-            "rtol": rtol,
+            "tol": tol,
         }
 
     def _matvec(self, x: ndarray) -> ndarray:
