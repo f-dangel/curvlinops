@@ -1,7 +1,7 @@
 """Implements linear operator inverses."""
 
 from math import sqrt
-from typing import Dict, List, Optional, Tuple, Union, Callable
+from typing import Callable, Dict, List, Optional, Tuple, Union
 from warnings import warn
 
 from einops import einsum, rearrange
