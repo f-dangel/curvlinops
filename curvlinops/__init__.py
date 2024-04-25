@@ -8,6 +8,7 @@ from curvlinops.hessian import HessianLinearOperator
 from curvlinops.inverse import (
     CGInverseLinearOperator,
     KFACInverseLinearOperator,
+    LSMRInverseLinearOperator,
     NeumannInverseLinearOperator,
 )
 from curvlinops.jacobian import JacobianLinearOperator, TransposedJacobianLinearOperator
@@ -34,6 +35,7 @@ __all__ = [
     "TransposedJacobianLinearOperator",
     # inversion
     "CGInverseLinearOperator",
+    "LSMRInverseLinearOperator",
     "NeumannInverseLinearOperator",
     "KFACInverseLinearOperator",
     # slicing
