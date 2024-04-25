@@ -1,7 +1,7 @@
 """Implements linear operator inverses."""
 
 from math import sqrt
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union, Callable
 from warnings import warn
 
 from einops import einsum, rearrange
@@ -47,7 +47,13 @@ class CGInverseLinearOperator(_InverseLinearOperator):
         self.set_cg_hyperparameters()
 
     def set_cg_hyperparameters(
-        self, x0=None, tol=1e-05, maxiter=None, M=None, callback=None, atol=None
+        self,
+        x0: Optional[ndarray] = None,
+        maxiter: Optional[int] = None,
+        M: Optional[Union[ndarray, LinearOperator]] = None,
+        callback: Optional[Callable] = None,
+        atol: Optional[float] = 0.0,
+        rtol: Optional[float] = 1e-5,
     ):
         """Store hyperparameters for CG.
 
@@ -60,11 +66,11 @@ class CGInverseLinearOperator(_InverseLinearOperator):
         """
         self._cg_hyperparameters = {
             "x0": x0,
-            "tol": tol,
             "maxiter": maxiter,
             "M": M,
             "callback": callback,
             "atol": atol,
+            "rtol": rtol,
         }
 
     def _matvec(self, x: ndarray) -> ndarray:
@@ -100,13 +106,13 @@ class LSMRInverseLinearOperator(_InverseLinearOperator):
 
     def set_lsmr_hyperparameters(
         self,
-        damp=0.0,
-        atol=1e-06,
-        btol=1e-06,
-        conlim=100000000.0,
-        maxiter=None,
-        show=False,
-        x0=None,
+        damp: float = 0.0,
+        atol: Optional[float] = 1e-6,
+        btol: Optional[float] = 1e-6,
+        conlim: Optional[float] = 1e-8,
+        maxiter: Optional[int] = None,
+        show: Optional[bool] = False,
+        x0: Optional[ndarray] = None,
     ):
         """Store hyperparameters for LSMR.
 

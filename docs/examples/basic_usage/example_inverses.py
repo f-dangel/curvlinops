@@ -177,7 +177,7 @@ report_nonclose(natural_gradient, natural_gradient_functorch, rtol=rtol, atol=at
 #  approximate equality. We can use stricter convergence hyperparameters for CG
 #  to achieve a more accurate inversion
 
-inverse_damped_GGN.set_cg_hyperparameters(tol=1e-7)  # default is 1e-5
+inverse_damped_GGN.set_cg_hyperparameters(rtol=1e-7)  # default is 1e-5
 natural_gradient_more_accurate = inverse_damped_GGN @ gradient
 
 smaller_rtol, smaller_atol = rtol / 10, atol / 10
