@@ -18,6 +18,7 @@ from curvlinops import (
     GGNLinearOperator,
     KFACInverseLinearOperator,
     KFACLinearOperator,
+    LSMRInverseLinearOperator,
     NeumannInverseLinearOperator,
 )
 from curvlinops.examples.functorch import functorch_ggn
@@ -59,7 +60,58 @@ def test_CG_inverse_damped_GGN_matmat(case, delta: float = 1e-2, num_vecs: int =
 
     inv_GGN = CGInverseLinearOperator(GGN + damping)
     inv_GGN_functorch = inv(
-        functorch_ggn(model_func, loss_func, params, data, "x").detach().cpu().numpy()
+        functorch_ggn(model_func, loss_func, params, data, input_key="x")
+        .detach()
+        .cpu()
+        .numpy()
+        + delta * eye(GGN.shape[1])
+    )
+
+    X = random.rand(GGN.shape[1], num_vecs)
+    report_nonclose(inv_GGN @ X, inv_GGN_functorch @ X, rtol=5e-3, atol=1e-5)
+
+
+def test_LSMR_inverse_damped_GGN_matvec(case, delta: float = 2e-2):
+    """Test matrix-vector multiplication by the inverse damped GGN with LSMR."""
+    model_func, loss_func, params, data, batch_size_fn = case
+
+    GGN = GGNLinearOperator(
+        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
+    )
+    damping = aslinearoperator(delta * sparse.eye(GGN.shape[0]))
+
+    inv_GGN = LSMRInverseLinearOperator(GGN + damping)
+    # set hyperparameters such that LSMR is accurate enough
+    inv_GGN.set_lsmr_hyperparameters(atol=0, btol=0, conlim=0, maxiter=2 * GGN.shape[0])
+    inv_GGN_functorch = inv(
+        functorch_ggn(model_func, loss_func, params, data, input_key="x")
+        .detach()
+        .cpu()
+        .numpy()
+        + delta * eye(GGN.shape[1])
+    )
+
+    x = random.rand(GGN.shape[1])
+    report_nonclose(inv_GGN @ x, inv_GGN_functorch @ x, rtol=5e-3, atol=1e-5)
+
+
+def test_LSMR_inverse_damped_GGN_matmat(case, delta: float = 1e-2, num_vecs: int = 3):
+    """Test matrix-matrix multiplication by the inverse damped GGN with LSMR."""
+    model_func, loss_func, params, data, batch_size_fn = case
+
+    GGN = GGNLinearOperator(
+        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
+    )
+    damping = aslinearoperator(delta * sparse.eye(GGN.shape[0]))
+
+    inv_GGN = LSMRInverseLinearOperator(GGN + damping)
+    # set hyperparameters such that LSMR is accurate enough
+    inv_GGN.set_lsmr_hyperparameters(atol=0, btol=0, conlim=0, maxiter=2 * GGN.shape[0])
+    inv_GGN_functorch = inv(
+        functorch_ggn(model_func, loss_func, params, data, input_key="x")
+        .detach()
+        .cpu()
+        .numpy()
         + delta * eye(GGN.shape[1])
     )
 
