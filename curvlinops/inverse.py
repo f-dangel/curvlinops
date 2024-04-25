@@ -6,7 +6,7 @@ from warnings import warn
 
 from einops import einsum, rearrange
 from numpy import allclose, column_stack, ndarray
-from scipy.sparse.linalg import LinearOperator, cg
+from scipy.sparse.linalg import LinearOperator, cg, lsmr
 from torch import Tensor, cat, cholesky_inverse, eye, float64, outer
 from torch.linalg import cholesky, eigh
 
@@ -38,8 +38,7 @@ class CGInverseLinearOperator(_InverseLinearOperator):
 
         Args:
             A: Linear operator whose inverse is formed. Must be symmetric and
-                positive-definite
-
+                positive-definite.
         """
         super().__init__(A.dtype, A.shape)
         self._A = A
@@ -55,7 +54,7 @@ class CGInverseLinearOperator(_InverseLinearOperator):
         They will be used to approximate the inverse matrix-vector products.
 
         For more detail, see
-        https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.linalg.cg.html
+        https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.linalg.cg.html.
 
         # noqa: DAR101
         """
@@ -79,6 +78,81 @@ class CGInverseLinearOperator(_InverseLinearOperator):
         """
         result, _ = cg(self._A, x, **self._cg_hyperparameters)
         return result
+
+
+class LSMRInverseLinearOperator(_InverseLinearOperator):
+    """Class for inverse linear operators via LSMR.
+
+    See https://arxiv.org/abs/1006.0758 for details on the LSMR algorithm.
+    """
+
+    def __init__(self, A: LinearOperator):
+        """Store the linear operator whose inverse should be represented.
+
+        Args:
+            A: Linear operator whose inverse is formed.
+        """
+        super().__init__(A.dtype, A.shape)
+        self._A = A
+
+        # LSMR hyperparameters
+        self.set_lsmr_hyperparameters()
+
+    def set_lsmr_hyperparameters(
+        self,
+        damp=0.0,
+        atol=1e-06,
+        btol=1e-06,
+        conlim=100000000.0,
+        maxiter=None,
+        show=False,
+        x0=None,
+    ):
+        """Store hyperparameters for LSMR.
+
+        They will be used to approximate the inverse matrix-vector products.
+
+        For more detail, see
+        https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.linalg.lsmr.html.
+
+        # noqa: DAR101
+        """
+        self._lsmr_hyperparameters = {
+            "damp": damp,
+            "atol": atol,
+            "btol": btol,
+            "conlim": conlim,
+            "maxiter": maxiter,
+            "show": show,
+            "x0": x0,
+        }
+
+    def matvec_with_info(
+        self, x: ndarray
+    ) -> Tuple[ndarray, int, int, float, float, float, float, float]:
+        """Multiply x by the inverse of A and return additional information.
+
+        Args:
+             x: Vector for multiplication.
+
+        Returns:
+            Result of inverse matrix-vector multiplication, ``A⁻¹ @ x`` with additional
+            information; see
+            https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.linalg.lsmr.html
+            for details (same return values).
+        """
+        return lsmr(self._A, x, **self._lsmr_hyperparameters)
+
+    def _matvec(self, x: ndarray) -> ndarray:
+        """Multiply x by the inverse of A.
+
+        Args:
+             x: Vector for multiplication.
+
+        Returns:
+             Result of inverse matrix-vector multiplication, ``A⁻¹ @ x``.
+        """
+        return self.matvec_with_info(x)[0]
 
 
 class NeumannInverseLinearOperator(_InverseLinearOperator):
