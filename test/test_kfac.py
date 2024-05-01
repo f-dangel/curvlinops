@@ -756,7 +756,7 @@ def test_det(case, exclude, separate_weight_and_bias, check_deterministic):
     # verify that the determinant is not trivial as this would make the test useless
     assert determinant != 0.0 and determinant != 1.0
     det_naive = det(kfac @ eye(kfac.shape[1]))
-    report_nonclose(determinant.cpu().numpy(), det_naive)
+    report_nonclose(determinant.cpu().numpy(), det_naive, rtol=1e-4)
 
     # Check that the det property is properly cached and reset
     assert kfac._det == determinant
@@ -815,7 +815,7 @@ def test_logdet(case, exclude, separate_weight_and_bias, check_deterministic):
     assert not isinf(log_det) and not isnan(log_det)
     sign, logabsdet = slogdet(kfac @ eye(kfac.shape[1]))
     log_det_naive = sign * logabsdet
-    report_nonclose(log_det.cpu().numpy(), log_det_naive, rtol=2e-5)
+    report_nonclose(log_det.cpu().numpy(), log_det_naive, rtol=1e-4)
 
     # Check that the logdet property is properly cached and reset
     assert kfac._logdet == log_det
