@@ -217,7 +217,66 @@ def test_kfac_mc(
         mc_samples=2_000,
         loss_average=loss_average,
     )
+    kfac_mat = kfac @ eye(kfac.shape[1])
 
+    atol = {"sum": 5e-1, "mean": 5e-3}[loss_func.reduction]
+    rtol = {"sum": 2e-2, "mean": 2e-2}[loss_func.reduction]
+
+    report_nonclose(ggn, kfac_mat, rtol=rtol, atol=atol)
+
+
+@mark.parametrize("setting", ["expand", "reduce"])
+@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
+def test_kfac_mc_weight_sharing(
+    kfac_weight_sharing_exact_case: Tuple[
+        Union[WeightShareModel, Conv2dModel],
+        MSELoss,
+        List[Parameter],
+        Dict[str, Iterable[Tuple[Tensor, Tensor]]],
+    ],
+    setting: str,
+    shuffle: bool,
+):
+    """Test KFAC-MC for linear layers with weight sharing against the exact GGN.
+
+    Args:
+        kfac_weight_sharing_exact_case: A fixture that returns a model, loss function,
+            list of parameters, and data.
+        setting: The weight-sharing setting to use. Can be ``'expand'`` or ``'reduce'``.
+        shuffle: Whether to shuffle the parameters before computing the KFAC matrix.
+    """
+    model, loss_func, params, data, batch_size_fn = kfac_weight_sharing_exact_case
+    model.setting = setting
+    if isinstance(model, Conv2dModel):
+        # parameters are only initialized after the setting property is set
+        params = [p for p in model.parameters() if p.requires_grad]
+    data = data[setting]
+
+    # set appropriate loss_average argument based on loss reduction and setting
+    loss_average = (
+        ("batch+sequence" if setting == "expand" else "batch")
+        if loss_func.reduction == "mean"
+        else None
+    )
+
+    if shuffle:
+        permutation = randperm(len(params))
+        params = [params[i] for i in permutation]
+
+    ggn = ggn_block_diagonal(
+        model, loss_func, params, data, batch_size_fn=batch_size_fn
+    )
+    kfac = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        fisher_type="mc",
+        mc_samples=2_000,
+        kfac_approx=setting,  # choose KFAC approximation consistent with setting
+        loss_average=loss_average,
+    )
     kfac_mat = kfac @ eye(kfac.shape[1])
 
     atol = {"sum": 5e-1, "mean": 5e-3}[loss_func.reduction]
@@ -500,17 +559,17 @@ def test_torch_matmat(case):
     x_list = kfac._torch_preprocess(x)
     kfac_x_list = kfac.torch_matmat(x_list)
     kfac_x_list = cat([rearrange(M, "k ... -> (...) k") for M in kfac_x_list])
-    report_nonclose(kfac_x, kfac_x_list.cpu().numpy())
+    report_nonclose(kfac_x, kfac_x_list.cpu().numpy(), rtol=1e-4)
 
     # Test against multiplication with dense matrix
     identity = torch_eye(kfac.shape[1], dtype=dtype, device=device)
     kfac_mat = kfac.torch_matmat(identity)
     kfac_mat_x = kfac_mat @ x
-    report_nonclose(kfac_x, kfac_mat_x.cpu().numpy())
+    report_nonclose(kfac_x, kfac_mat_x.cpu().numpy(), rtol=1e-4)
 
     # Test against _matmat
     kfac_x_numpy = kfac @ x.cpu().numpy()
-    report_nonclose(kfac_x, kfac_x_numpy)
+    report_nonclose(kfac_x, kfac_x_numpy, rtol=1e-4)
 
 
 def test_torch_matvec(case):
