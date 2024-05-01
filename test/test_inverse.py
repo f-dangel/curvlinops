@@ -37,6 +37,8 @@ def test_CG_inverse_damped_GGN_matvec(case, delta: float = 2e-2):
     damping = aslinearoperator(delta * sparse.eye(GGN.shape[0]))
 
     inv_GGN = CGInverseLinearOperator(GGN + damping)
+    # set hyperparameters such that CG is accurate enough
+    inv_GGN.set_cg_hyperparameters(atol=0, tol=0, maxiter=2 * GGN.shape[0])
     inv_GGN_functorch = inv(
         functorch_ggn(model_func, loss_func, params, data, input_key="x")
         .detach()
@@ -46,7 +48,7 @@ def test_CG_inverse_damped_GGN_matvec(case, delta: float = 2e-2):
     )
 
     x = random.rand(GGN.shape[1])
-    report_nonclose(inv_GGN @ x, inv_GGN_functorch @ x, rtol=5e-3, atol=1e-4)
+    report_nonclose(inv_GGN @ x, inv_GGN_functorch @ x, rtol=5e-3, atol=1e-5)
 
 
 def test_CG_inverse_damped_GGN_matmat(case, delta: float = 1e-2, num_vecs: int = 3):
@@ -59,6 +61,8 @@ def test_CG_inverse_damped_GGN_matmat(case, delta: float = 1e-2, num_vecs: int =
     damping = aslinearoperator(delta * sparse.eye(GGN.shape[0]))
 
     inv_GGN = CGInverseLinearOperator(GGN + damping)
+    # set hyperparameters such that CG is accurate enough
+    inv_GGN.set_cg_hyperparameters(atol=0, tol=0, maxiter=2 * GGN.shape[0])
     inv_GGN_functorch = inv(
         functorch_ggn(model_func, loss_func, params, data, input_key="x")
         .detach()
