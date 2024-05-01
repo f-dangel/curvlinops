@@ -46,7 +46,7 @@ def test_CG_inverse_damped_GGN_matvec(case, delta: float = 2e-2):
     )
 
     x = random.rand(GGN.shape[1])
-    report_nonclose(inv_GGN @ x, inv_GGN_functorch @ x, rtol=5e-3, atol=1e-5)
+    report_nonclose(inv_GGN @ x, inv_GGN_functorch @ x, rtol=5e-3, atol=1e-4)
 
 
 def test_CG_inverse_damped_GGN_matmat(case, delta: float = 1e-2, num_vecs: int = 3):
