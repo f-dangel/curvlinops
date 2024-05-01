@@ -5,9 +5,10 @@ from math import sqrt
 from typing import Callable, Dict, Iterable, List, Optional, Tuple, Union
 
 import torch
+from einops import rearrange
 from torch import Tensor, cat, einsum
 from torch.func import functional_call, grad, hessian, jacrev, jvp, vmap
-from torch.nn import Module
+from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, Module, MSELoss
 
 
 def blocks_to_matrix(blocks: Dict[str, Dict[str, Tensor]]) -> Tensor:
@@ -239,20 +240,36 @@ def functorch_empirical_fisher(
 
     params_argnum = 2
     batch_grad_fn = vmap(grad(loss_n, argnums=params_argnum))
+
+    # If >2d input we convert to an equivalent 2d input; assumes model with only linear
+    # modules, i.e. the additional input dimensions are maintained until the output.
+    if isinstance(X, dict):
+        X[input_key] = rearrange(X[input_key], "batch ... d_in -> (batch ...) d_in")
+    else:  # X is a tensor
+        X = rearrange(X, "batch ... d_in -> (batch ...) d_in")
     N = X.shape[0] if batch_size_fn is None else batch_size_fn(X)
+
+    # If >2d label we convert to an equivalent 2d label
+    if isinstance(loss_func, CrossEntropyLoss):
+        y = rearrange(y, "batch ... -> (batch ...)")
+    else:
+        y = rearrange(y, "batch ... c -> (batch ...) c")
 
     params_replicated_dict = {
         name: p.unsqueeze(0).expand(N, *(p.dim() * [-1]))
         for name, p in params_dict.items()
     }
-
     batch_grad = batch_grad_fn(X, y, params_replicated_dict)
     batch_grad = cat([bg.flatten(start_dim=1) for bg in batch_grad.values()], dim=1)
+    assert batch_grad.shape == (N, sum(p.numel() for p in params))
 
     if loss_func.reduction == "sum":
         normalization = 1
     elif loss_func.reduction == "mean":
         normalization = N
+        if isinstance(loss_func, (MSELoss, BCEWithLogitsLoss)):
+            _, C = y.shape
+            batch_grad *= sqrt(C)
     else:
         raise ValueError("Cannot detect reduction method from loss function.")
 

@@ -4,7 +4,7 @@ from collections.abc import MutableMapping
 from itertools import product
 from typing import Callable, Iterable, List, Optional, Tuple, Union
 
-from einops import reduce
+from einops import rearrange, reduce
 from einops.layers.torch import Rearrange
 from numpy import eye, ndarray
 from torch import Tensor, cat, cuda, device, dtype, from_numpy, rand, randint
@@ -134,14 +134,15 @@ class WeightShareModel(Sequential):
     ``(batch, ..., out_dim)``.
     """
 
-    def __init__(self, *args: Module):
+    def __init__(self, *args: Module, setting: str = "expand", loss: str = "MSE"):
         """Initialize the model.
 
         Args:
             *args: Modules of the sequential model.
         """
         super().__init__(*args)
-        self._setting = None
+        self.setting = setting
+        self.loss = loss
 
     @property
     def setting(self) -> str:
@@ -173,6 +174,31 @@ class WeightShareModel(Sequential):
             )
         self._setting = setting
 
+    @property
+    def loss(self) -> str:
+        """Return the type of loss function the model is used with.
+
+        Returns:
+            The type of loss function.
+        """
+        if self._loss is None:
+            raise ValueError("WeightShareModel.loss has not been set.")
+        return self._loss
+
+    @loss.setter
+    def loss(self, loss: str):
+        """Set the type of loss function the model is used with.
+
+        Args:
+            loss: The type of loss function.
+
+        Raises:
+            ValueError: If ``loss`` is not one of ``MSE``, ``CE``, or ``BCE``.
+        """
+        if loss not in {"MSE", "CE", "BCE"}:
+            raise ValueError(f"Expected loss to be 'MSE', 'CE', or 'BCE'. Got {loss}.")
+        self._loss = loss
+
     def forward(self, x: Tensor) -> Tensor:
         """Forward pass with processing of the weight-sharing dimension.
 
@@ -194,6 +220,8 @@ class WeightShareModel(Sequential):
         # Example: Transformer for translation: (batch, sequence_length, c)
         # (although second and third dimension would have to be transposed for
         # classification)
+        if x.ndim > 2 and self.loss == "CE":
+            x = rearrange(x, "batch ... c -> batch c ...")
         return x
 
 

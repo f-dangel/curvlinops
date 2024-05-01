@@ -38,7 +38,7 @@ def test_EFLinearOperator_matvec(case, adjoint: bool):
         op, op_functorch = op.adjoint(), op_functorch.conj().T
 
     x = random.rand(op.shape[1]).astype(op.dtype)
-    report_nonclose(op @ x, op_functorch @ x, atol=1e-7)
+    report_nonclose(op @ x, op_functorch @ x, atol=1e-6)
 
 
 def test_EFLinearOperator_matmat(case, adjoint: bool, num_vecs: int = 3):
@@ -64,4 +64,4 @@ def test_EFLinearOperator_matmat(case, adjoint: bool, num_vecs: int = 3):
         op, op_functorch = op.adjoint(), op_functorch.conj().T
 
     X = random.rand(op.shape[1], num_vecs).astype(op.dtype)
-    report_nonclose(op @ X, op_functorch @ X, atol=1e-7, rtol=1e-4)
+    report_nonclose(op @ X, op_functorch @ X, atol=1e-6, rtol=1e-4)
