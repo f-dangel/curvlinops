@@ -252,6 +252,14 @@ class KFACLinearOperator(_LinearOperator):
         self._gradient_covariances: Dict[str, Tensor] = {}
         self._mapping = self.compute_parameter_mapping(params, model_func)
 
+        # Determine the number of per-example loss terms
+        _, y = next(iter(data))
+        # Assumes that the batch dimension is the first dimension of target `y`
+        if isinstance(loss_func, CrossEntropyLoss):
+            self._num_per_example_loss_terms = y[1:].numel()
+        else:
+            self._num_per_example_loss_terms = y.shape[1:-1].numel()
+
         # Properties of the full matrix KFAC approximation are initialized to `None`
         self._reset_matrix_properties()
 
@@ -723,12 +731,6 @@ class KFACLinearOperator(_LinearOperator):
         batch_size = g.shape[0]
         if isinstance(module, Conv2d):
             g = rearrange(g, "batch c o1 o2 -> batch o1 o2 c")
-        sequence_length = g.shape[1:-1].numel()
-        num_loss_terms = {
-            None: batch_size,
-            "batch": batch_size,
-            "batch+sequence": batch_size * sequence_length,
-        }[self._loss_average]
 
         if self._kfac_approx == "expand":
             # KFAC-expand approximation
@@ -737,13 +739,20 @@ class KFACLinearOperator(_LinearOperator):
             # KFAC-reduce approximation
             g = reduce(g, "batch ... d_out -> batch d_out", "sum")
 
+        # Compute correction for the loss scaling depending on the loss reduction used
+        num_loss_terms = {
+            None: batch_size,
+            "batch": batch_size,
+            "batch+sequence": batch_size * self._num_per_example_loss_terms,
+        }[self._loss_average]
         # self._mc_samples will be 1 if fisher_type != "mc"
         correction = {
             None: 1.0 / self._mc_samples,
             "batch": num_loss_terms**2 / (self._N_data * self._mc_samples),
             "batch+sequence": num_loss_terms**2
-            / (self._N_data * self._mc_samples * sequence_length),
+            / (self._N_data * self._mc_samples * self._num_per_example_loss_terms),
         }[self._loss_average]
+
         covariance = einsum(g, g, "b i,b j->i j").mul_(correction)
 
         if module_name not in self._gradient_covariances:
@@ -786,7 +795,7 @@ class KFACLinearOperator(_LinearOperator):
 
         if self._kfac_approx == "expand":
             # KFAC-expand approximation
-            scale = x.shape[1:-1].numel()  # sequence_length
+            scale = x.shape[1:-1].numel()  # sequence length
             x = rearrange(x, "batch ... d_in -> (batch ...) d_in")
         else:
             # KFAC-reduce approximation
