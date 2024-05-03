@@ -8,7 +8,19 @@ from einops import rearrange, reduce
 from einops.layers.torch import Rearrange
 from numpy import eye, ndarray
 from torch import Tensor, cat, cuda, device, dtype, from_numpy, rand, randint
-from torch.nn import AdaptiveAvgPool2d, Conv2d, Flatten, Module, Parameter, Sequential
+from torch.nn import (
+    AdaptiveAvgPool2d,
+    BCEWithLogitsLoss,
+    Conv2d,
+    CrossEntropyLoss,
+    Flatten,
+    Identity,
+    Module,
+    MSELoss,
+    Parameter,
+    Sequential,
+    Upsample,
+)
 
 from curvlinops import GGNLinearOperator
 
@@ -283,6 +295,41 @@ class Conv2dModel(Module):
 
         Returns:
             Output of the sequential model.
+        """
+        return self._model(x)
+
+
+class UnetModel(Module):
+    """Simple Unet-like model where the number of spatial locations varies."""
+
+    def __init__(self, loss: Module):
+        """Initialize the model."""
+        if loss not in {MSELoss, CrossEntropyLoss, BCEWithLogitsLoss}:
+            raise ValueError(
+                "Loss has to be one of MSELoss, CrossEntropyLoss, BCEWithLogitsLoss. "
+                f"Got {loss}."
+            )
+        super().__init__()
+        self._model = Sequential(
+            Conv2d(3, 2, 3, padding=1, stride=2),
+            Conv2d(2, 2, 3, padding=3 // 2),
+            Upsample(scale_factor=2, mode="nearest"),
+            Conv2d(2, 3, 3, padding=1),
+            (
+                Rearrange("batch c h w -> batch h w c")
+                if issubclass(loss, (MSELoss, BCEWithLogitsLoss))
+                else Identity()
+            ),
+        )
+
+    def forward(self, x: Tensor) -> Tensor:
+        """Forward pass of the model.
+
+        Args:
+            x: Input to the forward pass.
+
+        Returns:
+            Output of the model.
         """
         return self._model(x)
 

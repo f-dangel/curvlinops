@@ -3,10 +3,12 @@
 from test.cases import DEVICES, DEVICES_IDS
 from test.utils import (
     Conv2dModel,
+    UnetModel,
     WeightShareModel,
     classification_targets,
     ggn_block_diagonal,
     regression_targets,
+    binary_classification_targets,
 )
 from typing import Dict, Iterable, List, Tuple, Union
 
@@ -495,6 +497,83 @@ def test_multi_dim_output(
     kfac_flat_mat = kfac_flat @ eye(kfac_flat.shape[1])
 
     report_nonclose(kfac_mat, kfac_flat_mat)
+
+
+@mark.parametrize("fisher_type", KFACLinearOperator._SUPPORTED_FISHER_TYPE)
+@mark.parametrize(
+    "loss", [MSELoss, CrossEntropyLoss, BCEWithLogitsLoss], ids=["mse", "ce", "bce"]
+)
+@mark.parametrize("dev", DEVICES, ids=DEVICES_IDS)
+def test_expand_setting_scaling(
+    fisher_type: str,
+    loss: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
+    dev: device,
+):
+    """Test KFAC for correct scaling for expand setting with mean reduction loss.
+
+    See #107 for details.
+
+    Args:
+        fisher_type: The type of Fisher matrix to use.
+        loss: The loss function to use.
+        dev: The device to run the test on.
+    """
+    manual_seed(0)
+
+    # set up data, loss function, and model
+    X1 = rand(2, 3, 32, 32)
+    X2 = rand(4, 3, 32, 32)
+    if issubclass(loss, MSELoss):
+        data = [
+            (X1, regression_targets((2, 32, 32, 3))),
+            (X2, regression_targets((4, 32, 32, 3))),
+        ]
+    elif issubclass(loss, BCEWithLogitsLoss):
+        data = [
+            (X1, binary_classification_targets((2, 32, 32, 3))),
+            (X2, binary_classification_targets((4, 32, 32, 3))),
+        ]
+    else:
+        data = [
+            (X1, classification_targets((2, 32, 32), 3)),
+            (X2, classification_targets((4, 32, 32), 3)),
+        ]
+    model = UnetModel(loss).to(dev)
+    params = list(model.parameters())
+
+    # KFAC with sum reduction
+    loss_func = loss(reduction="sum").to(dev)
+    kfac_sum = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        fisher_type=fisher_type,
+        loss_average=None,
+    )
+    # FOOF does not scale the gradient covariances, even when using a mean reduction
+    if fisher_type != "forward-only":
+        # Simulate a mean reduction by manually scaling the gradient covariances
+        loss_term_factor = 32 * 32  # number of spatial locations of model output
+        if issubclass(loss, (MSELoss, BCEWithLogitsLoss)):
+            loss_term_factor *= 3  # MSE loss averages over number of output channels
+        for ggT in kfac_sum._gradient_covariances.values():
+            ggT /= kfac_sum._N_data * loss_term_factor
+    kfac_simulated_mean_mat = kfac_sum @ eye(kfac_sum.shape[1])
+
+    # KFAC with mean reduction
+    loss_func = loss(reduction="mean").to(dev)
+    kfac_mean = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        fisher_type=fisher_type,
+        loss_average="batch+sequence",
+    )
+    kfac_mean_mat = kfac_mean @ eye(kfac_mean.shape[1])
+
+    report_nonclose(kfac_simulated_mean_mat, kfac_mean_mat)
 
 
 def test_bug_device_change_invalidates_parameter_mapping():
