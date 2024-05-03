@@ -5,10 +5,10 @@ from test.utils import (
     Conv2dModel,
     UnetModel,
     WeightShareModel,
+    binary_classification_targets,
     classification_targets,
     ggn_block_diagonal,
     regression_targets,
-    binary_classification_targets,
 )
 from typing import Dict, Iterable, List, Tuple, Union
 
