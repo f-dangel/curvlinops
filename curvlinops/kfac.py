@@ -108,7 +108,7 @@ class KFACLinearOperator(_LinearOperator):
     )
     _SUPPORTED_KFAC_APPROX: Tuple[str, ...] = ("expand", "reduce")
 
-    def __init__(
+    def __init__(  # noqa: C901
         self,
         model_func: Module,
         loss_func: MSELoss,
@@ -201,6 +201,7 @@ class KFACLinearOperator(_LinearOperator):
                 entry of the iterates from ``data`` and return their batch size.
 
         Raises:
+            RuntimeError: If the check for deterministic behavior fails.
             ValueError: If the loss function is not supported.
             ValueError: If the loss average is not supported.
             ValueError: If the loss average is ``None`` and the loss function's
@@ -209,8 +210,6 @@ class KFACLinearOperator(_LinearOperator):
                 reduction is ``'sum'``.
             ValueError: If ``fisher_type != 'mc'`` and ``mc_samples != 1``.
             ValueError: If ``X`` is not a tensor and ``batch_size_fn`` is not specified.
-            ValueError: If the number of loss terms is not divisible by the number of
-                data points.
         """
         if not isinstance(loss_func, self._SUPPORTED_LOSSES):
             raise ValueError(
@@ -273,24 +272,7 @@ class KFACLinearOperator(_LinearOperator):
             batch_size_fn=batch_size_fn,
         )
 
-        if num_per_example_loss_terms is None:
-            # Determine the number of per-example loss terms
-            num_loss_terms = sum(
-                (
-                    y.numel()
-                    if isinstance(loss_func, CrossEntropyLoss)
-                    else y.shape[:-1].numel()
-                )
-                for (_, y) in self._loop_over_data(desc="_num_per_example_loss_terms")
-            )
-            if num_loss_terms % self._N_data != 0:
-                raise ValueError(
-                    "The number of loss terms must be divisible by the number of data "
-                    f"points. Got num_loss_terms={num_loss_terms} and N_data={self._N_data}."
-                )
-            self._num_per_example_loss_terms = int(num_loss_terms / self._N_data)
-        else:
-            self._num_per_example_loss_terms = num_per_example_loss_terms
+        self._set_num_per_example_loss_terms(num_per_example_loss_terms)
 
         if check_deterministic:
             old_device = self._device
@@ -301,6 +283,39 @@ class KFACLinearOperator(_LinearOperator):
                 raise e
             finally:
                 self.to_device(old_device)
+
+    def _set_num_per_example_loss_terms(
+        self, num_per_example_loss_terms: Optional[int]
+    ):
+        """Set the number of per-example loss terms.
+
+        Args:
+            num_per_example_loss_terms: Number of per-example loss terms. If ``None``,
+                it is inferred from the data at the cost of one traversal through the
+                data loader.
+
+        Raises:
+            ValueError: If the number of loss terms is not divisible by the number of
+                data points.
+        """
+        if num_per_example_loss_terms is None:
+            # Determine the number of per-example loss terms
+            num_loss_terms = sum(
+                (
+                    y.numel()
+                    if isinstance(self._loss_func, CrossEntropyLoss)
+                    else y.shape[:-1].numel()
+                )
+                for (_, y) in self._loop_over_data(desc="_num_per_example_loss_terms")
+            )
+            if num_loss_terms % self._N_data != 0:
+                raise ValueError(
+                    "The number of loss terms must be divisible by the number of data "
+                    f"points; num_loss_terms={num_loss_terms}, N_data={self._N_data}."
+                )
+            self._num_per_example_loss_terms = int(num_loss_terms / self._N_data)
+        else:
+            self._num_per_example_loss_terms = num_per_example_loss_terms
 
     def _reset_matrix_properties(self):
         """Reset matrix properties."""
