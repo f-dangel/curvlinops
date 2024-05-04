@@ -122,6 +122,7 @@ class KFACLinearOperator(_LinearOperator):
         mc_samples: int = 1,
         kfac_approx: str = "expand",
         loss_average: Union[None, str] = "batch",
+        num_per_example_loss_terms: Optional[int] = None,
         separate_weight_and_bias: bool = True,
         num_data: Optional[int] = None,
         batch_size_fn: Optional[Callable[[MutableMapping], int]] = None,
@@ -188,6 +189,9 @@ class KFACLinearOperator(_LinearOperator):
                 language modeling. If ``None``, the loss function is a sum. This
                 argument is used to ensure that the preconditioner is scaled
                 consistently with the loss and the gradient. Default: ``"batch"``.
+            num_per_example_loss_terms: Number of per-example loss terms. If ``None``,
+                it is inferred from the data at the cost of one traversal through
+                the data loader. Defaults to ``None``.
             separate_weight_and_bias: Whether to treat weights and biases separately.
                 Defaults to ``True``.
             num_data: Number of data points. If ``None``, it is inferred from the data
@@ -205,6 +209,8 @@ class KFACLinearOperator(_LinearOperator):
                 reduction is ``'sum'``.
             ValueError: If ``fisher_type != 'mc'`` and ``mc_samples != 1``.
             ValueError: If ``X`` is not a tensor and ``batch_size_fn`` is not specified.
+            ValueError: If the number of loss terms is not divisible by the number of
+                data points.
         """
         if not isinstance(loss_func, self._SUPPORTED_LOSSES):
             raise ValueError(
@@ -252,14 +258,6 @@ class KFACLinearOperator(_LinearOperator):
         self._gradient_covariances: Dict[str, Tensor] = {}
         self._mapping = self.compute_parameter_mapping(params, model_func)
 
-        # Determine the number of per-example loss terms
-        _, y = next(iter(data))
-        # Assumes that the batch dimension is the first dimension of target `y`
-        if isinstance(loss_func, CrossEntropyLoss):
-            self._num_per_example_loss_terms = y[1:].numel()
-        else:
-            self._num_per_example_loss_terms = y.shape[1:-1].numel()
-
         # Properties of the full matrix KFAC approximation are initialized to `None`
         self._reset_matrix_properties()
 
@@ -269,11 +267,40 @@ class KFACLinearOperator(_LinearOperator):
             params,
             data,
             progressbar=progressbar,
-            check_deterministic=check_deterministic,
+            check_deterministic=False,
             shape=shape,
             num_data=num_data,
             batch_size_fn=batch_size_fn,
         )
+
+        if num_per_example_loss_terms is None:
+            # Determine the number of per-example loss terms
+            num_loss_terms = sum(
+                (
+                    y.numel()
+                    if isinstance(loss_func, CrossEntropyLoss)
+                    else y.shape[:-1].numel()
+                )
+                for (_, y) in self._loop_over_data(desc="_num_per_example_loss_terms")
+            )
+            if num_loss_terms % self._N_data != 0:
+                raise ValueError(
+                    "The number of loss terms must be divisible by the number of data "
+                    f"points. Got num_loss_terms={num_loss_terms} and N_data={self._N_data}."
+                )
+            self._num_per_example_loss_terms = int(num_loss_terms / self._N_data)
+        else:
+            self._num_per_example_loss_terms = num_per_example_loss_terms
+
+        if check_deterministic:
+            old_device = self._device
+            self.to_device(device("cpu"))
+            try:
+                self._check_deterministic()
+            except RuntimeError as e:
+                raise e
+            finally:
+                self.to_device(old_device)
 
     def _reset_matrix_properties(self):
         """Reset matrix properties."""
