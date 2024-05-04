@@ -417,12 +417,14 @@ def test_kfac_inplace_activations(dev: device):
 
 
 @mark.parametrize("fisher_type", KFACLinearOperator._SUPPORTED_FISHER_TYPE)
-@mark.parametrize("loss", [MSELoss, CrossEntropyLoss], ids=["mse", "ce"])
+@mark.parametrize(
+    "loss", [MSELoss, CrossEntropyLoss, BCEWithLogitsLoss], ids=["mse", "ce", "bce"]
+)
 @mark.parametrize("reduction", ["mean", "sum"])
 @mark.parametrize("dev", DEVICES, ids=DEVICES_IDS)
 def test_multi_dim_output(
     fisher_type: str,
-    loss: Union[MSELoss, CrossEntropyLoss],
+    loss: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
     reduction: str,
     dev: device,
 ):
@@ -438,17 +440,26 @@ def test_multi_dim_output(
     # set up loss function, data, and model
     loss_func = loss(reduction=reduction).to(dev)
     loss_average = None if reduction == "sum" else "batch+sequence"
+    X1 = rand(2, 7, 5, 5)
+    X2 = rand(4, 7, 5, 5)
     if isinstance(loss_func, MSELoss):
         data = [
-            (rand(2, 7, 5, 5), regression_targets((2, 7, 5, 3))),
-            (rand(4, 7, 5, 5), regression_targets((4, 7, 5, 3))),
+            (X1, regression_targets((2, 7, 5, 3))),
+            (X2, regression_targets((4, 7, 5, 3))),
+        ]
+        manual_seed(711)
+        model = Sequential(Linear(5, 4), Linear(4, 3)).to(dev)
+    elif issubclass(loss, BCEWithLogitsLoss):
+        data = [
+            (X1, binary_classification_targets((2, 7, 5, 3))),
+            (X2, binary_classification_targets((4, 7, 5, 3))),
         ]
         manual_seed(711)
         model = Sequential(Linear(5, 4), Linear(4, 3)).to(dev)
     else:
         data = [
-            (rand(2, 7, 5, 5), classification_targets((2, 7, 5), 3)),
-            (rand(4, 7, 5, 5), classification_targets((4, 7, 5), 3)),
+            (X1, classification_targets((2, 7, 5), 3)),
+            (X2, classification_targets((4, 7, 5), 3)),
         ]
         manual_seed(711)
         # rearrange is necessary to get the expected output shape for ce loss
@@ -481,7 +492,7 @@ def test_multi_dim_output(
     data_flat = [
         (
             (x, y.flatten(start_dim=0, end_dim=-2))
-            if isinstance(loss_func, MSELoss)
+            if isinstance(loss_func, (MSELoss, BCEWithLogitsLoss))
             else (x, y.flatten(start_dim=0))
         )
         for x, y in data
