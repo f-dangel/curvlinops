@@ -27,7 +27,6 @@ def test_EFLinearOperator_matvec(case, adjoint: bool):
             loss_func,
             params,
             data,
-            batch_size_fn=batch_size_fn,
             input_key="x",
         )
         .detach()
@@ -53,7 +52,6 @@ def test_EFLinearOperator_matmat(case, adjoint: bool, num_vecs: int = 3):
             loss_func,
             params,
             data,
-            batch_size_fn=batch_size_fn,
             input_key="x",
         )
         .detach()
