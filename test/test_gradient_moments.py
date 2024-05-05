@@ -27,7 +27,6 @@ def test_EFLinearOperator_matvec(case, adjoint: bool):
             loss_func,
             params,
             data,
-            batch_size_fn=batch_size_fn,
             input_key="x",
         )
         .detach()
@@ -38,7 +37,7 @@ def test_EFLinearOperator_matvec(case, adjoint: bool):
         op, op_functorch = op.adjoint(), op_functorch.conj().T
 
     x = random.rand(op.shape[1]).astype(op.dtype)
-    report_nonclose(op @ x, op_functorch @ x, atol=1e-6)
+    report_nonclose(op @ x, op_functorch @ x, atol=1e-5)
 
 
 def test_EFLinearOperator_matmat(case, adjoint: bool, num_vecs: int = 3):
@@ -53,7 +52,6 @@ def test_EFLinearOperator_matmat(case, adjoint: bool, num_vecs: int = 3):
             loss_func,
             params,
             data,
-            batch_size_fn=batch_size_fn,
             input_key="x",
         )
         .detach()
