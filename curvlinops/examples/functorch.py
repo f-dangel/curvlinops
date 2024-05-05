@@ -215,9 +215,6 @@ def functorch_empirical_fisher(
 
     Returns:
         Square matrix containing the empirical Fisher.
-
-    Raises:
-        ValueError: If the loss function's reduction cannot be determined.
     """
     (dev,) = {p.device for p in params}
     X, y = _concatenate_batches(data, input_key, device=dev)
