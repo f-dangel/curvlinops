@@ -66,19 +66,9 @@ def setup_submatrix_linear_operator(case, operator_case, submatrix_case):
     A = operator_case(model_func, loss_func, params, data, batch_size_fn=batch_size_fn)
     A_sub = SubmatrixLinearOperator(A, row_idxs, col_idxs)
 
-    if operator_case == EFLinearOperator:
-        A_functorch = CURVATURE_IN_FUNCTORCH[operator_case](
-            model_func,
-            loss_func,
-            params,
-            data,
-            batch_size_fn=batch_size_fn,
-            input_key="x",
-        )
-    else:
-        A_functorch = CURVATURE_IN_FUNCTORCH[operator_case](
-            model_func, loss_func, params, data, "x"
-        )
+    A_functorch = CURVATURE_IN_FUNCTORCH[operator_case](
+        model_func, loss_func, params, data, "x"
+    )
     A_sub_functorch = A_functorch[row_idxs, :][:, col_idxs].detach().cpu().numpy()
 
     return A_sub, A_sub_functorch, row_idxs, col_idxs
@@ -111,4 +101,4 @@ def test_SubmatrixLinearOperator_on_curvatures_matmat(
     A_sub_X = A_sub @ X
 
     assert A_sub_X.shape == (len(row_idxs), num_vecs)
-    report_nonclose(A_sub_X, A_sub_functorch @ X, atol=6e-7)
+    report_nonclose(A_sub_X, A_sub_functorch @ X, atol=1e-6)

@@ -523,6 +523,30 @@ class KFACLinearOperator(_LinearOperator):
         for handle in hook_handles:
             handle.remove()
 
+    def _maybe_adjust_loss_scale(self, loss: Tensor, output: Tensor) -> Tensor:
+        """Adjust the scale of the loss tensor if necessary.
+
+        The ``BCEWithLogitsLoss`` and ``MSELoss`` also average over the output dimension
+        in addition to the batch dimension. We adjust the scale of the loss to correct
+        for this.
+
+        Args:
+            loss: The loss tensor to adjust.
+            output: The model's output.
+
+        Returns:
+            The scaled loss tensor.
+        """
+        if (
+            isinstance(self._loss_func, (BCEWithLogitsLoss, MSELoss))
+            and self._loss_func.reduction == "mean"
+        ):
+            # ``BCEWithLogitsLoss`` and ``MSELoss`` also average over non-batch
+            # dimensions. We have to scale the loss to incorporate this scaling.
+            _, C = output.shape
+            loss *= sqrt(C)
+        return loss
+
     def _compute_loss_and_backward(self, output: Tensor, y: Tensor):
         r"""Compute the loss and the backward pass(es) required for KFAC.
 
@@ -554,9 +578,9 @@ class KFACLinearOperator(_LinearOperator):
             )
 
             # Fix scaling caused by the batch dimension
-            batch_size = output.shape[0]
+            num_loss_terms = output.shape[0]
             reduction = self._loss_func.reduction
-            scale = {"sum": 1.0, "mean": 1.0 / batch_size}[reduction]
+            scale = {"sum": 1.0, "mean": 1.0 / num_loss_terms}[reduction]
             hessian_sqrts.mul_(scale)
 
             # For each column `c` of the matrix square root we need to backpropagate,
@@ -574,22 +598,12 @@ class KFACLinearOperator(_LinearOperator):
             for mc in range(self._mc_samples):
                 y_sampled = self.draw_label(output)
                 loss = self._loss_func(output, y_sampled)
-
-                if (
-                    isinstance(self._loss_func, (BCEWithLogitsLoss, MSELoss))
-                    and self._loss_func.reduction == "mean"
-                ):
-                    # ``BCEWithLogitsLoss`` and ``MSELoss`` also average over non-batch
-                    # dimensions. We have to scale the loss to incorporate this scaling
-                    # as we cannot generally achieve it by incorporating it into the
-                    # drawn sample.
-                    _, C = output.shape
-                    loss *= sqrt(C)
-
+                loss = self._maybe_adjust_loss_scale(loss, output)
                 grad(loss, self._params, retain_graph=mc != self._mc_samples - 1)
 
         elif self._fisher_type == "empirical":
             loss = self._loss_func(output, y)
+            loss = self._maybe_adjust_loss_scale(loss, output)
             grad(loss, self._params)
 
         elif self._fisher_type == "forward-only":

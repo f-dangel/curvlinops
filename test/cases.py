@@ -3,6 +3,7 @@
 from collections import UserDict
 from collections.abc import MutableMapping
 from test.utils import (
+    WeightShareModel,
     binary_classification_targets,
     classification_targets,
     get_available_devices,
@@ -38,28 +39,28 @@ class ModelWithDictInput(Module):
         return self.net(x)
 
 
-# Add test cases here
-CASES_NO_DEVICE = [
+# Add test cases for numerically unstable inverses here
+INV_CASES_NO_DEVICE = [
     ###############################################################################
     #                                CLASSIFICATION                               #
     ###############################################################################
     # softmax cross-entropy loss
     {
-        "model_func": lambda: Sequential(Linear(10, 5), ReLU(), Linear(5, 2)),
+        "model_func": lambda: Sequential(Linear(10, 5), ReLU(), Linear(5, 3)),
         "loss_func": lambda: CrossEntropyLoss(reduction="mean"),
         "data": lambda: [
-            (rand(3, 10), classification_targets((3,), 2)),
-            (rand(4, 10), classification_targets((4,), 2)),
+            (rand(3, 10), classification_targets((3,), 3)),
+            (rand(4, 10), classification_targets((4,), 3)),
         ],
         "seed": 0,
     },
     # same as above, but uses reduction='sum'
     {
-        "model_func": lambda: Sequential(Linear(10, 5), ReLU(), Linear(5, 2)),
+        "model_func": lambda: Sequential(Linear(10, 5), ReLU(), Linear(5, 3)),
         "loss_func": lambda: CrossEntropyLoss(reduction="sum"),
         "data": lambda: [
-            (rand(3, 10), classification_targets((3,), 2)),
-            (rand(4, 10), classification_targets((4,), 2)),
+            (rand(3, 10), classification_targets((3,), 3)),
+            (rand(4, 10), classification_targets((4,), 3)),
         ],
         "seed": 0,
     },
@@ -145,6 +146,83 @@ CASES_NO_DEVICE = [
         "data": lambda: [
             (UserDict({"x": rand(3, 10)}), regression_targets((3, 2))),
             ({"x": rand(4, 10)}, regression_targets((4, 2))),
+        ],
+        "seed": 0,
+    },
+]
+
+INV_CASES = []
+for case in INV_CASES_NO_DEVICE:
+    for device in DEVICES:
+        case_with_device = {**case, "device": device}
+        INV_CASES.append(case_with_device)
+
+
+# add test cases here
+CASES_NO_DEVICE = INV_CASES_NO_DEVICE + [
+    # softmax cross-entropy loss with additional input/output dimension
+    {
+        "model_func": lambda: WeightShareModel(
+            Sequential(Linear(10, 5), ReLU(), Linear(5, 3)), setting="expand", loss="CE"
+        ),
+        "loss_func": lambda: CrossEntropyLoss(reduction="mean"),
+        "data": lambda: [
+            (rand(3, 5, 10), classification_targets((3, 5), 3)),
+            (rand(4, 5, 10), classification_targets((4, 5), 3)),
+        ],
+        "seed": 0,
+    },
+    # same as above, but uses reduction='sum'
+    {
+        "model_func": lambda: WeightShareModel(
+            Sequential(Linear(10, 5), ReLU(), Linear(5, 3)), setting="expand", loss="CE"
+        ),
+        "loss_func": lambda: CrossEntropyLoss(reduction="sum"),
+        "data": lambda: [
+            (rand(3, 5, 10), classification_targets((3, 5), 3)),
+            (rand(4, 5, 10), classification_targets((4, 5), 3)),
+        ],
+        "seed": 0,
+    },
+    # binary softmax cross-entropy loss, multiple outputs, additional input/output
+    # dimension, and mean reduction (tests the reduction factor)
+    {
+        "model_func": lambda: Sequential(Linear(10, 5), ReLU(), Linear(5, 2)),
+        "loss_func": lambda: BCEWithLogitsLoss(reduction="mean"),
+        "data": lambda: [
+            (rand(3, 5, 10), binary_classification_targets((3, 5, 2))),
+            (rand(4, 5, 10), binary_classification_targets((4, 5, 2))),
+        ],
+        "seed": 0,
+    },
+    # binary softmax cross-entropy loss, multiple outputs, additional input/output
+    # dimension, and sum reduction
+    {
+        "model_func": lambda: Sequential(Linear(10, 5), ReLU(), Linear(5, 2)),
+        "loss_func": lambda: BCEWithLogitsLoss(reduction="sum"),
+        "data": lambda: [
+            (rand(3, 5, 10), binary_classification_targets((3, 5, 2))),
+            (rand(4, 5, 10), binary_classification_targets((4, 5, 2))),
+        ],
+        "seed": 0,
+    },
+    # MSE loss, inputs and targets with additional dimension
+    {
+        "model_func": lambda: Sequential(Linear(8, 5), ReLU(), Linear(5, 3)),
+        "loss_func": lambda: MSELoss(reduction="mean"),
+        "data": lambda: [
+            (rand(2, 5, 8), regression_targets((2, 5, 3))),
+            (rand(6, 5, 8), regression_targets((6, 5, 3))),
+        ],
+        "seed": 0,
+    },
+    # same as above, but uses reduction='sum'
+    {
+        "model_func": lambda: Sequential(Linear(8, 5), ReLU(), Linear(5, 3)),
+        "loss_func": lambda: MSELoss(reduction="sum"),
+        "data": lambda: [
+            (rand(2, 5, 8), regression_targets((2, 5, 3))),
+            (rand(6, 5, 8), regression_targets((6, 5, 3))),
         ],
         "seed": 0,
     },

@@ -2,7 +2,7 @@
 
 import test.utils
 from collections.abc import MutableMapping
-from test.cases import ADJOINT_CASES, CASES, NON_DETERMINISTIC_CASES
+from test.cases import ADJOINT_CASES, CASES, INV_CASES, NON_DETERMINISTIC_CASES
 from test.kfac_cases import (
     KFAC_EXACT_CASES,
     KFAC_EXACT_ONE_DATUM_CASES,
@@ -49,6 +49,20 @@ def initialize_case(
 
 @fixture(params=CASES)
 def case(
+    request,
+) -> Tuple[
+    Callable[[Tensor], Tensor],
+    Callable[[Tensor, Tensor], Tensor],
+    List[Tensor],
+    Iterable[Tuple[Tensor, Tensor]],
+    Optional[Callable[[MutableMapping], int]],
+]:
+    case = request.param
+    yield initialize_case(case)
+
+
+@fixture(params=INV_CASES)
+def inv_case(
     request,
 ) -> Tuple[
     Callable[[Tensor], Tensor],

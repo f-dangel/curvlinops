@@ -2,12 +2,13 @@
 
 from collections.abc import MutableMapping
 from math import sqrt
-from typing import Callable, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Dict, Iterable, List, Optional, Tuple, Union
 
 import torch
-from torch import Tensor, cat, einsum
-from torch.func import functional_call, grad, hessian, jacrev, jvp, vmap
-from torch.nn import Module
+from einops import rearrange
+from torch import Tensor, cat, stack
+from torch.func import functional_call, grad, hessian, jacrev, jvp
+from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, Module, MSELoss
 
 
 def blocks_to_matrix(blocks: Dict[str, Dict[str, Tensor]]) -> Tensor:
@@ -198,7 +199,6 @@ def functorch_empirical_fisher(
     loss_func: Module,
     params: List[Tensor],
     data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
-    batch_size_fn: Optional[Callable[[MutableMapping], int]] = None,
     input_key: Optional[str] = None,
 ) -> Tensor:
     """Compute the empirical Fisher with functorch.
@@ -211,52 +211,70 @@ def functorch_empirical_fisher(
         params: List of differentiable parameters used by the prediction function.
         data: Source from which mini-batches can be drawn, for instance a list of
             mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
-        batch_size_fn: Given an input ``X``, tells the batch size. When ``None``,
-            defaults to ``lambda X: X.shape[0]``.
         input_key: Key to obtain the input tensor when ``X`` is a dict-like object.
 
     Returns:
         Square matrix containing the empirical Fisher.
-
-    Raises:
-        ValueError: If the loss function's reduction cannot be determined.
     """
     (dev,) = {p.device for p in params}
     X, y = _concatenate_batches(data, input_key, device=dev)
     params_dict = _make_params_dict(model_func, params)
 
-    # compute batched gradients
-    def loss_n(
-        X_n: Union[Tensor, MutableMapping], y_n: Tensor, params_dict: Dict[str, Tensor]
+    def losses(
+        X: Union[Tensor, MutableMapping], y: Tensor, params_dict: Dict[str, Tensor]
     ) -> Tensor:
-        """Compute the gradient for a single sample.
+        """Compute all elementary losses without reduction.
 
-        # noqa: DAR101
-        # noqa: DAR201
+        An elementary loss results from a scalar entry of `y`.
+
+        Args:
+            X: Mini-batch input.
+            y: Mini-batch labels.
+            params_dict: Dictionary of parameters.
+
+        Returns:
+            1d tensor containing all elementary losses.
         """
-        output = functional_call(model_func, params_dict, X_n)
-        return functional_call(loss_func, {}, (output, y_n))
+        output = functional_call(model_func, params_dict, X)
+
+        flatten_output = {
+            MSELoss: "batch ... d_out -> (batch ... d_out)",
+            BCEWithLogitsLoss: "batch ... d_out -> (batch ... d_out)",
+            CrossEntropyLoss: "batch c ... -> (batch ...) c",
+        }[loss_func.__class__]
+        flatten_y = "... -> (...)"
+        output_flat, y_flat = rearrange(output, flatten_output), rearrange(y, flatten_y)
+
+        return stack(
+            [
+                functional_call(loss_func, {}, (o_el, y_el))
+                for o_el, y_el in zip(output_flat, y_flat)
+            ]
+        )
 
     params_argnum = 2
-    batch_grad_fn = vmap(grad(loss_n, argnums=params_argnum))
-    N = X.shape[0] if batch_size_fn is None else batch_size_fn(X)
+    jac = jacrev(losses, argnums=params_argnum)(X, y, params_dict)
+    jac = cat([j.flatten(start_dim=1) for j in jac.values()], dim=1)
 
-    params_replicated_dict = {
-        name: p.unsqueeze(0).expand(N, *(p.dim() * [-1]))
-        for name, p in params_dict.items()
-    }
+    # the losses over which the expectation is taken
+    num_losses = {
+        CrossEntropyLoss: y.numel(),
+        MSELoss: y.shape[:-1].numel(),
+        BCEWithLogitsLoss: y.shape[:-1].numel(),
+    }[loss_func.__class__]
+    num_params = sum(p.numel() for p in params)
 
-    batch_grad = batch_grad_fn(X, y, params_replicated_dict)
-    batch_grad = cat([bg.flatten(start_dim=1) for bg in batch_grad.values()], dim=1)
+    # the losses which model the same random variable
+    grouped_losses = y.numel() // num_losses
+    jac = jac.reshape(num_losses, grouped_losses, num_params).sum(1)
+    if (
+        isinstance(loss_func, (MSELoss, BCEWithLogitsLoss))
+        and loss_func.reduction == "mean"
+    ):
+        jac /= sqrt(grouped_losses)
 
-    if loss_func.reduction == "sum":
-        normalization = 1
-    elif loss_func.reduction == "mean":
-        normalization = N
-    else:
-        raise ValueError("Cannot detect reduction method from loss function.")
-
-    return 1 / normalization * einsum("ni,nj->ij", batch_grad, batch_grad)
+    normalization = {"sum": 1, "mean": num_losses}[loss_func.reduction]
+    return jac.T @ jac / normalization
 
 
 def functorch_jacobian(

@@ -157,8 +157,8 @@ class FisherMCLinearOperator(_LinearOperator):
                 entry of the iterates from ``data`` and return their batch size.
 
         Raises:
-            NotImplementedError: If the loss function differs from ``MSELoss`` or
-                ``CrossEntropyLoss``.
+            NotImplementedError: If the loss function differs from ``MSELoss``,
+                BCEWithLogitsLoss, or ``CrossEntropyLoss``.
         """
         if not isinstance(loss_func, self.supported_losses):
             raise NotImplementedError(
@@ -215,15 +215,31 @@ class FisherMCLinearOperator(_LinearOperator):
         # compute ∂ℓₙ(yₙₘ)/∂fₙ where fₙ is the prediction for datum n and
         # yₙₘ is the m-th sampled label for datum n
         output = self._model_func(X)
+        # If >2d output we convert to an equivalent 2d output
+        if isinstance(self._loss_func, CrossEntropyLoss):
+            output = rearrange(output, "batch c ... -> (batch ...) c")
+            y = rearrange(y, "batch ... -> (batch ...)")
+        else:
+            output = rearrange(output, "batch ... c -> (batch ...) c")
+            y = rearrange(y, "batch ... c -> (batch ...) c")
+
         grad_output = self.sample_grad_output(output, self._mc_samples, y)
+
+        # Adjust the scale depending on the loss reduction used
+        num_loss_terms, C = output.shape
+        reduction_factor = {
+            "mean": (
+                num_loss_terms
+                if isinstance(self._loss_func, CrossEntropyLoss)
+                else num_loss_terms * C
+            ),
+            "sum": 1.0,
+        }[self._loss_func.reduction]
 
         # Compute the pseudo-loss L' := 0.5 / (M * c) ∑ₙ ∑ₘ fₙᵀ (gₙₘ gₙₘᵀ) fₙ where
         # gₙₘ = ∂ℓₙ(yₙₘ)/∂fₙ (detached) and M is the number of MC samples.
         # The GGN of L' linearized at fₙ is the MC Fisher.
         # We can thus multiply with it by computing the GGN-vector products of L'.
-        reduction_factor = {"mean": self._batch_size_fn(X), "sum": 1.0}[
-            self._loss_func.reduction
-        ]
         loss = (
             0.5
             / reduction_factor

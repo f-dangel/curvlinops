@@ -27,9 +27,9 @@ from curvlinops.examples.utils import report_nonclose
 KFAC_MIN_DAMPING = 1e-8
 
 
-def test_CG_inverse_damped_GGN_matvec(case, delta: float = 2e-2):
+def test_CG_inverse_damped_GGN_matvec(inv_case, delta: float = 2e-2):
     """Test matrix-vector multiplication by the inverse damped GGN with CG."""
-    model_func, loss_func, params, data, batch_size_fn = case
+    model_func, loss_func, params, data, batch_size_fn = inv_case
 
     GGN = GGNLinearOperator(
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn
@@ -49,9 +49,9 @@ def test_CG_inverse_damped_GGN_matvec(case, delta: float = 2e-2):
     report_nonclose(inv_GGN @ x, inv_GGN_functorch @ x, rtol=5e-3, atol=1e-5)
 
 
-def test_CG_inverse_damped_GGN_matmat(case, delta: float = 1e-2, num_vecs: int = 3):
+def test_CG_inverse_damped_GGN_matmat(inv_case, delta: float = 1e-2, num_vecs: int = 3):
     """Test matrix-matrix multiplication by the inverse damped GGN with CG."""
-    model_func, loss_func, params, data, batch_size_fn = case
+    model_func, loss_func, params, data, batch_size_fn = inv_case
 
     GGN = GGNLinearOperator(
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn
@@ -71,9 +71,9 @@ def test_CG_inverse_damped_GGN_matmat(case, delta: float = 1e-2, num_vecs: int =
     report_nonclose(inv_GGN @ X, inv_GGN_functorch @ X, rtol=5e-3, atol=1e-5)
 
 
-def test_LSMR_inverse_damped_GGN_matvec(case, delta: float = 2e-2):
+def test_LSMR_inverse_damped_GGN_matvec(inv_case, delta: float = 2e-2):
     """Test matrix-vector multiplication by the inverse damped GGN with LSMR."""
-    model_func, loss_func, params, data, batch_size_fn = case
+    model_func, loss_func, params, data, batch_size_fn = inv_case
 
     GGN = GGNLinearOperator(
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn
@@ -95,9 +95,11 @@ def test_LSMR_inverse_damped_GGN_matvec(case, delta: float = 2e-2):
     report_nonclose(inv_GGN @ x, inv_GGN_functorch @ x, rtol=5e-3, atol=1e-5)
 
 
-def test_LSMR_inverse_damped_GGN_matmat(case, delta: float = 1e-2, num_vecs: int = 3):
+def test_LSMR_inverse_damped_GGN_matmat(
+    inv_case, delta: float = 1e-2, num_vecs: int = 3
+):
     """Test matrix-matrix multiplication by the inverse damped GGN with LSMR."""
-    model_func, loss_func, params, data, batch_size_fn = case
+    model_func, loss_func, params, data, batch_size_fn = inv_case
 
     GGN = GGNLinearOperator(
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn
@@ -119,9 +121,9 @@ def test_LSMR_inverse_damped_GGN_matmat(case, delta: float = 1e-2, num_vecs: int
     report_nonclose(inv_GGN @ X, inv_GGN_functorch @ X, rtol=5e-3, atol=1e-5)
 
 
-def test_Neumann_inverse_damped_GGN_matvec(case, delta: float = 1e-2):
+def test_Neumann_inverse_damped_GGN_matvec(inv_case, delta: float = 1e-2):
     """Test matrix-vector multiplication by the inverse damped GGN with Neumann."""
-    model_func, loss_func, params, data, batch_size_fn = case
+    model_func, loss_func, params, data, batch_size_fn = inv_case
 
     GGN = GGNLinearOperator(
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn
