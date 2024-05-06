@@ -320,7 +320,7 @@ class KFACLinearOperator(_LinearOperator):
                     "The number of loss terms must be divisible by the number of data "
                     f"points; num_loss_terms={num_loss_terms}, N_data={self._N_data}."
                 )
-            self._num_per_example_loss_terms = int(num_loss_terms / self._N_data)
+            self._num_per_example_loss_terms = num_loss_terms // self._N_data
         else:
             self._num_per_example_loss_terms = num_per_example_loss_terms
 

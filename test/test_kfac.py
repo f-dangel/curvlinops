@@ -567,7 +567,9 @@ def test_expand_setting_scaling(
         # Simulate a mean reduction by manually scaling the gradient covariances
         loss_term_factor = 32 * 32  # number of spatial locations of model output
         if issubclass(loss, (MSELoss, BCEWithLogitsLoss)):
-            loss_term_factor *= 3  # MSE loss averages over number of output channels
+            output_random_variable_size = 3
+            # MSE loss averages over number of output channels
+            loss_term_factor *= output_random_variable_size
         for ggT in kfac_sum._gradient_covariances.values():
             ggT /= kfac_sum._N_data * loss_term_factor
     kfac_simulated_mean_mat = kfac_sum @ eye(kfac_sum.shape[1])
