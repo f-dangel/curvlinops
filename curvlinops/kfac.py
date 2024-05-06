@@ -189,9 +189,16 @@ class KFACLinearOperator(_LinearOperator):
                 language modeling. If ``None``, the loss function is a sum. This
                 argument is used to ensure that the preconditioner is scaled
                 consistently with the loss and the gradient. Default: ``"batch"``.
-            num_per_example_loss_terms: Number of per-example loss terms. If ``None``,
-                it is inferred from the data at the cost of one traversal through
-                the data loader. Defaults to ``None``.
+            num_per_example_loss_terms: Number of per-example loss terms, e.g., the
+                number of tokens in a sequence. The model outputs will have
+                ``num_data * num_per_example_loss_terms * C`` entries, where ``C`` is
+                the dimension of the random variable we define the likelihood over --
+                for the ``CrossEntropyLoss`` it will be the number of classes, for the
+                ``MSELoss`` and ``BCEWithLogitsLoss`` it will be the size of the last
+                dimension of the the model outputs/targets (our convention here).
+                If ``None``, ``num_per_example_loss_terms`` is inferred from the data at
+                the cost of one traversal through the data loader. It is expected to be
+                the same for all examples. Defaults to ``None``.
             separate_weight_and_bias: Whether to treat weights and biases separately.
                 Defaults to ``True``.
             num_data: Number of data points. If ``None``, it is inferred from the data
