@@ -108,7 +108,7 @@ class KFACLinearOperator(_LinearOperator):
     )
     _SUPPORTED_KFAC_APPROX: Tuple[str, ...] = ("expand", "reduce")
 
-    def __init__(
+    def __init__(  # noqa: C901
         self,
         model_func: Module,
         loss_func: MSELoss,
@@ -122,6 +122,7 @@ class KFACLinearOperator(_LinearOperator):
         mc_samples: int = 1,
         kfac_approx: str = "expand",
         loss_average: Union[None, str] = "batch",
+        num_per_example_loss_terms: Optional[int] = None,
         separate_weight_and_bias: bool = True,
         num_data: Optional[int] = None,
         batch_size_fn: Optional[Callable[[MutableMapping], int]] = None,
@@ -188,6 +189,16 @@ class KFACLinearOperator(_LinearOperator):
                 language modeling. If ``None``, the loss function is a sum. This
                 argument is used to ensure that the preconditioner is scaled
                 consistently with the loss and the gradient. Default: ``"batch"``.
+            num_per_example_loss_terms: Number of per-example loss terms, e.g., the
+                number of tokens in a sequence. The model outputs will have
+                ``num_data * num_per_example_loss_terms * C`` entries, where ``C`` is
+                the dimension of the random variable we define the likelihood over --
+                for the ``CrossEntropyLoss`` it will be the number of classes, for the
+                ``MSELoss`` and ``BCEWithLogitsLoss`` it will be the size of the last
+                dimension of the the model outputs/targets (our convention here).
+                If ``None``, ``num_per_example_loss_terms`` is inferred from the data at
+                the cost of one traversal through the data loader. It is expected to be
+                the same for all examples. Defaults to ``None``.
             separate_weight_and_bias: Whether to treat weights and biases separately.
                 Defaults to ``True``.
             num_data: Number of data points. If ``None``, it is inferred from the data
@@ -197,6 +208,7 @@ class KFACLinearOperator(_LinearOperator):
                 entry of the iterates from ``data`` and return their batch size.
 
         Raises:
+            RuntimeError: If the check for deterministic behavior fails.
             ValueError: If the loss function is not supported.
             ValueError: If the loss average is not supported.
             ValueError: If the loss average is ``None`` and the loss function's
@@ -261,11 +273,56 @@ class KFACLinearOperator(_LinearOperator):
             params,
             data,
             progressbar=progressbar,
-            check_deterministic=check_deterministic,
+            check_deterministic=False,
             shape=shape,
             num_data=num_data,
             batch_size_fn=batch_size_fn,
         )
+
+        self._set_num_per_example_loss_terms(num_per_example_loss_terms)
+
+        if check_deterministic:
+            old_device = self._device
+            self.to_device(device("cpu"))
+            try:
+                self._check_deterministic()
+            except RuntimeError as e:
+                raise e
+            finally:
+                self.to_device(old_device)
+
+    def _set_num_per_example_loss_terms(
+        self, num_per_example_loss_terms: Optional[int]
+    ):
+        """Set the number of per-example loss terms.
+
+        Args:
+            num_per_example_loss_terms: Number of per-example loss terms. If ``None``,
+                it is inferred from the data at the cost of one traversal through the
+                data loader.
+
+        Raises:
+            ValueError: If the number of loss terms is not divisible by the number of
+                data points.
+        """
+        if num_per_example_loss_terms is None:
+            # Determine the number of per-example loss terms
+            num_loss_terms = sum(
+                (
+                    y.numel()
+                    if isinstance(self._loss_func, CrossEntropyLoss)
+                    else y.shape[:-1].numel()
+                )
+                for (_, y) in self._loop_over_data(desc="_num_per_example_loss_terms")
+            )
+            if num_loss_terms % self._N_data != 0:
+                raise ValueError(
+                    "The number of loss terms must be divisible by the number of data "
+                    f"points; num_loss_terms={num_loss_terms}, N_data={self._N_data}."
+                )
+            self._num_per_example_loss_terms = num_loss_terms // self._N_data
+        else:
+            self._num_per_example_loss_terms = num_per_example_loss_terms
 
     def _reset_matrix_properties(self):
         """Reset matrix properties."""
@@ -723,12 +780,6 @@ class KFACLinearOperator(_LinearOperator):
         batch_size = g.shape[0]
         if isinstance(module, Conv2d):
             g = rearrange(g, "batch c o1 o2 -> batch o1 o2 c")
-        sequence_length = g.shape[1:-1].numel()
-        num_loss_terms = {
-            None: batch_size,
-            "batch": batch_size,
-            "batch+sequence": batch_size * sequence_length,
-        }[self._loss_average]
 
         if self._kfac_approx == "expand":
             # KFAC-expand approximation
@@ -737,13 +788,20 @@ class KFACLinearOperator(_LinearOperator):
             # KFAC-reduce approximation
             g = reduce(g, "batch ... d_out -> batch d_out", "sum")
 
+        # Compute correction for the loss scaling depending on the loss reduction used
+        num_loss_terms = {
+            None: batch_size,
+            "batch": batch_size,
+            "batch+sequence": batch_size * self._num_per_example_loss_terms,
+        }[self._loss_average]
         # self._mc_samples will be 1 if fisher_type != "mc"
         correction = {
             None: 1.0 / self._mc_samples,
             "batch": num_loss_terms**2 / (self._N_data * self._mc_samples),
             "batch+sequence": num_loss_terms**2
-            / (self._N_data * self._mc_samples * sequence_length),
+            / (self._N_data * self._mc_samples * self._num_per_example_loss_terms),
         }[self._loss_average]
+
         covariance = einsum(g, g, "b i,b j->i j").mul_(correction)
 
         if module_name not in self._gradient_covariances:
@@ -786,7 +844,7 @@ class KFACLinearOperator(_LinearOperator):
 
         if self._kfac_approx == "expand":
             # KFAC-expand approximation
-            scale = x.shape[1:-1].numel()  # sequence_length
+            scale = x.shape[1:-1].numel()  # sequence length
             x = rearrange(x, "batch ... d_in -> (batch ...) d_in")
         else:
             # KFAC-reduce approximation
