@@ -1243,37 +1243,37 @@ def test_save_and_load_state_dict():
     # save state dict
     state_dict = kfac.state_dict()
 
+    # create new KFAC with different loss function and try to load state dict
+    kfac_new = KFACLinearOperator(
+        model,
+        CrossEntropyLoss(),
+        params,
+        [(X, y)],
+    )
     with raises(ValueError, match="loss"):
-        # create new KFAC with different loss function and try to load state dict
-        kfac_new = KFACLinearOperator(
-            model,
-            CrossEntropyLoss(),
-            params,
-            [(X, y)],
-        )
         kfac_new.load_state_dict(state_dict)
 
+    # create new KFAC with different loss reduction and try to load state dict
+    kfac_new = KFACLinearOperator(
+        model,
+        MSELoss(),
+        params,
+        [(X, y)],
+    )
     with raises(ValueError, match="reduction"):
-        # create new KFAC with different loss reduction and try to load state dict
-        kfac_new = KFACLinearOperator(
-            model,
-            MSELoss(),
-            params,
-            [(X, y)],
-        )
         kfac_new.load_state_dict(state_dict)
 
+    # create new KFAC with different model and try to load state dict
+    wrong_model = Sequential(Linear(D_in, 10), ReLU(), Linear(10, D_out))
+    wrong_params = list(wrong_model.parameters())
+    kfac_new = KFACLinearOperator(
+        wrong_model,
+        MSELoss(reduction="sum"),
+        wrong_params,
+        [(X, y)],
+        loss_average=None,
+    )
     with raises(RuntimeError, match="loading state_dict"):
-        # create new KFAC with different model and try to load state dict
-        wrong_model = Sequential(Linear(D_in, 10), ReLU(), Linear(10, D_out))
-        wrong_params = list(wrong_model.parameters())
-        kfac_new = KFACLinearOperator(
-            wrong_model,
-            MSELoss(reduction="sum"),
-            wrong_params,
-            [(X, y)],
-            loss_average=None,
-        )
         kfac_new.load_state_dict(state_dict)
 
     # create new KFAC and load state dict

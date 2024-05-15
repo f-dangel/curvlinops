@@ -683,10 +683,10 @@ def test_KFAC_inverse_save_and_load_state_dict():
     # save state dict
     state_dict = inv_kfac.state_dict()
 
+    # create new inverse KFAC with different linop input and try to load state dict
+    wrong_kfac = KFACLinearOperator(model, CrossEntropyLoss(), params, [(X, y)])
+    inv_kfac_wrong = KFACInverseLinearOperator(wrong_kfac)
     with raises(ValueError, match="mismatch"):
-        # create new inverse KFAC with different linop input and try to load state dict
-        wrong_kfac = KFACLinearOperator(model, CrossEntropyLoss(), params, [(X, y)])
-        inv_kfac_wrong = KFACInverseLinearOperator(wrong_kfac)
         inv_kfac_wrong.load_state_dict(state_dict)
 
     # create new inverse KFAC and load state dict

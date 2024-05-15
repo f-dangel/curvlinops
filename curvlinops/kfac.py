@@ -1089,7 +1089,7 @@ class KFACLinearOperator(_LinearOperator):
             "loss_reduction": self._loss_func.reduction,
             # Attributes
             "progressbar": self._progressbar,
-            "shape": self._shape,
+            "shape": self.shape,
             "seed": self._seed,
             "fisher_type": self._fisher_type,
             "mc_samples": self._mc_samples,
@@ -1137,7 +1137,7 @@ class KFACLinearOperator(_LinearOperator):
 
         # Set attributes
         self._progressbar = state_dict["progressbar"]
-        self._shape = state_dict["shape"]
+        self.shape = state_dict["shape"]
         self._seed = state_dict["seed"]
         self._fisher_type = state_dict["fisher_type"]
         self._mc_samples = state_dict["mc_samples"]
@@ -1182,6 +1182,9 @@ class KFACLinearOperator(_LinearOperator):
 
         Returns:
             Linear operator of KFAC approximation.
+
+        Raises:
+            RuntimeError: If the check for deterministic behavior fails.
         """
         loss_func = {
             "MSELoss": MSELoss,
