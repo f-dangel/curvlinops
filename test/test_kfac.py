@@ -1220,3 +1220,124 @@ def test_kfac_does_affect_grad():
     # make sure gradients are unchanged
     for grad_before, p in zip(grads_before, params):
         assert allclose(grad_before, p.grad)
+
+
+def test_save_and_load_state_dict():
+    """Test that KFACLinearOperator can be saved and loaded from state dict."""
+    manual_seed(0)
+    batch_size, D_in, D_out = 4, 3, 2
+    X = rand(batch_size, D_in)
+    y = rand(batch_size, D_out)
+    model = Linear(D_in, D_out)
+
+    params = list(model.parameters())
+    # create and compute KFAC
+    kfac = KFACLinearOperator(
+        model,
+        MSELoss(reduction="sum"),
+        params,
+        [(X, y)],
+        loss_average=None,
+    )
+
+    # save state dict
+    state_dict = kfac.state_dict()
+
+    with raises(ValueError, match="loss"):
+        # create new KFAC with different loss function and try to load state dict
+        kfac_new = KFACLinearOperator(
+            model,
+            CrossEntropyLoss(),
+            params,
+            [(X, y)],
+        )
+        kfac_new.load_state_dict(state_dict)
+
+    with raises(ValueError, match="reduction"):
+        # create new KFAC with different loss reduction and try to load state dict
+        kfac_new = KFACLinearOperator(
+            model,
+            MSELoss(),
+            params,
+            [(X, y)],
+        )
+        kfac_new.load_state_dict(state_dict)
+
+    with raises(RuntimeError, match="loading state_dict"):
+        # create new KFAC with different model and try to load state dict
+        wrong_model = Sequential(Linear(D_in, 10), ReLU(), Linear(10, D_out))
+        wrong_params = list(wrong_model.parameters())
+        kfac_new = KFACLinearOperator(
+            wrong_model,
+            MSELoss(reduction="sum"),
+            wrong_params,
+            [(X, y)],
+            loss_average=None,
+        )
+        kfac_new.load_state_dict(state_dict)
+
+    # create new KFAC and load state dict
+    kfac_new = KFACLinearOperator(
+        model,
+        MSELoss(reduction="sum"),
+        params,
+        [(X, y)],
+        loss_average=None,
+    )
+
+    # check that the two KFACs are equal
+    assert len(kfac.state_dict()) == len(kfac_new.state_dict())
+    for value, value_new in zip(
+        kfac.state_dict().values(), kfac_new.state_dict().values()
+    ):
+        if isinstance(value, Tensor):
+            assert allclose(value, value_new)
+        elif isinstance(value, dict):
+            for key, val in value.items():
+                assert allclose(val, value_new[key])
+        else:
+            assert value == value_new
+
+    test_mat = rand(kfac.shape[1])
+    report_nonclose(kfac @ test_mat, kfac_new @ test_mat)
+
+
+def test_from_state_dict():
+    """Test that KFACLinearOperator can be created from state dict."""
+    manual_seed(0)
+    batch_size, D_in, D_out = 4, 3, 2
+    X = rand(batch_size, D_in)
+    y = rand(batch_size, D_out)
+    model = Linear(D_in, D_out)
+
+    params = list(model.parameters())
+    # create and compute KFAC
+    kfac = KFACLinearOperator(
+        model,
+        MSELoss(reduction="sum"),
+        params,
+        [(X, y)],
+        loss_average=None,
+    )
+
+    # save state dict
+    state_dict = kfac.state_dict()
+
+    # create new KFAC from state dict
+    kfac_new = KFACLinearOperator.from_state_dict(state_dict, model, params, [(X, y)])
+
+    # check that the two KFACs are equal
+    assert len(kfac.state_dict()) == len(kfac_new.state_dict())
+    for value, value_new in zip(
+        kfac.state_dict().values(), kfac_new.state_dict().values()
+    ):
+        if isinstance(value, Tensor):
+            assert allclose(value, value_new)
+        elif isinstance(value, dict):
+            for key, val in value.items():
+                assert allclose(val, value_new[key])
+        else:
+            assert value == value_new
+
+    test_mat = rand(kfac.shape[1])
+    report_nonclose(kfac @ test_mat, kfac_new @ test_mat)
