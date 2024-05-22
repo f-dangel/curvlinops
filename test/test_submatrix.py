@@ -56,7 +56,7 @@ def test_SubmatrixLinearOperator__matvec(
     x = random.rand(A_sub.shape[1])
     A_sub_linop_x = A_sub_linop @ x
 
-    assert (len(col_idxs),) if adjoint else A_sub_linop_x.shape == (len(row_idxs),)
+    assert A_sub_linop_x.shape == ((len(col_idxs),) if adjoint else (len(row_idxs),))
     report_nonclose(A_sub @ x, A_sub_linop_x)
 
 
@@ -85,10 +85,8 @@ def test_SubmatrixLinearOperator__matmat(
     X = random.rand(A_sub.shape[1], num_vecs)
     A_sub_linop_X = A_sub_linop @ X
 
-    assert (
-        (len(col_idxs), num_vecs)
-        if adjoint
-        else A_sub_linop_X.shape == (len(row_idxs), num_vecs)
+    assert A_sub_linop_X.shape == (
+        (len(col_idxs), num_vecs) if adjoint else (len(row_idxs), num_vecs)
     )
     report_nonclose(A_sub @ X, A_sub_linop_X)
 
