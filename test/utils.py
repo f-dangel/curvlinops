@@ -7,7 +7,18 @@ from typing import Callable, Iterable, List, Optional, Tuple, Union
 from einops import rearrange, reduce
 from einops.layers.torch import Rearrange
 from numpy import eye, ndarray
-from torch import Tensor, cat, cuda, device, dtype, from_numpy, rand, randint
+from torch import (
+    Tensor,
+    allclose,
+    as_tensor,
+    cat,
+    cuda,
+    device,
+    dtype,
+    from_numpy,
+    rand,
+    randint,
+)
 from torch.nn import (
     AdaptiveAvgPool2d,
     BCEWithLogitsLoss,
@@ -367,3 +378,29 @@ def batch_size_fn(X: MutableMapping) -> int:
         batch_size: The first dimension size of the tensor.
     """
     return X["x"].shape[0]
+
+
+def compare_state_dicts(state_dict: dict, state_dict_new: dict):
+    """Compare two state dicts recursively.
+
+    Args:
+        state_dict (dict): The first state dict to compare.
+        state_dict_new (dict): The second state dict to compare.
+
+    Raises:
+        AssertionError: If the state dicts are not equal.
+    """
+    assert len(state_dict) == len(state_dict_new)
+    for value, value_new in zip(state_dict.values(), state_dict_new.values()):
+        if isinstance(value, Tensor):
+            assert allclose(value, value_new)
+        elif isinstance(value, dict):
+            compare_state_dicts(value, value_new)
+        elif isinstance(value, tuple):
+            assert len(value) == len(value_new)
+            assert all(isinstance(v, type(v2)) for v, v2 in zip(value, value_new))
+            assert all(
+                allclose(as_tensor(v), as_tensor(v2)) for v, v2 in zip(value, value_new)
+            )
+        else:
+            assert value == value_new

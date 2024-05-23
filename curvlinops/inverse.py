@@ -1,7 +1,7 @@
 """Implements linear operator inverses."""
 
 from math import sqrt
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from warnings import warn
 
 from einops import einsum, rearrange
@@ -695,3 +695,68 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
         M_torch = self._A._preprocess(M)
         M_torch = self.torch_matmat(M_torch)
         return self._A._postprocess(M_torch)
+
+    def state_dict(self) -> Dict[str, Any]:
+        """Return the state of the inverse KFAC linear operator.
+
+        Returns:
+            State dictionary.
+        """
+        return {
+            "A": self._A.state_dict(),
+            # Attributes
+            "damping": self._damping,
+            "use_heuristic_damping": self._use_heuristic_damping,
+            "min_damping": self._min_damping,
+            "use_exact_damping": self._use_exact_damping,
+            "cache": self._cache,
+            "retry_double_precision": self._retry_double_precision,
+            # Inverse Kronecker factors (if computed and cached)
+            "inverse_input_covariances": self._inverse_input_covariances,
+            "inverse_gradient_covariances": self._inverse_gradient_covariances,
+        }
+
+    def load_state_dict(self, state_dict: Dict[str, Any]):
+        """Load the state of the inverse KFAC linear operator.
+
+        Args:
+            state_dict: State dictionary.
+        """
+        self._A.load_state_dict(state_dict["A"])
+
+        # Set attributes
+        self._damping = state_dict["damping"]
+        self._use_heuristic_damping = state_dict["use_heuristic_damping"]
+        self._min_damping = state_dict["min_damping"]
+        self._use_exact_damping = state_dict["use_exact_damping"]
+        self._cache = state_dict["cache"]
+        self._retry_double_precision = state_dict["retry_double_precision"]
+
+        # Set inverse Kronecker factors (if computed and cached)
+        self._inverse_input_covariances = state_dict["inverse_input_covariances"]
+        self._inverse_gradient_covariances = state_dict["inverse_gradient_covariances"]
+
+    @classmethod
+    def from_state_dict(
+        cls, state_dict: Dict[str, Any], A: KFACLinearOperator
+    ) -> "KFACInverseLinearOperator":
+        """Load an inverse KFAC linear operator from a state dictionary.
+
+        Args:
+            state_dict: State dictionary.
+            A: ``KFACLinearOperator`` whose inverse is formed.
+
+        Returns:
+            Linear operator of inverse KFAC approximation.
+        """
+        inv_kfac = cls(
+            A,
+            damping=state_dict["damping"],
+            use_heuristic_damping=state_dict["use_heuristic_damping"],
+            min_damping=state_dict["min_damping"],
+            use_exact_damping=state_dict["use_exact_damping"],
+            cache=state_dict["cache"],
+            retry_double_precision=state_dict["retry_double_precision"],
+        )
+        inv_kfac.load_state_dict(state_dict)
+        return inv_kfac

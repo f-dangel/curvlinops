@@ -1,5 +1,6 @@
 """Contains tests for ``curvlinops.kfac``."""
 
+import os
 from test.cases import DEVICES, DEVICES_IDS
 from test.utils import (
     Conv2dModel,
@@ -7,6 +8,7 @@ from test.utils import (
     WeightShareModel,
     binary_classification_targets,
     classification_targets,
+    compare_state_dicts,
     ggn_block_diagonal,
     regression_targets,
 )
@@ -20,7 +22,7 @@ from pytest import mark, raises, skip
 from scipy.linalg import block_diag
 from torch import Tensor, allclose, cat, cuda, device
 from torch import eye as torch_eye
-from torch import isinf, isnan, manual_seed, rand, rand_like, randperm
+from torch import isinf, isnan, load, manual_seed, rand, rand_like, randperm, save
 from torch.nn import (
     BCEWithLogitsLoss,
     CrossEntropyLoss,
@@ -1220,3 +1222,107 @@ def test_kfac_does_affect_grad():
     # make sure gradients are unchanged
     for grad_before, p in zip(grads_before, params):
         assert allclose(grad_before, p.grad)
+
+
+def test_save_and_load_state_dict():
+    """Test that KFACLinearOperator can be saved and loaded from state dict."""
+    manual_seed(0)
+    batch_size, D_in, D_out = 4, 3, 2
+    X = rand(batch_size, D_in)
+    y = rand(batch_size, D_out)
+    model = Linear(D_in, D_out)
+
+    params = list(model.parameters())
+    # create and compute KFAC
+    kfac = KFACLinearOperator(
+        model,
+        MSELoss(reduction="sum"),
+        params,
+        [(X, y)],
+        loss_average=None,
+    )
+
+    # save state dict
+    state_dict = kfac.state_dict()
+    save(state_dict, "kfac_state_dict.pt")
+
+    # create new KFAC with different loss function and try to load state dict
+    kfac_new = KFACLinearOperator(
+        model,
+        CrossEntropyLoss(),
+        params,
+        [(X, y)],
+    )
+    with raises(ValueError, match="loss"):
+        kfac_new.load_state_dict(load("kfac_state_dict.pt"))
+
+    # create new KFAC with different loss reduction and try to load state dict
+    kfac_new = KFACLinearOperator(
+        model,
+        MSELoss(),
+        params,
+        [(X, y)],
+    )
+    with raises(ValueError, match="reduction"):
+        kfac_new.load_state_dict(load("kfac_state_dict.pt"))
+
+    # create new KFAC with different model and try to load state dict
+    wrong_model = Sequential(Linear(D_in, 10), ReLU(), Linear(10, D_out))
+    wrong_params = list(wrong_model.parameters())
+    kfac_new = KFACLinearOperator(
+        wrong_model,
+        MSELoss(reduction="sum"),
+        wrong_params,
+        [(X, y)],
+        loss_average=None,
+    )
+    with raises(RuntimeError, match="loading state_dict"):
+        kfac_new.load_state_dict(load("kfac_state_dict.pt"))
+
+    # create new KFAC and load state dict
+    kfac_new = KFACLinearOperator(
+        model,
+        MSELoss(reduction="sum"),
+        params,
+        [(X, y)],
+        loss_average=None,
+        check_deterministic=False,  # turn off to avoid computing KFAC again
+    )
+    kfac_new.load_state_dict(load("kfac_state_dict.pt"))
+    # clean up
+    os.remove("kfac_state_dict.pt")
+
+    # check that the two KFACs are equal
+    compare_state_dicts(kfac.state_dict(), kfac_new.state_dict())
+    test_vec = rand(kfac.shape[1])
+    report_nonclose(kfac @ test_vec, kfac_new @ test_vec)
+
+
+def test_from_state_dict():
+    """Test that KFACLinearOperator can be created from state dict."""
+    manual_seed(0)
+    batch_size, D_in, D_out = 4, 3, 2
+    X = rand(batch_size, D_in)
+    y = rand(batch_size, D_out)
+    model = Linear(D_in, D_out)
+
+    params = list(model.parameters())
+    # create and compute KFAC
+    kfac = KFACLinearOperator(
+        model,
+        MSELoss(reduction="sum"),
+        params,
+        [(X, y)],
+        loss_average=None,
+    )
+
+    # save state dict
+    state_dict = kfac.state_dict()
+
+    # create new KFAC from state dict
+    kfac_new = KFACLinearOperator.from_state_dict(state_dict, model, params, [(X, y)])
+
+    # check that the two KFACs are equal
+    compare_state_dicts(kfac.state_dict(), kfac_new.state_dict())
+    test_vec = rand(kfac.shape[1])
+    report_nonclose(kfac @ test_vec, kfac_new @ test_vec)

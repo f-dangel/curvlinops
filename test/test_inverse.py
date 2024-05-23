@@ -1,7 +1,8 @@
 """Contains tests for ``curvlinops/inverse``."""
 
+import os
 from math import sqrt
-from test.utils import cast_input
+from test.utils import cast_input, compare_state_dicts
 from typing import Iterable, List, Tuple, Union
 
 import torch
@@ -654,3 +655,82 @@ def test_KFAC_inverse_damped_torch_matvec(
 
     # Test against _matmat
     report_nonclose(inv_KFAC @ x.cpu().numpy(), inv_KFAC_x.cpu().numpy())
+
+
+def test_KFAC_inverse_save_and_load_state_dict():
+    """Test that KFACInverseLinearOperator can be saved and loaded from state dict."""
+    torch.manual_seed(0)
+    batch_size, D_in, D_out = 4, 3, 2
+    X = torch.rand(batch_size, D_in)
+    y = torch.rand(batch_size, D_out)
+    model = torch.nn.Linear(D_in, D_out)
+
+    params = list(model.parameters())
+    # create and compute KFAC
+    kfac = KFACLinearOperator(
+        model,
+        MSELoss(reduction="sum"),
+        params,
+        [(X, y)],
+        loss_average=None,
+    )
+
+    # create inverse KFAC
+    inv_kfac = KFACInverseLinearOperator(
+        kfac, damping=1e-2, use_heuristic_damping=True, retry_double_precision=False
+    )
+    _ = inv_kfac @ eye(kfac.shape[1])  # to trigger inverse computation
+
+    # save state dict
+    state_dict = inv_kfac.state_dict()
+    torch.save(state_dict, "inv_kfac_state_dict.pt")
+
+    # create new inverse KFAC with different linop input and try to load state dict
+    wrong_kfac = KFACLinearOperator(model, CrossEntropyLoss(), params, [(X, y)])
+    inv_kfac_wrong = KFACInverseLinearOperator(wrong_kfac)
+    with raises(ValueError, match="mismatch"):
+        inv_kfac_wrong.load_state_dict(torch.load("inv_kfac_state_dict.pt"))
+
+    # create new inverse KFAC and load state dict
+    inv_kfac_new = KFACInverseLinearOperator(kfac)
+    inv_kfac_new.load_state_dict(torch.load("inv_kfac_state_dict.pt"))
+    # clean up
+    os.remove("inv_kfac_state_dict.pt")
+
+    # check that the two inverse KFACs are equal
+    compare_state_dicts(inv_kfac.state_dict(), inv_kfac_new.state_dict())
+    test_vec = torch.rand(inv_kfac.shape[1])
+    report_nonclose(inv_kfac @ test_vec, inv_kfac_new @ test_vec)
+
+
+def test_KFAC_inverse_from_state_dict():
+    """Test that KFACInverseLinearOperator can be created from state dict."""
+    torch.manual_seed(0)
+    batch_size, D_in, D_out = 4, 3, 2
+    X = torch.rand(batch_size, D_in)
+    y = torch.rand(batch_size, D_out)
+    model = torch.nn.Linear(D_in, D_out)
+
+    params = list(model.parameters())
+    # create and compute KFAC
+    kfac = KFACLinearOperator(
+        model,
+        MSELoss(reduction="sum"),
+        params,
+        [(X, y)],
+        loss_average=None,
+    )
+
+    # create inverse KFAC and save state dict
+    inv_kfac = KFACInverseLinearOperator(
+        kfac, damping=1e-2, use_heuristic_damping=True, retry_double_precision=False
+    )
+    state_dict = inv_kfac.state_dict()
+
+    # create new KFAC from state dict
+    inv_kfac_new = KFACInverseLinearOperator.from_state_dict(state_dict, kfac)
+
+    # check that the two inverse KFACs are equal
+    compare_state_dicts(inv_kfac.state_dict(), inv_kfac_new.state_dict())
+    test_vec = torch.rand(kfac.shape[1])
+    report_nonclose(inv_kfac @ test_vec, inv_kfac_new @ test_vec)
