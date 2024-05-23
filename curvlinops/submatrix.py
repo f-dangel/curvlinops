@@ -1,5 +1,7 @@
 """Implements slices of linear operators."""
 
+from __future__ import annotations
+
 from typing import List
 
 from numpy import column_stack, ndarray, zeros
@@ -78,3 +80,13 @@ class SubmatrixLinearOperator(LinearOperator):
             ``A[row_idxs, :][:, col_idxs] @ x``. Has shape ``[len(row_idxs), N]``.
         """
         return column_stack([self @ col for col in X.T])
+
+    def _adjoint(self) -> SubmatrixLinearOperator:
+        """Return the adjoint of the sub-matrix.
+
+        For that, we need to take the adjoint operator, and swap row and column indices.
+
+        Returns:
+            The linear operator for the adjoint sub-matrix.
+        """
+        return type(self)(self._A.adjoint(), self._col_idxs, self._row_idxs)
