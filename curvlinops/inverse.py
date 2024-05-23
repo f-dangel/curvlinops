@@ -738,9 +738,7 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
 
     @classmethod
     def from_state_dict(
-        cls,
-        state_dict: Dict[str, Any],
-        A: KFACLinearOperator,
+        cls, state_dict: Dict[str, Any], A: KFACLinearOperator
     ) -> "KFACInverseLinearOperator":
         """Load an inverse KFAC linear operator from a state dictionary.
 

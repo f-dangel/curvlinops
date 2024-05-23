@@ -656,6 +656,25 @@ def test_KFAC_inverse_damped_torch_matvec(
     report_nonclose(inv_KFAC @ x.cpu().numpy(), inv_KFAC_x.cpu().numpy())
 
 
+def compare_state_dicts(state_dict: dict, state_dict_new: dict):
+    """Compare two state dicts recursively."""
+    assert len(state_dict) == len(state_dict_new)
+    for value, value_new in zip(state_dict.values(), state_dict_new.values()):
+        if isinstance(value, torch.Tensor):
+            assert torch.allclose(value, value_new)
+        elif isinstance(value, dict):
+            compare_state_dicts(value, value_new)
+        elif isinstance(value, tuple):
+            assert len(value) == len(value_new)
+            assert all([isinstance(v, type(v2)) for v, v2 in zip(value, value_new)])
+            assert all(
+                torch.allclose(torch.as_tensor(v), torch.as_tensor(v2))
+                for v, v2 in zip(value, value_new)
+            )
+        else:
+            assert value == value_new
+
+
 def test_KFAC_inverse_save_and_load_state_dict():
     """Test that KFACInverseLinearOperator can be saved and loaded from state dict."""
     torch.manual_seed(0)
@@ -694,25 +713,9 @@ def test_KFAC_inverse_save_and_load_state_dict():
     inv_kfac_new.load_state_dict(state_dict)
 
     # check that the two inverse KFACs are equal
-    def compare_state_dicts(state_dict: dict, state_dict_new: dict):
-        assert len(state_dict) == len(state_dict_new)
-        for value, value_new in zip(state_dict.values(), state_dict_new.values()):
-            if isinstance(value, torch.Tensor):
-                assert torch.allclose(value, value_new)
-            elif isinstance(value, dict):
-                compare_state_dicts(value, value_new)
-            elif isinstance(value, tuple):
-                assert all(
-                    torch.allclose(torch.as_tensor(v), torch.as_tensor(v2))
-                    for v, v2 in zip(value, value_new)
-                )
-            else:
-                assert value == value_new
-
+    test_vec = torch.rand(inv_kfac.shape[1])
+    report_nonclose(inv_kfac @ test_vec, inv_kfac_new @ test_vec)
     compare_state_dicts(inv_kfac.state_dict(), inv_kfac_new.state_dict())
-
-    test_mat = torch.rand(inv_kfac.shape[1])
-    report_nonclose(inv_kfac @ test_mat, inv_kfac_new @ test_mat)
 
 
 def test_KFAC_inverse_from_state_dict():
@@ -743,22 +746,6 @@ def test_KFAC_inverse_from_state_dict():
     inv_kfac_new = KFACInverseLinearOperator.from_state_dict(state_dict, kfac)
 
     # check that the two inverse KFACs are equal
-    def compare_state_dicts(state_dict: dict, state_dict_new: dict):
-        assert len(state_dict) == len(state_dict_new)
-        for value, value_new in zip(state_dict.values(), state_dict_new.values()):
-            if isinstance(value, torch.Tensor):
-                assert torch.allclose(value, value_new)
-            elif isinstance(value, dict):
-                compare_state_dicts(value, value_new)
-            elif isinstance(value, tuple):
-                assert all(
-                    torch.allclose(torch.as_tensor(v), torch.as_tensor(v2))
-                    for v, v2 in zip(value, value_new)
-                )
-            else:
-                assert value == value_new
-
+    test_vec = torch.rand(kfac.shape[1])
+    report_nonclose(inv_kfac @ test_vec, inv_kfac_new @ test_vec)
     compare_state_dicts(inv_kfac.state_dict(), inv_kfac_new.state_dict())
-
-    test_mat = torch.rand(kfac.shape[1])
-    report_nonclose(inv_kfac @ test_mat, inv_kfac_new @ test_mat)

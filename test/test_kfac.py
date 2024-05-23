@@ -1286,6 +1286,9 @@ def test_save_and_load_state_dict():
     )
 
     # check that the two KFACs are equal
+    test_vec = rand(kfac.shape[1])
+    report_nonclose(kfac @ test_vec, kfac_new @ test_vec)
+
     assert len(kfac.state_dict()) == len(kfac_new.state_dict())
     for value, value_new in zip(
         kfac.state_dict().values(), kfac_new.state_dict().values()
@@ -1297,9 +1300,6 @@ def test_save_and_load_state_dict():
                 assert allclose(val, value_new[key])
         else:
             assert value == value_new
-
-    test_mat = rand(kfac.shape[1])
-    report_nonclose(kfac @ test_mat, kfac_new @ test_mat)
 
 
 def test_from_state_dict():
@@ -1327,6 +1327,9 @@ def test_from_state_dict():
     kfac_new = KFACLinearOperator.from_state_dict(state_dict, model, params, [(X, y)])
 
     # check that the two KFACs are equal
+    test_vec = rand(kfac.shape[1])
+    report_nonclose(kfac @ test_vec, kfac_new @ test_vec)
+
     assert len(kfac.state_dict()) == len(kfac_new.state_dict())
     for value, value_new in zip(
         kfac.state_dict().values(), kfac_new.state_dict().values()
@@ -1338,6 +1341,3 @@ def test_from_state_dict():
                 assert allclose(val, value_new[key])
         else:
             assert value == value_new
-
-    test_mat = rand(kfac.shape[1])
-    report_nonclose(kfac @ test_mat, kfac_new @ test_mat)
