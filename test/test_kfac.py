@@ -8,6 +8,7 @@ from test.utils import (
     WeightShareModel,
     binary_classification_targets,
     classification_targets,
+    compare_state_dicts,
     ggn_block_diagonal,
     regression_targets,
 )
@@ -1288,25 +1289,13 @@ def test_save_and_load_state_dict():
         check_deterministic=False,  # turn off to avoid computing KFAC again
     )
     kfac_new.load_state_dict(load("kfac_state_dict.pt"))
-
-    # check that the two KFACs are equal
-    assert len(kfac.state_dict()) == len(kfac_new.state_dict())
-    for value, value_new in zip(
-        kfac.state_dict().values(), kfac_new.state_dict().values()
-    ):
-        if isinstance(value, Tensor):
-            assert allclose(value, value_new)
-        elif isinstance(value, dict):
-            for key, val in value.items():
-                assert allclose(val, value_new[key])
-        else:
-            assert value == value_new
-
-    test_vec = rand(kfac.shape[1])
-    report_nonclose(kfac @ test_vec, kfac_new @ test_vec)
-
     # clean up
     os.remove("kfac_state_dict.pt")
+
+    # check that the two KFACs are equal
+    compare_state_dicts(kfac.state_dict(), kfac_new.state_dict())
+    test_vec = rand(kfac.shape[1])
+    report_nonclose(kfac @ test_vec, kfac_new @ test_vec)
 
 
 def test_from_state_dict():
@@ -1334,17 +1323,6 @@ def test_from_state_dict():
     kfac_new = KFACLinearOperator.from_state_dict(state_dict, model, params, [(X, y)])
 
     # check that the two KFACs are equal
-    assert len(kfac.state_dict()) == len(kfac_new.state_dict())
-    for value, value_new in zip(
-        kfac.state_dict().values(), kfac_new.state_dict().values()
-    ):
-        if isinstance(value, Tensor):
-            assert allclose(value, value_new)
-        elif isinstance(value, dict):
-            for key, val in value.items():
-                assert allclose(val, value_new[key])
-        else:
-            assert value == value_new
-
+    compare_state_dicts(kfac.state_dict(), kfac_new.state_dict())
     test_vec = rand(kfac.shape[1])
     report_nonclose(kfac @ test_vec, kfac_new @ test_vec)
