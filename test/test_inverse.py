@@ -708,11 +708,11 @@ def test_KFAC_inverse_save_and_load_state_dict():
     wrong_kfac = KFACLinearOperator(model, CrossEntropyLoss(), params, [(X, y)])
     inv_kfac_wrong = KFACInverseLinearOperator(wrong_kfac)
     with raises(ValueError, match="mismatch"):
-        inv_kfac_wrong.load_state_dict(torch.load(state_dict))
+        inv_kfac_wrong.load_state_dict(torch.load("inv_kfac_state_dict.pt"))
 
     # create new inverse KFAC and load state dict
     inv_kfac_new = KFACInverseLinearOperator(kfac)
-    inv_kfac_new.load_state_dict(torch.load(state_dict))
+    inv_kfac_new.load_state_dict(torch.load("inv_kfac_state_dict.pt"))
 
     # check that the two inverse KFACs are equal
     compare_state_dicts(inv_kfac.state_dict(), inv_kfac_new.state_dict())

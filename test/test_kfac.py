@@ -1253,7 +1253,7 @@ def test_save_and_load_state_dict():
         [(X, y)],
     )
     with raises(ValueError, match="loss"):
-        kfac_new.load_state_dict(load(state_dict))
+        kfac_new.load_state_dict(load("kfac_state_dict.pt"))
 
     # create new KFAC with different loss reduction and try to load state dict
     kfac_new = KFACLinearOperator(
@@ -1263,7 +1263,7 @@ def test_save_and_load_state_dict():
         [(X, y)],
     )
     with raises(ValueError, match="reduction"):
-        kfac_new.load_state_dict(load(state_dict))
+        kfac_new.load_state_dict(load("kfac_state_dict.pt"))
 
     # create new KFAC with different model and try to load state dict
     wrong_model = Sequential(Linear(D_in, 10), ReLU(), Linear(10, D_out))
@@ -1276,7 +1276,7 @@ def test_save_and_load_state_dict():
         loss_average=None,
     )
     with raises(RuntimeError, match="loading state_dict"):
-        kfac_new.load_state_dict(load(state_dict))
+        kfac_new.load_state_dict(load("kfac_state_dict.pt"))
 
     # create new KFAC and load state dict
     kfac_new = KFACLinearOperator(
@@ -1287,7 +1287,7 @@ def test_save_and_load_state_dict():
         loss_average=None,
         check_deterministic=False,  # turn off to avoid computing KFAC again
     )
-    kfac_new.load_state_dict(load(state_dict))
+    kfac_new.load_state_dict(load("kfac_state_dict.pt"))
 
     # check that the two KFACs are equal
     assert len(kfac.state_dict()) == len(kfac_new.state_dict())

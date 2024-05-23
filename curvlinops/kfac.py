@@ -1148,6 +1148,23 @@ class KFACLinearOperator(_LinearOperator):
         self._N_data = state_dict["num_data"]
 
         # Set Kronecker factors (if computed)
+        if self._input_covariances or self._gradient_covariances:
+            # If computed, check if the keys match the mapping keys
+            input_covariances_keys = set(self._input_covariances.keys())
+            gradient_covariances_keys = set(self._gradient_covariances.keys())
+            mapping_keys = set(self._mapping.keys())
+            if (
+                input_covariances_keys != mapping_keys
+                or gradient_covariances_keys != mapping_keys
+            ):
+                raise ValueError(
+                    "Input or gradient covariance keys in state dict do not match "
+                    "mapping keys of linear operator. "
+                    "Difference between input covariance and mapping keys: "
+                    f"{input_covariances_keys - mapping_keys}. "
+                    "Difference between gradient covariance and mapping keys: "
+                    f"{gradient_covariances_keys - mapping_keys}."
+                )
         self._input_covariances = state_dict["input_covariances"]
         self._gradient_covariances = state_dict["gradient_covariances"]
 
