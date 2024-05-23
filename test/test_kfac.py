@@ -1,5 +1,6 @@
 """Contains tests for ``curvlinops.kfac``."""
 
+import os
 from test.cases import DEVICES, DEVICES_IDS
 from test.utils import (
     Conv2dModel,
@@ -20,7 +21,7 @@ from pytest import mark, raises, skip
 from scipy.linalg import block_diag
 from torch import Tensor, allclose, cat, cuda, device
 from torch import eye as torch_eye
-from torch import isinf, isnan, manual_seed, rand, rand_like, randperm
+from torch import isinf, isnan, load, manual_seed, rand, rand_like, randperm, save
 from torch.nn import (
     BCEWithLogitsLoss,
     CrossEntropyLoss,
@@ -1242,6 +1243,7 @@ def test_save_and_load_state_dict():
 
     # save state dict
     state_dict = kfac.state_dict()
+    save(state_dict, "kfac_state_dict.pt")
 
     # create new KFAC with different loss function and try to load state dict
     kfac_new = KFACLinearOperator(
@@ -1251,7 +1253,7 @@ def test_save_and_load_state_dict():
         [(X, y)],
     )
     with raises(ValueError, match="loss"):
-        kfac_new.load_state_dict(state_dict)
+        kfac_new.load_state_dict(load(state_dict))
 
     # create new KFAC with different loss reduction and try to load state dict
     kfac_new = KFACLinearOperator(
@@ -1261,7 +1263,7 @@ def test_save_and_load_state_dict():
         [(X, y)],
     )
     with raises(ValueError, match="reduction"):
-        kfac_new.load_state_dict(state_dict)
+        kfac_new.load_state_dict(load(state_dict))
 
     # create new KFAC with different model and try to load state dict
     wrong_model = Sequential(Linear(D_in, 10), ReLU(), Linear(10, D_out))
@@ -1274,7 +1276,7 @@ def test_save_and_load_state_dict():
         loss_average=None,
     )
     with raises(RuntimeError, match="loading state_dict"):
-        kfac_new.load_state_dict(state_dict)
+        kfac_new.load_state_dict(load(state_dict))
 
     # create new KFAC and load state dict
     kfac_new = KFACLinearOperator(
@@ -1283,12 +1285,11 @@ def test_save_and_load_state_dict():
         params,
         [(X, y)],
         loss_average=None,
+        check_deterministic=False,  # turn off to avoid computing KFAC again
     )
+    kfac_new.load_state_dict(load(state_dict))
 
     # check that the two KFACs are equal
-    test_vec = rand(kfac.shape[1])
-    report_nonclose(kfac @ test_vec, kfac_new @ test_vec)
-
     assert len(kfac.state_dict()) == len(kfac_new.state_dict())
     for value, value_new in zip(
         kfac.state_dict().values(), kfac_new.state_dict().values()
@@ -1300,6 +1301,12 @@ def test_save_and_load_state_dict():
                 assert allclose(val, value_new[key])
         else:
             assert value == value_new
+
+    test_vec = rand(kfac.shape[1])
+    report_nonclose(kfac @ test_vec, kfac_new @ test_vec)
+
+    # clean up
+    os.remove("kfac_state_dict.pt")
 
 
 def test_from_state_dict():
@@ -1327,9 +1334,6 @@ def test_from_state_dict():
     kfac_new = KFACLinearOperator.from_state_dict(state_dict, model, params, [(X, y)])
 
     # check that the two KFACs are equal
-    test_vec = rand(kfac.shape[1])
-    report_nonclose(kfac @ test_vec, kfac_new @ test_vec)
-
     assert len(kfac.state_dict()) == len(kfac_new.state_dict())
     for value, value_new in zip(
         kfac.state_dict().values(), kfac_new.state_dict().values()
@@ -1341,3 +1345,6 @@ def test_from_state_dict():
                 assert allclose(val, value_new[key])
         else:
             assert value == value_new
+
+    test_vec = rand(kfac.shape[1])
+    report_nonclose(kfac @ test_vec, kfac_new @ test_vec)

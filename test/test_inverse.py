@@ -1,5 +1,6 @@
 """Contains tests for ``curvlinops/inverse``."""
 
+import os
 from math import sqrt
 from test.utils import cast_input
 from typing import Iterable, List, Tuple, Union
@@ -666,7 +667,7 @@ def compare_state_dicts(state_dict: dict, state_dict_new: dict):
             compare_state_dicts(value, value_new)
         elif isinstance(value, tuple):
             assert len(value) == len(value_new)
-            assert all([isinstance(v, type(v2)) for v, v2 in zip(value, value_new)])
+            assert all(isinstance(v, type(v2)) for v, v2 in zip(value, value_new))
             assert all(
                 torch.allclose(torch.as_tensor(v), torch.as_tensor(v2))
                 for v, v2 in zip(value, value_new)
@@ -701,21 +702,25 @@ def test_KFAC_inverse_save_and_load_state_dict():
 
     # save state dict
     state_dict = inv_kfac.state_dict()
+    torch.save(state_dict, "inv_kfac_state_dict.pt")
 
     # create new inverse KFAC with different linop input and try to load state dict
     wrong_kfac = KFACLinearOperator(model, CrossEntropyLoss(), params, [(X, y)])
     inv_kfac_wrong = KFACInverseLinearOperator(wrong_kfac)
     with raises(ValueError, match="mismatch"):
-        inv_kfac_wrong.load_state_dict(state_dict)
+        inv_kfac_wrong.load_state_dict(torch.load(state_dict))
 
     # create new inverse KFAC and load state dict
     inv_kfac_new = KFACInverseLinearOperator(kfac)
-    inv_kfac_new.load_state_dict(state_dict)
+    inv_kfac_new.load_state_dict(torch.load(state_dict))
 
     # check that the two inverse KFACs are equal
+    compare_state_dicts(inv_kfac.state_dict(), inv_kfac_new.state_dict())
     test_vec = torch.rand(inv_kfac.shape[1])
     report_nonclose(inv_kfac @ test_vec, inv_kfac_new @ test_vec)
-    compare_state_dicts(inv_kfac.state_dict(), inv_kfac_new.state_dict())
+
+    # clean up
+    os.remove("inv_kfac_state_dict.pt")
 
 
 def test_KFAC_inverse_from_state_dict():
@@ -746,6 +751,6 @@ def test_KFAC_inverse_from_state_dict():
     inv_kfac_new = KFACInverseLinearOperator.from_state_dict(state_dict, kfac)
 
     # check that the two inverse KFACs are equal
+    compare_state_dicts(inv_kfac.state_dict(), inv_kfac_new.state_dict())
     test_vec = torch.rand(kfac.shape[1])
     report_nonclose(inv_kfac @ test_vec, inv_kfac_new @ test_vec)
-    compare_state_dicts(inv_kfac.state_dict(), inv_kfac_new.state_dict())
