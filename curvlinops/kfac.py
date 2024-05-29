@@ -120,7 +120,7 @@ class KFACLinearOperator(_LinearOperator):
     _SUPPORTED_FISHER_TYPE: FisherType = FisherType
     _SUPPORTED_KFAC_APPROX: KFACType = KFACType
 
-    def __init__(  # noqa: C901
+    def __init__(
         self,
         model_func: Module,
         loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
