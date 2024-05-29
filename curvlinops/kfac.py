@@ -229,7 +229,7 @@ class KFACLinearOperator(_LinearOperator):
         if fisher_type != FisherType.MC and mc_samples != 1:
             raise ValueError(
                 f"Invalid mc_samples: {mc_samples}. "
-                "Only mc_samples=1 is supported for fisher_type != 'mc'."
+                "Only mc_samples=1 is supported for `fisher_type != FisherType.MC`."
             )
         if kfac_approx not in self._SUPPORTED_KFAC_APPROX:
             raise ValueError(
