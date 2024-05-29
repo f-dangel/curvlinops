@@ -22,7 +22,7 @@ from collections.abc import MutableMapping
 from enum import Enum
 from functools import partial
 from math import sqrt
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, TypeVar, Union
 
 from einops import einsum, rearrange, reduce
 from numpy import ndarray
@@ -45,6 +45,11 @@ from curvlinops.kfac_utils import (
     extract_patches,
     loss_hessian_matrix_sqrt,
 )
+
+# Type for a matrix/vector that can be represented as a list of tensors with the same
+# shape as the parameters, or a single matrix/vector of shape `[D, D]`/`[D]` where `D`
+# is the number of parameters.
+ParameterMatrixType = TypeVar("ParameterMatrixType", Tensor, List[Tensor])
 
 
 class FisherType(str, Enum):
@@ -342,7 +347,7 @@ class KFACLinearOperator(_LinearOperator):
         return [res.T.reshape(shape) for res, shape in zip(result, shapes)]
 
     def _check_input_type_and_preprocess(
-        self, M_torch: Union[Tensor, List[Tensor]]
+        self, M_torch: ParameterMatrixType
     ) -> Tuple[bool, List[Tensor]]:
         """Check input type and maybe preprocess to list format.
 
@@ -392,9 +397,7 @@ class KFACLinearOperator(_LinearOperator):
             M_torch = self._torch_preprocess(M_torch)
         return return_tensor, M_torch
 
-    def torch_matmat(
-        self, M_torch: Union[Tensor, List[Tensor]]
-    ) -> Union[Tensor, List[Tensor]]:
+    def torch_matmat(self, M_torch: ParameterMatrixType) -> ParameterMatrixType:
         """Apply KFAC to a matrix (multiple vectors) in PyTorch.
 
         This allows for matrix-matrix products with the KFAC approximation in PyTorch
@@ -459,9 +462,7 @@ class KFACLinearOperator(_LinearOperator):
 
         return M_torch
 
-    def torch_matvec(
-        self, v_torch: Union[Tensor, List[Tensor]]
-    ) -> Union[Tensor, List[Tensor]]:
+    def torch_matvec(self, v_torch: ParameterMatrixType) -> ParameterMatrixType:
         """Apply KFAC to a vector in PyTorch.
 
         This allows for matrix-vector products with the KFAC approximation in PyTorch
