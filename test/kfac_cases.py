@@ -22,6 +22,8 @@ from torch.nn import (
     Sequential,
 )
 
+from curvlinops.kfac import KFACType
+
 # Add test cases here, devices and loss function with different reductions will be
 # added automatically below
 KFAC_EXACT_CASES_NO_DEVICE_NO_LOSS_FUNC = [
@@ -79,11 +81,11 @@ KFAC_WEIGHT_SHARING_EXACT_CASES_NO_DEVICE_NO_LOSS_FUNC = [
     {
         "model_func": lambda: WeightShareModel(Linear(5, 4), Linear(4, 3)),
         "data": lambda: {
-            "expand": [
+            KFACType.EXPAND: [
                 (rand(2, 4, 8, 5), regression_targets((2, 4, 8, 3))),
                 (rand(7, 4, 8, 5), regression_targets((7, 4, 8, 3))),
             ],
-            "reduce": [
+            KFACType.REDUCE: [
                 (rand(1, 4, 8, 5), regression_targets((1, 3))),
                 (rand(7, 4, 8, 5), regression_targets((7, 3))),
             ],
@@ -94,11 +96,11 @@ KFAC_WEIGHT_SHARING_EXACT_CASES_NO_DEVICE_NO_LOSS_FUNC = [
     {
         "model_func": lambda: Conv2dModel(),
         "data": lambda: {
-            "expand": [
+            KFACType.EXPAND: [
                 (rand(2, 3, 32, 32), regression_targets((2, 33, 33, 2))),
                 (rand(7, 3, 32, 32), regression_targets((7, 33, 33, 2))),
             ],
-            "reduce": [
+            KFACType.REDUCE: [
                 (rand(1, 3, 32, 32), regression_targets((1, 2))),
                 (rand(8, 3, 32, 32), regression_targets((8, 2))),
             ],
@@ -210,11 +212,11 @@ SINGLE_LAYER_WEIGHT_SHARING_CASES_NO_DEVICE_NO_LOSS_FUNC = [
     {
         "model_func": lambda: WeightShareModel(Linear(5, 3)),
         "data": lambda: {
-            "expand": [
+            KFACType.EXPAND: [
                 (rand(7, 4, 8, 5), regression_targets((7, 4, 8, 3))),
                 (rand(7, 4, 8, 5), regression_targets((7, 4, 8, 3))),
             ],
-            "reduce": [
+            KFACType.REDUCE: [
                 (rand(8, 4, 8, 5), regression_targets((8, 3))),
                 (rand(8, 4, 8, 5), regression_targets((8, 3))),
             ],
@@ -225,11 +227,11 @@ SINGLE_LAYER_WEIGHT_SHARING_CASES_NO_DEVICE_NO_LOSS_FUNC = [
     {
         "model_func": lambda: Conv2dModel(),
         "data": lambda: {
-            "expand": [
+            KFACType.EXPAND: [
                 (rand(7, 3, 32, 32), regression_targets((7, 33, 33, 2))),
                 (rand(7, 3, 32, 32), regression_targets((7, 33, 33, 2))),
             ],
-            "reduce": [
+            KFACType.REDUCE: [
                 (rand(8, 3, 32, 32), regression_targets((8, 2))),
                 (rand(8, 3, 32, 32), regression_targets((8, 2))),
             ],

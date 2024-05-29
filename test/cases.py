@@ -24,6 +24,8 @@ from torch.nn import (
 )
 from torch.utils.data import DataLoader, TensorDataset
 
+from curvlinops.kfac import KFACType
+
 DEVICES = get_available_devices()
 DEVICES_IDS = [f"dev={d}" for d in DEVICES]
 
@@ -163,7 +165,9 @@ CASES_NO_DEVICE = INV_CASES_NO_DEVICE + [
     # softmax cross-entropy loss with additional input/output dimension
     {
         "model_func": lambda: WeightShareModel(
-            Sequential(Linear(10, 5), ReLU(), Linear(5, 3)), setting="expand", loss="CE"
+            Sequential(Linear(10, 5), ReLU(), Linear(5, 3)),
+            setting=KFACType.EXPAND,
+            loss="CE",
         ),
         "loss_func": lambda: CrossEntropyLoss(reduction="mean"),
         "data": lambda: [
@@ -175,7 +179,9 @@ CASES_NO_DEVICE = INV_CASES_NO_DEVICE + [
     # same as above, but uses reduction='sum'
     {
         "model_func": lambda: WeightShareModel(
-            Sequential(Linear(10, 5), ReLU(), Linear(5, 3)), setting="expand", loss="CE"
+            Sequential(Linear(10, 5), ReLU(), Linear(5, 3)),
+            setting=KFACType.EXPAND,
+            loss="CE",
         ),
         "loss_func": lambda: CrossEntropyLoss(reduction="sum"),
         "data": lambda: [

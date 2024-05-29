@@ -242,14 +242,12 @@ def test_KFAC_inverse_damped_matmat(
         names = {p.data_ptr(): name for name, p in model_func.named_parameters()}
         params = [p for p in params if exclude not in names[p.data_ptr()]]
 
-    loss_average = "batch" if loss_func.reduction == "mean" else None
     KFAC = KFACLinearOperator(
         model_func,
         loss_func,
         params,
         data,
         batch_size_fn=batch_size_fn,
-        loss_average=loss_average,
         separate_weight_and_bias=separate_weight_and_bias,
         fisher_type=fisher_type,
         check_deterministic=False,
@@ -342,14 +340,12 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901
         names = {p.data_ptr(): name for name, p in model_func.named_parameters()}
         params = [p for p in params if exclude not in names[p.data_ptr()]]
 
-    loss_average = "batch" if loss_func.reduction == "mean" else None
     KFAC = KFACLinearOperator(
         model_func,
         loss_func,
         params,
         data,
         batch_size_fn=batch_size_fn,
-        loss_average=loss_average,
         separate_weight_and_bias=separate_weight_and_bias,
         check_deterministic=False,
     )
@@ -475,14 +471,12 @@ def test_KFAC_inverse_exactly_damped_matmat(
         names = {p.data_ptr(): name for name, p in model_func.named_parameters()}
         params = [p for p in params if exclude not in names[p.data_ptr()]]
 
-    loss_average = "batch" if loss_func.reduction == "mean" else None
     KFAC = KFACLinearOperator(
         model_func,
         loss_func,
         params,
         data,
         batch_size_fn=batch_size_fn,
-        loss_average=loss_average,
         separate_weight_and_bias=separate_weight_and_bias,
         check_deterministic=False,
     )
@@ -551,14 +545,12 @@ def test_KFAC_inverse_damped_torch_matmat(
         for x, y in data
     ]
 
-    loss_average = "batch" if loss_func.reduction == "mean" else None
     KFAC = KFACLinearOperator(
         model_func,
         loss_func,
         params,
         data,
         batch_size_fn=batch_size_fn,
-        loss_average=loss_average,
         check_deterministic=False,
     )
     KFAC.dtype = float64
@@ -616,14 +608,12 @@ def test_KFAC_inverse_damped_torch_matvec(
         for x, y in data
     ]
 
-    loss_average = "batch" if loss_func.reduction == "mean" else None
     KFAC = KFACLinearOperator(
         model_func,
         loss_func,
         params,
         data,
         batch_size_fn=batch_size_fn,
-        loss_average=loss_average,
         check_deterministic=False,
     )
     KFAC.dtype = float64
@@ -672,7 +662,6 @@ def test_KFAC_inverse_save_and_load_state_dict():
         MSELoss(reduction="sum"),
         params,
         [(X, y)],
-        loss_average=None,
     )
 
     # create inverse KFAC
@@ -718,7 +707,6 @@ def test_KFAC_inverse_from_state_dict():
         MSELoss(reduction="sum"),
         params,
         [(X, y)],
-        loss_average=None,
     )
 
     # create inverse KFAC and save state dict
