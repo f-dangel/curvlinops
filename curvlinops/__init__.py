@@ -12,7 +12,7 @@ from curvlinops.inverse import (
     NeumannInverseLinearOperator,
 )
 from curvlinops.jacobian import JacobianLinearOperator, TransposedJacobianLinearOperator
-from curvlinops.kfac import KFACLinearOperator
+from curvlinops.kfac import FisherType, KFACLinearOperator, KFACType
 from curvlinops.norm.hutchinson import HutchinsonSquaredFrobeniusNormEstimator
 from curvlinops.papyan2020traces.spectrum import (
     LanczosApproximateLogSpectrumCached,
@@ -33,6 +33,9 @@ __all__ = [
     "KFACLinearOperator",
     "JacobianLinearOperator",
     "TransposedJacobianLinearOperator",
+    # Enums
+    "FisherType",
+    "KFACType",
     # inversion
     "CGInverseLinearOperator",
     "LSMRInverseLinearOperator",
