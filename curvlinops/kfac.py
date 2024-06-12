@@ -19,7 +19,7 @@ and generalized to all linear layers with weight sharing in
 from __future__ import annotations
 
 from collections.abc import MutableMapping
-from enum import Enum
+from enum import Enum, EnumMeta
 from functools import partial
 from math import sqrt
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, TypeVar, Union
@@ -52,7 +52,18 @@ from curvlinops.kfac_utils import (
 ParameterMatrixType = TypeVar("ParameterMatrixType", Tensor, List[Tensor])
 
 
-class FisherType(str, Enum):
+class MetaEnum(EnumMeta):
+    """Metaclass for the Enum class for desired behavior of the `in` operator."""
+
+    def __contains__(cls, item):
+        try:
+            cls(item)
+        except ValueError:
+            return False
+        return True
+
+
+class FisherType(str, Enum, metaclass=MetaEnum):
     """Enum for the Fisher type."""
 
     TYPE2 = "type-2"
@@ -61,7 +72,7 @@ class FisherType(str, Enum):
     FORWARD_ONLY = "forward-only"
 
 
-class KFACType(str, Enum):
+class KFACType(str, Enum, metaclass=MetaEnum):
     """Enum for the KFAC approximation type."""
 
     EXPAND = "expand"
