@@ -35,7 +35,8 @@ def initialize_case(
     params = [p for p in model_func.parameters() if p.requires_grad]
     data = case["data"]()
 
-    # In some KFAC cases, ``data = {"expand": [(X, y), ...], "reduce": [(X, y), ...]}``
+    # In some KFAC cases,
+    # ``data = {KFACType.EXPAND: [(X, y), ...], KFACType.REDUCE: [(X, y), ...]}``
     # unlike the standard ``data = [(X: Tensor | MutableMapping, y), ...]``.
     # We ignore the former since the latter is included in KFAC cases, and thus the
     # feature of ``MutableMapping`` inputs is sufficiently covered already.
