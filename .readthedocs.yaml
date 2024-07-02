@@ -11,8 +11,8 @@ build:
   tools:
     python: "3.8"
   jobs:
-    post_build:
-    - pip install --upgrade packaging wheel
+    post_install:
+    - pip install --upgrade pip packaging wheel
 
 python:
   install:
