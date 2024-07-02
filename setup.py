@@ -4,14 +4,15 @@ Use ``setup.cfg`` for configuration.
 """
 
 import sys
+from importlib.metadata import version
 
-from pkg_resources import VersionConflict, require
+from packaging.version import Version
 from setuptools import setup
 
-try:
-    require("setuptools>=38.3")
-except VersionConflict:
-    print("Error: version of setuptools is too old (<38.3)!")
+setuptools_version = Version(version("setuptools"))
+
+if setuptools_version < Version("38.3"):
+    print(f"Error: version of setuptools is too old (<38.3). Got {setuptools_version}.")
     sys.exit(1)
 
 
