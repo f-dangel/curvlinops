@@ -14,6 +14,10 @@ build:
 python:
   install:
   - method: pip
+    path: wheels
+  - method: pip
+    path: packaging
+  - method: pip
     path: .
     extra_requirements:
       - docs
