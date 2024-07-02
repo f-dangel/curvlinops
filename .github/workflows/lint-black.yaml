@@ -21,6 +21,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
+        python -m pip install --upgrade wheel
         python -m pip install --upgrade packaging
         python -m pip show packaging
         make install-lint
