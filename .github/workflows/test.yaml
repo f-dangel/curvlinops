@@ -25,8 +25,7 @@ jobs:
         python-version: "${{ matrix.python-version }}"
     - name: Install Dependencies
       run: |
-        python -m pip install --upgrade pip
-        python -m pip install packaging
+        python -m pip install --upgrade pip wheel
         make install-test
     - name: Run test
       if: contains('refs/heads/master refs/heads/development', github.ref)
