@@ -11,7 +11,7 @@ build:
   tools:
     python: "3.8"
   commands:
-    - pip install --upgrade pip wheels packaging
+    - pip install --upgrade pip wheel packaging
 
 python:
   install:
