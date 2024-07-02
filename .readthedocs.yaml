@@ -10,11 +10,13 @@ build:
   os: ubuntu-22.04
   tools:
     python: "3.8"
-  commands:
-    - pip install --upgrade pip wheel packaging
 
 python:
   install:
+  - method: pip
+    path: packaging
+  - method: pip
+    path: wheel
   - method: pip
     path: .
     extra_requirements:
