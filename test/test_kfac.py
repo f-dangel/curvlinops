@@ -683,6 +683,23 @@ def test_torch_matvec(case):
     report_nonclose(kfac_x, kfac_x_numpy)
 
 
+def test_torch_matvec_list_output_shapes(cnn_case):
+    """Test output shapes with list input format (issue #124)."""
+    model, loss_func, params, data, batch_size_fn = cnn_case
+    kfac = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+    )
+    vec = [rand_like(p) for p in kfac._params]
+    out_list = kfac.torch_matvec(vec)
+    assert len(out_list) == len(kfac._params)
+    for out_i, p_i in zip(out_list, kfac._params):
+        assert out_i.shape == p_i.shape
+
+
 @mark.parametrize(
     "check_deterministic",
     [True, False],
