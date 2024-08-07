@@ -695,7 +695,8 @@ def test_torch_matvec_list_output_shapes(cnn_case):
     )
     vec = [rand_like(p) for p in kfac._params]
     out_list = kfac.torch_matvec(vec)
-    for out_i, p_i in zip(out_list, kfac._params, strict=True):
+    assert len(out_list) == len(kfac._params)
+    for out_i, p_i in zip(out_list, kfac._params):
         assert out_i.shape == p_i.shape
 
 
