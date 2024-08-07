@@ -627,6 +627,8 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
         for mod_name, param_pos in self._A._mapping.items():
             # retrieve the inverses of the Kronecker factors from cache or invert them
             aaT_inv, ggT_inv = self._compute_or_get_cached_inverse(mod_name)
+            # cache the weight shape to ensure correct shapes are returned
+            weight_shape = M_torch[param_pos["weight"]].shape
 
             # bias and weights are treated jointly
             if (
@@ -644,6 +646,11 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
                 M_torch = self._separate_left_and_right_multiply(
                     M_torch, param_pos, aaT_inv, ggT_inv
                 )
+
+            # restore original shapes
+            M_torch[param_pos["weight"]] = M_torch[param_pos["weight"]].view(
+                weight_shape
+            )
 
         if return_tensor:
             M_torch = cat([rearrange(M, "k ... -> (...) k") for M in M_torch])
