@@ -5,9 +5,9 @@ from collections.abc import MutableMapping
 from test.cases import (
     ADJOINT_CASES,
     CASES,
+    CNN_CASES,
     INV_CASES,
     NON_DETERMINISTIC_CASES,
-    CNN_CASES,
 )
 from test.kfac_cases import (
     KFAC_EXACT_CASES,
