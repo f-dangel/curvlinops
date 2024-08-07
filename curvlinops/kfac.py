@@ -27,6 +27,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, TypeVar
 from einops import einsum, rearrange, reduce
 from numpy import ndarray
 from torch import Generator, Tensor, cat, device, eye, randn, stack
+from torch.linalg import eigh
 from torch.autograd import grad
 from torch.nn import (
     BCEWithLogitsLoss,
@@ -144,6 +145,7 @@ class KFACLinearOperator(_LinearOperator):
         fisher_type: str = FisherType.MC,
         mc_samples: int = 1,
         kfac_approx: str = KFACType.EXPAND,
+        correct_eigenvalues: bool = False,
         num_per_example_loss_terms: Optional[int] = None,
         separate_weight_and_bias: bool = True,
         num_data: Optional[int] = None,
@@ -204,6 +206,11 @@ class KFACLinearOperator(_LinearOperator):
                 See `Eschenhagen et al., 2023 <https://arxiv.org/abs/2311.00636>`_
                 for an explanation of the two approximations.
                 Defaults to ``KFACType.EXPAND``.
+            correct_eigenvalues: Whether to correct the eigenvalues in the KFAC
+                eigenbasis, as proposed in
+                `George et al., 2018 <https://arxiv.org/abs/1806.03884>`_. If true,
+                will only store the eigendecomposition of the KFAC approximation.
+                Defaults to ``False``.
             num_per_example_loss_terms: Number of per-example loss terms, e.g., the
                 number of tokens in a sequence. The model outputs will have
                 ``num_data * num_per_example_loss_terms * C`` entries, where ``C`` is
@@ -254,9 +261,19 @@ class KFACLinearOperator(_LinearOperator):
         self._fisher_type = fisher_type
         self._mc_samples = mc_samples
         self._kfac_approx = kfac_approx
+        self._correct_eigenvalues = correct_eigenvalues
         self._input_covariances: Dict[str, Tensor] = {}
         self._gradient_covariances: Dict[str, Tensor] = {}
         self._mapping = self.compute_parameter_mapping(params, model_func)
+
+        # Initialize the eigenvectors and eigenvalues of the Kronecker factors
+        self._input_covariances_eigenvectors: Dict[str, Tensor] = {}
+        self._input_covariances_eigenvalues: Dict[str, Tensor] = {}
+        self._gradient_covariances_eigenvectors: Dict[str, Tensor] = {}
+        self._gradient_covariances_eigenvalues: Dict[str, Tensor] = {}
+
+        # Initialize the corrected eigenvalues for EKFAC
+        self._corrected_eigenvalues: Dict[str, Tensor] = {}
 
         # Properties of the full matrix KFAC approximation are initialized to `None`
         self._reset_matrix_properties()
@@ -892,6 +909,35 @@ class KFACLinearOperator(_LinearOperator):
             raise NotImplementedError("Found parameters in un-supported layers.")
 
         return positions
+
+    def compute_eigendecomposition(self, keep_kronecker_factors: bool = False) -> None:
+        """Compute the eigendecomposition of the KFAC approximation.
+
+        Args:
+            keep_kronecker_factors: Whether to keep the Kronecker factors. If ``False``,
+                will free the memory used by the Kronecker factors.
+                Defaults to ``False``.
+        """
+        if not self._input_covariances and not self._gradient_covariances:
+            self._compute_kfac()
+
+        for mod_name in self._mapping.keys():
+            aaT = self._input_covariances[mod_name]
+            ggT = self._gradient_covariances[mod_name]
+            if not keep_kronecker_factors:
+                del self._input_covariances[mod_name]
+                del self._gradient_covariances[mod_name]
+
+            # Compute eigendecomposition of the Kronecker factors
+            aaT_eigvals, aaT_eigvecs = eigh(aaT)
+            self._input_covariances_eigenvectors[mod_name] = aaT_eigvecs
+            self._input_covariances_eigenvalues[mod_name] = aaT_eigvals
+            del aaT
+
+            ggT_eigvals, ggT_eigvecs = eigh(ggT)
+            self._gradient_covariances_eigenvectors[mod_name] = ggT_eigvecs
+            self._gradient_covariances_eigenvalues[mod_name] = ggT_eigvals
+            del ggT
 
     @property
     def trace(self) -> Tensor:
