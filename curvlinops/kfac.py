@@ -433,6 +433,10 @@ class KFACLinearOperator(_LinearOperator):
             self._compute_kfac()
 
         for mod_name, param_pos in self._mapping.items():
+            # cache the weight shape to ensure correct shapes are returned
+            if "weight" in param_pos:
+                weight_shape = M_torch[param_pos["weight"]].shape
+
             # bias and weights are treated jointly
             if (
                 not self._separate_weight_and_bias
@@ -467,6 +471,12 @@ class KFACLinearOperator(_LinearOperator):
                         M_torch[pos],
                         "j k,v k ... -> v j ...",
                     )
+
+            # restore original shapes
+            if "weight" in param_pos:
+                M_torch[param_pos["weight"]] = M_torch[param_pos["weight"]].view(
+                    weight_shape
+                )
 
         if return_tensor:
             M_torch = cat([rearrange(M, "k ... -> (...) k") for M in M_torch])

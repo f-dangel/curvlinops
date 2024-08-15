@@ -14,9 +14,12 @@ from torch import rand, rand_like
 from torch.nn import (
     BatchNorm1d,
     BCEWithLogitsLoss,
+    Conv2d,
     CrossEntropyLoss,
     Dropout,
+    Flatten,
     Linear,
+    MaxPool2d,
     Module,
     MSELoss,
     ReLU,
@@ -239,6 +242,34 @@ for case in CASES_NO_DEVICE:
     for device in DEVICES:
         case_with_device = {**case, "device": device}
         CASES.append(case_with_device)
+
+
+# CNN model for classification task
+CNN_CASES_NO_DEVICE = [
+    {
+        "model_func": lambda: Sequential(
+            Conv2d(1, 6, 5),
+            ReLU(),
+            MaxPool2d(2),
+            Conv2d(6, 16, 5),
+            ReLU(),
+            MaxPool2d(2),
+            Flatten(),
+            Linear(16 * 4 * 4, 10),
+        ),
+        "loss_func": lambda: CrossEntropyLoss(),
+        "data": lambda: [
+            (rand(5, 1, 28, 28), classification_targets((5,), 10)),
+            (rand(5, 1, 28, 28), classification_targets((5,), 10)),
+        ],
+        "seed": 0,
+    },
+]
+CNN_CASES = []
+for cnn_case in CNN_CASES_NO_DEVICE:
+    for device in DEVICES:
+        case_with_device = {**cnn_case, "device": device}
+        CNN_CASES.append(case_with_device)
 
 
 NON_DETERMINISTIC_CASES_NO_DEVICE = []
