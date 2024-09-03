@@ -2,7 +2,13 @@
 
 import test.utils
 from collections.abc import MutableMapping
-from test.cases import ADJOINT_CASES, CASES, INV_CASES, NON_DETERMINISTIC_CASES
+from test.cases import (
+    ADJOINT_CASES,
+    CASES,
+    CNN_CASES,
+    INV_CASES,
+    NON_DETERMINISTIC_CASES,
+)
 from test.kfac_cases import (
     KFAC_EXACT_CASES,
     KFAC_EXACT_ONE_DATUM_CASES,
@@ -74,6 +80,20 @@ def inv_case(
 ]:
     case = request.param
     yield initialize_case(case)
+
+
+@fixture(params=CNN_CASES)
+def cnn_case(
+    request,
+) -> Tuple[
+    Callable[[Tensor], Tensor],
+    Callable[[Tensor, Tensor], Tensor],
+    List[Tensor],
+    Iterable[Tuple[Tensor, Tensor]],
+    Optional[Callable[[MutableMapping], int]],
+]:
+    cnn_case = request.param
+    yield initialize_case(cnn_case)
 
 
 @fixture(params=NON_DETERMINISTIC_CASES)

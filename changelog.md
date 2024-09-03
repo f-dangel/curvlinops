@@ -6,6 +6,136 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2024-08-15
+
+This major release is almost fully backward compatible with the `1.x.y` release
+except for one API change in `KFACLinearOperator`. Most notably, it adds
+**support for HuggingFace LLMs**, ships a linear operator for the inverse of
+KFAC, and offers many performance improvements.
+
+### Breaking changes to `1.x.y`
+
+- Remove `loss_average` argument from `KFACLinearOperator`
+  [PR](https://github.com/f-dangel/curvlinops/pull/117)
+
+### Added/New
+
+- Support HuggingFace LLMs and provide an
+  [example](https://curvlinops.readthedocs.io/en/latest/basic_usage/example_huggingface.html)
+  ([PR](https://github.com/f-dangel/curvlinops/pull/100))
+
+- Add Linear operator for the inverse of KFAC (`KFACInverseLinearOperator`)
+  ([PR](https://github.com/f-dangel/curvlinops/pull/69))
+
+  - Support exact and heuristic damping of the Kronecker factors when inverting
+    ([PR](https://github.com/f-dangel/curvlinops/pull/93))
+
+  - Add option to fall back to double precision if inversion fails in single precision
+    ([PR](https://github.com/f-dangel/curvlinops/pull/102))
+
+  - Add functionality to checkpoint a linear operator
+    ([PR](https://github.com/f-dangel/curvlinops/pull/114))
+
+- Add Estimation method for the squared Frobenius norm of a linear operator
+  ([PR](https://github.com/f-dangel/curvlinops/pull/80))
+
+  - Improve efficiency
+    ([PR](https://github.com/f-dangel/curvlinops/pull/120))
+
+- Add support for `BCEWithLogitsLoss` in `FisherMCLinearOperator` and
+  `KFACLinearOperator`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/99))
+
+- Improvements to `KFACLinearOperator`
+
+  - Add functionality to compute exact trace, determinant, log determinant, and
+    frobenius norm of `KFACLinearOperator`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/95))
+
+  - Add option to compute input-based curvature, known as
+    [FOOF](https://arxiv.org/abs/2201.12250)/[ISAAC](https://arxiv.org/abs/2305.00604)
+    ([PR](https://github.com/f-dangel/curvlinops/pull/98))
+
+  - Compute KFAC matrices without overwriting values in `.grad`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/104))
+
+  - Add functionality to checkpoint a linear operator
+    ([PR](https://github.com/f-dangel/curvlinops/pull/114))
+
+- Add inverse linear operator `LSMRInverseLinearOperator` to multiply by solving
+  a least-squares system with [LSMR](https://arxiv.org/abs/1006.0758)
+  ([PR](https://github.com/f-dangel/curvlinops/pull/106))
+
+- Improve linear operator interface
+  - Add `num_data` argument to manually specify number of data points in a data
+    loader and avoid one pass through the data
+    ([PR](https://github.com/f-dangel/curvlinops/pull/70))
+  - Support block-diagonal approximations in `HessianLinearOperator` via a new
+    `block_sizes` argument
+    ([PR](https://github.com/f-dangel/curvlinops/pull/74))
+
+- Add option to multiply with KFAC and its inverse purely in PyTorch
+  ([PR](https://github.com/f-dangel/curvlinops/pull/91))
+
+- Improve performance when multiplying linear operators onto a matrix
+  ([PR](https://github.com/f-dangel/curvlinops/pull/73))
+
+- Improve performance of `EFLinearOperator`
+  ([PR1](https://github.com/f-dangel/curvlinops/pull/84)
+  [PR2](https://github.com/f-dangel/curvlinops/pull/88))
+  and `FisherMCLinearOperator`
+  ([PR1](https://github.com/f-dangel/curvlinops/pull/85)
+  [PR2](https://github.com/f-dangel/curvlinops/pull/89))
+
+- Implement adjoint of `SubmatrixLinearOperator`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/115))
+
+### Fixed/Removed
+
+- Device error of random number generator for `MCFisherLinearOperator` and
+  `KFACLinearOperator` when running on GPU
+  ([PR](https://github.com/f-dangel/curvlinops/pull/76))
+
+- Broken parameter mapping for KFAC when loading a linear operator to a
+  different device
+  ([PR](https://github.com/f-dangel/curvlinops/pull/78))
+
+- Device errors in tests
+  ([PR](https://github.com/f-dangel/curvlinops/pull/103))
+
+- Scaling issue for Fisher matrices and KFAC for model outputs with more
+  than two dimensions and mean reduction
+  ([issue](https://github.com/f-dangel/curvlinops/issues/108),
+  [PR1](https://github.com/f-dangel/curvlinops/pull/109),
+  [PR2](https://github.com/f-dangel/curvlinops/pull/110),
+  [PR3](https://github.com/f-dangel/curvlinops/pull/112))
+
+- Fix from introducing `Enum`s
+  ([PR](https://github.com/f-dangel/curvlinops/pull/119))
+
+- Fix output shapes of KFAC's `matvec` for convolution weights
+  ([PR](https://github.com/f-dangel/curvlinops/pull/125))
+
+### Internal
+
+- Use latest `black` (`black==24.1.1`)
+  ([PR](https://github.com/f-dangel/curvlinops/pull/72))
+
+- Use module names instead of tensor addresses to identify parameters in KFAC
+  ([PR](https://github.com/f-dangel/curvlinops/pull/79))
+
+- Include links to source code in the documentation
+  ([PR](https://github.com/f-dangel/curvlinops/pull/81))
+
+- Run Github actions for pull requests to any branch
+  ([PR](https://github.com/f-dangel/curvlinops/pull/97))
+
+- Deprecate `pkg_resources`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/121))
+
+- Migrate from `setup.py` to `pyproject.toml`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/123))
+
 ## [1.2.0] - 2024-01-12
 
 This release ships with many new features and requires PyTorch 2:
@@ -155,7 +285,8 @@ Adds various new features:
 
 Initial release
 
-[Unreleased]: https://github.com/f-dangel/curvlinops/compare/1.2.0...HEAD
+[Unreleased]: https://github.com/f-dangel/curvlinops/compare/2.0.0...HEAD
+[2.0.0]: https://github.com/f-dangel/curvlinops/releases/tag/2.0.0
 [1.2.0]: https://github.com/f-dangel/curvlinops/releases/tag/1.2.0
 [1.1.0]: https://github.com/f-dangel/curvlinops/releases/tag/1.1.0
 [1.0.0]: https://github.com/f-dangel/curvlinops/releases/tag/1.0.0
