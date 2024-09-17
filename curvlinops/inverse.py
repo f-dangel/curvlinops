@@ -1,16 +1,16 @@
 """Implements linear operator inverses."""
 
 from math import sqrt
-from typing import Any, Callable, Dict, Optional, Tuple, TypeVar, Union
+from typing import Any, Callable, Dict, Optional, Tuple, Union
 from warnings import warn
 
-from einops import einsum, rearrange
+from einops import rearrange
 from numpy import allclose, column_stack, ndarray
 from scipy.sparse.linalg import LinearOperator, cg, lsmr
 from torch import Tensor, cat, cholesky_inverse, eye, float64, outer
 from torch.linalg import cholesky, eigh
 
-from curvlinops.kfac import KFACLinearOperator, KFACType, ParameterMatrixType
+from curvlinops.kfac import FactorType, KFACLinearOperator, ParameterMatrixType
 
 
 class _InverseLinearOperator(LinearOperator):
@@ -360,8 +360,8 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
         self._use_exact_damping = use_exact_damping
         self._cache = cache
         self._retry_double_precision = retry_double_precision
-        self._inverse_input_covariances: Dict[str, KFACType] = {}
-        self._inverse_gradient_covariances: Dict[str, KFACType] = {}
+        self._inverse_input_covariances: Dict[str, FactorType] = {}
+        self._inverse_gradient_covariances: Dict[str, FactorType] = {}
 
     def _compute_damping(
         self, aaT: Optional[Tensor], ggT: Optional[Tensor]
@@ -405,9 +405,44 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
             M.add(eye(M.shape[0], dtype=M.dtype, device=M.device), alpha=damping)
         )
 
+    def _compute_inv_damped_eigenvalues(
+        self, aaT_eigvals: Tensor, ggT_eigvals: Tensor, name: str
+    ) -> Union[Tensor, Dict[str, Tensor]]:
+        """Compute the inverses of the damped eigenvalues for a given layer.
+
+        Args:
+            aaT_eigvals: Eigenvalues of the input covariance matrix.
+            ggT_eigvals: Eigenvalues of the gradient covariance matrix.
+            name: Name of the layer for which to damp and invert eigenvalues.
+
+        Returns:
+            Inverses of the damped eigenvalues.
+        """
+        param_pos = self._A._mapping[name]
+        if (
+            not self._A._separate_weight_and_bias
+            and "weight" in param_pos
+            and "bias" in param_pos
+        ):
+            inv_damped_eigenvalues = (
+                outer(ggT_eigvals, aaT_eigvals).add_(self._damping).pow_(-1)
+            )
+        else:
+            inv_damped_eigenvalues = {}
+            for p_name, pos in param_pos.items():
+                if p_name == "weight":
+                    inv_damped_eigenvalues[pos] = (
+                        outer(ggT_eigvals, aaT_eigvals).add_(self._damping).pow_(-1)
+                    )
+                else:
+                    inv_damped_eigenvalues[pos] = ggT_eigvals.add(self._damping).pow_(
+                        -1
+                    )
+        return inv_damped_eigenvalues
+
     def _compute_inverse_factors(
         self, aaT: Optional[Tensor], ggT: Optional[Tensor], name: str
-    ) -> Tuple[KFACType, KFACType, Optional[Tensor]]:
+    ) -> Tuple[FactorType, FactorType, Optional[Tensor]]:
         """Compute the inverses of the Kronecker factors for a given layer.
 
         Args:
@@ -430,26 +465,9 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
             # Kronecker-factored eigenbasis (KFE).
             aaT_eigvals, aaT_eigvecs = (None, None) if aaT is None else eigh(aaT)
             ggT_eigvals, ggT_eigvecs = (None, None) if ggT is None else eigh(ggT)
-            param_pos = self._A._mapping[name]
-            if (
-                not self._A._separate_weight_and_bias
-                and "weight" in param_pos
-                and "bias" in param_pos
-            ):
-                inv_damped_eigenvalues = (
-                    outer(ggT_eigvals, aaT_eigvals).add_(self._damping).pow_(-1)
-                )
-            else:
-                inv_damped_eigenvalues = {}
-                for p_name, pos in param_pos.items():
-                    if p_name == "weight":
-                        inv_damped_eigenvalues[pos] = (
-                            outer(ggT_eigvals, aaT_eigvals).add_(self._damping).pow_(-1)
-                        )
-                    else:
-                        inv_damped_eigenvalues[pos] = ggT_eigvals.add(
-                            self._damping
-                        ).pow_(-1)
+            inv_damped_eigenvalues = self._compute_inv_damped_eigenvalues(
+                aaT_eigvals, ggT_eigvals, name
+            )
             return aaT_eigvecs, ggT_eigvecs, inv_damped_eigenvalues
         else:
             damping_aaT, damping_ggT = self._compute_damping(aaT, ggT)
@@ -500,7 +518,7 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
 
     def _compute_or_get_cached_inverse(
         self, name: str
-    ) -> Tuple[KFACType, KFACType, Optional[Tensor]]:
+    ) -> Tuple[FactorType, FactorType, Optional[Tensor]]:
         """Invert the Kronecker factors of the KFACLinearOperator or retrieve them.
 
         Args:

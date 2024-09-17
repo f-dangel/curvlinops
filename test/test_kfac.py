@@ -37,7 +37,6 @@ from torch.nn import (
 
 from curvlinops import EFLinearOperator, GGNLinearOperator
 from curvlinops.examples.utils import report_nonclose
-from curvlinops.gradient_moments import EFLinearOperator
 from curvlinops.kfac import FisherType, KFACLinearOperator, KFACType
 
 

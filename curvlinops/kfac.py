@@ -51,8 +51,8 @@ from curvlinops.kfac_utils import (
 # shape as the parameters, or a single matrix/vector of shape `[D, D]`/`[D]` where `D`
 # is the number of parameters.
 ParameterMatrixType = TypeVar("ParameterMatrixType", Tensor, List[Tensor])
-KFACType = TypeVar(
-    "KFACType", Optional[Tensor], Tuple[Optional[Tensor], Optional[Tensor]]
+FactorType = TypeVar(
+    "FactorType", Optional[Tensor], Tuple[Optional[Tensor], Optional[Tensor]]
 )
 
 
@@ -438,8 +438,8 @@ class KFACLinearOperator(_LinearOperator):
     @staticmethod
     def _left_and_right_multiply(
         M_joint: Tensor,
-        aaT: KFACType,
-        ggT: KFACType,
+        aaT: FactorType,
+        ggT: FactorType,
         eigenvalues: Optional[Tensor],
     ) -> Tensor:
         """Left and right multiply matrix with Kronecker factors.
@@ -477,8 +477,8 @@ class KFACLinearOperator(_LinearOperator):
     def _separate_left_and_right_multiply(
         M_torch: Tensor,
         param_pos: Dict[str, int],
-        aaT: KFACType,
-        ggT: KFACType,
+        aaT: FactorType,
+        ggT: FactorType,
         eigenvalues: Optional[Tensor],
     ) -> Tensor:
         """Multiply matrix with Kronecker factors for separated weight and bias.
@@ -933,7 +933,7 @@ class KFACLinearOperator(_LinearOperator):
     def _compute_eigenvalue_correction(
         self, module_name: str, g: Tensor, correction: int
     ):
-        """Compute the corrected eigenvalues for the EKFAC approximation.
+        r"""Compute the corrected eigenvalues for the EKFAC approximation.
 
         The corrected eigenvalues are computed as
         :math:`\lambda_{\text{corrected}} = (Q_g^T G Q_a)^2`, where
@@ -1083,6 +1083,10 @@ class KFACLinearOperator(_LinearOperator):
 
         Returns:
             The updated dictionary.
+
+        Raises:
+            ValueError: If the types of the value and the dictionary entry are
+                incompatible.
         """
         if key not in dictionary:
             dictionary[key] = value
