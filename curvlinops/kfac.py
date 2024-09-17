@@ -61,7 +61,7 @@ class MetaEnum(EnumMeta):
 
     def __contains__(cls, item: str) -> bool:
         """Check if an item is a valid member of the Enum.
-        
+
         Args:
             item: The item to check.
 
