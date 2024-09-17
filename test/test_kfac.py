@@ -566,7 +566,7 @@ def test_multi_dim_output(
     "correct_eigenvalues", [False, True], ids=["", "eigenvalue_corrected"]
 )
 @mark.parametrize("dev", DEVICES, ids=DEVICES_IDS)
-def test_expand_setting_scaling(
+def test_expand_setting_scaling(  # noqa: C901
     fisher_type: str,
     loss: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
     dev: device,
