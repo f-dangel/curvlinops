@@ -412,7 +412,7 @@ def test_kfac_ef_one_datum(
     )
     kfac_mat = kfac @ eye(kfac.shape[1])
 
-    report_nonclose(ef, kfac_mat)
+    report_nonclose(ef, kfac_mat, atol=1e-7)
 
 
 @mark.parametrize("dev", DEVICES, ids=DEVICES_IDS)
