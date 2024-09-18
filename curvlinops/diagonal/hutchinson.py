@@ -50,7 +50,7 @@ class HutchinsonDiagonalEstimator:
         >>> error_high_precision = norm(diag_A - diag_A_high_precision)
         >>> assert error_low_precision > error_high_precision
         >>> round(error_low_precision, 4), round(error_high_precision, 4)
-        (5.7268, 0.1525)
+        (np.float64(5.7268), np.float64(0.1525))
     """
 
     def __init__(self, A: LinearOperator):
