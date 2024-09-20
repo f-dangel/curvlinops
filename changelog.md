@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Deprecate Python 3.8 as it will reach its end of life in October 2024
   ([PR](https://github.com/f-dangel/curvlinops/pull/128))
 
+### Internal
+
+- Update Github action versions and cache `pip`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/129))
+
 ## [2.0.0] - 2024-08-15
 
 This major release is almost fully backward compatible with the `1.x.y` release
