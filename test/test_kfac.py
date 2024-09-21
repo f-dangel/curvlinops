@@ -512,7 +512,7 @@ def test_multi_dim_output(
     # KFAC for deep linear network with 4d input and output
     params = list(model.parameters())
     context = (
-        raises(ValueError, match="eigenvalues")
+        raises(NotImplementedError, match="eigenvalues")
         if correct_eigenvalues and fisher_type == FisherType.FORWARD_ONLY
         else nullcontext()
     )  # EKFAC for FOOF is currently not supported

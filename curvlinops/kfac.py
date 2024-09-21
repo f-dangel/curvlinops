@@ -243,7 +243,11 @@ class KFACLinearOperator(_LinearOperator):
         Raises:
             RuntimeError: If the check for deterministic behavior fails.
             ValueError: If the loss function is not supported.
+            ValueError: If the Fisher type is not supported.
+            ValueError: If the KFAC approximation type is not supported.
             ValueError: If ``fisher_type != FisherType.MC`` and ``mc_samples != 1``.
+            NotImplementedError: If ``correct_eigenvalues`` and ``fisher_type ==
+                FisherType.FORWARD_ONLY``.
             ValueError: If ``X`` is not a tensor and ``batch_size_fn`` is not specified.
         """
         if not isinstance(loss_func, self._SUPPORTED_LOSSES):
