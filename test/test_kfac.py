@@ -610,7 +610,7 @@ def test_expand_setting_scaling(  # noqa: C901
     loss_func = loss(reduction="sum").to(dev)
 
     context = (
-        raises(ValueError, match="eigenvalues")
+        raises(NotImplementedError, match="eigenvalues")
         if correct_eigenvalues and fisher_type == FisherType.FORWARD_ONLY
         else nullcontext()
     )  # EKFAC for FOOF is currently not supported
@@ -1131,7 +1131,7 @@ def test_forward_only_fisher_type(
 
     # Compute KFAC with `fisher_type=FisherType.FORWARD_ONLY
     context = (
-        raises(ValueError, match="eigenvalues")
+        raises(NotImplementedError, match="eigenvalues")
         if correct_eigenvalues
         else nullcontext()
     )  # EKFAC for FOOF is currently not supported
