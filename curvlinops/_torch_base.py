@@ -128,6 +128,9 @@ class PyTorchLinearOperator:
                 This is useful for post-processing the multiplication's result.
             is_vec: Whether the input is a vector or a matrix.
             num_vecs: The number of vectors represented by the input.
+
+        Raises:
+            ValueError: If the input format is invalid.
         """
         if isinstance(X, Tensor):
             list_format = False
@@ -295,10 +298,10 @@ class PyTorchLinearOperator:
     def _infer_device(self) -> device:
         """Infer the linear operator's device.
 
-        Returns:
+        Returns:  # noqa: D402
             The device of the linear operator.
 
-        Raises: # noqa: D402
+        Raises:
             NotImplementedError: Must be implemented by subclasses.
         """
         raise NotImplementedError
@@ -306,10 +309,10 @@ class PyTorchLinearOperator:
     def _infer_dtype(self) -> dtype:
         """Infer the linear operator's data type.
 
-        Returns:
+        Returns: # noqa: D402
             The data type of the linear operator.
 
-        Raises: # noqa: D402
+        Raises:
             NotImplementedError: Must be implemented by subclasses.
         """
         raise NotImplementedError
