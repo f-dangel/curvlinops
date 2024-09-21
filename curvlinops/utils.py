@@ -3,7 +3,7 @@
 from typing import List
 
 from numpy import cumsum
-from torch import Tensor, logical_not
+from torch import Tensor
 
 
 def split_list(x: List, sizes: List[int]) -> List[List]:
