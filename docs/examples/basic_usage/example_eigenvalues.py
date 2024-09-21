@@ -59,7 +59,7 @@ loss_function = nn.MSELoss(reduction="mean").to(DEVICE)
 # We are ready to setup the linear operator. In this example, we will use the Hessian.
 
 data = [(X1, y1), (X2, y2)]
-H = HessianLinearOperator(model, loss_function, params, data)
+H = HessianLinearOperator(model, loss_function, params, data).to_scipy()
 
 # %%
 #

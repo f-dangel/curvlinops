@@ -507,7 +507,7 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
 
     def _matmat_batch(
         self, X: Union[MutableMapping, Tensor], y: Tensor, M: List[Tensor]
-    ) -> Tuple[Tensor]:
+    ) -> List[Tensor]:
         """Apply the mini-batch matrix to a vector.
 
         Args:
