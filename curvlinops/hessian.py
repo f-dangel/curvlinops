@@ -65,20 +65,20 @@ class HessianLinearOperator(CurvatureLinearOperator):
         grad_params = grad(loss, self._params, create_graph=True)
 
         (num_vecs,) = {m.shape[-1] for m in M}
-        AM = [zeros_like(m) for m in M]
+        HM = [zeros_like(m) for m in M]
 
         # per-block HMP
-        for M_block, p_block, g_block, AM_block in zip(
+        for M_block, p_block, g_block, HM_block in zip(
             split_list(M, self._block_sizes),
             split_list(self._params, self._block_sizes),
             split_list(grad_params, self._block_sizes),
-            split_list(AM, self._block_sizes),
+            split_list(HM, self._block_sizes),
         ):
             for n in range(num_vecs):
                 col_n = hessian_vector_product(
                     loss, p_block, [M[..., n] for M in M_block], grad_params=g_block
                 )
                 for p, col in enumerate(col_n):
-                    AM_block[p][..., n].add_(col)
+                    HM_block[p][..., n].add_(col)
 
-        return AM
+        return HM

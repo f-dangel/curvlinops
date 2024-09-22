@@ -116,7 +116,7 @@ plt.colorbar()
 #
 # Setting up a linear operator for the Fisher/GGN is identical to the Hessian.
 
-GGN = GGNLinearOperator(model, loss_function, params, data)
+GGN = GGNLinearOperator(model, loss_function, params, data).to_scipy()
 
 # %%
 #

@@ -80,7 +80,7 @@ loss_function = nn.MSELoss(reduction="mean").to(DEVICE)
 # First,  we set up a linear operator for the damped GGN/Fisher
 
 data = [(X1, y1), (X2, y2)]
-GGN = GGNLinearOperator(model, loss_function, params, data)
+GGN = GGNLinearOperator(model, loss_function, params, data).to_scipy()
 
 delta = 1e-2
 damping = aslinearoperator(delta * sparse.eye(GGN.shape[0]))

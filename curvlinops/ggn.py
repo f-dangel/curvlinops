@@ -8,11 +8,11 @@ from typing import List, Tuple, Union
 from backpack.hessianfree.ggnvp import ggn_vector_product_from_plist
 from torch import Tensor, zeros_like
 
-from curvlinops._base import _LinearOperator
+from curvlinops._torch_base import CurvatureLinearOperator
 
 
-class GGNLinearOperator(_LinearOperator):
-    r"""GGN as SciPy linear operator.
+class GGNLinearOperator(CurvatureLinearOperator):
+    r"""Linear operator for the generalized Gauss-Newton matrix of an empirical risk.
 
     Consider the empirical risk
 
@@ -39,47 +39,42 @@ class GGNLinearOperator(_LinearOperator):
             \mathbf{J}_{\mathbf{\theta}}
             f_{\mathbf{\theta}}(\mathbf{x}_n)
         \right)\,.
+
+    Attributes:
+        SELF_ADJOINT: Whether the linear operator is self-adjoint. ``True`` for GGNs.
     """
 
+    SELF_ADJOINT: bool = True
+
     def _matmat_batch(
-        self, X: Union[Tensor, MutableMapping], y: Tensor, M_list: List[Tensor]
-    ) -> Tuple[Tensor, ...]:
+        self, X: Union[Tensor, MutableMapping], y: Tensor, M: List[Tensor]
+    ) -> List[Tensor]:
         """Apply the mini-batch GGN to a matrix.
 
         Args:
             X: Input to the DNN.
             y: Ground truth.
-            M_list: Matrix to be multiplied with in list format.
+            M: Matrix to be multiplied with in tensor list format.
                 Tensors have same shape as trainable model parameters, and an
-                additional leading axis for the matrix columns.
+                additional trailing axis for the matrix columns.
 
         Returns:
             Result of GGN multiplication in list format. Has the same shape as
-            ``M_list``, i.e. each tensor in the list has the shape of a parameter and a
-            leading dimension of matrix columns.
+            ``M_``, i.e. each tensor in the list has the shape of a parameter and a
+            trailing dimension of matrix columns.
         """
         output = self._model_func(X)
         loss = self._loss_func(output, y)
 
         # collect matrix-matrix products per parameter
-        result_list = [zeros_like(M) for M in M_list]
+        (num_vecs,) = {m.shape[-1] for m in M}
+        GM = [zeros_like(m) for m in M]
 
-        num_vecs = M_list[0].shape[0]
         for n in range(num_vecs):
-            col_n_list = ggn_vector_product_from_plist(
-                loss, output, self._params, [M[n] for M in M_list]
+            col_n = ggn_vector_product_from_plist(
+                loss, output, self._params, [m[..., n] for m in M]
             )
-            for result, col_n in zip(result_list, col_n_list):
-                result[n].add_(col_n)
+            for GM_p, col_n_p in zip(GM, col_n):
+                GM_p[..., n].add_(col_n_p)
 
-        return tuple(result_list)
-
-    def _adjoint(self) -> GGNLinearOperator:
-        """Return the linear operator representing the adjoint.
-
-        The GGN is real symmetric, and hence self-adjoint.
-
-        Returns:
-            Self.
-        """
-        return self
+        return GM

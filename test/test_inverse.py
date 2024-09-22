@@ -34,7 +34,7 @@ def test_CG_inverse_damped_GGN_matvec(inv_case, delta: float = 2e-2):
 
     GGN = GGNLinearOperator(
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn
-    )
+    ).to_scipy()
     damping = aslinearoperator(delta * sparse.eye(GGN.shape[0]))
 
     inv_GGN = CGInverseLinearOperator(GGN + damping)
@@ -56,7 +56,7 @@ def test_CG_inverse_damped_GGN_matmat(inv_case, delta: float = 1e-2, num_vecs: i
 
     GGN = GGNLinearOperator(
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn
-    )
+    ).to_scipy()
     damping = aslinearoperator(delta * sparse.eye(GGN.shape[0]))
 
     inv_GGN = CGInverseLinearOperator(GGN + damping)
@@ -78,7 +78,7 @@ def test_LSMR_inverse_damped_GGN_matvec(inv_case, delta: float = 2e-2):
 
     GGN = GGNLinearOperator(
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn
-    )
+    ).to_scipy()
     damping = aslinearoperator(delta * sparse.eye(GGN.shape[0]))
 
     inv_GGN = LSMRInverseLinearOperator(GGN + damping)
@@ -104,7 +104,7 @@ def test_LSMR_inverse_damped_GGN_matmat(
 
     GGN = GGNLinearOperator(
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn
-    )
+    ).to_scipy()
     damping = aslinearoperator(delta * sparse.eye(GGN.shape[0]))
 
     inv_GGN = LSMRInverseLinearOperator(GGN + damping)
@@ -128,7 +128,7 @@ def test_Neumann_inverse_damped_GGN_matvec(inv_case, delta: float = 1e-2):
 
     GGN = GGNLinearOperator(
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn
-    )
+    ).to_scipy()
     damping = aslinearoperator(delta * sparse.eye(GGN.shape[0]))
 
     damped_GGN_functorch = functorch_ggn(

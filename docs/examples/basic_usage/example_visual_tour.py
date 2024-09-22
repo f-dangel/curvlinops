@@ -80,7 +80,7 @@ print(f"Layer parameters: {num_params_layer}")
 Hessian_linop = HessianLinearOperator(
     model, loss_function, params, dataloader
 ).to_scipy()
-GGN_linop = GGNLinearOperator(model, loss_function, params, dataloader)
+GGN_linop = GGNLinearOperator(model, loss_function, params, dataloader).to_scipy()
 EF_linop = EFLinearOperator(model, loss_function, params, dataloader)
 
 # %%
