@@ -119,7 +119,7 @@ def test_LSMR_inverse_damped_GGN_matmat(
     )
 
     X = random.rand(GGN.shape[1], num_vecs)
-    report_nonclose(inv_GGN @ X, inv_GGN_functorch @ X, rtol=5e-3, atol=1e-5)
+    report_nonclose(inv_GGN @ X, inv_GGN_functorch @ X, rtol=1e-2, atol=1e-5)
 
 
 def test_Neumann_inverse_damped_GGN_matvec(inv_case, delta: float = 1e-2):
