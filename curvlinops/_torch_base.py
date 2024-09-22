@@ -32,7 +32,13 @@ class PyTorchLinearOperator:
     operator, which can be useful for interfacing with SciPy routines. To achieve this,
     the functions ``_infer_device`` and ``_infer_dtype`` must be implemented.
 
+    Attributes:
+        SELF_ADJOINT: Whether the linear operator is self-adjoint. If ``True``,
+            ``_adjoint`` does not need to be implemented. Default: ``False``.
+
     """
+
+    SELF_ADJOINT: bool = False
 
     def __init__(
         self, in_shape: List[Tuple[int, ...]], out_shape: List[Tuple[int, ...]]
@@ -106,7 +112,7 @@ class PyTorchLinearOperator:
         Returns:
             The adjoint of the linear operator.
         """
-        return self._adjoint()
+        return self if self.SELF_ADJOINT else self._adjoint()
 
     def _adjoint(self) -> PyTorchLinearOperator:
         """Adjoint of the linear operator.

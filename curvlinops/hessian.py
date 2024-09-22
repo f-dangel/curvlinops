@@ -1,7 +1,5 @@
 """Contains a linear operator implementation of the Hessian."""
 
-from __future__ import annotations
-
 from collections.abc import MutableMapping
 from typing import List, Union
 
@@ -37,8 +35,11 @@ class HessianLinearOperator(CurvatureLinearOperator):
     Attributes:
         SUPPORTS_BLOCKS: Whether the linear operator supports block operations.
             Default is ``True``.
+        SELF_ADJOINT: Whether the linear operator is self-adjoint (``True`` for
+            Hessians).
     """
 
+    SELF_ADJOINT: bool = True
     SUPPORTS_BLOCKS: bool = True
 
     def _matmat_batch(
@@ -81,13 +82,3 @@ class HessianLinearOperator(CurvatureLinearOperator):
                     AM_block[p][..., n].add_(col)
 
         return AM
-
-    def _adjoint(self) -> HessianLinearOperator:
-        """Return the linear operator representing the adjoint.
-
-        The Hessian is real symmetric, and hence self-adjoint.
-
-        Returns:
-            Self.
-        """
-        return self
