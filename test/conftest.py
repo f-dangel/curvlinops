@@ -4,9 +4,13 @@ import test.utils
 from collections.abc import MutableMapping
 from test.cases import (
     ADJOINT_CASES,
+    ADJOINT_IDS,
+    BLOCK_SIZES_FNS,
     CASES,
     CNN_CASES,
     INV_CASES,
+    IS_VEC_IDS,
+    IS_VECS,
     NON_DETERMINISTIC_CASES,
 )
 from test.kfac_cases import (
@@ -21,7 +25,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Tuple
 from numpy import random
 from pytest import fixture
 from torch import Tensor, manual_seed
-from torch.nn import Module, MSELoss
+from torch.nn import Module, MSELoss, Parameter
 
 
 def initialize_case(
@@ -110,8 +114,35 @@ def non_deterministic_case(
     yield initialize_case(case)
 
 
-@fixture(params=ADJOINT_CASES)
+@fixture(params=ADJOINT_CASES, ids=ADJOINT_IDS)
 def adjoint(request) -> bool:
+    return request.param
+
+
+@fixture(params=IS_VECS, ids=IS_VEC_IDS)
+def is_vec(request) -> bool:
+    """Whether to test matrix-vector or matrix-matrix multiplication.
+
+    Args:
+        request: Pytest request object.
+
+    Returns:
+        ``True`` if the test is for matrix-vector multiplication, ``False`` otherwise.
+    """
+    return request.param
+
+
+@fixture(params=BLOCK_SIZES_FNS.values(), ids=BLOCK_SIZES_FNS.keys())
+def block_sizes_fn(request) -> Callable[[List[Parameter]], Optional[List[int]]]:
+    """Function to generate the ``block_sizes`` argument for a linear operator.
+
+    Args:
+        request: Pytest request object.
+
+    Returns:
+        A function that generates the block sizes for a linear operator from the
+        parameters.
+    """
     return request.param
 
 

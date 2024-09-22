@@ -371,3 +371,16 @@ for case in NON_DETERMINISTIC_CASES_NO_DEVICE:
         NON_DETERMINISTIC_CASES.append(case_with_device)
 
 ADJOINT_CASES = [False, True]
+ADJOINT_IDS = ["", "adjoint"]
+
+IS_VECS = [False, True]
+IS_VEC_IDS = ["matvec", "matmat"]
+
+
+BLOCK_SIZES_FNS = {
+    "full": lambda params: None,
+    "per-parameter-blocks": lambda params: [1 for _ in range(len(params))],
+    "two-blocks": lambda params: (
+        [1] if len(params) == 1 else [len(params) // 2, len(params) - len(params) // 2]
+    ),
+}
