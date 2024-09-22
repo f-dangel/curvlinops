@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import MutableMapping
-from typing import List, Tuple, Union
+from typing import List, Union
 
 from backpack.hessianfree.ggnvp import ggn_vector_product_from_plist
 from torch import Tensor, zeros_like
