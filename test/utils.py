@@ -486,7 +486,7 @@ def compare_matmat(
     # input in numpy format
     op_scipy = op.to_scipy()
     op_x = op_scipy @ x_numpy
-    assert type(op_x) == ndarray
+    assert type(op_x) is ndarray
     assert allclose_report(from_numpy(op_x).to(dev), mat_x, **tol)
 
     # input in tensor list format
