@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Update Github action versions and cache `pip`
   ([PR](https://github.com/f-dangel/curvlinops/pull/129))
 
+- Re-activate Monte-Carlo tests, refactor, and reduce their run time
+  ([PR](https://github.com/f-dangel/curvlinops/pull/131))
+
 ## [2.0.0] - 2024-08-15
 
 This major release is almost fully backward compatible with the `1.x.y` release
