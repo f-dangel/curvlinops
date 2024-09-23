@@ -102,9 +102,11 @@ class FisherMCLinearOperator(CurvatureLinearOperator):
     Attributes:
         SELF_ADJOINT: Whether the operator is self-adjoint. ``True`` for the Fisher.
         supported_losses: Supported loss functions.
+        FIXED_DATA_ORDER: Whether the data order must be fix. ``True`` for MC-Fisher.
     """
 
     SELF_ADJOINT: bool = True
+    FIXED_DATA_ORDER: bool = True
     supported_losses = (MSELoss, CrossEntropyLoss, BCEWithLogitsLoss)
 
     def __init__(
