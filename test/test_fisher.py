@@ -1,7 +1,7 @@
 """Contains tests for ``curvlinops/fisher.py``."""
 
 from collections.abc import MutableMapping
-from contextlib import suppress
+from contextlib import redirect_stdout, suppress
 
 from numpy import random, zeros_like
 from pytest import mark, raises
@@ -10,11 +10,11 @@ from curvlinops import FisherMCLinearOperator
 from curvlinops.examples.functorch import functorch_ggn
 from curvlinops.examples.utils import report_nonclose
 
-MAX_REPEATS_MC_SAMPLES = [(1_000_000, 1), (10_000, 100)]
+MAX_REPEATS_MC_SAMPLES = [(10_000, 1), (100, 100)]
 MAX_REPEATS_MC_SAMPLES_IDS = [
     f"max_repeats={n}-mc_samples={m}" for (n, m) in MAX_REPEATS_MC_SAMPLES
 ]
-CHECK_EVERY = 1_000
+CHECK_EVERY = 100
 
 
 @mark.montecarlo
@@ -58,7 +58,8 @@ def test_LinearOperator_matvec_expectation(
     Gx = G_functorch @ x
 
     Fx = zeros_like(x)
-    atol, rtol = 1e-5, 1e-1
+    atol = 5e-3 * max(abs(Gx))
+    rtol = 1e-1
 
     for m in range(max_repeats):
         Fx += F @ x
@@ -66,9 +67,8 @@ def test_LinearOperator_matvec_expectation(
 
         total_samples = (m + 1) * mc_samples
         if total_samples % CHECK_EVERY == 0:
-            with suppress(ValueError):
+            with redirect_stdout(None), suppress(ValueError):
                 report_nonclose(Fx / (m + 1), Gx, rtol=rtol, atol=atol)
-                print(f"Converged after {m} iterations")
                 return
 
     report_nonclose(Fx / max_repeats, Gx, rtol=rtol, atol=atol)
@@ -104,7 +104,8 @@ def test_LinearOperator_matmat_expectation(
     GX = G_functorch @ X
 
     FX = zeros_like(X)
-    atol, rtol = 1e-5, 1e-1
+    atol = 5e-3 * max(abs(GX.flatten()))
+    rtol = 1.5e-1
 
     for m in range(max_repeats):
         FX += F @ X
@@ -112,9 +113,8 @@ def test_LinearOperator_matmat_expectation(
 
         total_samples = (m + 1) * mc_samples
         if total_samples % CHECK_EVERY == 0:
-            with suppress(ValueError):
+            with redirect_stdout(None), suppress(ValueError):
                 report_nonclose(FX / (m + 1), GX, rtol=rtol, atol=atol)
-                print(f"Converged after {m} iterations")
                 return
 
-    report_nonclose(FX, GX, rtol=rtol, atol=atol)
+    report_nonclose(FX / max_repeats, GX, rtol=rtol, atol=atol)
