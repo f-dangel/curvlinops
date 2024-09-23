@@ -340,7 +340,7 @@ def test_kfac_ef_one_datum(
     for param in params:
         ef = EFLinearOperator(
             model, loss_func, [param], data, batch_size_fn=batch_size_fn
-        )
+        ).to_scipy()
         ef_blocks.append(ef @ eye(ef.shape[1]))
     ef = block_diag(*ef_blocks)
 
