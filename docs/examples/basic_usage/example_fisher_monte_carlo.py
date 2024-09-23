@@ -79,7 +79,7 @@ loss_function = nn.CrossEntropyLoss(reduction="mean").to(DEVICE)
 # identity matrix:
 
 GGN = GGNLinearOperator(model, loss_function, params, data).to_scipy()
-F = FisherMCLinearOperator(model, loss_function, params, data)
+F = FisherMCLinearOperator(model, loss_function, params, data).to_scipy()
 
 D = GGN.shape[0]
 identity = numpy.eye(D)
@@ -109,7 +109,9 @@ mc_samples = [1, 2, 4, 8]
 residual_norms = []
 
 for mc in mc_samples:
-    F = FisherMCLinearOperator(model, loss_function, params, data, mc_samples=mc)
+    F = FisherMCLinearOperator(
+        model, loss_function, params, data, mc_samples=mc
+    ).to_scipy()
     F_mat = F @ identity
     residual_norms.append(numpy.linalg.norm(GGN_mat - F_mat))
 
@@ -131,12 +133,16 @@ for mc, norm in zip(mc_samples, residual_norms):
 # first linear operator, we generate some random numbers to show that the
 # global random number generator does not influence the Monte-Carlo estimator:
 
-F1_mat = FisherMCLinearOperator(model, loss_function, params, data) @ identity
+F1_mat = (
+    FisherMCLinearOperator(model, loss_function, params, data).to_scipy() @ identity
+)
 
 # draw some random numbers to modify the global random number generator's state
 torch.rand(123)
 
-F2_mat = FisherMCLinearOperator(model, loss_function, params, data) @ identity
+F2_mat = (
+    FisherMCLinearOperator(model, loss_function, params, data).to_scipy() @ identity
+)
 
 # still, we get the same deterministic approximation
 residual_norm = numpy.linalg.norm(F1_mat - F2_mat)
@@ -201,7 +207,7 @@ for seed, mc in enumerate(range(mc_samples.max()), start=start_seed):
     # linear operators indeed realize deterministic matrices.
     F = FisherMCLinearOperator(
         model, loss_function, params, data, seed=seed, check_deterministic=False
-    )
+    ).to_scipy()
     F_accumulated += F @ identity
     if mc + 1 in mc_samples:
         F_snapshots.append(F_accumulated / (mc + 1))
