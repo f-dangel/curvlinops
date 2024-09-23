@@ -1,9 +1,10 @@
 """Tests the linear operator interface in PyTorch."""
 
-from typing import List, MutableMapping
+from typing import Generator, Iterable, Iterator, List, MutableMapping, Tuple, Union
 
 from pytest import raises
-from torch import Tensor, zeros
+from torch import Tensor, randperm, zeros
+from torch.nn import Identity
 
 from curvlinops._torch_base import CurvatureLinearOperator, PyTorchLinearOperator
 
@@ -107,4 +108,48 @@ def test_check_deterministic(non_deterministic_case):
             data,
             batch_size_fn=batch_size_fn,
             check_deterministic=True,
+        )
+
+
+class FixedBatchesIdentityLinearOperator(CurvatureLinearOperator):
+    """Linear identity operator which demands deterministic batches."""
+
+    FIXED_DATA_ORDER: bool = True
+
+    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+        return X
+
+
+class PermutedBatchLoader:
+    """Randomly shuffle data points in a batch before returning it."""
+
+    def __init__(self, data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]]):
+        self.data = data
+
+    def __iter__(self) -> Iterator[Tuple[Union[Tensor, MutableMapping], Tensor]]:
+        for X, y in self.data:
+            permutation = randperm(y.shape[0])
+
+            if isinstance(X, MutableMapping):
+                for key, value in X.items():
+                    if isinstance(value, Tensor):
+                        X[key] = X[key][permutation]
+            else:
+                X = X[permutation]
+
+            yield X, y[permutation]
+
+
+def test_check_deterministic_batch(case):
+    """Test that non-deterministic batches are recognized.
+
+    Args:
+        case: Tuple of model, loss function, parameters, data, and batch size getter.
+    """
+    model_func, loss_func, params, data, batch_size_fn = case
+
+    data = PermutedBatchLoader(data)
+    with raises(RuntimeError):
+        _ = FixedBatchesIdentityLinearOperator(
+            model_func, loss_func, params, data, batch_size_fn=batch_size_fn
         )
