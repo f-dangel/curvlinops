@@ -1,10 +1,8 @@
 """Contains tests for ``curvlinops/hessian``."""
 
-from collections.abc import MutableMapping
 from test.utils import compare_matmat
 from typing import Callable, List, Optional
 
-from pytest import raises
 from torch import block_diag
 from torch.nn import Parameter
 
@@ -30,11 +28,6 @@ def test_HessianLinearOperator(
     """
     model_func, loss_func, params, data, batch_size_fn = case
     block_sizes = block_sizes_fn(params)
-
-    # Test when X is dict-like but batch_size_fn = None (default)
-    if isinstance(data[0][0], MutableMapping):
-        with raises(ValueError):
-            _ = HessianLinearOperator(model_func, loss_func, params, data)
 
     H = HessianLinearOperator(
         model_func,

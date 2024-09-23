@@ -1,11 +1,11 @@
 """Tests the linear operator interface in PyTorch."""
 
-from typing import List
+from typing import List, MutableMapping
 
 from pytest import raises
 from torch import Tensor, zeros
 
-from curvlinops._torch_base import PyTorchLinearOperator
+from curvlinops._torch_base import CurvatureLinearOperator, PyTorchLinearOperator
 
 
 def test_input_formatting():
@@ -80,3 +80,16 @@ def test_preserve_input_format():
     X = zeros(26, 6)  # matrix in tensor format
     IdX = Id @ X
     assert IdX.allclose(X)
+
+
+def test_MutableMapping_no_batch_size_fn(case):
+    """Trigger error with ``MutableMapping`` data + unspecified batch size getter.
+
+    Args:
+        case: Tuple of model, loss function, parameters, data, and batch size getter.
+    """
+    model_func, loss_func, params, data, _ = case
+
+    if isinstance(data[0][0], MutableMapping):
+        with raises(ValueError):
+            _ = CurvatureLinearOperator(model_func, loss_func, params, data)
