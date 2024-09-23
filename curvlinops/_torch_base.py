@@ -373,7 +373,9 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
     """Base class for PyTorch linear operators of deep learning curvature matrices.
 
     To implement a new curvature linear operator, subclass this class and implement
-    the ``_matmat_batch`` and ``_adjoint`` methods.
+    the ``_matmat_batch`` and ``_adjoint`` methods. If the linear operator does not
+    map between the neural network's parameter space, you also need to implement
+    ``_get_in_shape`` and ``_get_out_shape``.
 
     Attributes:
         SUPPORTS_BLOCKS: Whether the linear operator supports multiplication with
@@ -394,8 +396,6 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
         data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
-        in_shape: Optional[List[Tuple[int, ...]]] = None,
-        out_shape: Optional[List[Tuple[int, ...]]] = None,
         num_data: Optional[int] = None,
         block_sizes: Optional[List[int]] = None,
         batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
@@ -427,10 +427,6 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
                 model's forward pass could depend on the order in which mini-batches
                 are presented (BatchNorm, Dropout). Default: ``True``. This is a
                 safeguard, only turn it off if you know what you are doing.
-            in_shape: Shapes of the linear operator's input tensor product space.
-                If ``None``, will use the shapes of ``params``.
-            out_shape: Shapes of the linear operator's output tensor product space.
-                If ``None``, will use the shapes of ``params``.
             num_data: Number of data points. If ``None``, it is inferred from the data
                 at the cost of one traversal through the data loader.
             block_sizes: This argument will be ignored if the linear operator does not
@@ -455,10 +451,6 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
             raise ValueError(
                 "When using dict-like custom data, `batch_size_fn` is required."
             )
-
-        in_shape = [tuple(p.shape) for p in params] if in_shape is None else in_shape
-        out_shape = [tuple(p.shape) for p in params] if out_shape is None else out_shape
-        super().__init__(in_shape, out_shape)
 
         self._params = params
         if block_sizes is not None:
@@ -490,6 +482,8 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
             else num_data
         )
 
+        super().__init__(self._get_in_shape(), self._get_out_shape())
+
         if check_deterministic:
             old_device = self._device
             self.to_device(device("cpu"))
@@ -499,6 +493,22 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
                 raise e
             finally:
                 self.to_device(old_device)
+
+    def _get_in_shape(self) -> List[Tuple[int, ...]]:
+        """Return linear operator's input space dimensions.
+
+        Returns:
+            Shapes of the linear operator's input tensor product space.
+        """
+        return [tuple(p.shape) for p in self._params]
+
+    def _get_out_shape(self) -> List[Tuple[int, ...]]:
+        """Return linear operator's output space dimensions.
+
+        Returns:
+            Shapes of the linear operator's output tensor product space.
+        """
+        return [tuple(p.shape) for p in self._params]
 
     def _matmat(self, M: List[Tensor]) -> List[Tensor]:
         """Matrix-matrix multiplication.

@@ -63,20 +63,6 @@ class JacobianLinearOperator(CurvatureLinearOperator):
                 needs to be specified. The intended behavior is to consume the first
                 entry of the iterates from ``data`` and return their batch size.
         """
-        _batch_size_fn = (
-            (lambda X: X.shape[0]) if batch_size_fn is None else batch_size_fn
-        )
-        num_data = (
-            sum(_batch_size_fn(t) for t, _ in data) if num_data is None else num_data
-        )
-        x = next(iter(data))[0]
-
-        if isinstance(x, Tensor):
-            self._params = params
-            x = x.to(self._infer_device())
-
-        out_shape = [(num_data,) + model_func(x).shape[1:]]
-
         super().__init__(
             model_func,
             None,
@@ -84,11 +70,23 @@ class JacobianLinearOperator(CurvatureLinearOperator):
             data,
             progressbar=progressbar,
             check_deterministic=check_deterministic,
-            in_shape=[tuple(p.shape) for p in params],
-            out_shape=out_shape,
             num_data=num_data,
             batch_size_fn=batch_size_fn,
         )
+
+    def _get_out_shape(self) -> List[Tuple[int, ...]]:
+        """Return the Jacobian's output space dimensions.
+
+        Returns:
+            Shapes of the Jacobian's output tensor product space.
+            For a model with output of shape ``S``, this is ``[(N, *S)]`` where ``N``
+            is the total number of data points.
+        """
+        x = next(iter(self._data))[0]
+        if isinstance(x, Tensor):
+            x = x.to(self._infer_device())
+
+        return [(self._N_data,) + self._model_func(x).shape[1:]]
 
     def _matmat(self, M: List[Tensor]) -> List[Tensor]:
         """Apply the Jacobian to a matrix in tensor list format.
@@ -182,20 +180,6 @@ class TransposedJacobianLinearOperator(CurvatureLinearOperator):
                 needs to be specified. The intended behavior is to consume the first
                 entry of the iterates from ``data`` and return their batch size.
         """
-        _batch_size_fn = (
-            (lambda X: X.shape[0]) if batch_size_fn is None else batch_size_fn
-        )
-        num_data = (
-            sum(_batch_size_fn(t) for t, _ in data) if num_data is None else num_data
-        )
-        x = next(iter(data))[0]
-
-        if isinstance(x, Tensor):
-            self._params = params
-            x = x.to(self._infer_device())
-
-        in_shape = [(num_data,) + model_func(x).shape[1:]]
-
         super().__init__(
             model_func,
             None,
@@ -203,11 +187,23 @@ class TransposedJacobianLinearOperator(CurvatureLinearOperator):
             data,
             progressbar=progressbar,
             check_deterministic=check_deterministic,
-            in_shape=in_shape,
-            out_shape=[tuple(p.shape) for p in params],
             num_data=num_data,
             batch_size_fn=batch_size_fn,
         )
+
+    def _get_in_shape(self) -> List[Tuple[int, ...]]:
+        """Return the transposed Jacobian's input space dimensions.
+
+        Returns:
+            Shapes of the transposed Jacobian's input tensor product space.
+            For a model with output of shape ``S``, this is ``[(N, *S)]`` where ``N``
+            is the total number of data points.
+        """
+        x = next(iter(self._data))[0]
+        if isinstance(x, Tensor):
+            x = x.to(self._infer_device())
+
+        return [(self._N_data,) + self._model_func(x).shape[1:]]
 
     def _matmat(self, M: List[Tensor]) -> List[Tensor]:
         """Apply the transpose Jacobian to a matrix in tensor list format.
