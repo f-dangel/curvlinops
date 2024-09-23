@@ -445,7 +445,7 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
             )
 
         in_shape = [tuple(p.shape) for p in params] if in_shape is None else in_shape
-        out_shape = [tuple(p.shape) for p in params] if in_shape is None else in_shape
+        out_shape = [tuple(p.shape) for p in params] if out_shape is None else out_shape
         super().__init__(in_shape, out_shape)
 
         self._params = params

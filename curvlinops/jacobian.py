@@ -7,30 +7,28 @@ from typing import Callable, Iterable, List, Optional, Tuple, Union
 
 from backpack.hessianfree.lop import transposed_jacobian_vector_product as vjp
 from backpack.hessianfree.rop import jacobian_vector_product as jvp
-from numpy import allclose, ndarray
-from torch import Tensor, cat, from_numpy, no_grad, stack, zeros_like
+from numpy import allclose
+from torch import Tensor, cat, no_grad, stack, zeros_like
 from torch.nn import Parameter
 
-from curvlinops._base import _LinearOperator
+from curvlinops._torch_base import CurvatureLinearOperator
+from curvlinops.utils import allclose_report
 
 
-class JacobianLinearOperator(_LinearOperator):
-    """Linear operator for the Jacobian.
-
-    Can be used with SciPy.
-    """
+class JacobianLinearOperator(CurvatureLinearOperator):
+    """Linear operator of the Jacobian."""
 
     def __init__(
         self,
-        model_func: Callable[[Tensor], Tensor],
+        model_func: Callable[[Union[MutableMapping, Tensor]], Tensor],
         params: List[Parameter],
         data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
         num_data: Optional[int] = None,
-        batch_size_fn: Optional[Callable[[MutableMapping], int]] = None,
+        batch_size_fn: Optional[Callable[[Union[Tensor, MutableMapping]], int]] = None,
     ):
-        r"""Linear operator for the Jacobian as SciPy linear operator.
+        r"""Linear operator for the Jacobian as PyTorch linear operator.
 
         Consider a model :math:`f(\mathbf{x}, \mathbf{\theta}): \mathbb{R}^M
         \times \mathbb{R}^D \to \mathbb{R}^C` with parameters
@@ -70,10 +68,10 @@ class JacobianLinearOperator(_LinearOperator):
         x = next(iter(data))[0]
 
         if isinstance(x, Tensor):
-            x = x.to(self._infer_device(params))
+            self._params = params
+            x = x.to(self._infer_device())
 
-        num_outputs = model_func(x).shape[1:].numel()
-        num_params = sum(p.numel() for p in params)
+        out_shape = [(num_data,) + model_func(x).shape[1:]]
 
         super().__init__(
             model_func,
@@ -82,7 +80,8 @@ class JacobianLinearOperator(_LinearOperator):
             data,
             progressbar=progressbar,
             check_deterministic=check_deterministic,
-            shape=(num_data * num_outputs, num_params),
+            in_shape=[tuple(p.shape) for p in params],
+            out_shape=out_shape,
             num_data=num_data,
             batch_size_fn=batch_size_fn,
         )
@@ -107,9 +106,9 @@ class JacobianLinearOperator(_LinearOperator):
         rtol, atol = 5e-5, 1e-6
 
         def check_X_y(X1, X2, y1, y2):
-            if not allclose(X1, X2) or not allclose(y1, y2):
-                self.print_nonclose(X1, X2, rtol=rtol, atol=atol)
-                self.print_nonclose(y1, y2, rtol=rtol, atol=atol)
+            if not allclose_report(X1, X2, rtol=rtol, atol=atol) or not allclose_report(
+                y1, y2, rtol=rtol, atol=atol
+            ):
                 raise RuntimeError("Non-deterministic data loading detected.")
 
         with no_grad():
@@ -117,54 +116,44 @@ class JacobianLinearOperator(_LinearOperator):
                 self._loop_over_data(desc="_check_deterministic_data_pred"),
                 self._loop_over_data(desc="_check_deterministic_data_pred2"),
             ):
-                pred1, y1 = self._model_func(X1).cpu().numpy(), y1.cpu().numpy()
-                pred2, y2 = self._model_func(X2).cpu().numpy(), y2.cpu().numpy()
+                pred1, pred2 = self._model_func(X1), self._model_func(X2)
 
                 if isinstance(X1, Tensor) or isinstance(X2, Tensor):
-                    X1, X2 = X1.cpu().numpy(), X2.cpu().numpy()
                     check_X_y(X1, X2, y1, y2)
                 else:  # X is a MutableMapping
                     for k in X1.keys():
                         v1, v2 = X1[k], X2[k]
 
                         if isinstance(v1, Tensor) or isinstance(v2, Tensor):
-                            X1, X2 = v1.cpu().numpy(), v2.cpu().numpy()
+                            check_X_y(v1, v2, y1, y2)
 
-                        check_X_y(X1, X2, y1, y2)
-
-                if not allclose(pred1, pred2):
-                    self.print_nonclose(pred1, pred2, rtol=rtol, atol=atol)
+                if not allclose_report(pred1, pred2, atol=atol, rtol=rtol):
                     raise RuntimeError("Non-deterministic model detected.")
 
-    def _matmat(self, M: ndarray) -> ndarray:
-        """Apply the Jacobian to a matrix.
+    def _matmat(self, M: List[Tensor]) -> List[Tensor]:
+        """Apply the Jacobian to a matrix in tensor list format.
 
         Args:
-            M: Matrix for multiplication. Has shape ``[D, K]``.
+            M: Matrix for multiplication in tensor list format.
 
         Returns:
-            Matrix-multiplication result ``J @ M``. Has shape ``[N * C, K]``.
+            Matrix-multiplication result ``J @ M`` in tensor list format.
         """
-        num_vecs = M.shape[1]
-        M_list = self._preprocess(M)
-
-        result_list = []
+        (num_vecs,) = {m.shape[-1] for m in M}
+        JM = []
 
         for X, _ in self._loop_over_data(desc="_matmat"):
             output = self._model_func(X)
 
             # multiply the mini-batch Jacobian onto all vectors
-            col = []
-            for n in range(num_vecs):
-                (col_n,) = jvp(output, self._params, [M[n] for M in M_list])
-                col.append(col_n.flatten(start_dim=1))
-            # combine columns into a single tensor and append
-            result_list.append(stack(col))
+            JM_col = [
+                jvp(output, self._params, [m[..., n] for m in M])[0]
+                for n in range(num_vecs)
+            ]
+            JM.append(stack(JM_col, dim=-1))
 
         # concatenate over batches
-        result_list = [cat(result_list, dim=1)]
-
-        return self._postprocess(result_list)
+        return [cat(JM)]
 
     def _adjoint(self) -> TransposedJacobianLinearOperator:
         """Return a linear operator representing the adjoint.
@@ -179,26 +168,24 @@ class JacobianLinearOperator(_LinearOperator):
             progressbar=self._progressbar,
             check_deterministic=False,
             batch_size_fn=self._batch_size_fn,
+            num_data=self._N_data,
         )
 
 
-class TransposedJacobianLinearOperator(_LinearOperator):
-    """Linear operator for the transpose Jacobian.
-
-    Can be used with SciPy.
-    """
+class TransposedJacobianLinearOperator(CurvatureLinearOperator):
+    """Linear operator for the transpose Jacobian."""
 
     def __init__(
         self,
-        model_func: Callable[[Tensor], Tensor],
+        model_func: Callable[[Union[MutableMapping, Tensor]], Tensor],
         params: List[Parameter],
         data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
         num_data: Optional[int] = None,
-        batch_size_fn: Optional[Callable[[MutableMapping], int]] = None,
+        batch_size_fn: Optional[Callable[[Union[Tensor, MutableMapping]], int]] = None,
     ):
-        r"""Linear operator for the transpose Jacobian as SciPy linear operator.
+        r"""Linear operator for the transpose Jacobian as PyTorch linear operator.
 
         Consider a model :math:`f(\mathbf{x}, \mathbf{\theta}): \mathbb{R}^M
         \times \mathbb{R}^D \to \mathbb{R}^C` with parameters
@@ -238,10 +225,10 @@ class TransposedJacobianLinearOperator(_LinearOperator):
         x = next(iter(data))[0]
 
         if isinstance(x, Tensor):
-            x = x.to(self._infer_device(params))
+            self._params = params
+            x = x.to(self._infer_device())
 
-        num_outputs = model_func(x).shape[1:].numel()
-        num_params = sum(p.numel() for p in params)
+        in_shape = [(num_data,) + model_func(x).shape[1:]]
 
         super().__init__(
             model_func,
@@ -250,7 +237,8 @@ class TransposedJacobianLinearOperator(_LinearOperator):
             data,
             progressbar=progressbar,
             check_deterministic=check_deterministic,
-            shape=(num_params, num_data * num_outputs),
+            in_shape=in_shape,
+            out_shape=[tuple(p.shape) for p in params],
             num_data=num_data,
             batch_size_fn=batch_size_fn,
         )
@@ -312,39 +300,38 @@ class TransposedJacobianLinearOperator(_LinearOperator):
                     self.print_nonclose(pred1, pred2, rtol=rtol, atol=atol)
                     raise RuntimeError("Non-deterministic model detected.")
 
-    def _matmat(self, M: ndarray) -> ndarray:
-        """Apply the transpose Jacobian to a matrix.
+    def _matmat(self, M: List[Tensor]) -> List[Tensor]:
+        """Apply the transpose Jacobian to a matrix in tensor list format.
 
         Args:
-            M: Matrix for multiplication. Has shape ``[N C, K]``.
+            M: Matrix for multiplication in tensor list format.
 
         Returns:
-            Matrix-multiplication result ``J^T @ M``. Has shape ``[D, K]``.
+            Matrix-multiplication result ``J^T @ M`` in tensor list format.
         """
-        M_torch = from_numpy(M).to(self._device)
-        num_vectors = M_torch.shape[1]
+        (num_vectors,) = {m.shape[-1] for m in M}
 
         # allocate result tensors
-        out_list = []
+        JTM = []
         for p in self._params:
-            repeat = [num_vectors] + [1] * p.ndim
-            out_list.append(zeros_like(p).unsqueeze(0).repeat(*repeat))
+            repeat = p.ndim * [1] + [num_vectors]
+            JTM.append(zeros_like(p).unsqueeze(-1).repeat(*repeat))
 
         processed = 0
         for X, _ in self._loop_over_data(desc="_matmat"):
             pred = self._model_func(X)
-            start, end = processed, processed + pred.numel()
+            start, end = processed, processed + pred.shape[0]
 
             for n in range(num_vectors):
-                v = M_torch[start:end, n].reshape_as(pred)
-                JT_v = vjp(pred, self._params, v)
+                (v,) = [m[start:end, ..., n] for m in M]
+                JTv = vjp(pred, self._params, v)
 
-                for p_res, p_vjp in zip(out_list, JT_v):
-                    p_res[n].add_(p_vjp)
+                for JTM_p, JTV_p in zip(JTM, JTv):
+                    JTM_p[..., n].add_(JTV_p)
 
-            processed += pred.numel()
+            processed += pred.shape[0]
 
-        return self._postprocess(out_list)
+        return JTM
 
     def _adjoint(self) -> JacobianLinearOperator:
         """Return a linear operator representing the adjoint.
@@ -358,5 +345,6 @@ class TransposedJacobianLinearOperator(_LinearOperator):
             self._data,
             progressbar=self._progressbar,
             check_deterministic=False,
+            num_data=self._N_data,
             batch_size_fn=self._batch_size_fn,
         )

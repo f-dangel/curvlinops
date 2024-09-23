@@ -27,9 +27,10 @@ def test_JacobianLinearOperator_matvec(case, adjoint: bool):
     )
     if adjoint:
         op, op_functorch = op.adjoint(), op_functorch.conj().T
+    op = op.to_scipy()
 
     x = random.rand(op.shape[1])
-    report_nonclose(op @ x, op_functorch @ x, rtol=1e-4)
+    report_nonclose(op @ x, op_functorch @ x, rtol=1e-4, atol=1e-7)
 
 
 def test_JacobianLinearOperator_matmat(case, adjoint: bool, num_vecs: int = 3):
@@ -44,9 +45,10 @@ def test_JacobianLinearOperator_matmat(case, adjoint: bool, num_vecs: int = 3):
     )
     if adjoint:
         op, op_functorch = op.adjoint(), op_functorch.conj().T
+    op = op.to_scipy()
 
     X = random.rand(op.shape[1], num_vecs)
-    report_nonclose(op @ X, op_functorch @ X, rtol=1e-4)
+    report_nonclose(op @ X, op_functorch @ X, rtol=1e-4, atol=1e-7)
 
 
 def test_TransposedJacobianLinearOperator_matvec(case, adjoint: bool):
@@ -69,9 +71,10 @@ def test_TransposedJacobianLinearOperator_matvec(case, adjoint: bool):
     )
     if adjoint:
         op, op_functorch = op.adjoint(), op_functorch.conj().T
+    op = op.to_scipy()
 
     x = random.rand(op.shape[1])
-    report_nonclose(op @ x, op_functorch @ x, rtol=1e-4)
+    report_nonclose(op @ x, op_functorch @ x, rtol=1e-4, atol=1e-7)
 
 
 def test_TransposedJacobianLinearOperator_matmat(
@@ -91,6 +94,7 @@ def test_TransposedJacobianLinearOperator_matmat(
     )
     if adjoint:
         op, op_functorch = op.adjoint(), op_functorch.conj().T
+    op = op.to_scipy()
 
     X = random.rand(op.shape[1], num_vecs)
-    report_nonclose(op @ X, op_functorch @ X, rtol=1e-4)
+    report_nonclose(op @ X, op_functorch @ X, rtol=1e-4, atol=1e-7)
