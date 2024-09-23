@@ -93,3 +93,18 @@ def test_MutableMapping_no_batch_size_fn(case):
     if isinstance(data[0][0], MutableMapping):
         with raises(ValueError):
             _ = CurvatureLinearOperator(model_func, loss_func, params, data)
+
+
+def test_check_deterministic(non_deterministic_case):
+    """Test that non-deterministic behavior is recognized."""
+    model_func, loss_func, params, data, batch_size_fn = non_deterministic_case
+
+    with raises(RuntimeError):
+        CurvatureLinearOperator(
+            model_func,
+            loss_func,
+            params,
+            data,
+            batch_size_fn=batch_size_fn,
+            check_deterministic=True,
+        )

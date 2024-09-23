@@ -1,4 +1,4 @@
-"""Implements linear operators for per-sample Jacobians."""
+"""Implements linear operators for Jacobians."""
 
 from __future__ import annotations
 
@@ -7,16 +7,20 @@ from typing import Callable, Iterable, List, Optional, Tuple, Union
 
 from backpack.hessianfree.lop import transposed_jacobian_vector_product as vjp
 from backpack.hessianfree.rop import jacobian_vector_product as jvp
-from numpy import allclose
-from torch import Tensor, cat, no_grad, stack, zeros_like
+from torch import Tensor, cat, stack, zeros_like
 from torch.nn import Parameter
 
 from curvlinops._torch_base import CurvatureLinearOperator
-from curvlinops.utils import allclose_report
 
 
 class JacobianLinearOperator(CurvatureLinearOperator):
-    """Linear operator of the Jacobian."""
+    """Linear operator of the Jacobian.
+
+    Attributes:
+        FIXED_DATA_ORDER: Whether the data order must be fix. ``True`` for Jacobians.
+    """
+
+    FIXED_DATA_ORDER: bool = True
 
     def __init__(
         self,
@@ -86,50 +90,6 @@ class JacobianLinearOperator(CurvatureLinearOperator):
             batch_size_fn=batch_size_fn,
         )
 
-    def _check_deterministic(self):
-        """Verify that the linear operator is deterministic.
-
-        In addition to the checks from the base class, checks that the model
-        predictions and data are always the same (loaded in the same order, and
-        only deterministic operations in the network.
-
-        Note:
-            Deterministic checks should be performed on CPU. We noticed that even when
-            it passes on CPU, it can fail on GPU; probably due to non-deterministic
-            operations.
-
-        Raises:
-            RuntimeError: If the linear operator is not deterministic.
-        """
-        super()._check_deterministic()
-
-        rtol, atol = 5e-5, 1e-6
-
-        def check_X_y(X1, X2, y1, y2):
-            if not allclose_report(X1, X2, rtol=rtol, atol=atol) or not allclose_report(
-                y1, y2, rtol=rtol, atol=atol
-            ):
-                raise RuntimeError("Non-deterministic data loading detected.")
-
-        with no_grad():
-            for (X1, y1), (X2, y2) in zip(
-                self._loop_over_data(desc="_check_deterministic_data_pred"),
-                self._loop_over_data(desc="_check_deterministic_data_pred2"),
-            ):
-                pred1, pred2 = self._model_func(X1), self._model_func(X2)
-
-                if isinstance(X1, Tensor) or isinstance(X2, Tensor):
-                    check_X_y(X1, X2, y1, y2)
-                else:  # X is a MutableMapping
-                    for k in X1.keys():
-                        v1, v2 = X1[k], X2[k]
-
-                        if isinstance(v1, Tensor) or isinstance(v2, Tensor):
-                            check_X_y(v1, v2, y1, y2)
-
-                if not allclose_report(pred1, pred2, atol=atol, rtol=rtol):
-                    raise RuntimeError("Non-deterministic model detected.")
-
     def _matmat(self, M: List[Tensor]) -> List[Tensor]:
         """Apply the Jacobian to a matrix in tensor list format.
 
@@ -173,7 +133,13 @@ class JacobianLinearOperator(CurvatureLinearOperator):
 
 
 class TransposedJacobianLinearOperator(CurvatureLinearOperator):
-    """Linear operator for the transpose Jacobian."""
+    """Linear operator for the transpose Jacobian.
+
+    Attributes:
+        FIXED_DATA_ORDER: Whether the data order must be fix. ``True`` for Jacobians.
+    """
+
+    FIXED_DATA_ORDER: bool = True
 
     def __init__(
         self,
@@ -242,63 +208,6 @@ class TransposedJacobianLinearOperator(CurvatureLinearOperator):
             num_data=num_data,
             batch_size_fn=batch_size_fn,
         )
-
-    def _check_deterministic(self):
-        """Verify that the linear operator is deterministic.
-
-        In addition to the checks from the base class, checks that the model
-        predictions and data are always the same (loaded in the same order, and
-        only deterministic operations in the network.
-
-        Note:
-            Deterministic checks should be performed on CPU. We noticed that even when
-            it passes on CPU, it can fail on GPU; probably due to non-deterministic
-            operations.
-
-        Raises:
-            RuntimeError: If the linear operator is not deterministic.
-        """
-        super()._check_deterministic()
-
-        rtol, atol = 5e-5, 1e-6
-
-        with no_grad():
-            for (X1, y1), (X2, y2) in zip(
-                self._loop_over_data(desc="_check_deterministic_data_pred1"),
-                self._loop_over_data(desc="_check_deterministic_data_pred2"),
-            ):
-                pred1, y1 = self._model_func(X1).cpu().numpy(), y1.cpu().numpy()
-                pred2, y2 = self._model_func(X2).cpu().numpy(), y2.cpu().numpy()
-
-                def check_X_y(X1, X2, y1, y2):
-                    if not allclose(X1, X2) or not allclose(y1, y2):
-                        self.print_nonclose(X1, X2, rtol=rtol, atol=atol)
-                        self.print_nonclose(y1, y2, rtol=rtol, atol=atol)
-                        raise RuntimeError("Non-deterministic data loading detected.")
-
-                with no_grad():
-                    for (X1, y1), (X2, y2) in zip(
-                        self._loop_over_data(desc="_check_deterministic_data_pred"),
-                        self._loop_over_data(desc="_check_deterministic_data_pred2"),
-                    ):
-                        pred1, y1 = self._model_func(X1).cpu().numpy(), y1.cpu().numpy()
-                        pred2, y2 = self._model_func(X2).cpu().numpy(), y2.cpu().numpy()
-
-                        if isinstance(X1, Tensor) or isinstance(X2, Tensor):
-                            X1, X2 = X1.cpu().numpy(), X2.cpu().numpy()
-                            check_X_y(X1, X2, y1, y2)
-                        else:  # X is a MutableMapping
-                            for k in X1.keys():
-                                v1, v2 = X1[k], X2[k]
-
-                                if isinstance(v1, Tensor) or isinstance(v2, Tensor):
-                                    X1, X2 = v1.cpu().numpy(), v2.cpu().numpy()
-
-                                check_X_y(X1, X2, y1, y2)
-
-                if not allclose(pred1, pred2):
-                    self.print_nonclose(pred1, pred2, rtol=rtol, atol=atol)
-                    raise RuntimeError("Non-deterministic model detected.")
 
     def _matmat(self, M: List[Tensor]) -> List[Tensor]:
         """Apply the transpose Jacobian to a matrix in tensor list format.

@@ -2,7 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Callable, Iterable, List, MutableMapping, Optional, Tuple, Union
+from typing import (
+    Callable,
+    Iterable,
+    Iterator,
+    List,
+    MutableMapping,
+    Optional,
+    Tuple,
+    Union,
+)
 
 import numpy
 from scipy.sparse.linalg import LinearOperator
@@ -370,9 +379,12 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
         SUPPORTS_BLOCKS: Whether the linear operator supports multiplication with
             a block-diagonal approximation rather than the full matrix.
             Default: ``False``.
+        FIXED_DATA_ORDER: Whether the data loader must return the same data
+            for every iteration. Default: ``False``.
     """
 
     SUPPORTS_BLOCKS: bool = False
+    FIXED_DATA_ORDER: bool = False
 
     def __init__(
         self,
@@ -580,32 +592,28 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
     #                             DETERMINISTIC CHECKS                            #
     ###############################################################################
 
-    def gradient_and_loss(self) -> Tuple[List[Tensor], Tensor]:
-        """Evaluate the gradient and loss on the data.
+    def data_prediction_loss_gradient(
+        self,
+    ) -> Iterator[
+        Tuple[
+            Tuple[Union[Tensor, MutableMapping], Tensor],
+            Tensor,
+            Optional[Tensor],
+            Optional[List[Tensor]],
+        ]
+    ]:
+        """Yield input, prediction, loss, and gradient for each batch."""
+        for X, y in self._loop_over_data(desc="batch_prediction_loss_gradient"):
+            prediction = self._model_func(X)
+            if self._loss_func is None:
+                loss, grad_params = None, None
+            else:
+                normalization_factor = self._get_normalization_factor(X, y)
+                loss = self._loss_func(prediction, y).mul_(normalization_factor)
+                grad_params = [g.detach() for g in grad(loss, self._params)]
+                loss.detach_()
 
-        (Not really part of the LinearOperator interface.)
-
-        Returns:
-            Gradient and loss on the data set.
-
-        Raises:
-            ValueError: If there is no loss function.
-        """
-        if self._loss_func is None:
-            raise ValueError("No loss function specified.")
-
-        total_loss = tensor([0.0], device=self._device, dtype=self._infer_dtype())
-        total_grad = [zeros_like(p) for p in self._params]
-
-        for X, y in self._loop_over_data(desc="gradient_and_loss"):
-            loss = self._loss_func(self._model_func(X), y)
-            normalization_factor = self._get_normalization_factor(X, y)
-
-            for grad_param, current in zip(total_grad, grad(loss, self._params)):
-                grad_param.add_(current, alpha=normalization_factor)
-            total_loss.add_(loss.detach(), alpha=normalization_factor)
-
-        return total_grad, total_loss
+            yield (X, y), prediction, loss, grad_params
 
     def to_device(self, device: device):
         """Load linear operator to a device (inplace).
@@ -644,29 +652,103 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
         Raises:
             RuntimeError: If non-deterministic behavior is detected.
         """
+        rtol, atol = 5e-5, 1e-6
+
+        if self._loss_func is None:
+            total_grad1, total_grad2 = None, None
+            total_loss1, total_loss2 = None, None
+        else:
+            total_grad1 = [zeros_like(p) for p in self._params]
+            total_grad2 = [zeros_like(p) for p in self._params]
+            total_loss1 = tensor(0.0, device=self._device, dtype=self._infer_dtype())
+            total_loss2 = tensor(0.0, device=self._device, dtype=self._infer_dtype())
+
+        # loop twice over the data loader, accumulate total quantities and compare
+        # batch quantities if the linear operator demands fixed data order
+        for ((X1, y1), pred1, loss1, grad1), ((X2, y2), pred2, loss2, grad2) in zip(
+            self.data_prediction_loss_gradient(), self.data_prediction_loss_gradient()
+        ):
+            if self.FIXED_DATA_ORDER:
+                self.__check_deterministic_batch(
+                    (X1, X2),
+                    (y1, y2),
+                    (pred1, pred2),
+                    (loss1, loss2),
+                    (grad1, grad2),
+                    rtol=rtol,
+                    atol=atol,
+                )
+
+            # accumulate total quantities
+            if self._loss_func is not None:
+                total_loss1.add_(loss1)
+                total_loss2.add_(loss2)
+                for total_g1, g1 in zip(total_grad1, grad1):
+                    total_g1.add_(g1)
+                for total_g2, g2 in zip(total_grad2, grad2):
+                    total_g2.add_(g2)
+
+        if self._loss_func is not None:
+            if not allclose_report(loss1, loss2, rtol=rtol, atol=atol):
+                raise RuntimeError("Check for deterministic total loss failed.")
+
+            if any(
+                not allclose_report(g1, g2, atol=atol, rtol=rtol)
+                for g1, g2 in zip(total_grad1, total_grad2)
+            ):
+                raise RuntimeError("Check for deterministic total gradient failed.")
+
+        self.__check_deterministic_matvec(rtol=rtol, atol=atol)
+
+    def __check_deterministic_batch(
+        self,
+        Xs,
+        ys,
+        predictions,
+        losses,
+        gradients,
+        rtol: float = 1e-5,
+        atol: float = 1e-8,
+    ):
+        """Check that the data loader always returns the same order of data."""
+
+        X1, X2 = Xs
+        if isinstance(X1, MutableMapping) and isinstance(X2, MutableMapping):
+            for k in X1.keys():
+                v1, v2 = X1[k], X2[k]
+                if isinstance(v1, Tensor) and not allclose_report(
+                    v1, v2, rtol=rtol, atol=atol
+                ):
+                    raise RuntimeError("Check for deterministic X failed.")
+        elif not allclose_report(X1, X2, rtol=rtol, atol=atol):
+            raise RuntimeError("Check for deterministic X failed.")
+
+        y1, y2 = ys
+        if not allclose_report(y1, y2, rtol=rtol, atol=atol):
+            raise RuntimeError("Check for deterministic y failed.")
+
+        pred1, pred2 = predictions
+        if not allclose_report(pred1, pred2, rtol=rtol, atol=atol):
+            raise RuntimeError("Check for deterministic batch prediction failed.")
+
+        loss1, loss2 = losses
+        grad1, grad2 = gradients
+        if self._loss_func is not None:
+            if not allclose_report(loss1, loss2, rtol=rtol, atol=atol):
+                raise RuntimeError("Check for deterministic batch loss failed.")
+
+            if any(
+                not allclose_report(g1, g2, rtol=rtol, atol=atol)
+                for g1, g2 in zip(grad1, grad2)
+            ):
+                raise RuntimeError("Check for deterministic batch gradient failed.")
+
+    def __check_deterministic_matvec(self, rtol: float = 1e-5, atol: float = 1e-8):
         v = rand(self.shape[1], device=self._device, dtype=self._infer_dtype())
         Av1 = self @ v
         Av2 = self @ v
-
-        rtol, atol = 5e-5, 1e-6
         if not allclose_report(Av1, Av2, rtol=rtol, atol=atol):
             raise RuntimeError("Check for deterministic matvec failed.")
-
-        if self._loss_func is None:
-            return
-
-        # only carried out if there is a loss function
-        grad1, loss1 = self.gradient_and_loss()
-        grad2, loss2 = self.gradient_and_loss()
-
-        if not allclose_report(loss1, loss2, rtol=rtol, atol=atol):
-            raise RuntimeError("Check for deterministic loss failed.")
-
-        if len(grad1) != len(grad2) or any(
-            not allclose_report(g1, g2, atol=atol, rtol=rtol)
-            for g1, g2 in zip(grad1, grad2)
-        ):
-            raise RuntimeError("Check for deterministic gradient failed.")
 
     ###############################################################################
     #                                 SCIPY EXPORT                                #
