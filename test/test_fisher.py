@@ -37,7 +37,7 @@ def test_LinearOperator_matvec_expectation(
                 mc_samples=mc_samples,
             )
 
-    F = FisherMCLinearOperator(
+    F_torch = FisherMCLinearOperator(
         model_func,
         loss_func,
         params,
@@ -45,6 +45,7 @@ def test_LinearOperator_matvec_expectation(
         batch_size_fn=batch_size_fn,
         mc_samples=mc_samples,
     )
+    F = F_torch.to_scipy()
     G_functorch = (
         functorch_ggn(model_func, loss_func, params, data, input_key="x")
         .detach()
@@ -62,7 +63,7 @@ def test_LinearOperator_matvec_expectation(
 
     for m in range(max_repeats):
         Fx += F @ x
-        F._seed += 1
+        F_torch._seed += 1
 
         total_samples = (m + 1) * mc_samples
         if total_samples % CHECK_EVERY == 0:
@@ -83,7 +84,7 @@ def test_LinearOperator_matmat_expectation(
 ):
     model_func, loss_func, params, data, batch_size_fn = case
 
-    F = FisherMCLinearOperator(
+    F_torch = FisherMCLinearOperator(
         model_func,
         loss_func,
         params,
@@ -91,6 +92,7 @@ def test_LinearOperator_matmat_expectation(
         batch_size_fn=batch_size_fn,
         mc_samples=mc_samples,
     )
+    F = F_torch.to_scipy()
     G_functorch = (
         functorch_ggn(model_func, loss_func, params, data, input_key="x")
         .detach()
@@ -108,7 +110,7 @@ def test_LinearOperator_matmat_expectation(
 
     for m in range(max_repeats):
         FX += F @ X
-        F._seed += 1
+        F_torch._seed += 1
 
         total_samples = (m + 1) * mc_samples
         if total_samples % CHECK_EVERY == 0:

@@ -1,7 +1,5 @@
 """Contains LinearOperator implementation of the GGN."""
 
-from __future__ import annotations
-
 from collections.abc import MutableMapping
 from typing import List, Union
 
