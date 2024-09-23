@@ -3,7 +3,6 @@
 from test.cases import DEVICES, DEVICES_IDS
 from test.utils import classification_targets
 
-from numpy import eye as numpy_eye
 from pytest import mark, raises
 from torch import (
     allclose,
@@ -97,8 +96,8 @@ def test_ActivationHessianLinearOperator(dev: device):
     activation = ("", "input", 0)
 
     # compute the Hessian matrix representation
-    H_linop = ActivationHessianLinearOperator(model, loss_func, activation, data)
-    H_mat = from_numpy(H_linop @ numpy_eye(H_linop.shape[1])).to(dev, X.dtype)
+    H = ActivationHessianLinearOperator(model, loss_func, activation, data)
+    H_mat = H @ eye(H.shape[1], device=dev, dtype=X.dtype)
 
     # we know that the Hessian of softmax CE loss is ``diag(p(x)) - p(x) p(x)ᵀ``
     # where ``p(x)`` is the softmax probability on a single datum ``x``. On a batch,
