@@ -28,6 +28,7 @@ from einops import einsum, rearrange, reduce
 from numpy import ndarray
 from torch import Generator, Tensor, cat, device, eye, randn, stack
 from torch.autograd import grad
+from torch.linalg import eigh
 from torch.nn import (
     BCEWithLogitsLoss,
     Conv2d,
@@ -50,12 +51,23 @@ from curvlinops.kfac_utils import (
 # shape as the parameters, or a single matrix/vector of shape `[D, D]`/`[D]` where `D`
 # is the number of parameters.
 ParameterMatrixType = TypeVar("ParameterMatrixType", Tensor, List[Tensor])
+FactorType = TypeVar(
+    "FactorType", Optional[Tensor], Tuple[Optional[Tensor], Optional[Tensor]]
+)
 
 
 class MetaEnum(EnumMeta):
     """Metaclass for the Enum class for desired behavior of the `in` operator."""
 
-    def __contains__(cls, item):
+    def __contains__(cls, item: str) -> bool:
+        """Check if an item is a valid member of the Enum.
+
+        Args:
+            item: The item to check.
+
+        Returns:
+            ``True`` if the item is a valid member of the Enum, ``False`` otherwise.
+        """
         try:
             cls(item)
         except ValueError:
@@ -144,6 +156,7 @@ class KFACLinearOperator(_LinearOperator):
         fisher_type: str = FisherType.MC,
         mc_samples: int = 1,
         kfac_approx: str = KFACType.EXPAND,
+        correct_eigenvalues: bool = False,
         num_per_example_loss_terms: Optional[int] = None,
         separate_weight_and_bias: bool = True,
         num_data: Optional[int] = None,
@@ -204,6 +217,11 @@ class KFACLinearOperator(_LinearOperator):
                 See `Eschenhagen et al., 2023 <https://arxiv.org/abs/2311.00636>`_
                 for an explanation of the two approximations.
                 Defaults to ``KFACType.EXPAND``.
+            correct_eigenvalues: Whether to correct the eigenvalues in the KFAC
+                eigenbasis, as proposed in
+                `George et al., 2018 <https://arxiv.org/abs/1806.03884>`_. If true,
+                will only store the eigendecomposition of the KFAC approximation.
+                Defaults to ``False``.
             num_per_example_loss_terms: Number of per-example loss terms, e.g., the
                 number of tokens in a sequence. The model outputs will have
                 ``num_data * num_per_example_loss_terms * C`` entries, where ``C`` is
@@ -225,7 +243,11 @@ class KFACLinearOperator(_LinearOperator):
         Raises:
             RuntimeError: If the check for deterministic behavior fails.
             ValueError: If the loss function is not supported.
+            ValueError: If the Fisher type is not supported.
+            ValueError: If the KFAC approximation type is not supported.
             ValueError: If ``fisher_type != FisherType.MC`` and ``mc_samples != 1``.
+            NotImplementedError: If ``correct_eigenvalues`` and ``fisher_type ==
+                FisherType.FORWARD_ONLY``.
             ValueError: If ``X`` is not a tensor and ``batch_size_fn`` is not specified.
         """
         if not isinstance(loss_func, self._SUPPORTED_LOSSES):
@@ -242,6 +264,10 @@ class KFACLinearOperator(_LinearOperator):
                 f"Invalid mc_samples: {mc_samples}. "
                 "Only mc_samples=1 is supported for `fisher_type != FisherType.MC`."
             )
+        if fisher_type == FisherType.FORWARD_ONLY and correct_eigenvalues:
+            raise NotImplementedError(
+                "Correcting eigenvalues is not supported for FisherType.FORWARD_ONLY."
+            )
         if kfac_approx not in self._SUPPORTED_KFAC_APPROX:
             raise ValueError(
                 f"Invalid kfac_approx: {kfac_approx}. "
@@ -254,9 +280,24 @@ class KFACLinearOperator(_LinearOperator):
         self._fisher_type = fisher_type
         self._mc_samples = mc_samples
         self._kfac_approx = kfac_approx
+        self._correct_eigenvalues = correct_eigenvalues
+        # Initialize flag which determines whether to compute the KFAC factors or the
+        # eigenvalue correction in the forward-backward pass(es)
+        self._compute_eigenvalue_correction_flag = False
         self._input_covariances: Dict[str, Tensor] = {}
         self._gradient_covariances: Dict[str, Tensor] = {}
         self._mapping = self.compute_parameter_mapping(params, model_func)
+
+        # Initialize the eigenvectors and eigenvalues of the Kronecker factors
+        self._input_covariances_eigenvectors: Dict[str, Tensor] = {}
+        self._input_covariances_eigenvalues: Dict[str, Tensor] = {}
+        self._gradient_covariances_eigenvectors: Dict[str, Tensor] = {}
+        self._gradient_covariances_eigenvalues: Dict[str, Tensor] = {}
+
+        # Initialize the cache for activations
+        self._cached_activations: Dict[str, Tensor] = {}
+        # Initialize the corrected eigenvalues for EKFAC
+        self._corrected_eigenvalues: Dict[str, Tensor] = {}
 
         # Properties of the full matrix KFAC approximation are initialized to `None`
         self._reset_matrix_properties()
@@ -408,6 +449,91 @@ class KFACLinearOperator(_LinearOperator):
             M_torch = self._torch_preprocess(M_torch)
         return return_tensor, M_torch
 
+    @staticmethod
+    def _left_and_right_multiply(
+        M_joint: Tensor,
+        aaT: FactorType,
+        ggT: FactorType,
+        eigenvalues: Optional[Tensor],
+    ) -> Tensor:
+        """Left and right multiply matrix with Kronecker factors.
+
+        Args:
+            M_joint: Matrix for multiplication.
+            aaT: Input covariance Kronecker factor or its eigenvectors. ``None`` for
+                biases.
+            ggT: Gradient covariance Kronecker factor or its eigenvectors.
+            eigenvalues: Eigenvalues of the (E)KFAC approximation when multiplying with
+                the eigendecomposition of the KFAC approximation. ``None`` for the
+                non-decomposed KFAC approximation.
+
+        Returns:
+            Matrix-multiplication result ``KFAC @ M_joint``.
+        """
+        if eigenvalues is None:
+            M_joint = einsum(ggT, M_joint, aaT, "i j, m j k, k l -> m i l")
+        else:
+            # Perform preconditioning in KFE, e.g. see equation (21) in
+            # https://arxiv.org/abs/2308.03296.
+            aaT_eigvecs = aaT
+            ggT_eigvecs = ggT
+            # Transform in eigenbasis.
+            M_joint = einsum(
+                ggT_eigvecs, M_joint, aaT_eigvecs, "i j, m i k, k l -> m j l"
+            )
+            # Multiply (broadcasted) by eigenvalues.
+            M_joint.mul_(eigenvalues)
+            # Transform back to standard basis.
+            M_joint = einsum(
+                ggT_eigvecs, M_joint, aaT_eigvecs, "i j, m j k, l k -> m i l"
+            )
+        return M_joint
+
+    @staticmethod
+    def _separate_left_and_right_multiply(
+        M_torch: Tensor,
+        param_pos: Dict[str, int],
+        aaT: FactorType,
+        ggT: FactorType,
+        eigenvalues: Optional[Tensor],
+    ) -> Tensor:
+        """Multiply matrix with Kronecker factors for separated weight and bias.
+
+        Args:
+            M_torch: Matrix for multiplication.
+            param_pos: Dictionary with positions of the weight and bias parameters.
+            aaT: Input covariance Kronecker factor or its eigenvectors. ``None`` for
+                biases.
+            ggT: Gradient covariance Kronecker factor or its eigenvectors.
+            eigenvalues: Eigenvalues of the (E)KFAC approximation when multiplying with
+                the eigendecomposition of the KFAC approximation. ``None`` for the
+                non-decomposed KFAC approximation.
+
+        Returns:
+            Matrix-multiplication result ``KFAC @ M_torch``.
+        """
+        for p_name, pos in param_pos.items():
+            # for weights we need to multiply from the right with aaT
+            # for weights and biases we need to multiply from the left with ggT
+            if p_name == "weight":
+                M_w = rearrange(M_torch[pos], "m c_out ... -> m c_out (...)")
+                # If `eigenvalues` is not `None`, we transform to eigenbasis here
+                M_torch[pos] = einsum(M_w, aaT, "m i j, j k -> m i k")
+
+            # If `eigenvalues` is not `None`, we convert to eigenbasis here
+            M_torch[pos] = einsum(
+                ggT.T if eigenvalues else ggT, M_torch[pos], "i j, m j ... -> m i ..."
+            )
+
+            if eigenvalues is not None:
+                # Multiply (broadcasted) by eigenvalues, convert back to original basis
+                M_torch[pos].mul_(eigenvalues[pos])
+                if p_name == "weight":
+                    M_torch[pos] = einsum(M_torch[pos], aaT, "m i j, k j -> m i k")
+                M_torch[pos] = einsum(ggT, M_torch[pos], "i j, m j ... -> m i ...")
+
+        return M_torch
+
     def torch_matmat(self, M_torch: ParameterMatrixType) -> ParameterMatrixType:
         """Apply KFAC to a matrix (multiple vectors) in PyTorch.
 
@@ -429,13 +555,28 @@ class KFACLinearOperator(_LinearOperator):
             ``[D, K]`` with some ``K``.
         """
         return_tensor, M_torch = self._check_input_type_and_preprocess(M_torch)
-        if not self._input_covariances and not self._gradient_covariances:
+        if (
+            not self._input_covariances
+            and not self._gradient_covariances
+            and not self._input_covariances_eigenvectors
+            and not self._gradient_covariances_eigenvectors
+        ):
             self._compute_kfac()
 
         for mod_name, param_pos in self._mapping.items():
             # cache the weight shape to ensure correct shapes are returned
             if "weight" in param_pos:
                 weight_shape = M_torch[param_pos["weight"]].shape
+
+            # get the Kronecker factors for the current module
+            if self._correct_eigenvalues:
+                aaT = self._input_covariances_eigenvectors.get(mod_name)
+                ggT = self._gradient_covariances_eigenvectors.get(mod_name)
+                eigenvalues = self._corrected_eigenvalues[mod_name]
+            else:
+                aaT = self._input_covariances.get(mod_name)
+                ggT = self._gradient_covariances.get(mod_name)
+                eigenvalues = None
 
             # bias and weights are treated jointly
             if (
@@ -444,33 +585,15 @@ class KFACLinearOperator(_LinearOperator):
                 and "bias" in param_pos.keys()
             ):
                 w_pos, b_pos = param_pos["weight"], param_pos["bias"]
-                # v denotes the free dimension for treating multiple vectors in parallel
-                M_w = rearrange(M_torch[w_pos], "v c_out ... -> v c_out (...)")
-                M_joint = cat([M_w, M_torch[b_pos].unsqueeze(-1)], dim=2)
-                aaT = self._input_covariances[mod_name]
-                ggT = self._gradient_covariances[mod_name]
-                M_joint = einsum(ggT, M_joint, aaT, "i j,v j k,k l -> v i l")
-
+                M_w = rearrange(M_torch[w_pos], "m c_out ... -> m c_out (...)")
+                M_joint = cat([M_w, M_torch[b_pos].unsqueeze(2)], dim=2)
+                M_joint = self._left_and_right_multiply(M_joint, aaT, ggT, eigenvalues)
                 w_cols = M_w.shape[2]
                 M_torch[w_pos], M_torch[b_pos] = M_joint.split([w_cols, 1], dim=2)
-
-            # for weights we need to multiply from the right with aaT
-            # for weights and biases we need to multiply from the left with ggT
             else:
-                for p_name, pos in param_pos.items():
-                    if p_name == "weight":
-                        M_w = rearrange(M_torch[pos], "v c_out ... -> v c_out (...)")
-                        M_torch[pos] = einsum(
-                            M_w,
-                            self._input_covariances[mod_name],
-                            "v c_out j,j k -> v c_out k",
-                        )
-
-                    M_torch[pos] = einsum(
-                        self._gradient_covariances[mod_name],
-                        M_torch[pos],
-                        "j k,v k ... -> v j ...",
-                    )
+                M_torch = self._separate_left_and_right_multiply(
+                    M_torch, param_pos, aaT, ggT, eigenvalues
+                )
 
             # restore original shapes
             if "weight" in param_pos:
@@ -575,6 +698,24 @@ class KFACLinearOperator(_LinearOperator):
         for X, y in self._loop_over_data(desc="KFAC matrices"):
             output = self._model_func(X)
             self._compute_loss_and_backward(output, y)
+
+        if self._correct_eigenvalues:
+            # Compute the eigenvalue decomposition of the KFAC approximation
+            if not (
+                self._input_covariances_eigenvalues
+                or self._gradient_covariances_eigenvalues
+            ):
+                self._compute_eigendecomposition()
+
+            # Compute the corrected eigenvalues for the EKFAC approximation
+            self._compute_eigenvalue_correction_flag = True
+            for X, y in self._loop_over_data(desc="Eigenvalue correction"):
+                output = self._model_func(X)
+                self._compute_loss_and_backward(output, y)
+            self._compute_eigenvalue_correction_flag = False
+
+            # Delete the cached activations
+            self._cached_activations.clear()
 
         # clean up
         for handle in hook_handles:
@@ -798,12 +939,96 @@ class KFACLinearOperator(_LinearOperator):
             / (self._N_data * self._mc_samples * self._num_per_example_loss_terms),
         }[self._loss_func.reduction]
 
-        covariance = einsum(g, g, "b i,b j->i j").mul_(correction)
-
-        if module_name not in self._gradient_covariances:
-            self._gradient_covariances[module_name] = covariance
+        if self._compute_eigenvalue_correction_flag:
+            # Compute the eigenvalue correction for the EKFAC approximation
+            self._compute_eigenvalue_correction(module_name, g, correction)
         else:
-            self._gradient_covariances[module_name].add_(covariance)
+            # Compute and accumulate the gradient covariance
+            covariance = einsum(g, g, "b i, b j -> i j").mul_(correction)
+            self._gradient_covariances = self._set_or_add_(
+                self._gradient_covariances, module_name, covariance
+            )
+
+    def _compute_eigenvalue_correction(
+        self, module_name: str, g: Tensor, correction: int
+    ):
+        r"""Compute the corrected eigenvalues for the EKFAC approximation.
+
+        The corrected eigenvalues are computed as
+        :math:`\lambda_{\text{corrected}} = (Q_g^T G Q_a)^2`, where
+        :math:`Q_a` and :math:`Q_g` are the eigenvectors of the input and gradient
+        covariances, respectively, and ``G`` is the gradient matrix. The corrected
+        eigenvalues are used to correct the eigenvalues of the KFAC approximation
+        (EKFAC).
+
+        Args:
+            module_name: Name of the module in the neural network.
+            g: The gradient w.r.t. the layer output.
+            correction: Correction factor for the eigenvalues.
+        """
+        param_pos = self._mapping[module_name]
+        aaT_eigenvectors = self._input_covariances_eigenvectors.get(module_name)
+        ggT_eigenvectors = self._gradient_covariances_eigenvectors.get(module_name)
+
+        # Compute corrected eigenvalues for EKFAC.
+        if (
+            not self._separate_weight_and_bias
+            and "weight" in param_pos.keys()
+            and "bias" in param_pos.keys()
+        ):
+            # Compute per-example gradient using the cached activations
+            per_example_gradient = einsum(
+                g,
+                self._cached_activations[module_name],
+                "shared d_out, shared d_in -> shared d_out d_in",
+            )
+            # Transform the per-example gradient to the eigenbasis and square it
+            self._corrected_eigenvalues = self._set_or_add_(
+                self._corrected_eigenvalues,
+                module_name,
+                einsum(
+                    ggT_eigenvectors,
+                    per_example_gradient,
+                    aaT_eigenvectors,
+                    "d_out1 d_out2, ... d_out1 d_in1, d_in1 d_in2 -> ... d_out2 d_in2",
+                )
+                .square_()
+                .sum(dim=0)
+                .mul_(correction),
+            )
+        else:
+            if module_name not in self._corrected_eigenvalues:
+                self._corrected_eigenvalues[module_name] = {}
+            for p_name, pos in param_pos.items():
+                # Compute per-example gradient using the cached activations
+                per_example_gradient = (
+                    einsum(
+                        g,
+                        self._cached_activations[module_name],
+                        "shared d_out, shared d_in -> shared d_out d_in",
+                    )
+                    if p_name == "weight"
+                    else g
+                )
+                # Transform the per-example gradient to the eigenbasis and square it
+                if p_name == "weight":
+                    per_example_gradient = einsum(
+                        per_example_gradient,
+                        aaT_eigenvectors,
+                        "batch d_out d_in1, d_in1 d_in2 -> batch d_out d_in2",
+                    )
+                self._corrected_eigenvalues[module_name] = self._set_or_add_(
+                    self._corrected_eigenvalues[module_name],
+                    pos,
+                    einsum(
+                        ggT_eigenvectors,
+                        per_example_gradient,
+                        "d_out1 d_out2, batch d_out1 ... -> batch d_out2 ...",
+                    )
+                    .square_()
+                    .sum(dim=0)
+                    .mul_(correction),
+                )
 
     def _hook_accumulate_input_covariance(
         self, module: Module, inputs: Tuple[Tensor], module_name: str
@@ -840,7 +1065,7 @@ class KFACLinearOperator(_LinearOperator):
 
         if self._kfac_approx == KFACType.EXPAND:
             # KFAC-expand approximation
-            scale = x.shape[1:-1].numel()  # sequence length
+            scale = x.shape[1:-1].numel()  # weight sharing dimensions size
             x = rearrange(x, "batch ... d_in -> (batch ...) d_in")
         else:
             # KFAC-reduce approximation
@@ -855,12 +1080,43 @@ class KFACLinearOperator(_LinearOperator):
         ):
             x = cat([x, x.new_ones(x.shape[0], 1)], dim=1)
 
-        covariance = einsum(x, x, "b i,b j -> i j").div_(self._N_data * scale)
-
-        if module_name not in self._input_covariances:
-            self._input_covariances[module_name] = covariance
+        if self._compute_eigenvalue_correction_flag:
+            self._cached_activations[module_name] = x
         else:
-            self._input_covariances[module_name].add_(covariance)
+            # Compute and accumulate the input covariance
+            covariance = einsum(x, x, "b i, b j -> i j").div_(self._N_data * scale)
+            self._input_covariances = self._set_or_add_(
+                self._input_covariances, module_name, covariance
+            )
+
+    @staticmethod
+    def _set_or_add_(
+        dictionary: Dict[str, Tensor], key: str, value: Tensor
+    ) -> Dict[str, Tensor]:
+        """Set or add a value to a dictionary entry.
+
+        Args:
+            dictionary: The dictionary to update.
+            key: The key to update.
+            value: The value to add.
+
+        Returns:
+            The updated dictionary.
+
+        Raises:
+            ValueError: If the types of the value and the dictionary entry are
+                incompatible.
+        """
+        if key not in dictionary:
+            dictionary[key] = value
+        elif isinstance(dictionary[key], Tensor) and isinstance(value, Tensor):
+            dictionary[key].add_(value)
+        else:
+            raise ValueError(
+                "Incompatible types for addition: dictionary value of type "
+                f"{type(dictionary[key])} and value to be added of type {type(value)}."
+            )
+        return dictionary
 
     @classmethod
     def compute_parameter_mapping(
@@ -903,6 +1159,28 @@ class KFACLinearOperator(_LinearOperator):
 
         return positions
 
+    def _compute_eigendecomposition(self) -> None:
+        """Compute the eigendecomposition of the KFAC approximation."""
+        if not self._input_covariances and not self._gradient_covariances:
+            self._compute_kfac()
+
+        for mod_name in self._mapping.keys():
+            # Free up memory by deleting the Kronecker factors
+            aaT = self._input_covariances.pop(mod_name, None)
+            ggT = self._gradient_covariances.pop(mod_name, None)
+
+            # Compute eigendecomposition of the Kronecker factors
+            if aaT is not None:
+                aaT_eigvals, aaT_eigvecs = eigh(aaT)
+                self._input_covariances_eigenvectors[mod_name] = aaT_eigvecs
+                self._input_covariances_eigenvalues[mod_name] = aaT_eigvals
+                del aaT
+            if ggT is not None:
+                ggT_eigvals, ggT_eigvecs = eigh(ggT)
+                self._gradient_covariances_eigenvectors[mod_name] = ggT_eigvecs
+                self._gradient_covariances_eigenvalues[mod_name] = ggT_eigvals
+                del ggT
+
     @property
     def trace(self) -> Tensor:
         r"""Trace of the KFAC approximation.
@@ -918,25 +1196,41 @@ class KFACLinearOperator(_LinearOperator):
         if self._trace is not None:
             return self._trace
 
-        if not self._input_covariances and not self._gradient_covariances:
+        if (
+            not self._input_covariances
+            and not self._gradient_covariances
+            and not self._corrected_eigenvalues
+        ):
             self._compute_kfac()
 
+        # Initialize the trace
         self._trace = 0.0
-        for mod_name, param_pos in self._mapping.items():
-            tr_ggT = self._gradient_covariances[mod_name].trace()
-            if (
-                not self._separate_weight_and_bias
-                and "weight" in param_pos.keys()
-                and "bias" in param_pos.keys()
-            ):
-                self._trace += self._input_covariances[mod_name].trace() * tr_ggT
-            else:
-                for p_name in param_pos.keys():
-                    self._trace += tr_ggT * (
-                        self._input_covariances[mod_name].trace()
-                        if p_name == "weight"
-                        else 1
-                    )
+
+        if self._correct_eigenvalues:
+            for corrected_eigenvalues in self._corrected_eigenvalues.values():
+                if isinstance(corrected_eigenvalues, dict):
+                    for val in corrected_eigenvalues.values():
+                        self._trace += val.sum()
+                else:
+                    self._trace += corrected_eigenvalues.sum()
+        else:
+            # TODO: Also support the trace for eigendecomposition of KFAC
+            for mod_name, param_pos in self._mapping.items():
+                tr_ggT = self._gradient_covariances[mod_name].trace()
+                if (
+                    not self._separate_weight_and_bias
+                    and "weight" in param_pos.keys()
+                    and "bias" in param_pos.keys()
+                ):
+                    self._trace += self._input_covariances[mod_name].trace() * tr_ggT
+                else:
+                    for p_name in param_pos.keys():
+                        self._trace += tr_ggT * (
+                            self._input_covariances[mod_name].trace()
+                            if p_name == "weight"
+                            else 1
+                        )
+
         return self._trace
 
     @property
@@ -955,33 +1249,49 @@ class KFACLinearOperator(_LinearOperator):
         if self._det is not None:
             return self._det
 
-        if not self._input_covariances and not self._gradient_covariances:
+        if (
+            not self._input_covariances
+            and not self._gradient_covariances
+            and not self._corrected_eigenvalues
+        ):
             self._compute_kfac()
 
+        # Initialize the determinant
         self._det = 1.0
-        for mod_name, param_pos in self._mapping.items():
-            m = self._gradient_covariances[mod_name].shape[0]
-            det_ggT = self._gradient_covariances[mod_name].det()
-            if (
-                not self._separate_weight_and_bias
-                and "weight" in param_pos.keys()
-                and "bias" in param_pos.keys()
-            ):
-                n = self._input_covariances[mod_name].shape[0]
-                det_aaT = self._input_covariances[mod_name].det()
-                self._det *= det_aaT.pow(m) * det_ggT.pow(n)
-            else:
-                for p_name in param_pos.keys():
-                    n = (
-                        self._input_covariances[mod_name].shape[0]
-                        if p_name == "weight"
-                        else 1
-                    )
-                    self._det *= det_ggT.pow(n) * (
-                        self._input_covariances[mod_name].det().pow(m)
-                        if p_name == "weight"
-                        else 1
-                    )
+
+        if self._correct_eigenvalues:
+            for corrected_eigenvalues in self._corrected_eigenvalues.values():
+                if isinstance(corrected_eigenvalues, dict):
+                    for val in corrected_eigenvalues.values():
+                        self._det *= val.prod()
+                else:
+                    self._det *= corrected_eigenvalues.prod()
+        else:
+            # TODO: Also support the det for eigendecomposition of KFAC
+            for mod_name, param_pos in self._mapping.items():
+                m = self._gradient_covariances[mod_name].shape[0]
+                det_ggT = self._gradient_covariances[mod_name].det()
+                if (
+                    not self._separate_weight_and_bias
+                    and "weight" in param_pos.keys()
+                    and "bias" in param_pos.keys()
+                ):
+                    n = self._input_covariances[mod_name].shape[0]
+                    det_aaT = self._input_covariances[mod_name].det()
+                    self._det *= det_aaT.pow(m) * det_ggT.pow(n)
+                else:
+                    for p_name in param_pos.keys():
+                        n = (
+                            self._input_covariances[mod_name].shape[0]
+                            if p_name == "weight"
+                            else 1
+                        )
+                        self._det *= det_ggT.pow(n) * (
+                            self._input_covariances[mod_name].det().pow(m)
+                            if p_name == "weight"
+                            else 1
+                        )
+
         return self._det
 
     @property
@@ -1001,33 +1311,49 @@ class KFACLinearOperator(_LinearOperator):
         if self._logdet is not None:
             return self._logdet
 
-        if not self._input_covariances and not self._gradient_covariances:
+        if (
+            not self._input_covariances
+            and not self._gradient_covariances
+            and not self._corrected_eigenvalues
+        ):
             self._compute_kfac()
 
+        # Initialize the log determinant
         self._logdet = 0.0
-        for mod_name, param_pos in self._mapping.items():
-            m = self._gradient_covariances[mod_name].shape[0]
-            logdet_ggT = self._gradient_covariances[mod_name].logdet()
-            if (
-                not self._separate_weight_and_bias
-                and "weight" in param_pos.keys()
-                and "bias" in param_pos.keys()
-            ):
-                n = self._input_covariances[mod_name].shape[0]
-                logdet_aaT = self._input_covariances[mod_name].logdet()
-                self._logdet += m * logdet_aaT + n * logdet_ggT
-            else:
-                for p_name in param_pos.keys():
-                    n = (
-                        self._input_covariances[mod_name].shape[0]
-                        if p_name == "weight"
-                        else 1
-                    )
-                    self._logdet += n * logdet_ggT + (
-                        m * self._input_covariances[mod_name].logdet()
-                        if p_name == "weight"
-                        else 0
-                    )
+
+        if self._correct_eigenvalues:
+            for corrected_eigenvalues in self._corrected_eigenvalues.values():
+                if isinstance(corrected_eigenvalues, dict):
+                    for val in corrected_eigenvalues.values():
+                        self._logdet += val.log().sum()
+                else:
+                    self._logdet += corrected_eigenvalues.log().sum()
+        else:
+            # TODO: Also support the log det for eigendecomposition of KFAC
+            for mod_name, param_pos in self._mapping.items():
+                m = self._gradient_covariances[mod_name].shape[0]
+                logdet_ggT = self._gradient_covariances[mod_name].logdet()
+                if (
+                    not self._separate_weight_and_bias
+                    and "weight" in param_pos.keys()
+                    and "bias" in param_pos.keys()
+                ):
+                    n = self._input_covariances[mod_name].shape[0]
+                    logdet_aaT = self._input_covariances[mod_name].logdet()
+                    self._logdet += m * logdet_aaT + n * logdet_ggT
+                else:
+                    for p_name in param_pos.keys():
+                        n = (
+                            self._input_covariances[mod_name].shape[0]
+                            if p_name == "weight"
+                            else 1
+                        )
+                        self._logdet += n * logdet_ggT + (
+                            m * self._input_covariances[mod_name].logdet()
+                            if p_name == "weight"
+                            else 0
+                        )
+
         return self._logdet
 
     @property
@@ -1044,28 +1370,43 @@ class KFACLinearOperator(_LinearOperator):
         if self._frobenius_norm is not None:
             return self._frobenius_norm
 
-        if not self._input_covariances and not self._gradient_covariances:
+        if (
+            not self._input_covariances
+            and not self._gradient_covariances
+            and not self._corrected_eigenvalues
+        ):
             self._compute_kfac()
 
+        # Initialize the Frobenius norm
         self._frobenius_norm = 0.0
-        for mod_name, param_pos in self._mapping.items():
-            squared_frob_ggT = self._gradient_covariances[mod_name].square().sum()
-            if (
-                not self._separate_weight_and_bias
-                and "weight" in param_pos.keys()
-                and "bias" in param_pos.keys()
-            ):
-                squared_frob_aaT = self._input_covariances[mod_name].square().sum()
-                self._frobenius_norm += squared_frob_aaT * squared_frob_ggT
-            else:
-                for p_name in param_pos.keys():
-                    self._frobenius_norm += squared_frob_ggT * (
-                        self._input_covariances[mod_name].square().sum()
-                        if p_name == "weight"
-                        else 1
-                    )
-        self._frobenius_norm.sqrt_()
-        return self._frobenius_norm
+
+        if self._correct_eigenvalues:
+            for corrected_eigenvalues in self._corrected_eigenvalues.values():
+                if isinstance(corrected_eigenvalues, dict):
+                    for val in corrected_eigenvalues.values():
+                        self._frobenius_norm += val.square().sum()
+                else:
+                    self._frobenius_norm += corrected_eigenvalues.square().sum()
+        else:
+            # TODO: Also support the Frobenius norm for eigendecomposition of KFAC
+            for mod_name, param_pos in self._mapping.items():
+                squared_frob_ggT = self._gradient_covariances[mod_name].square().sum()
+                if (
+                    not self._separate_weight_and_bias
+                    and "weight" in param_pos.keys()
+                    and "bias" in param_pos.keys()
+                ):
+                    squared_frob_aaT = self._input_covariances[mod_name].square().sum()
+                    self._frobenius_norm += squared_frob_aaT * squared_frob_ggT
+                else:
+                    for p_name in param_pos.keys():
+                        self._frobenius_norm += squared_frob_ggT * (
+                            self._input_covariances[mod_name].square().sum()
+                            if p_name == "weight"
+                            else 1
+                        )
+
+        return self._frobenius_norm.sqrt_()
 
     def state_dict(self) -> Dict[str, Any]:
         """Return the state of the KFAC linear operator.
@@ -1090,13 +1431,22 @@ class KFACLinearOperator(_LinearOperator):
             "fisher_type": self._fisher_type,
             "mc_samples": self._mc_samples,
             "kfac_approx": self._kfac_approx,
+            "correct_eigenvalues": self._correct_eigenvalues,
             "num_per_example_loss_terms": self._num_per_example_loss_terms,
             "separate_weight_and_bias": self._separate_weight_and_bias,
             "num_data": self._N_data,
             # Kronecker factors (if computed)
             "input_covariances": self._input_covariances,
             "gradient_covariances": self._gradient_covariances,
-            # Properties (not necessarily computed)
+            # Kronecker factors eigendecomposition (if computed)
+            "input_covariances_eigenvectors": self._input_covariances_eigenvectors,
+            "input_covariances_eigenvalues": self._input_covariances_eigenvalues,
+            "gradient_covariances_eigenvectors": self._gradient_covariances_eigenvectors,
+            "gradient_covariances_eigenvalues": self._gradient_covariances_eigenvalues,
+            # Quantities for eigenvalue correction (if computed)
+            "cached_activations": self._cached_activations,
+            "corrected_eigenvalues": self._corrected_eigenvalues,
+            # Properties (if computed)
             "trace": self._trace,
             "det": self._det,
             "logdet": self._logdet,
@@ -1137,6 +1487,7 @@ class KFACLinearOperator(_LinearOperator):
         self._fisher_type = state_dict["fisher_type"]
         self._mc_samples = state_dict["mc_samples"]
         self._kfac_approx = state_dict["kfac_approx"]
+        self._correct_eigenvalues = state_dict["correct_eigenvalues"]
         self._num_per_example_loss_terms = state_dict["num_per_example_loss_terms"]
         self._separate_weight_and_bias = state_dict["separate_weight_and_bias"]
         self._N_data = state_dict["num_data"]
@@ -1161,6 +1512,26 @@ class KFACLinearOperator(_LinearOperator):
                 )
         self._input_covariances = state_dict["input_covariances"]
         self._gradient_covariances = state_dict["gradient_covariances"]
+
+        # Set Kronecker factors eigendecomposition (if computed)
+        # TODO: should we check if the keys match the mapping keys?
+        self._input_covariances_eigenvectors = state_dict[
+            "input_covariances_eigenvectors"
+        ]
+        self._input_covariances_eigenvalues = state_dict[
+            "input_covariances_eigenvalues"
+        ]
+        self._gradient_covariances_eigenvectors = state_dict[
+            "gradient_covariances_eigenvectors"
+        ]
+        self._gradient_covariances_eigenvalues = state_dict[
+            "gradient_covariances_eigenvalues"
+        ]
+
+        # Set quantities for eigenvalue correction (if computed)
+        # TODO: should we check if the keys match the mapping keys?
+        self._cached_activations = state_dict["cached_activations"]
+        self._corrected_eigenvalues = state_dict["corrected_eigenvalues"]
 
         # Set properties (not necessarily computed)
         self._trace = state_dict["trace"]
@@ -1215,6 +1586,7 @@ class KFACLinearOperator(_LinearOperator):
             fisher_type=state_dict["fisher_type"],
             mc_samples=state_dict["mc_samples"],
             kfac_approx=state_dict["kfac_approx"],
+            correct_eigenvalues=state_dict["correct_eigenvalues"],
             num_per_example_loss_terms=state_dict["num_per_example_loss_terms"],
             separate_weight_and_bias=state_dict["separate_weight_and_bias"],
             num_data=state_dict["num_data"],
