@@ -1,7 +1,7 @@
 """Implements linear operator inverses."""
 
 from math import sqrt
-from typing import Any, Callable, Dict, Optional, Tuple, TypeVar, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar, Union
 from warnings import warn
 
 from einops import einsum, rearrange
@@ -10,7 +10,12 @@ from scipy.sparse.linalg import LinearOperator, cg, lsmr
 from torch import Tensor, cat, cholesky_inverse, eye, float64, outer
 from torch.linalg import cholesky, eigh
 
-from curvlinops.kfac import KFACLinearOperator, ParameterMatrixType
+from curvlinops.kfac import KFACLinearOperator
+
+# Type for a matrix/vector that can be represented as a list of tensors with the same
+# shape as the parameters, or a single matrix/vector of shape `[D, D]`/`[D]` where `D`
+# is the number of parameters.
+ParameterMatrixType = TypeVar("ParameterMatrixType", Tensor, List[Tensor])
 
 KFACInvType = TypeVar(
     "KFACInvType", Optional[Tensor], Tuple[Optional[Tensor], Optional[Tensor]]
