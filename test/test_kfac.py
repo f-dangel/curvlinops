@@ -1345,5 +1345,5 @@ def test_bug_132_dtype_deterministic_checks(dev: device):
 
     loss_func = MSELoss().to(dev, dt)
 
-    with raises(RuntimeError):
-        _ = KFACLinearOperator(model, loss_func, params, data, check_deterministic=True)
+    # run deterministic checks
+    KFACLinearOperator(model, loss_func, params, data, check_deterministic=True)

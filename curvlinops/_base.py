@@ -117,6 +117,7 @@ class _LinearOperator(LinearOperator):
         self._loss_func = loss_func
         self._data = data
         self._device = self._infer_device(self._params)
+        (self._torch_dtype,) = {p.dtype for p in self._params}
         self._progressbar = progressbar
         self._batch_size_fn = (
             (lambda X: X.shape[0]) if batch_size_fn is None else batch_size_fn
@@ -302,7 +303,7 @@ class _LinearOperator(LinearOperator):
             M = M.astype(self.dtype)
         num_vectors = M.shape[1]
 
-        result = from_numpy(M).to(self._device)
+        result = from_numpy(M).to(self._device, self._torch_dtype)
         # split parameter blocks
         dims = [p.numel() for p in self._params]
         result = result.split(dims)
@@ -324,7 +325,7 @@ class _LinearOperator(LinearOperator):
             concatenated dimensions over all list entries.
         """
         result = [rearrange(M, "k ... -> (...) k") for M in M_list]
-        return cat(result, dim=0).cpu().numpy()
+        return cat(result).cpu().numpy().astype(self.dtype)
 
     def _loop_over_data(
         self, desc: Optional[str] = None, add_device_to_desc: bool = True
