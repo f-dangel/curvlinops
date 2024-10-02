@@ -8,7 +8,7 @@ from einops import rearrange
 from numpy import allclose, argwhere, float32, isclose, logical_not, ndarray
 from numpy.random import rand
 from scipy.sparse.linalg import LinearOperator
-from torch import Tensor, cat
+from torch import Tensor, bfloat16, cat
 from torch import device as torch_device
 from torch import from_numpy, tensor, zeros_like
 from torch.autograd import grad
@@ -325,7 +325,11 @@ class _LinearOperator(LinearOperator):
             concatenated dimensions over all list entries.
         """
         result = [rearrange(M, "k ... -> (...) k") for M in M_list]
-        return cat(result).cpu().numpy().astype(self.dtype)
+        result = cat(result)
+        # calling .numpy() on a BF-16 tensor is not supported, see
+        # (https://github.com/pytorch/pytorch/issues/90574)
+        result = result.float() if result.dtype == bfloat16 else result
+        return result.cpu().numpy().astype(self.dtype)
 
     def _loop_over_data(
         self, desc: Optional[str] = None, add_device_to_desc: bool = True
