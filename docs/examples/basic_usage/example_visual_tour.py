@@ -188,9 +188,7 @@ def plot(
 
 
 # use `tueplots` to make the plot look pretty
-plot_config = plt.rc_context(
-    bundles.icml2024(column="full", nrows=1.5 * rows, ncols=columns)
-)
+plot_config = bundles.icml2024(column="full", nrows=1.5 * rows, ncols=columns)
 
 # %%
 #
@@ -201,7 +199,7 @@ def logabs(mat, epsilon=1e-6):
     return numpy.log10(numpy.clip(numpy.abs(mat), a_min=epsilon, a_max=None))
 
 
-with plot_config:
+with plt.rc_context(plot_config):
     plot(logabs, transform_title="Logarithmic absolute entries")
 plt.savefig("curvature_matrices_log_abs.pdf", bbox_inches="tight")
 
@@ -214,7 +212,7 @@ def unchanged(mat):
     return mat
 
 
-with plot_config:
+with plt.rc_context(plot_config):
     plot(unchanged, transform_title="Unaltered matrix entries")
 
 # %%
