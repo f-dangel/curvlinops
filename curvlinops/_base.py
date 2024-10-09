@@ -340,7 +340,7 @@ class _LinearOperator(LinearOperator):
         Yields:
             Mini-batches ``(X, y)``.
         """
-        data_iter = iter(self._data)
+        data_iter = self._data
 
         if self._progressbar:
             desc = f"{self.__class__.__name__}{'' if desc is None else f'.{desc}'}"
