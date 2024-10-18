@@ -8,9 +8,9 @@ from einops import rearrange
 from numpy import allclose, argwhere, float32, isclose, logical_not, ndarray
 from numpy.random import rand
 from scipy.sparse.linalg import LinearOperator
-from torch import Tensor, cat
+from torch import Tensor, as_tensor, bfloat16, cat
 from torch import device as torch_device
-from torch import from_numpy, tensor, zeros_like
+from torch import tensor, zeros_like
 from torch.autograd import grad
 from torch.nn import Module, Parameter
 from tqdm import tqdm
@@ -117,6 +117,7 @@ class _LinearOperator(LinearOperator):
         self._loss_func = loss_func
         self._data = data
         self._device = self._infer_device(self._params)
+        (self._torch_dtype,) = {p.dtype for p in self._params}
         self._progressbar = progressbar
         self._batch_size_fn = (
             (lambda X: X.shape[0]) if batch_size_fn is None else batch_size_fn
@@ -302,7 +303,7 @@ class _LinearOperator(LinearOperator):
             M = M.astype(self.dtype)
         num_vectors = M.shape[1]
 
-        result = from_numpy(M).to(self._device)
+        result = as_tensor(M, dtype=self._torch_dtype, device=self._device)
         # split parameter blocks
         dims = [p.numel() for p in self._params]
         result = result.split(dims)
@@ -324,7 +325,11 @@ class _LinearOperator(LinearOperator):
             concatenated dimensions over all list entries.
         """
         result = [rearrange(M, "k ... -> (...) k") for M in M_list]
-        return cat(result, dim=0).cpu().numpy()
+        result = cat(result)
+        # calling .numpy() on a BF-16 tensor is not supported, see
+        # (https://github.com/pytorch/pytorch/issues/90574)
+        result = result.float() if result.dtype == bfloat16 else result
+        return result.cpu().numpy().astype(self.dtype)
 
     def _loop_over_data(
         self, desc: Optional[str] = None, add_device_to_desc: bool = True
