@@ -84,6 +84,7 @@ docs = [
     "matplotlib",
     "sphinx-gallery",
     "sphinx-rtd-theme",
+    "tueplots"
 ]
 
 ###############################################################################
