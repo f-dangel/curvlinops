@@ -8,9 +8,9 @@ from einops import rearrange
 from numpy import allclose, argwhere, float32, isclose, logical_not, ndarray
 from numpy.random import rand
 from scipy.sparse.linalg import LinearOperator
-from torch import Tensor, bfloat16, cat
+from torch import Tensor, as_tensor, bfloat16, cat
 from torch import device as torch_device
-from torch import from_numpy, tensor, zeros_like
+from torch import tensor, zeros_like
 from torch.autograd import grad
 from torch.nn import Module, Parameter
 from tqdm import tqdm
@@ -303,7 +303,7 @@ class _LinearOperator(LinearOperator):
             M = M.astype(self.dtype)
         num_vectors = M.shape[1]
 
-        result = from_numpy(M).to(self._device, self._torch_dtype)
+        result = as_tensor(M, dtype=self._torch_dtype, device=self._device)
         # split parameter blocks
         dims = [p.numel() for p in self._params]
         result = result.split(dims)
