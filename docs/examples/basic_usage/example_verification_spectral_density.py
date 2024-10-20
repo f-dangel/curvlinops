@@ -14,6 +14,7 @@ from numpy import e, exp, linspace, log, logspace, matmul, ndarray, zeros
 from numpy.linalg import eigh
 from numpy.random import pareto, randn, seed
 from scipy.sparse.linalg import aslinearoperator, eigsh
+from tueplots import bundles
 
 from curvlinops.outer import OuterProductLinearOperator
 from curvlinops.papyan2020traces.spectrum import (
@@ -85,7 +86,7 @@ Y_linop = aslinearoperator(Y)
 # and using the same hyperparameters as specified by the paper:
 
 # spectral density hyperparameters
-num_points = 1024
+num_points = 200
 ncv = 128
 num_repeats = 10
 kappa = 3
@@ -118,20 +119,33 @@ grid, density = lanczos_approximate_spectrum(
 # and plot it with a histogram (same number of bins as in the paper) of the
 # exact density:
 
-plt.figure()
-plt.xlabel("Eigenvalue")
-plt.ylabel("Spectral density")
+# use `tueplots` to make the plot look pretty
+plot_config = bundles.icml2024(column="half")
 
-left, right = grid[0], grid[-1]
-num_bins = 100
-bins = linspace(left, right, num_bins, endpoint=True)
-plt.hist(Y_evals, bins=bins, log=True, density=True, label="Exact")
+with plt.rc_context(plot_config):
+    plt.figure()
+    plt.xlabel(r"Eigenvalue $\lambda$")
+    plt.ylabel(r"Spectral density $\rho(\lambda)$")
 
-plt.plot(grid, density, label="Approximate")
-plt.legend()
+    left, right = grid[0], grid[-1]
+    num_bins = 40
+    bins = linspace(left, right, num_bins, endpoint=True)
+    plt.hist(
+        Y_evals,
+        bins=bins,
+        log=True,
+        density=True,
+        label="Exact",
+        edgecolor="white",
+        lw=0.5,
+    )
 
-# same ylimits as in the paper
-plt.ylim(bottom=1e-5, top=1e1)
+    plt.plot(grid, density, label="Approximate")
+    plt.legend()
+
+    # same ylimits as in the paper
+    plt.ylim(bottom=1e-5, top=1e1)
+    plt.savefig("toy_spectrum.pdf", bbox_inches="tight")
 
 # %%
 #
@@ -172,7 +186,7 @@ for idx, kappa in enumerate(kappas):
 
 # %%
 #
-# Wit rank deflation
+# With rank deflation
 # ^^^^^^^^^^^^^^^^^^
 #
 # As you can see in the above plot, the spectrum consists of a bulk and three
@@ -288,7 +302,7 @@ Y_linop = aslinearoperator(Y)
 # and using the same hyperparameters as specified by the paper:
 
 # spectral density hyperparameters
-num_points = 1024
+num_points = 200
 margin = 0.05
 ncv = 256
 num_repeats = 10
@@ -319,29 +333,43 @@ grid, density = lanczos_approximate_log_spectrum(
 #
 # Now we can visualize the results:
 
-plt.figure()
-plt.xlabel("Eigenvalue")
-plt.ylabel("Spectral density")
+# use `tueplots` to make the plot look pretty
+plot_config = bundles.icml2024(column="half")
 
-Y_log_abs_evals = log(abs(Y_evals) + epsilon)
+with plt.rc_context(plot_config):
+    plt.figure()
+    plt.xlabel(r"Absolute eigenvalue $\nu = |\lambda| + \epsilon$")
+    plt.ylabel(r"Spectral density $\rho(\log\nu)$")
 
-xlimits_no_margin = (Y_log_abs_evals.min(), Y_log_abs_evals.max())
-width_no_margins = xlimits_no_margin[1] - xlimits_no_margin[0]
-xlimits = [
-    xlimits_no_margin[0] - margin * width_no_margins,
-    xlimits_no_margin[1] + margin * width_no_margins,
-]
+    Y_log_abs_evals = log(abs(Y_evals) + epsilon)
 
-plt.semilogx()
-num_bins = 100
-bins = logspace(*xlimits, num=num_bins, endpoint=True, base=e)
-plt.hist(exp(Y_log_abs_evals), bins=bins, log=True, density=True, label="Exact")
+    xlimits_no_margin = (Y_log_abs_evals.min(), Y_log_abs_evals.max())
+    width_no_margins = xlimits_no_margin[1] - xlimits_no_margin[0]
+    xlimits = [
+        xlimits_no_margin[0] - margin * width_no_margins,
+        xlimits_no_margin[1] + margin * width_no_margins,
+    ]
 
-plt.plot(grid, density, label="Approximate")
+    plt.semilogx()
+    num_bins = 40
+    bins = logspace(*xlimits, num=num_bins, endpoint=True, base=e)
+    plt.hist(
+        exp(Y_log_abs_evals),
+        bins=bins,
+        log=True,
+        density=True,
+        label="Exact",
+        edgecolor="white",
+        lw=0.5,
+    )
 
-# use same ylimits as in the paper
-plt.ylim(bottom=1e-14, top=1e-2)
-plt.legend()
+    plt.plot(grid, density, label="Approximate")
+
+    # use same ylimits as in the paper
+    plt.ylim(bottom=1e-14, top=1e-2)
+    plt.legend()
+
+    plt.savefig("toy_log_spectrum.pdf", bbox_inches="tight")
 
 # %%
 #

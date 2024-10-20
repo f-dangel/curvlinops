@@ -201,7 +201,7 @@ def logabs(mat, epsilon=1e-6):
 
 with plt.rc_context(plot_config):
     plot(logabs, transform_title="Logarithmic absolute entries")
-plt.savefig("curvature_matrices_log_abs.pdf", bbox_inches="tight")
+    plt.savefig("curvature_matrices_log_abs.pdf", bbox_inches="tight")
 
 # %%
 #
