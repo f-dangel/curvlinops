@@ -440,6 +440,9 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901
 @mark.parametrize(
     "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
 )
+@mark.parametrize(
+    "correct_eigenvalues", [False, True], ids=["", "eigenvalue_corrected"]
+)
 def test_KFAC_inverse_exactly_damped_matmat(
     case: Tuple[
         Module,
@@ -450,6 +453,7 @@ def test_KFAC_inverse_exactly_damped_matmat(
     cache: bool,
     exclude: str,
     separate_weight_and_bias: bool,
+    correct_eigenvalues: bool,
     delta: float = 1e-2,
 ):
     """Test matrix-matrix multiplication by an inverse (exactly) damped KFAC approximation."""
@@ -479,6 +483,7 @@ def test_KFAC_inverse_exactly_damped_matmat(
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
         check_deterministic=False,
+        correct_eigenvalues=correct_eigenvalues,
     )
     KFAC.dtype = float64
 
@@ -511,7 +516,7 @@ def test_KFAC_inverse_exactly_damped_matmat(
     report_nonclose(inv_KFAC @ X, inv_KFAC_naive @ X)
 
     assert inv_KFAC._cache == cache
-    if cache:
+    if cache and not correct_eigenvalues:
         # test that the cache is not empty
         assert len(inv_KFAC._inverse_input_covariances) > 0
         assert len(inv_KFAC._inverse_gradient_covariances) > 0
@@ -521,6 +526,9 @@ def test_KFAC_inverse_exactly_damped_matmat(
         assert len(inv_KFAC._inverse_gradient_covariances) == 0
 
 
+@mark.parametrize(
+    "correct_eigenvalues", [False, True], ids=["", "eigenvalue_corrected"]
+)
 def test_KFAC_inverse_damped_torch_matmat(
     case: Tuple[
         Module,
@@ -528,6 +536,7 @@ def test_KFAC_inverse_damped_torch_matmat(
         List[Parameter],
         Iterable[Tuple[torch.Tensor, torch.Tensor]],
     ],
+    correct_eigenvalues: bool,
     delta: float = 1e-2,
 ):
     """Test torch matrix-matrix multiplication by an inverse damped KFAC approximation."""
@@ -552,9 +561,14 @@ def test_KFAC_inverse_damped_torch_matmat(
         data,
         batch_size_fn=batch_size_fn,
         check_deterministic=False,
+        correct_eigenvalues=correct_eigenvalues,
     )
     KFAC.dtype = float64
-    inv_KFAC = KFACInverseLinearOperator(KFAC, damping=(delta, delta))
+    inv_KFAC = KFACInverseLinearOperator(
+        KFAC,
+        damping=delta if correct_eigenvalues else (delta, delta),
+        use_exact_damping=True if correct_eigenvalues else False,
+    )
     device = KFAC._device
 
     num_vectors = 2
@@ -584,6 +598,9 @@ def test_KFAC_inverse_damped_torch_matmat(
     report_nonclose(inv_KFAC_X, kfac_x_numpy)
 
 
+@mark.parametrize(
+    "correct_eigenvalues", [False, True], ids=["", "eigenvalue_corrected"]
+)
 def test_KFAC_inverse_damped_torch_matvec(
     case: Tuple[
         Module,
@@ -591,6 +608,7 @@ def test_KFAC_inverse_damped_torch_matvec(
         List[Parameter],
         Iterable[Tuple[torch.Tensor, torch.Tensor]],
     ],
+    correct_eigenvalues: bool,
     delta: float = 1e-2,
 ):
     """Test torch matrix-vector multiplication by an inverse damped KFAC approximation."""
@@ -615,9 +633,14 @@ def test_KFAC_inverse_damped_torch_matvec(
         data,
         batch_size_fn=batch_size_fn,
         check_deterministic=False,
+        correct_eigenvalues=correct_eigenvalues,
     )
     KFAC.dtype = float64
-    inv_KFAC = KFACInverseLinearOperator(KFAC, damping=(delta, delta))
+    inv_KFAC = KFACInverseLinearOperator(
+        KFAC,
+        damping=delta if correct_eigenvalues else (delta, delta),
+        use_exact_damping=True if correct_eigenvalues else False,
+    )
     device = KFAC._device
 
     x = torch.rand(KFAC.shape[1], dtype=dtype, device=device)
@@ -647,7 +670,10 @@ def test_KFAC_inverse_damped_torch_matvec(
     report_nonclose(inv_KFAC @ x.cpu().numpy(), inv_KFAC_x.cpu().numpy())
 
 
-def test_KFAC_inverse_save_and_load_state_dict():
+@mark.parametrize(
+    "correct_eigenvalues", [False, True], ids=["", "eigenvalue_corrected"]
+)
+def test_KFAC_inverse_save_and_load_state_dict(correct_eigenvalues):
     """Test that KFACInverseLinearOperator can be saved and loaded from state dict."""
     torch.manual_seed(0)
     batch_size, D_in, D_out = 4, 3, 2
@@ -662,11 +688,16 @@ def test_KFAC_inverse_save_and_load_state_dict():
         MSELoss(reduction="sum"),
         params,
         [(X, y)],
+        correct_eigenvalues=correct_eigenvalues,
     )
 
     # create inverse KFAC
     inv_kfac = KFACInverseLinearOperator(
-        kfac, damping=1e-2, use_heuristic_damping=True, retry_double_precision=False
+        kfac,
+        damping=1e-2,
+        use_exact_damping=True if correct_eigenvalues else False,
+        use_heuristic_damping=False if correct_eigenvalues else True,
+        retry_double_precision=False,
     )
     _ = inv_kfac @ eye(kfac.shape[1])  # to trigger inverse computation
 
@@ -681,7 +712,9 @@ def test_KFAC_inverse_save_and_load_state_dict():
         inv_kfac_wrong.load_state_dict(torch.load("inv_kfac_state_dict.pt"))
 
     # create new inverse KFAC and load state dict
-    inv_kfac_new = KFACInverseLinearOperator(kfac)
+    inv_kfac_new = KFACInverseLinearOperator(
+        kfac, use_exact_damping=True if correct_eigenvalues else False
+    )
     inv_kfac_new.load_state_dict(torch.load("inv_kfac_state_dict.pt"))
     # clean up
     os.remove("inv_kfac_state_dict.pt")
@@ -692,7 +725,10 @@ def test_KFAC_inverse_save_and_load_state_dict():
     report_nonclose(inv_kfac @ test_vec, inv_kfac_new @ test_vec)
 
 
-def test_KFAC_inverse_from_state_dict():
+@mark.parametrize(
+    "correct_eigenvalues", [False, True], ids=["", "eigenvalue_corrected"]
+)
+def test_KFAC_inverse_from_state_dict(correct_eigenvalues):
     """Test that KFACInverseLinearOperator can be created from state dict."""
     torch.manual_seed(0)
     batch_size, D_in, D_out = 4, 3, 2
@@ -707,11 +743,16 @@ def test_KFAC_inverse_from_state_dict():
         MSELoss(reduction="sum"),
         params,
         [(X, y)],
+        correct_eigenvalues=correct_eigenvalues,
     )
 
     # create inverse KFAC and save state dict
     inv_kfac = KFACInverseLinearOperator(
-        kfac, damping=1e-2, use_heuristic_damping=True, retry_double_precision=False
+        kfac,
+        damping=1e-2,
+        use_exact_damping=True if correct_eigenvalues else False,
+        use_heuristic_damping=False if correct_eigenvalues else True,
+        retry_double_precision=False,
     )
     state_dict = inv_kfac.state_dict()
 
@@ -724,7 +765,10 @@ def test_KFAC_inverse_from_state_dict():
     report_nonclose(inv_kfac @ test_vec, inv_kfac_new @ test_vec)
 
 
-def test_torch_matvec_list_output_shapes(cnn_case):
+@mark.parametrize(
+    "correct_eigenvalues", [False, True], ids=["", "eigenvalue_corrected"]
+)
+def test_torch_matvec_list_output_shapes(cnn_case, correct_eigenvalues):
     """Test output shapes with list input format (issue #124)."""
     model, loss_func, params, data, batch_size_fn = cnn_case
     kfac = KFACLinearOperator(
@@ -733,8 +777,11 @@ def test_torch_matvec_list_output_shapes(cnn_case):
         params,
         data,
         batch_size_fn=batch_size_fn,
+        correct_eigenvalues=correct_eigenvalues,
     )
-    inv_kfac = KFACInverseLinearOperator(kfac, damping=1e-2)
+    inv_kfac = KFACInverseLinearOperator(
+        kfac, damping=1e-2, use_exact_damping=True if correct_eigenvalues else False
+    )
     vec = [torch.rand_like(p) for p in kfac._params]
     out_list = inv_kfac.torch_matvec(vec)
     assert len(out_list) == len(kfac._params)

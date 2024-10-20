@@ -1,15 +1,16 @@
 """Contains tests for ``curvlinops.kfac``."""
 
 import os
+from contextlib import nullcontext
 from test.cases import DEVICES, DEVICES_IDS
 from test.utils import (
     Conv2dModel,
     UnetModel,
     WeightShareModel,
     binary_classification_targets,
+    block_diagonal,
     classification_targets,
     compare_state_dicts,
-    ggn_block_diagonal,
     regression_targets,
 )
 from typing import Dict, Iterable, List, Tuple, Union
@@ -19,7 +20,6 @@ from einops.layers.torch import Rearrange
 from numpy import eye, random
 from numpy.linalg import det, norm, slogdet
 from pytest import mark, raises, skip
-from scipy.linalg import block_diag
 from torch import Tensor, allclose, cat, cuda, device
 from torch import eye as torch_eye
 from torch import (
@@ -45,8 +45,8 @@ from torch.nn import (
     Sequential,
 )
 
+from curvlinops import EFLinearOperator, GGNLinearOperator
 from curvlinops.examples.utils import report_nonclose
-from curvlinops.gradient_moments import EFLinearOperator
 from curvlinops.kfac import FisherType, KFACLinearOperator, KFACType
 
 
@@ -57,6 +57,9 @@ from curvlinops.kfac import FisherType, KFACLinearOperator, KFACType
     "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
 )
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
+@mark.parametrize(
+    "correct_eigenvalues", [False, True], ids=["", "eigenvalue_corrected"]
+)
 def test_kfac_type2(
     kfac_exact_case: Tuple[
         Module, MSELoss, List[Parameter], Iterable[Tuple[Tensor, Tensor]]
@@ -64,6 +67,7 @@ def test_kfac_type2(
     shuffle: bool,
     exclude: str,
     separate_weight_and_bias: bool,
+    correct_eigenvalues: bool,
 ):
     """Test the KFAC implementation against the exact GGN.
 
@@ -75,6 +79,7 @@ def test_kfac_type2(
             or ``None``.
         separate_weight_and_bias: Whether to treat weight and bias as separate blocks in
             the KFAC matrix.
+        correct_eigenvalues: Whether EKFAC should be used.
     """
     assert exclude in [None, "weight", "bias"]
     model, loss_func, params, data, batch_size_fn = kfac_exact_case
@@ -87,7 +92,8 @@ def test_kfac_type2(
         permutation = randperm(len(params))
         params = [params[i] for i in permutation]
 
-    ggn = ggn_block_diagonal(
+    ggn = block_diagonal(
+        GGNLinearOperator,
         model,
         loss_func,
         params,
@@ -103,10 +109,11 @@ def test_kfac_type2(
         batch_size_fn=batch_size_fn,
         fisher_type=FisherType.TYPE2,
         separate_weight_and_bias=separate_weight_and_bias,
+        correct_eigenvalues=correct_eigenvalues,
     )
     kfac_mat = kfac @ eye(kfac.shape[1])
 
-    report_nonclose(ggn, kfac_mat)
+    report_nonclose(ggn, kfac_mat, atol=1e-6)
 
     # Check that input covariances were not computed
     if exclude == "weight":
@@ -121,6 +128,9 @@ def test_kfac_type2(
     "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
 )
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
+@mark.parametrize(
+    "correct_eigenvalues", [False, True], ids=["", "eigenvalue_corrected"]
+)
 def test_kfac_type2_weight_sharing(
     kfac_weight_sharing_exact_case: Tuple[
         Union[WeightShareModel, Conv2dModel],
@@ -132,6 +142,7 @@ def test_kfac_type2_weight_sharing(
     shuffle: bool,
     exclude: str,
     separate_weight_and_bias: bool,
+    correct_eigenvalues: bool,
 ):
     """Test KFAC for linear weight-sharing layers against the exact GGN.
 
@@ -145,6 +156,7 @@ def test_kfac_type2_weight_sharing(
             or ``None``.
         separate_weight_and_bias: Whether to treat weight and bias as separate blocks in
             the KFAC matrix.
+        correct_eigenvalues: Whether EKFAC should be used.
     """
     assert exclude in [None, "weight", "bias"]
     model, loss_func, params, data, batch_size_fn = kfac_weight_sharing_exact_case
@@ -162,7 +174,8 @@ def test_kfac_type2_weight_sharing(
         permutation = randperm(len(params))
         params = [params[i] for i in permutation]
 
-    ggn = ggn_block_diagonal(
+    ggn = block_diagonal(
+        GGNLinearOperator,
         model,
         loss_func,
         params,
@@ -179,6 +192,7 @@ def test_kfac_type2_weight_sharing(
         fisher_type=FisherType.TYPE2,
         kfac_approx=setting,  # choose KFAC approximation consistent with setting
         separate_weight_and_bias=separate_weight_and_bias,
+        correct_eigenvalues=correct_eigenvalues,
     )
     kfac_mat = kfac @ eye(kfac.shape[1])
 
@@ -190,11 +204,15 @@ def test_kfac_type2_weight_sharing(
 
 
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
+@mark.parametrize(
+    "correct_eigenvalues", [False, True], ids=["", "eigenvalue_corrected"]
+)
 def test_kfac_mc(
     kfac_exact_case: Tuple[
         Module, MSELoss, List[Parameter], Iterable[Tuple[Tensor, Tensor]]
     ],
     shuffle: bool,
+    correct_eigenvalues: bool,
 ):
     """Test the KFAC implementation using MC samples against the exact GGN.
 
@@ -202,6 +220,7 @@ def test_kfac_mc(
         kfac_exact_case: A fixture that returns a model, loss function, list of
             parameters, and data.
         shuffle: Whether to shuffle the parameters before computing the KFAC matrix.
+        correct_eigenvalues: Whether EKFAC should be used.
     """
     model, loss_func, params, data, batch_size_fn = kfac_exact_case
 
@@ -209,8 +228,8 @@ def test_kfac_mc(
         permutation = randperm(len(params))
         params = [params[i] for i in permutation]
 
-    ggn = ggn_block_diagonal(
-        model, loss_func, params, data, batch_size_fn=batch_size_fn
+    ggn = block_diagonal(
+        GGNLinearOperator, model, loss_func, params, data, batch_size_fn=batch_size_fn
     )
     kfac = KFACLinearOperator(
         model,
@@ -218,7 +237,9 @@ def test_kfac_mc(
         params,
         data,
         batch_size_fn=batch_size_fn,
-        mc_samples=2_000,
+        fisher_type=FisherType.MC,
+        mc_samples=3_000,
+        correct_eigenvalues=correct_eigenvalues,
     )
     kfac_mat = kfac @ eye(kfac.shape[1])
 
@@ -230,6 +251,9 @@ def test_kfac_mc(
 
 @mark.parametrize("setting", [KFACType.EXPAND, KFACType.REDUCE])
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
+@mark.parametrize(
+    "correct_eigenvalues", [False, True], ids=["", "eigenvalue_corrected"]
+)
 def test_kfac_mc_weight_sharing(
     kfac_weight_sharing_exact_case: Tuple[
         Union[WeightShareModel, Conv2dModel],
@@ -239,6 +263,7 @@ def test_kfac_mc_weight_sharing(
     ],
     setting: str,
     shuffle: bool,
+    correct_eigenvalues: bool,
 ):
     """Test KFAC-MC for linear layers with weight sharing against the exact GGN.
 
@@ -248,6 +273,7 @@ def test_kfac_mc_weight_sharing(
         setting: The weight-sharing setting to use. Can be ``KFACType.EXPAND`` or
             ``KFACType.REDUCE``.
         shuffle: Whether to shuffle the parameters before computing the KFAC matrix.
+        correct_eigenvalues: Whether EKFAC should be used.
     """
     model, loss_func, params, data, batch_size_fn = kfac_weight_sharing_exact_case
     model.setting = setting
@@ -260,8 +286,8 @@ def test_kfac_mc_weight_sharing(
         permutation = randperm(len(params))
         params = [params[i] for i in permutation]
 
-    ggn = ggn_block_diagonal(
-        model, loss_func, params, data, batch_size_fn=batch_size_fn
+    ggn = block_diagonal(
+        GGNLinearOperator, model, loss_func, params, data, batch_size_fn=batch_size_fn
     )
     kfac = KFACLinearOperator(
         model,
@@ -270,8 +296,9 @@ def test_kfac_mc_weight_sharing(
         data,
         batch_size_fn=batch_size_fn,
         fisher_type=FisherType.MC,
-        mc_samples=2_000,
+        mc_samples=4_000,
         kfac_approx=setting,  # choose KFAC approximation consistent with setting
+        correct_eigenvalues=correct_eigenvalues,
     )
     kfac_mat = kfac @ eye(kfac.shape[1])
 
@@ -281,6 +308,9 @@ def test_kfac_mc_weight_sharing(
     report_nonclose(ggn, kfac_mat, rtol=rtol, atol=atol)
 
 
+@mark.parametrize(
+    "correct_eigenvalues", [False, True], ids=["", "eigenvalue_corrected"]
+)
 def test_kfac_one_datum(
     kfac_exact_one_datum_case: Tuple[
         Module,
@@ -288,11 +318,12 @@ def test_kfac_one_datum(
         List[Parameter],
         Iterable[Tuple[Tensor, Tensor]],
     ],
+    correct_eigenvalues: bool,
 ):
     model, loss_func, params, data, batch_size_fn = kfac_exact_one_datum_case
 
-    ggn = ggn_block_diagonal(
-        model, loss_func, params, data, batch_size_fn=batch_size_fn
+    ggn = block_diagonal(
+        GGNLinearOperator, model, loss_func, params, data, batch_size_fn=batch_size_fn
     )
     kfac = KFACLinearOperator(
         model,
@@ -301,12 +332,16 @@ def test_kfac_one_datum(
         data,
         batch_size_fn=batch_size_fn,
         fisher_type=FisherType.TYPE2,
+        correct_eigenvalues=correct_eigenvalues,
     )
     kfac_mat = kfac @ eye(kfac.shape[1])
 
     report_nonclose(ggn, kfac_mat)
 
 
+@mark.parametrize(
+    "correct_eigenvalues", [False, True], ids=["", "eigenvalue_corrected"]
+)
 def test_kfac_mc_one_datum(
     kfac_exact_one_datum_case: Tuple[
         Module,
@@ -314,11 +349,12 @@ def test_kfac_mc_one_datum(
         List[Parameter],
         Iterable[Tuple[Tensor, Tensor]],
     ],
+    correct_eigenvalues: bool,
 ):
     model, loss_func, params, data, batch_size_fn = kfac_exact_one_datum_case
 
-    ggn = ggn_block_diagonal(
-        model, loss_func, params, data, batch_size_fn=batch_size_fn
+    ggn = block_diagonal(
+        GGNLinearOperator, model, loss_func, params, data, batch_size_fn=batch_size_fn
     )
     kfac = KFACLinearOperator(
         model,
@@ -326,7 +362,9 @@ def test_kfac_mc_one_datum(
         params,
         data,
         batch_size_fn=batch_size_fn,
+        fisher_type=FisherType.MC,
         mc_samples=11_000,
+        correct_eigenvalues=correct_eigenvalues,
     )
     kfac_mat = kfac @ eye(kfac.shape[1])
 
@@ -336,6 +374,15 @@ def test_kfac_mc_one_datum(
     report_nonclose(ggn, kfac_mat, rtol=rtol, atol=atol)
 
 
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+@mark.parametrize(
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
+@mark.parametrize(
+    "correct_eigenvalues", [False, True], ids=["", "eigenvalue_corrected"]
+)
 def test_kfac_ef_one_datum(
     kfac_exact_one_datum_case: Tuple[
         Module,
@@ -343,16 +390,25 @@ def test_kfac_ef_one_datum(
         List[Parameter],
         Iterable[Tuple[Tensor, Tensor]],
     ],
+    separate_weight_and_bias: bool,
+    exclude: str,
+    correct_eigenvalues: bool,
 ):
     model, loss_func, params, data, batch_size_fn = kfac_exact_one_datum_case
 
-    ef_blocks = []  # list of per-parameter EFs
-    for param in params:
-        ef = EFLinearOperator(
-            model, loss_func, [param], data, batch_size_fn=batch_size_fn
-        )
-        ef_blocks.append(ef @ eye(ef.shape[1]))
-    ef = block_diag(*ef_blocks)
+    if exclude is not None:
+        names = {p.data_ptr(): name for name, p in model.named_parameters()}
+        params = [p for p in params if exclude not in names[p.data_ptr()]]
+
+    ef = block_diagonal(
+        EFLinearOperator,
+        model,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        separate_weight_and_bias=separate_weight_and_bias,
+    )
 
     kfac = KFACLinearOperator(
         model,
@@ -360,11 +416,13 @@ def test_kfac_ef_one_datum(
         params,
         data,
         batch_size_fn=batch_size_fn,
+        separate_weight_and_bias=separate_weight_and_bias,
         fisher_type=FisherType.EMPIRICAL,
+        correct_eigenvalues=correct_eigenvalues,
     )
     kfac_mat = kfac @ eye(kfac.shape[1])
 
-    report_nonclose(ef, kfac_mat)
+    report_nonclose(ef, kfac_mat, atol=1e-7)
 
 
 @mark.parametrize("dev", DEVICES, ids=DEVICES_IDS)
@@ -385,7 +443,7 @@ def test_kfac_inplace_activations(dev: device):
     params = list(model.parameters())
 
     # 1) compare KFAC and GGN
-    ggn = ggn_block_diagonal(model, loss_func, params, data)
+    ggn = block_diagonal(GGNLinearOperator, model, loss_func, params, data)
 
     kfac = KFACLinearOperator(model, loss_func, params, data, mc_samples=2_000)
     kfac_mat = kfac @ eye(kfac.shape[1])
@@ -399,7 +457,7 @@ def test_kfac_inplace_activations(dev: device):
     for mod in model.modules():
         if hasattr(mod, "inplace"):
             mod.inplace = False
-    ggn_no_inplace = ggn_block_diagonal(model, loss_func, params, data)
+    ggn_no_inplace = block_diagonal(GGNLinearOperator, model, loss_func, params, data)
 
     report_nonclose(ggn, ggn_no_inplace)
 
@@ -410,11 +468,15 @@ def test_kfac_inplace_activations(dev: device):
 )
 @mark.parametrize("reduction", ["mean", "sum"])
 @mark.parametrize("dev", DEVICES, ids=DEVICES_IDS)
+@mark.parametrize(
+    "correct_eigenvalues", [False, True], ids=["", "eigenvalue_corrected"]
+)
 def test_multi_dim_output(
     fisher_type: str,
     loss: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
     reduction: str,
     dev: device,
+    correct_eigenvalues: bool,
 ):
     """Test the KFAC implementation for >2d outputs (using a 3d and 4d output).
 
@@ -423,6 +485,7 @@ def test_multi_dim_output(
         loss: The loss function to use.
         reduction: The reduction to use for the loss function.
         dev: The device to run the test on.
+        correct_eigenvalues: Whether EKFAC should be used.
     """
     manual_seed(0)
     # set up loss function, data, and model
@@ -458,13 +521,22 @@ def test_multi_dim_output(
 
     # KFAC for deep linear network with 4d input and output
     params = list(model.parameters())
-    kfac = KFACLinearOperator(
-        model,
-        loss_func,
-        params,
-        data,
-        fisher_type=fisher_type,
-    )
+    context = (
+        raises(NotImplementedError, match="eigenvalues")
+        if correct_eigenvalues and fisher_type == FisherType.FORWARD_ONLY
+        else nullcontext()
+    )  # EKFAC for FOOF is currently not supported
+    with context:
+        kfac = KFACLinearOperator(
+            model,
+            loss_func,
+            params,
+            data,
+            fisher_type=fisher_type,
+            correct_eigenvalues=correct_eigenvalues,
+        )
+    if correct_eigenvalues and fisher_type == FisherType.FORWARD_ONLY:
+        return
     kfac_mat = kfac @ eye(kfac.shape[1])
 
     # KFAC for deep linear network with 4d input and equivalent 2d output
@@ -489,6 +561,7 @@ def test_multi_dim_output(
         params_flat,
         data_flat,
         fisher_type=fisher_type,
+        correct_eigenvalues=correct_eigenvalues,
     )
     kfac_flat_mat = kfac_flat @ eye(kfac_flat.shape[1])
 
@@ -499,11 +572,15 @@ def test_multi_dim_output(
 @mark.parametrize(
     "loss", [MSELoss, CrossEntropyLoss, BCEWithLogitsLoss], ids=["mse", "ce", "bce"]
 )
+@mark.parametrize(
+    "correct_eigenvalues", [False, True], ids=["", "eigenvalue_corrected"]
+)
 @mark.parametrize("dev", DEVICES, ids=DEVICES_IDS)
-def test_expand_setting_scaling(
+def test_expand_setting_scaling(  # noqa: C901
     fisher_type: str,
     loss: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
     dev: device,
+    correct_eigenvalues: bool,
 ):
     """Test KFAC for correct scaling for expand setting with mean reduction loss.
 
@@ -513,6 +590,7 @@ def test_expand_setting_scaling(
         fisher_type: The type of Fisher matrix to use.
         loss: The loss function to use.
         dev: The device to run the test on.
+        correct_eigenvalues: Whether EKFAC should be used.
     """
     manual_seed(0)
 
@@ -538,14 +616,26 @@ def test_expand_setting_scaling(
     params = list(model.parameters())
 
     # KFAC with sum reduction
+    params = list(model.parameters())
     loss_func = loss(reduction="sum").to(dev)
-    kfac_sum = KFACLinearOperator(
-        model,
-        loss_func,
-        params,
-        data,
-        fisher_type=fisher_type,
-    )
+
+    context = (
+        raises(NotImplementedError, match="eigenvalues")
+        if correct_eigenvalues and fisher_type == FisherType.FORWARD_ONLY
+        else nullcontext()
+    )  # EKFAC for FOOF is currently not supported
+    with context:
+        kfac_sum = KFACLinearOperator(
+            model,
+            loss_func,
+            params,
+            data,
+            fisher_type=fisher_type,
+            correct_eigenvalues=correct_eigenvalues,
+        )
+    if correct_eigenvalues and fisher_type == FisherType.FORWARD_ONLY:
+        return
+
     # FOOF does not scale the gradient covariances, even when using a mean reduction
     if fisher_type != FisherType.FORWARD_ONLY:
         # Simulate a mean reduction by manually scaling the gradient covariances
@@ -554,8 +644,17 @@ def test_expand_setting_scaling(
             output_random_variable_size = 3
             # MSE loss averages over number of output channels
             loss_term_factor *= output_random_variable_size
-        for ggT in kfac_sum._gradient_covariances.values():
-            ggT /= kfac_sum._N_data * loss_term_factor
+        correction = kfac_sum._N_data * loss_term_factor
+        if correct_eigenvalues:
+            for eigenvalues in kfac_sum._corrected_eigenvalues.values():
+                if isinstance(eigenvalues, dict):
+                    for eigenvals in eigenvalues.values():
+                        eigenvals /= correction
+                else:
+                    eigenvalues /= correction
+        else:
+            for ggT in kfac_sum._gradient_covariances.values():
+                ggT /= correction
     kfac_simulated_mean_mat = kfac_sum @ eye(kfac_sum.shape[1])
 
     # KFAC with mean reduction
@@ -566,10 +665,11 @@ def test_expand_setting_scaling(
         params,
         data,
         fisher_type=fisher_type,
+        correct_eigenvalues=correct_eigenvalues,
     )
     kfac_mean_mat = kfac_mean @ eye(kfac_mean.shape[1])
 
-    report_nonclose(kfac_simulated_mean_mat, kfac_mean_mat)
+    report_nonclose(kfac_simulated_mean_mat, kfac_mean_mat, atol=1e-7)
 
 
 def test_bug_device_change_invalidates_parameter_mapping():
@@ -605,9 +705,22 @@ def test_bug_device_change_invalidates_parameter_mapping():
     report_nonclose(kfac_x_gpu, kfac_x_cpu)
 
 
-def test_torch_matmat(case):
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+@mark.parametrize(
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
+@mark.parametrize(
+    "correct_eigenvalues", [False, True], ids=["", "eigenvalue_corrected"]
+)
+def test_torch_matmat(case, separate_weight_and_bias, exclude, correct_eigenvalues):
     """Test that the torch_matmat method of KFACLinearOperator works."""
     model, loss_func, params, data, batch_size_fn = case
+
+    if exclude is not None:
+        names = {p.data_ptr(): name for name, p in model.named_parameters()}
+        params = [p for p in params if exclude not in names[p.data_ptr()]]
 
     kfac = KFACLinearOperator(
         model,
@@ -615,6 +728,8 @@ def test_torch_matmat(case):
         params,
         data,
         batch_size_fn=batch_size_fn,
+        separate_weight_and_bias=separate_weight_and_bias,
+        correct_eigenvalues=correct_eigenvalues,
     )
     device = kfac._device
     # KFAC.dtype is a numpy data type
@@ -645,9 +760,22 @@ def test_torch_matmat(case):
     report_nonclose(kfac_x, kfac_x_numpy, rtol=1e-4)
 
 
-def test_torch_matvec(case):
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+@mark.parametrize(
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
+@mark.parametrize(
+    "correct_eigenvalues", [False, True], ids=["", "eigenvalue_corrected"]
+)
+def test_torch_matvec(case, separate_weight_and_bias, exclude, correct_eigenvalues):
     """Test that the torch_matvec method of KFACLinearOperator works."""
     model, loss_func, params, data, batch_size_fn = case
+
+    if exclude is not None:
+        names = {p.data_ptr(): name for name, p in model.named_parameters()}
+        params = [p for p in params if exclude not in names[p.data_ptr()]]
 
     kfac = KFACLinearOperator(
         model,
@@ -655,6 +783,8 @@ def test_torch_matvec(case):
         params,
         data,
         batch_size_fn=batch_size_fn,
+        separate_weight_and_bias=separate_weight_and_bias,
+        correct_eigenvalues=correct_eigenvalues,
     )
     device = kfac._device
     # KFAC.dtype is a numpy data type
@@ -693,7 +823,10 @@ def test_torch_matvec(case):
     report_nonclose(kfac_x, kfac_x_numpy)
 
 
-def test_torch_matvec_list_output_shapes(cnn_case):
+@mark.parametrize(
+    "correct_eigenvalues", [False, True], ids=["", "eigenvalue_corrected"]
+)
+def test_torch_matvec_list_output_shapes(cnn_case, correct_eigenvalues):
     """Test output shapes with list input format (issue #124)."""
     model, loss_func, params, data, batch_size_fn = cnn_case
     kfac = KFACLinearOperator(
@@ -702,6 +835,7 @@ def test_torch_matvec_list_output_shapes(cnn_case):
         params,
         data,
         batch_size_fn=batch_size_fn,
+        correct_eigenvalues=correct_eigenvalues,
     )
     vec = [rand_like(p) for p in kfac._params]
     out_list = kfac.torch_matvec(vec)
@@ -721,7 +855,12 @@ def test_torch_matvec_list_output_shapes(cnn_case):
 @mark.parametrize(
     "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
 )
-def test_trace(case, exclude, separate_weight_and_bias, check_deterministic):
+@mark.parametrize(
+    "correct_eigenvalues", [False, True], ids=["", "eigenvalue_corrected"]
+)
+def test_trace(
+    case, exclude, separate_weight_and_bias, check_deterministic, correct_eigenvalues
+):
     """Test that the trace property of KFACLinearOperator works."""
     model, loss_func, params, data, batch_size_fn = case
 
@@ -737,6 +876,7 @@ def test_trace(case, exclude, separate_weight_and_bias, check_deterministic):
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
         check_deterministic=check_deterministic,
+        correct_eigenvalues=correct_eigenvalues,
     )
 
     # Check for equivalence of trace property and naive trace computation
@@ -761,7 +901,12 @@ def test_trace(case, exclude, separate_weight_and_bias, check_deterministic):
 @mark.parametrize(
     "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
 )
-def test_frobenius_norm(case, exclude, separate_weight_and_bias, check_deterministic):
+@mark.parametrize(
+    "correct_eigenvalues", [False, True], ids=["", "eigenvalue_corrected"]
+)
+def test_frobenius_norm(
+    case, exclude, separate_weight_and_bias, check_deterministic, correct_eigenvalues
+):
     """Test that the Frobenius norm property of KFACLinearOperator works."""
     model, loss_func, params, data, batch_size_fn = case
 
@@ -777,6 +922,7 @@ def test_frobenius_norm(case, exclude, separate_weight_and_bias, check_determini
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
         check_deterministic=check_deterministic,
+        correct_eigenvalues=correct_eigenvalues,
     )
 
     # Check for equivalence of frobenius_norm property and the naive computation
@@ -801,7 +947,12 @@ def test_frobenius_norm(case, exclude, separate_weight_and_bias, check_determini
 @mark.parametrize(
     "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
 )
-def test_det(case, exclude, separate_weight_and_bias, check_deterministic):
+@mark.parametrize(
+    "correct_eigenvalues", [False, True], ids=["", "eigenvalue_corrected"]
+)
+def test_det(
+    case, exclude, separate_weight_and_bias, check_deterministic, correct_eigenvalues
+):
     """Test that the determinant property of KFACLinearOperator works."""
     model, loss_func, params, data, batch_size_fn = case
 
@@ -817,21 +968,32 @@ def test_det(case, exclude, separate_weight_and_bias, check_deterministic):
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
         check_deterministic=check_deterministic,
+        correct_eigenvalues=correct_eigenvalues,
     )
 
     # add damping manually to avoid singular matrices
     if not check_deterministic:
         kfac._compute_kfac()
-    assert kfac._input_covariances or kfac._gradient_covariances
+
     delta = 1.0  # requires much larger damping value compared to ``logdet``
-    for aaT in kfac._input_covariances.values():
-        aaT.add_(
-            torch_eye(aaT.shape[0], dtype=aaT.dtype, device=aaT.device), alpha=delta
-        )
-    for ggT in kfac._gradient_covariances.values():
-        ggT.add_(
-            torch_eye(ggT.shape[0], dtype=ggT.dtype, device=ggT.device), alpha=delta
-        )
+    if correct_eigenvalues:
+        assert kfac._corrected_eigenvalues
+        for eigenvalues in kfac._corrected_eigenvalues.values():
+            if isinstance(eigenvalues, dict):
+                for eigenvals in eigenvalues.values():
+                    eigenvals.add_(delta)
+            else:
+                eigenvalues.add_(delta)
+    else:
+        assert kfac._input_covariances or kfac._gradient_covariances
+        for aaT in kfac._input_covariances.values():
+            aaT.add_(
+                torch_eye(aaT.shape[0], dtype=aaT.dtype, device=aaT.device), alpha=delta
+            )
+        for ggT in kfac._gradient_covariances.values():
+            ggT.add_(
+                torch_eye(ggT.shape[0], dtype=ggT.dtype, device=ggT.device), alpha=delta
+            )
 
     # Check for equivalence of the det property and naive determinant computation
     determinant = kfac.det
@@ -857,7 +1019,12 @@ def test_det(case, exclude, separate_weight_and_bias, check_deterministic):
 @mark.parametrize(
     "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
 )
-def test_logdet(case, exclude, separate_weight_and_bias, check_deterministic):
+@mark.parametrize(
+    "correct_eigenvalues", [False, True], ids=["", "eigenvalue_corrected"]
+)
+def test_logdet(
+    case, exclude, separate_weight_and_bias, check_deterministic, correct_eigenvalues
+):
     """Test that the log determinant property of KFACLinearOperator works."""
     model, loss_func, params, data, batch_size_fn = case
 
@@ -873,21 +1040,32 @@ def test_logdet(case, exclude, separate_weight_and_bias, check_deterministic):
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
         check_deterministic=check_deterministic,
+        correct_eigenvalues=correct_eigenvalues,
     )
 
     # add damping manually to avoid singular matrices
     if not check_deterministic:
         kfac._compute_kfac()
-    assert kfac._input_covariances or kfac._gradient_covariances
+
     delta = 1e-3  # only requires much smaller damping value compared to ``det``
-    for aaT in kfac._input_covariances.values():
-        aaT.add_(
-            torch_eye(aaT.shape[0], dtype=aaT.dtype, device=aaT.device), alpha=delta
-        )
-    for ggT in kfac._gradient_covariances.values():
-        ggT.add_(
-            torch_eye(ggT.shape[0], dtype=ggT.dtype, device=ggT.device), alpha=delta
-        )
+    if correct_eigenvalues:
+        assert kfac._corrected_eigenvalues
+        for eigenvalues in kfac._corrected_eigenvalues.values():
+            if isinstance(eigenvalues, dict):
+                for eigenvals in eigenvalues.values():
+                    eigenvals.add_(delta)
+            else:
+                eigenvalues.add_(delta)
+    else:
+        assert kfac._input_covariances or kfac._gradient_covariances
+        for aaT in kfac._input_covariances.values():
+            aaT.add_(
+                torch_eye(aaT.shape[0], dtype=aaT.dtype, device=aaT.device), alpha=delta
+            )
+        for ggT in kfac._gradient_covariances.values():
+            ggT.add_(
+                torch_eye(ggT.shape[0], dtype=ggT.dtype, device=ggT.device), alpha=delta
+            )
 
     # Check for equivalence of the logdet property and naive log determinant computation
     log_det = kfac.logdet
@@ -910,11 +1088,15 @@ def test_logdet(case, exclude, separate_weight_and_bias, check_deterministic):
     "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
 )
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
+@mark.parametrize(
+    "correct_eigenvalues", [False, True], ids=["", "eigenvalue_corrected"]
+)
 def test_forward_only_fisher_type(
     case: Tuple[Module, MSELoss, List[Parameter], Iterable[Tuple[Tensor, Tensor]]],
     shuffle: bool,
     exclude: str,
     separate_weight_and_bias: bool,
+    correct_eigenvalues: bool,
 ):
     """Test the KFAC with forward-only Fisher (used for FOOF) implementation.
 
@@ -926,6 +1108,7 @@ def test_forward_only_fisher_type(
             or ``None``.
         separate_weight_and_bias: Whether to treat weight and bias as separate blocks in
             the KFAC matrix.
+        correct_eigenvalues: Whether EKFAC should be used.
     """
     assert exclude in [None, "weight", "bias"]
     model, loss_func, params, data, batch_size_fn = case
@@ -956,16 +1139,25 @@ def test_forward_only_fisher_type(
         )
     simulated_foof_mat = foof_simulated @ eye(foof_simulated.shape[1])
 
-    # Compute KFAC with `fisher_type=FisherType.FORWARD_ONLY`
-    foof = KFACLinearOperator(
-        model,
-        loss_func,
-        params,
-        data,
-        batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
-        fisher_type=FisherType.FORWARD_ONLY,
-    )
+    # Compute KFAC with `fisher_type=FisherType.FORWARD_ONLY
+    context = (
+        raises(NotImplementedError, match="eigenvalues")
+        if correct_eigenvalues
+        else nullcontext()
+    )  # EKFAC for FOOF is currently not supported
+    with context:
+        foof = KFACLinearOperator(
+            model,
+            loss_func,
+            params,
+            data,
+            batch_size_fn=batch_size_fn,
+            separate_weight_and_bias=separate_weight_and_bias,
+            fisher_type=FisherType.FORWARD_ONLY,
+            correct_eigenvalues=correct_eigenvalues,
+        )
+    if correct_eigenvalues:
+        return
     foof_mat = foof @ eye(foof.shape[1])
 
     # Check for equivalence
@@ -1024,7 +1216,8 @@ def test_forward_only_fisher_type_exact_case(
         params = [params[i] for i in permutation]
 
     # Compute exact block-diagonal GGN
-    ggn = ggn_block_diagonal(
+    ggn = block_diagonal(
+        GGNLinearOperator,
         model,
         loss_func,
         params,
@@ -1128,7 +1321,8 @@ def test_forward_only_fisher_type_exact_weight_sharing_case(
         permutation = randperm(len(params))
         params = [params[i] for i in permutation]
 
-    ggn = ggn_block_diagonal(
+    ggn = block_diagonal(
+        GGNLinearOperator,
         model,
         loss_func,
         params,
@@ -1199,7 +1393,10 @@ def test_kfac_does_affect_grad():
         assert allclose(grad_before, p.grad)
 
 
-def test_save_and_load_state_dict():
+@mark.parametrize(
+    "correct_eigenvalues", [False, True], ids=["", "eigenvalue_corrected"]
+)
+def test_save_and_load_state_dict(correct_eigenvalues):
     """Test that KFACLinearOperator can be saved and loaded from state dict."""
     manual_seed(0)
     batch_size, D_in, D_out = 4, 3, 2
@@ -1214,6 +1411,7 @@ def test_save_and_load_state_dict():
         MSELoss(reduction="sum"),
         params,
         [(X, y)],
+        correct_eigenvalues=correct_eigenvalues,
     )
 
     # save state dict
@@ -1270,7 +1468,10 @@ def test_save_and_load_state_dict():
     report_nonclose(kfac @ test_vec, kfac_new @ test_vec)
 
 
-def test_from_state_dict():
+@mark.parametrize(
+    "correct_eigenvalues", [False, True], ids=["", "eigenvalue_corrected"]
+)
+def test_from_state_dict(correct_eigenvalues):
     """Test that KFACLinearOperator can be created from state dict."""
     manual_seed(0)
     batch_size, D_in, D_out = 4, 3, 2
@@ -1285,6 +1486,7 @@ def test_from_state_dict():
         MSELoss(reduction="sum"),
         params,
         [(X, y)],
+        correct_eigenvalues=correct_eigenvalues,
     )
 
     # save state dict
