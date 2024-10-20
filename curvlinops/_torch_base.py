@@ -6,7 +6,7 @@ from typing import Callable, List, Optional, Tuple, Union
 
 import numpy
 from scipy.sparse.linalg import LinearOperator
-from torch import Size, Tensor, cat, device, dtype, from_numpy
+from torch import Size, Tensor, as_tensor, cat, device, dtype
 
 
 class PyTorchLinearOperator:
@@ -19,7 +19,7 @@ class PyTorchLinearOperator:
     One main difference is that the linear operators cannot only multiply
     vectors/matrices specified as single PyTorch tensors, but also
     vectors/matrices specified in tensor list format. This is common in
-    PyTorch, where the space a linear operator acts on is a tensor product
+    PyTorch, where the space a linear operator acts on is a tensor product.
 
     Functions that need to be implemented are ``_matmat`` and ``_adjoint``.
 
@@ -342,7 +342,7 @@ class PyTorchLinearOperator:
                 The output matrix in NumPy format.
             """
             X_dtype = X.dtype
-            X_torch = from_numpy(X).to(device, dtype)
+            X_torch = as_tensor(X, dtype=dtype, device=device)
             AX_torch = f(X_torch)
             return AX_torch.detach().cpu().numpy().astype(X_dtype)
 
