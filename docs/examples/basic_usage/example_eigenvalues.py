@@ -191,7 +191,7 @@ def power_method(
 # here to get better convergence, and we have to use relatively large tolerances for the
 # comparison (which we didn't when comparing :code:`eigsh` with :code:`eigh`).
 
-top_k_evals_power, _ = power_method(H, tol=1e-4, k=3)
+top_k_evals_power, _ = power_method(H, tol=1e-4, k=k)
 print(f"Comparing leading {k} Hessian eigenvalues (eigsh vs. power).")
 report_nonclose(top_k_evals_functorch, top_k_evals_power, rtol=2e-2, atol=1e-6)
 
@@ -206,7 +206,7 @@ H = HessianLinearOperator(model, loss_function, params, data, progressbar=True)
 
 # determine number of matrix-vector products used by `eigsh`
 with StringIO() as buf, redirect_stderr(buf):
-    top_k_evals, _ = scipy.sparse.linalg.eigsh(H, k=3, which="LA")
+    top_k_evals, _ = scipy.sparse.linalg.eigsh(H, k=k, which="LA")
     # The tqdm progressbar will print "matmat" for each batch in a matrix-vector
     # product. Therefore, we need to divide by the number of batches
     queries_eigsh = buf.getvalue().count("matmat") // len(data)
@@ -214,7 +214,7 @@ print(f"eigsh used {queries_eigsh} matrix-vector products.")
 
 # determine number of matrix-vector products used by power iteration
 with StringIO() as buf, redirect_stderr(buf):
-    top_k_evals_power, _ = power_method(H, k=3)
+    top_k_evals_power, _ = power_method(H, k=k)
     # The tqdm progressbar will print "matmat" for each batch in a matrix-vector
     # product. Therefore, we need to divide by the number of batches
     queries_power = buf.getvalue().count("matmat") // len(data)
