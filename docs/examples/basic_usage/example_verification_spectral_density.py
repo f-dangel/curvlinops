@@ -167,27 +167,39 @@ with plt.rc_context(plot_config):
 # Let's try out different values for :code:`kappa`:
 
 kappas = [1.1, 3, 10.0]
-fig, ax = plt.subplots(ncols=len(kappas), figsize=(12, 3), sharex=True, sharey=True)
-
 cache = LanczosApproximateSpectrumCached(Y_linop, ncv, boundaries)
 
-for idx, kappa in enumerate(kappas):
-    grid, density = cache.approximate_spectrum(
-        num_repeats=num_repeats, num_points=num_points, kappa=kappa, margin=margin
-    )
+# use `tueplots` to make the plot look pretty
+plot_config = bundles.icml2024(column="full", ncols=len(kappas))
 
-    ax[idx].hist(Y_evals, bins=bins, log=True, density=True, label="Exact")
-    ax[idx].plot(grid, density, label=rf"$\kappa = {kappa}$")
-    ax[idx].legend()
+with plt.rc_context(plot_config):
+    fig, ax = plt.subplots(ncols=len(kappas), sharex=True, sharey=True)
+    for idx, kappa in enumerate(kappas):
+        grid, density = cache.approximate_spectrum(
+            num_repeats=num_repeats, num_points=num_points, kappa=kappa, margin=margin
+        )
 
-    ax[idx].set_xlabel("Eigenvalue")
-    ax[idx].set_ylabel("Spectral density")
-    ax[idx].set_ylim(bottom=1e-5, top=1e1)
+        ax[idx].hist(
+            Y_evals,
+            bins=bins,
+            log=True,
+            density=True,
+            label="Exact",
+            edgecolor="white",
+            lw=0.5,
+        )
+        ax[idx].plot(grid, density, label=rf"$\kappa = {kappa}$")
+        ax[idx].legend()
+
+        ax[idx].set_xlabel(r"Eigenvalue $\lambda$")
+        if idx == 0:
+            ax[idx].set_ylabel(r"Spectral density $\rho(\lambda)$")
+        ax[idx].set_ylim(bottom=1e-5, top=1e1)
 
 # %%
 #
 # With rank deflation
-# ^^^^^^^^^^^^^^^^^^
+# ^^^^^^^^^^^^^^^^^^^
 #
 # As you can see in the above plot, the spectrum consists of a bulk and three
 # outliers. We can project out the three (or in general :code:`k`) outliers to
@@ -221,25 +233,37 @@ grid_no_top, density_no_top = lanczos_approximate_spectrum(
 #
 # Here is the visualization, with outliers marked separately:
 
-plt.figure()
-plt.title(f"With rank deflation (top {k})")
-plt.xlabel("Eigenvalue")
-plt.ylabel("Spectral density")
+# use `tueplots` to make the plot look pretty
+plot_config = bundles.icml2024(column="half")
 
-plt.hist(Y_evals, bins=bins, log=True, density=True, label="Exact")
-plt.plot(grid_no_top, density_no_top, label="Approximate (deflated)")
+with plt.rc_context(plot_config):
+    plt.figure()
+    plt.title(f"With rank deflation (top {k})")
+    plt.xlabel(r"Eigenvalue $\lambda$")
+    plt.ylabel(r"Spectral density $\rho(\lambda)$")
 
-plt.plot(
-    Y_top_evals,
-    len(Y_top_evals) * [1 / Y_linop.shape[0]],
-    linestyle="",
-    marker="o",
-    label=f"Top {k}",
-)
+    plt.hist(
+        Y_evals,
+        bins=bins,
+        log=True,
+        density=True,
+        label="Exact",
+        edgecolor="white",
+        lw=0.5,
+    )
+    plt.plot(grid_no_top, density_no_top, label="Approximate (deflated)")
 
-# same ylimits as in the paper
-plt.ylim(bottom=1e-5, top=1e1)
-plt.legend()
+    plt.plot(
+        Y_top_evals,
+        len(Y_top_evals) * [1 / Y_linop.shape[0]],
+        linestyle="",
+        marker="o",
+        label=f"Top {k}",
+    )
+
+    # same ylimits as in the paper
+    plt.ylim(bottom=1e-5, top=1e1)
+    plt.legend()
 
 # %%
 #
@@ -383,26 +407,36 @@ with plt.rc_context(plot_config):
 #
 # Let's try out different values for :code:`kappa`:
 
-plt.close()
-
 kappas = [1.01, 1.1, 3]
-fig, ax = plt.subplots(ncols=len(kappas), figsize=(12, 3), sharex=True, sharey=True)
-
 cache = LanczosApproximateLogSpectrumCached(Y_linop, ncv, boundaries)
 
-for idx, kappa in enumerate(kappas):
-    grid, density = cache.approximate_log_spectrum(
-        num_repeats=num_repeats,
-        num_points=num_points,
-        kappa=kappa,
-        margin=margin,
-        epsilon=epsilon,
-    )
+# use `tueplots` to make the plot look pretty
+plot_config = bundles.icml2024(column="full", ncols=len(kappas))
 
-    ax[idx].hist(exp(Y_log_abs_evals), bins=bins, log=True, density=True, label="Exact")
-    ax[idx].loglog(grid, density, label=rf"$\kappa = {kappa}$")
-    ax[idx].legend()
+with plt.rc_context(plot_config):
+    fig, ax = plt.subplots(ncols=len(kappas), sharex=True, sharey=True)
+    for idx, kappa in enumerate(kappas):
+        grid, density = cache.approximate_log_spectrum(
+            num_repeats=num_repeats,
+            num_points=num_points,
+            kappa=kappa,
+            margin=margin,
+            epsilon=epsilon,
+        )
 
-    ax[idx].set_xlabel("Eigenvalue")
-    ax[idx].set_ylabel("Spectral density")
-    ax[idx].set_ylim(bottom=1e-14, top=1e-2)
+        ax[idx].hist(
+            exp(Y_log_abs_evals),
+            bins=bins,
+            log=True,
+            density=True,
+            label="Exact",
+            edgecolor="white",
+            lw=0.5,
+        )
+        ax[idx].loglog(grid, density, label=rf"$\kappa = {kappa}$")
+        ax[idx].legend()
+
+        ax[idx].set_xlabel(r"Absolute eigenvalue $\nu = |\lambda| + \epsilon$")
+        if idx == 0:
+            ax[idx].set_ylabel(r"Spectral density $\rho(\log \nu)$")
+        ax[idx].set_ylim(bottom=1e-14, top=1e-2)
