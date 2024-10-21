@@ -226,7 +226,7 @@ assert queries_power > queries_eigsh
 #
 # Sadly, the power iteration also does not offer computational benefits, consuming
 # more matrix-vector products than :code:`eigsh`. While it is elegant and simple,
-# it cannot compete with :code:`eigsh`, at least the comparison provided here
+# it cannot compete with :code:`eigsh`, at least in the comparison provided here
 # (note that we used a relative small tolerance for the power iteration, and it will
 # likely deteriorate further if we decrease the tolerance).
 #
