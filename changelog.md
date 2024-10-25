@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added/New
 
+### Fixed/Removed
+
+### Internal
+
+## [2.0.1] - 2024-10-25
+
+Minor bug fixes and documentation polishing.
+
+### Added/New
+
 - Comparison of `eigsh` with power iteration in [eigenvalue
   example](https://curvlinops.readthedocs.io/en/latest/basic_usage/example_eigenvalues.html#sphx-glr-basic-usage-example-eigenvalues-py)
   ([PR](https://github.com/f-dangel/curvlinops/pull/140))
@@ -315,7 +325,8 @@ Adds various new features:
 
 Initial release
 
-[Unreleased]: https://github.com/f-dangel/curvlinops/compare/2.0.0...HEAD
+[Unreleased]: https://github.com/f-dangel/curvlinops/compare/2.0.1...HEAD
+[2.0.1]: https://github.com/f-dangel/curvlinops/releases/tag/2.0.1
 [2.0.0]: https://github.com/f-dangel/curvlinops/releases/tag/2.0.0
 [1.2.0]: https://github.com/f-dangel/curvlinops/releases/tag/1.2.0
 [1.1.0]: https://github.com/f-dangel/curvlinops/releases/tag/1.1.0
