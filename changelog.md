@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added/New
+
+- Comparison of `eigsh` with power iteration in [eigenvalue
+  example](https://curvlinops.readthedocs.io/en/latest/basic_usage/example_eigenvalues.html#sphx-glr-basic-usage-example-eigenvalues-py)
+  ([PR](https://github.com/f-dangel/curvlinops/pull/140))
+
 ### Fixed/Removed
 
 - Deprecate Python 3.8 as it will reach its end of life in October 2024
