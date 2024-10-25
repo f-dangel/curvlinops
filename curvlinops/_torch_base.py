@@ -6,18 +6,7 @@ from typing import Callable, Iterable, List, MutableMapping, Optional, Tuple, Un
 
 import numpy
 from scipy.sparse.linalg import LinearOperator
-from torch import (
-    Size,
-    Tensor,
-    as_tensor,
-    cat,
-    device,
-    dtype,
-    from_numpy,
-    rand,
-    tensor,
-    zeros_like,
-)
+from torch import Size, Tensor, as_tensor, cat, device, dtype, rand, tensor, zeros_like
 from torch.autograd import grad
 from torch.nn import Module, Parameter
 from tqdm import tqdm
