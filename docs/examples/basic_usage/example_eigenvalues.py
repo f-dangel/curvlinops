@@ -116,7 +116,7 @@ report_nonclose(top_k_evals, top_k_evals_functorch)
 # --------------------------------
 #
 # Here, we compare the query efficiency of :func:`scipy.sparse.linalg.eigsh` with the
-# `power iteration <https://en.wikipedia.org/wiki/Power_iteration`_ method, a simple
+# `power iteration <https://en.wikipedia.org/wiki/Power_iteration>`_ method, a simple
 # method to compute the leading eigenvalues (in terms of magnitude). We re-use the im-
 # plementation from the `PyHessian library <https://github.com/amirgholami/PyHessian>`_
 # and adapt it to work with SciPy arrays rather than PyTorch tensors:
