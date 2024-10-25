@@ -74,7 +74,7 @@ H = HessianLinearOperator(model, loss_function, params, data)
 # :math:`k=3` eigenvalues.
 
 k = 3
-which = "LA"  # largest algebraic
+which = "LM"  # largest magnitude
 top_k_evals, _ = scipy.sparse.linalg.eigsh(H, k=k, which=which)
 
 print(f"Leading {k} Hessian eigenvalues: {top_k_evals}")
@@ -116,8 +116,10 @@ report_nonclose(top_k_evals, top_k_evals_functorch)
 # --------------------------------
 #
 # Here, we compare the query efficiency of :func:`scipy.sparse.linalg.eigsh` with the
-# power iteration method. We re-use the implementation from the PyHessian library and
-# adapt it to work with SciPy arrays, rather than PyTorch tensors. It looks as follows:
+# `power iteration <https://en.wikipedia.org/wiki/Power_iteration`_ method, a simple
+# method to compute the leading eigenvalues (in terms of magnitude). We re-use the im-
+# plementation from the `PyHessian library <https://github.com/amirgholami/PyHessian>`_
+# and adapt it to work with SciPy arrays rather than PyTorch tensors:
 
 
 def power_method(
@@ -134,7 +136,7 @@ def power_method(
     Args:
         A: Linear operator of dimension ``D`` whose top eigenpairs will be computed.
         max_iterations: Maximum number of iterations. Defaults to ``100``.
-        tol: Relative tolerance between to consecutive iterations that has to be
+        tol: Relative tolerance between two consecutive iterations that has to be
             reached for convergence. Defaults to ``1e-3``.
         k: Number of eigenpairs to compute. Defaults to ``1``.
 
@@ -189,7 +191,7 @@ def power_method(
 # Let's compute the top-3 eigenvalues via power iteration and verify they roughly match.
 # Note that we are using a smaller :code:`tol` value than the PyHessian default value
 # here to get better convergence, and we have to use relatively large tolerances for the
-# comparison (which we didn't when comparing :code:`eigsh` with :code:`eigh`).
+# comparison (which we didn't do when comparing :code:`eigsh` with :code:`eigh`).
 
 top_k_evals_power, _ = power_method(H, tol=1e-4, k=k)
 print(f"Comparing leading {k} Hessian eigenvalues (eigsh vs. power).")
@@ -206,7 +208,7 @@ H = HessianLinearOperator(model, loss_function, params, data, progressbar=True)
 
 # determine number of matrix-vector products used by `eigsh`
 with StringIO() as buf, redirect_stderr(buf):
-    top_k_evals, _ = scipy.sparse.linalg.eigsh(H, k=k, which="LA")
+    top_k_evals, _ = scipy.sparse.linalg.eigsh(H, k=k, which=which)
     # The tqdm progressbar will print "matmat" for each batch in a matrix-vector
     # product. Therefore, we need to divide by the number of batches
     queries_eigsh = buf.getvalue().count("matmat") // len(data)
