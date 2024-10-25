@@ -9,6 +9,8 @@ plots for synthetic spectra shown in Figure 15 of the paper.
 Here are the imports:
 """
 
+from os import getenv
+
 import matplotlib.pyplot as plt
 from numpy import e, exp, linspace, log, logspace, matmul, ndarray, zeros
 from numpy.linalg import eigh
@@ -23,6 +25,10 @@ from curvlinops.papyan2020traces.spectrum import (
     lanczos_approximate_log_spectrum,
     lanczos_approximate_spectrum,
 )
+
+# LaTeX is not available in Github actions.
+# Therefore, we are turning it off if the script executes on GHA.
+ENABLE_TEX = not getenv("CI")
 
 seed(0)
 
@@ -120,7 +126,7 @@ grid, density = lanczos_approximate_spectrum(
 # exact density:
 
 # use `tueplots` to make the plot look pretty
-plot_config = bundles.icml2024(column="half")
+plot_config = bundles.icml2024(column="half", tex=ENABLE_TEX)
 
 with plt.rc_context(plot_config):
     plt.figure()
@@ -170,7 +176,7 @@ kappas = [1.1, 3, 10.0]
 cache = LanczosApproximateSpectrumCached(Y_linop, ncv, boundaries)
 
 # use `tueplots` to make the plot look pretty
-plot_config = bundles.icml2024(column="full", ncols=len(kappas))
+plot_config = bundles.icml2024(column="full", ncols=len(kappas), tex=ENABLE_TEX)
 
 with plt.rc_context(plot_config):
     fig, ax = plt.subplots(ncols=len(kappas), sharex=True, sharey=True)
@@ -234,7 +240,7 @@ grid_no_top, density_no_top = lanczos_approximate_spectrum(
 # Here is the visualization, with outliers marked separately:
 
 # use `tueplots` to make the plot look pretty
-plot_config = bundles.icml2024(column="half")
+plot_config = bundles.icml2024(column="half", tex=ENABLE_TEX)
 
 with plt.rc_context(plot_config):
     plt.figure()
@@ -358,7 +364,7 @@ grid, density = lanczos_approximate_log_spectrum(
 # Now we can visualize the results:
 
 # use `tueplots` to make the plot look pretty
-plot_config = bundles.icml2024(column="half")
+plot_config = bundles.icml2024(column="half", tex=ENABLE_TEX)
 
 with plt.rc_context(plot_config):
     plt.figure()
@@ -411,7 +417,7 @@ kappas = [1.01, 1.1, 3]
 cache = LanczosApproximateLogSpectrumCached(Y_linop, ncv, boundaries)
 
 # use `tueplots` to make the plot look pretty
-plot_config = bundles.icml2024(column="full", ncols=len(kappas))
+plot_config = bundles.icml2024(column="full", ncols=len(kappas), tex=ENABLE_TEX)
 
 with plt.rc_context(plot_config):
     fig, ax = plt.subplots(ncols=len(kappas), sharex=True, sharey=True)
