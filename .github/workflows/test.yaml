@@ -29,11 +29,11 @@ jobs:
         python -m pip install --upgrade pip
         make install-test
     - name: Run test
-      if: contains('refs/heads/master refs/heads/development', github.ref)
+      if: contains('refs/heads/main', github.ref)
       run: |
         make test
     - name: Run test-light
-      if: contains('refs/heads/master refs/heads/development', github.ref) != 1
+      if: contains('refs/heads/main', github.ref) != 1
       run: |
         make test-light
 

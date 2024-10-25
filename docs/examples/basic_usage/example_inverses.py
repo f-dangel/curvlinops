@@ -70,7 +70,7 @@ params = [p for p in model.parameters() if p.requires_grad]
 loss_function = nn.MSELoss(reduction="mean").to(DEVICE)
 
 
-# %
+# %%
 #
 # Next, let's compute the ingredients for the natural gradient.
 #
