@@ -32,6 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add more matrices in visual tour code example and prettify plots
   ([PR](https://github.com/f-dangel/curvlinops/pull/134))
 
+- Prettify visualizations in [spectral density
+  example](https://curvlinops.readthedocs.io/en/latest/basic_usage/example_verification_spectral_density.html)
+  ([PR](https://github.com/f-dangel/curvlinops/pull/139))
+
 ## [2.0.0] - 2024-08-15
 
 This major release is almost fully backward compatible with the `1.x.y` release

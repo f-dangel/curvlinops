@@ -55,6 +55,7 @@ requires-python = ">=3.9"
 # Dependencies needed to run the tests.
 test = [
     "matplotlib",
+    "tueplots",
     "coveralls",
     "pytest",
     "pytest-cov",
