@@ -78,9 +78,11 @@ def test_ActivationHessianLinearOperator(dev: device):
     # model does nothing to the input but needs parameters so the linear
     # operator can infer the device
     model = Linear(num_classes, num_classes, bias=False).to(dev)
-    model.weight.data = eye(num_classes)
+    model.weight.data = eye(
+        num_classes, device=model.weight.device, dtype=model.weight.dtype
+    )
 
-    loss_func = CrossEntropyLoss(reduction="sum")
+    loss_func = CrossEntropyLoss(reduction="sum").to(dev)
     X = rand(batch_size, num_classes, requires_grad=True, device=dev)
     y = classification_targets((batch_size,), num_classes).to(dev)
     data = [(X, y)]
