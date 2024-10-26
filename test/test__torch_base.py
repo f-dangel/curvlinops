@@ -1,10 +1,9 @@
 """Tests the linear operator interface in PyTorch."""
 
-from typing import Generator, Iterable, Iterator, List, MutableMapping, Tuple, Union
+from typing import Iterable, Iterator, List, MutableMapping, Tuple, Union
 
 from pytest import raises
 from torch import Tensor, randperm, zeros
-from torch.nn import Identity
 
 from curvlinops._torch_base import CurvatureLinearOperator, PyTorchLinearOperator
 

@@ -25,7 +25,7 @@ from math import sqrt
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
 from einops import einsum, rearrange, reduce
-from torch import Generator, Tensor, cat, device, eye, randn, stack, zeros_like
+from torch import Generator, Tensor, cat, device, eye, randn, stack
 from torch.autograd import grad
 from torch.nn import (
     BCEWithLogitsLoss,
