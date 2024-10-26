@@ -8,6 +8,7 @@ from test.utils import (
     WeightShareModel,
     binary_classification_targets,
     classification_targets,
+    compare_matmat,
     compare_state_dicts,
     ggn_block_diagonal,
     regression_targets,
@@ -596,13 +597,20 @@ def test_bug_device_change_invalidates_parameter_mapping():
     kfac_x_gpu = kfac @ x
 
     kfac_torch.to_device(cpu)
+    kfac = kfac_torch.to_scipy()
     kfac_x_cpu = kfac @ x
 
     report_nonclose(kfac_x_gpu, kfac_x_cpu)
 
 
-def test_torch_matmat(case):
-    """Test that the torch_matmat method of KFACLinearOperator works."""
+def test_KFACLinearOperator(case, adjoint: bool, is_vec: bool):
+    """Test matrix multiplication with KFAC.
+
+    Args:
+        case: Tuple of model, loss function, parameters, data, and batch size getter.
+        adjoint: Whether to test the adjoint operator.
+        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
+    """
     model, loss_func, params, data, batch_size_fn = case
 
     kfac = KFACLinearOperator(
@@ -612,85 +620,12 @@ def test_torch_matmat(case):
         data,
         batch_size_fn=batch_size_fn,
     )
+
     device = kfac._device
     dtype = kfac._infer_dtype()
+    kfac_mat = kfac @  torch_eye(kfac.shape[1], device=device, dtype=dtype)
 
-    # Test single tensor input format
-    num_vectors = 16
-    x = rand(kfac.shape[1], num_vectors, dtype=dtype, device=device)
-    kfac_x = kfac @ x
-    assert x.device == kfac_x.device
-    assert x.dtype == kfac_x.dtype
-    assert kfac_x.shape == (kfac.shape[0], x.shape[1])
-
-    # Test list input format
-    x_list = x.split([p.numel() for p in params])
-    x_list = [x.reshape(*p.shape, num_vectors) for x, p in zip(x_list, params)]
-    kfac_x_list = kfac @ x_list
-    kfac_x_list = cat([rearrange(M, "... k -> (...) k") for M in kfac_x_list])
-    report_nonclose(kfac_x, kfac_x_list, rtol=1e-4, atol=1e-7)
-
-    # Test against multiplication with dense matrix
-    identity = torch_eye(kfac.shape[1], dtype=dtype, device=device)
-    kfac_mat = kfac @ identity
-    kfac_mat_x = kfac_mat @ x
-    report_nonclose(kfac_x, kfac_mat_x, rtol=1e-4, atol=1e-7)
-
-
-def test_torch_matvec(case):
-    """Test that the torch_matvec method of KFACLinearOperator works."""
-    model, loss_func, params, data, batch_size_fn = case
-
-    kfac = KFACLinearOperator(
-        model,
-        loss_func,
-        params,
-        data,
-        batch_size_fn=batch_size_fn,
-    )
-    device = kfac._device
-    dtype = kfac._infer_dtype()
-
-    x = rand(kfac.shape[1], dtype=dtype, device=device)
-    kfac_x = kfac @ x
-    assert x.device == kfac_x.device
-    assert x.dtype == kfac_x.dtype
-    assert kfac_x.shape == x.shape
-
-    # Test list input format
-    # split parameter blocks
-    dims = [p.numel() for p in kfac._params]
-    split_x = x.split(dims)
-    # unflatten parameter dimension
-    assert len(split_x) == len(kfac._params)
-    x_list = [res.reshape(p.shape) for res, p in zip(split_x, kfac._params)]
-    kfac_x_list = kfac @ x_list
-    kfac_x_list = cat([rearrange(M, "... -> (...)") for M in kfac_x_list])
-    report_nonclose(kfac_x, kfac_x_list)
-
-    # Test against multiplication with dense matrix
-    identity = torch_eye(kfac.shape[1], dtype=dtype, device=device)
-    kfac_mat = kfac @ identity
-    kfac_mat_x = kfac_mat @ x
-    report_nonclose(kfac_x, kfac_mat_x)
-
-
-def test_torch_matvec_list_output_shapes(cnn_case):
-    """Test output shapes with list input format (issue #124)."""
-    model, loss_func, params, data, batch_size_fn = cnn_case
-    kfac = KFACLinearOperator(
-        model,
-        loss_func,
-        params,
-        data,
-        batch_size_fn=batch_size_fn,
-    )
-    vec = [rand_like(p) for p in kfac._params]
-    out_list = kfac @ vec
-    assert len(out_list) == len(kfac._params)
-    for out_i, p_i in zip(out_list, kfac._params):
-        assert out_i.shape == p_i.shape
-
+    compare_matmat(kfac, kfac_mat, adjoint, is_vec, rtol=1e-5, atol=1e-7)
 
 @mark.parametrize(
     "check_deterministic",
@@ -808,7 +743,7 @@ def test_det(case, exclude, separate_weight_and_bias, check_deterministic):
     if not check_deterministic:
         kfac_torch._compute_kfac()
     assert kfac_torch._input_covariances or kfac_torch._gradient_covariances
-    delta = 1.0  # requires much larger damping value compared to ``logdet``
+    delta = 0.5  # requires much larger damping value compared to ``logdet``
     for aaT in kfac_torch._input_covariances.values():
         aaT.add_(
             torch_eye(aaT.shape[0], dtype=aaT.dtype, device=aaT.device), alpha=delta
