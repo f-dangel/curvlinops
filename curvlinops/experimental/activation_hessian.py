@@ -47,7 +47,13 @@ class ActivationHessianLinearOperator(CurvatureLinearOperator):
         \ell(f_{\mathbf{\theta}}(\mathbf{X}), \mathbf{y})
 
     and has dimension :math:`\mathrm{dim}(\mathbf{Z}) = N \mathrm{dim}(\mathbf{z})`.
+
+    Attributes:
+        SELF_ADJOINT: Whether the linear operator is self-adjoint. ``True`` for the
+            activation Hessian.
     """
+
+    SELF_ADJOINT: bool = True
 
     def __init__(
         self,
