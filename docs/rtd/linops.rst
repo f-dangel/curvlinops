@@ -51,7 +51,7 @@ Inverses
    :members: __init__, set_neumann_hyperparameters
 
 .. autoclass:: curvlinops.KFACInverseLinearOperator
-   :members: __init__, torch_matmat, torch_matvec
+   :members: __init__
 
 Sub-matrices
 ------------
