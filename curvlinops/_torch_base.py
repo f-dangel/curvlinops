@@ -602,9 +602,7 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
     #                             DETERMINISTIC CHECKS                            #
     ###############################################################################
 
-    def data_prediction_loss_gradient(
-        self,
-    ) -> Iterator[
+    def data_prediction_loss_gradient(self) -> Iterator[
         Tuple[
             Tuple[Union[Tensor, MutableMapping], Tensor],
             Tensor,
@@ -612,7 +610,11 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
             Optional[List[Tensor]],
         ]
     ]:
-        """Yield input, prediction, loss, and gradient for each batch."""
+        """Yield input, prediction, loss, and gradient for each batch.
+
+        Yields:
+            The batch, prediction, loss, and gradient.
+        """
         for X, y in self._loop_over_data(desc="batch_prediction_loss_gradient"):
             prediction = self._model_func(X)
             if self._loss_func is None:
@@ -775,6 +777,9 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
         Args:
             rtol: Relative tolerance for comparison. Defaults to ``1e-5``.
             atol: Absolute tolerance for comparison. Defaults to ``1e-8``.
+
+        Raises:
+            RuntimeError: If the two matrix-vector products yield different results.
         """
         v = rand(self.shape[1], device=self._device, dtype=self._infer_dtype())
         Av1 = self @ v
