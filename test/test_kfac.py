@@ -567,40 +567,6 @@ def test_expand_setting_scaling(
     report_nonclose(kfac_simulated_mean_mat, kfac_mean_mat)
 
 
-def test_bug_device_change_invalidates_parameter_mapping():
-    """Reproduce #77: Loading KFAC from GPU to CPU invalidates the internal mapping.
-
-    This leads to some parameter blocks not being updated inside ``.matmat``.
-    """
-    if not cuda.is_available():
-        skip("This test requires a GPU.")
-    gpu, cpu = device("cuda"), device("cpu")
-
-    manual_seed(0)
-
-    model = Sequential(Linear(5, 4), ReLU(), Linear(4, 4)).to(gpu)
-    data = [(rand(2, 5), regression_targets((2, 4)))]
-    loss_func = MSELoss().to(gpu)
-
-    kfac_torch = KFACLinearOperator(
-        model,
-        loss_func,
-        list(model.parameters()),
-        data,
-        fisher_type=FisherType.EMPIRICAL,
-        check_deterministic=False,  # turn off to avoid implicit device changes
-        progressbar=True,
-    )
-    kfac = kfac_torch.to_scipy()
-    x = rand(kfac.shape[1]).numpy()
-    kfac_x_gpu = kfac @ x
-
-    kfac_torch.to_device(cpu)
-    kfac_x_cpu = kfac @ x
-
-    report_nonclose(kfac_x_gpu, kfac_x_cpu)
-
-
 def test_torch_matmat(case):
     """Test that the torch_matmat method of KFACLinearOperator works."""
     model, loss_func, params, data, batch_size_fn = case

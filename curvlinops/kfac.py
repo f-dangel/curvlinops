@@ -143,7 +143,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
         num_per_example_loss_terms: Optional[int] = None,
         separate_weight_and_bias: bool = True,
         num_data: Optional[int] = None,
-        batch_size_fn: Optional[Callable[[MutableMapping], int]] = None,
+        batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
     ):
         """Kronecker-factored approximate curvature (KFAC) proxy of the Fisher/GGN.
 
@@ -271,14 +271,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
         self._set_num_per_example_loss_terms(num_per_example_loss_terms)
 
         if check_deterministic:
-            old_device = self._device
-            self.to_device(device("cpu"))
-            try:
-                self._check_deterministic()
-            except RuntimeError as e:
-                raise e
-            finally:
-                self.to_device(old_device)
+            self._check_deterministic()
 
     def _set_num_per_example_loss_terms(
         self, num_per_example_loss_terms: Optional[int]
@@ -319,18 +312,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
         self._det = None
         self._logdet = None
         self._frobenius_norm = None
-
-    def to_device(self, device: device):
-        """Load the linear operator to another device.
-
-        Args:
-            device: The device to which the linear operator should be moved.
-        """
-        super().to_device(device)
-        for key in self._input_covariances.keys():
-            self._input_covariances[key] = self._input_covariances[key].to(device)
-        for key in self._gradient_covariances.keys():
-            self._gradient_covariances[key] = self._gradient_covariances[key].to(device)
 
     def _matmat(self, M: List[Tensor]) -> List[Tensor]:
         """Apply KFAC to a matrix (multiple vectors) in tensor list format.
@@ -1035,7 +1016,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
         params: List[Parameter],
         data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
         check_deterministic: bool = True,
-        batch_size_fn: Optional[Callable[[MutableMapping], int]] = None,
+        batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
     ) -> KFACLinearOperator:
         """Load a KFAC linear operator from a state dictionary.
 
@@ -1082,13 +1063,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
         # Potentially call `check_deterministic` after the state dict is loaded
         if check_deterministic:
-            old_device = kfac._device
-            kfac.to_device(device("cpu"))
-            try:
-                kfac._check_deterministic()
-            except RuntimeError as e:
-                raise e
-            finally:
-                kfac.to_device(old_device)
+            kfac._check_deterministic()
 
         return kfac
