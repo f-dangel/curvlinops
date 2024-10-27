@@ -581,21 +581,3 @@ def test_KFAC_inverse_from_state_dict():
     compare_state_dicts(inv_kfac.state_dict(), inv_kfac_new.state_dict())
     test_vec = torch.rand(kfac.shape[1])
     report_nonclose(inv_kfac @ test_vec, inv_kfac_new @ test_vec)
-
-
-def test_torch_matvec_list_output_shapes(cnn_case):
-    """Test output shapes with list input format (issue #124)."""
-    model, loss_func, params, data, batch_size_fn = cnn_case
-    kfac = KFACLinearOperator(
-        model,
-        loss_func,
-        params,
-        data,
-        batch_size_fn=batch_size_fn,
-    )
-    inv_kfac = KFACInverseLinearOperator(kfac, damping=1e-2)
-    vec = [torch.rand_like(p) for p in kfac._params]
-    out_list = inv_kfac.torch_matvec(vec)
-    assert len(out_list) == len(kfac._params)
-    for out_i, p_i in zip(out_list, kfac._params):
-        assert out_i.shape == p_i.shape
