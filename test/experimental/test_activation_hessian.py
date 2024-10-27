@@ -1,7 +1,7 @@
 """Contains tests for ``curvlinops.activation_hessian``."""
 
 from test.cases import DEVICES, DEVICES_IDS
-from test.utils import classification_targets
+from test.utils import classification_targets, eye_like
 
 from pytest import mark, raises
 from torch import allclose, block_diag, device, einsum, eye, manual_seed, rand
@@ -78,9 +78,7 @@ def test_ActivationHessianLinearOperator(dev: device):
     # model does nothing to the input but needs parameters so the linear
     # operator can infer the device
     model = Linear(num_classes, num_classes, bias=False).to(dev)
-    model.weight.data = eye(
-        num_classes, device=model.weight.device, dtype=model.weight.dtype
-    )
+    model.weight.data = eye_like(model.weight.data)
 
     loss_func = CrossEntropyLoss(reduction="sum").to(dev)
     X = rand(batch_size, num_classes, requires_grad=True, device=dev)

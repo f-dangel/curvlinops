@@ -8,19 +8,9 @@ from typing import Callable, Iterable, List, Optional, Tuple, Union
 from einops import rearrange, reduce
 from einops.layers.torch import Rearrange
 from numpy import eye, ndarray
-from torch import (
-    Tensor,
-    allclose,
-    as_tensor,
-    cat,
-    cuda,
-    device,
-    dtype,
-    from_numpy,
-    rand,
-    randint,
-    zeros_like,
-)
+from torch import Tensor, allclose, as_tensor, cat, cuda, device, dtype
+from torch import eye as torch_eye
+from torch import from_numpy, rand, randint, zeros_like
 from torch.nn import (
     AdaptiveAvgPool2d,
     BCEWithLogitsLoss,
@@ -560,3 +550,13 @@ def compare_matmat_expectation(
                 return
 
     assert allclose_report(op_x / max_repeats, mat_x, **tol)
+
+
+def eye_like(A: Tensor) -> Tensor:
+    """Create an identity matrix of same size as ``A``.
+
+    Returns:
+        The identity matrix of ``A``'s size.
+    """
+    dim = A.shape[0]
+    return torch_eye(dim, device=A.device, dtype=A.dtype)

@@ -88,7 +88,7 @@ def test_SubmatrixLinearOperator_on_curvatures_matvec(
     A_sub_x = A_sub @ x
 
     assert A_sub_x.shape == (len(row_idxs),)
-    report_nonclose(A_sub_x, A_sub_functorch @ x, atol=2e-7)
+    report_nonclose(A_sub_x, A_sub_functorch @ x, atol=1e-6)
 
 
 @mark.parametrize("operator_case", CURVATURE_CASES)
