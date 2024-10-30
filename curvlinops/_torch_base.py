@@ -439,7 +439,7 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
             )
 
         in_shape = [tuple(p.shape) for p in params] if in_shape is None else in_shape
-        out_shape = [tuple(p.shape) for p in params] if in_shape is None else in_shape
+        out_shape = [tuple(p.shape) for p in params] if out_shape is None else out_shape
         super().__init__(in_shape, out_shape)
 
         self._params = params
@@ -538,7 +538,7 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
         Yields:
             Mini-batches ``(X, y)``.
         """
-        data_iter = iter(self._data)
+        data_iter = self._data
 
         if self._progressbar:
             desc = f"{self.__class__.__name__}{'' if desc is None else f'.{desc}'}"
