@@ -3,6 +3,7 @@
 from typing import List
 
 from numpy import cumsum
+from torch import Tensor
 
 
 def split_list(x: List, sizes: List[int]) -> List[List]:
@@ -25,3 +26,30 @@ def split_list(x: List, sizes: List[int]) -> List[List]:
         )
     boundaries = cumsum([0] + sizes)
     return [x[boundaries[i] : boundaries[i + 1]] for i in range(len(sizes))]
+
+
+def allclose_report(
+    tensor1: Tensor, tensor2: Tensor, rtol: float = 1e-5, atol: float = 1e-8
+) -> bool:
+    """Same as ``allclose``, but prints entries that differ.
+
+    Args:
+        tensor1: First tensor for comparison.
+        tensor2: Second tensor for comparison.
+        rtol: Relative tolerance. Default is ``1e-5``.
+        atol: Absolute tolerance. Default is ``1e-8``.
+
+    Returns:
+        ``True`` if the tensors are close, ``False`` otherwise.
+    """
+    close = tensor1.allclose(tensor2, rtol=rtol, atol=atol)
+    if not close:
+        nonclose_idx = tensor1.isclose(tensor2, rtol=rtol, atol=atol).logical_not_()
+        for idx, t1, t2 in zip(
+            nonclose_idx.argwhere(),
+            tensor1[nonclose_idx].flatten(),
+            tensor2[nonclose_idx].flatten(),
+        ):
+            print(f"at index {idx}: {t1:.5e} ≠ {t2:.5e}, ratio: {t1 / t2:.5e}")
+
+    return close
