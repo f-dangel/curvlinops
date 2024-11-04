@@ -73,7 +73,7 @@ H_functorch = (
 # its matrix representation through multiplication with the identity matrix,
 # followed by comparison to the Hessian matrix computed via :mod:`functorch`.
 
-H = HessianLinearOperator(model, loss_function, params, data)
+H = HessianLinearOperator(model, loss_function, params, data).to_scipy()
 
 report_nonclose(H_functorch, H @ numpy.eye(H.shape[1]))
 
@@ -122,7 +122,7 @@ H_param0_functorch = extract_block(H_functorch, params, i, j)
 # We can build a linear operator for this sub-Hessian by only providing the
 # first layer's weight as parameter:
 
-H_param0 = HessianLinearOperator(model, loss_function, [params[i]], data)
+H_param0 = HessianLinearOperator(model, loss_function, [params[i]], data).to_scipy()
 
 # %%
 #

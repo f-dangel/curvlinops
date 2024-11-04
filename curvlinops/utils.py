@@ -1,16 +1,16 @@
 """General utility functions."""
 
-from typing import List
+from typing import List, Tuple, Union
 
 from numpy import cumsum
 from torch import Tensor
 
 
-def split_list(x: List, sizes: List[int]) -> List[List]:
+def split_list(x: Union[List, Tuple], sizes: List[int]) -> List[List]:
     """Split a list into multiple lists of specified size.
 
     Args:
-        x: List to be split.
+        x: List or tuple to be split.
         sizes: Sizes of the resulting lists.
 
     Returns:
@@ -25,7 +25,7 @@ def split_list(x: List, sizes: List[int]) -> List[List]:
             + f" of {sum(sizes)} entries."
         )
     boundaries = cumsum([0] + sizes)
-    return [x[boundaries[i] : boundaries[i + 1]] for i in range(len(sizes))]
+    return [list(x[boundaries[i] : boundaries[i + 1]]) for i in range(len(sizes))]
 
 
 def allclose_report(
@@ -50,6 +50,12 @@ def allclose_report(
             tensor1[nonclose_idx].flatten(),
             tensor2[nonclose_idx].flatten(),
         ):
-            print(f"at index {idx}: {t1:.5e} ≠ {t2:.5e}, ratio: {t1 / t2:.5e}")
+            print(f"at index {idx.tolist()}: {t1:.5e} ≠ {t2:.5e}, ratio: {t1 / t2:.5e}")
+
+        # print largest and smallest absolute entries
+        amax1, amax2 = tensor1.abs().max().item(), tensor2.abs().max().item()
+        print(f"Abs max: {amax1:.5e} vs. {amax2:.5e}.")
+        amin1, amin2 = tensor1.abs().min().item(), tensor2.abs().min().item()
+        print(f"Abs min: {amin1:.5e} vs. {amin2:.5e}.")
 
     return close

@@ -85,7 +85,9 @@ print(f"Layer parameters: {num_params_layer}")
 #
 # First, create the linear operators:
 
-Hessian_linop = HessianLinearOperator(model, loss_function, params, dataloader)
+Hessian_linop = HessianLinearOperator(
+    model, loss_function, params, dataloader
+).to_scipy()
 GGN_linop = GGNLinearOperator(model, loss_function, params, dataloader)
 EF_linop = EFLinearOperator(model, loss_function, params, dataloader)
 Hessian_blocked_linop = HessianLinearOperator(
@@ -94,7 +96,7 @@ Hessian_blocked_linop = HessianLinearOperator(
     params,
     dataloader,
     block_sizes=[s for s in num_tensors_layer if s != 0],
-)
+).to_scipy()
 F_linop = FisherMCLinearOperator(model, loss_function, params, dataloader)
 KFAC_linop = KFACLinearOperator(
     model, loss_function, params, dataloader, separate_weight_and_bias=False

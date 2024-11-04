@@ -63,7 +63,7 @@ loss_function = nn.MSELoss(reduction="mean").to(DEVICE)
 # We are ready to setup the linear operator. In this example, we will use the Hessian.
 
 data = [(X1, y1), (X2, y2)]
-H = HessianLinearOperator(model, loss_function, params, data)
+H = HessianLinearOperator(model, loss_function, params, data).to_scipy()
 
 # %%
 #
@@ -204,7 +204,9 @@ report_nonclose(top_k_evals_functorch, top_k_evals_power, rtol=2e-2, atol=1e-6)
 # the linear operator's progress bar, which allows us to count the number of
 # matrix-vector products invoked by both eigen-solvers:
 
-H = HessianLinearOperator(model, loss_function, params, data, progressbar=True)
+H = HessianLinearOperator(
+    model, loss_function, params, data, progressbar=True
+).to_scipy()
 
 # determine number of matrix-vector products used by `eigsh`
 with StringIO() as buf, redirect_stderr(buf):
@@ -216,7 +218,7 @@ print(f"eigsh used {queries_eigsh} matrix-vector products.")
 
 # determine number of matrix-vector products used by power iteration
 with StringIO() as buf, redirect_stderr(buf):
-    top_k_evals_power, _ = power_method(H, k=k)
+    top_k_evals_power, _ = power_method(H, k=k, tol=1e-4)
     # The tqdm progressbar will print "matmat" for each batch in a matrix-vector
     # product. Therefore, we need to divide by the number of batches
     queries_power = buf.getvalue().count("matmat") // len(data)
@@ -228,9 +230,7 @@ assert queries_power > queries_eigsh
 #
 # Sadly, the power iteration also does not offer computational benefits, consuming
 # more matrix-vector products than :code:`eigsh`. While it is elegant and simple,
-# it cannot compete with :code:`eigsh`, at least in the comparison provided here
-# (note that we used a relative small tolerance for the power iteration, and it will
-# likely deteriorate further if we decrease the tolerance).
+# it cannot compete with :code:`eigsh`, at least in the comparison provided here.
 #
 # Therefore, we recommend using :code:`eigsh` for computing eigenvalues. This method
 # becomes accessible because :code:`curvlinops` interfaces with SciPy's linear
