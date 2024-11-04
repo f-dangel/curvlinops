@@ -6,7 +6,18 @@ from typing import Callable, Iterable, List, MutableMapping, Optional, Tuple, Un
 
 import numpy
 from scipy.sparse.linalg import LinearOperator
-from torch import Size, Tensor, as_tensor, cat, device, dtype, rand, tensor, zeros_like
+from torch import (
+    Size,
+    Tensor,
+    as_tensor,
+    bfloat16,
+    cat,
+    device,
+    dtype,
+    rand,
+    tensor,
+    zeros_like,
+)
 from torch.autograd import grad
 from torch.nn import Module, Parameter
 from tqdm import tqdm
@@ -343,6 +354,10 @@ class PyTorchLinearOperator:
             X_dtype = X.dtype
             X_torch = as_tensor(X, dtype=dtype, device=device)
             AX_torch = f(X_torch)
+            # calling .numpy() on a BF-16 tensor is not supported, see
+            # (https://github.com/pytorch/pytorch/issues/90574)
+            if AX_torch.dtype == bfloat16:
+                AX_torch = AX_torch.float()
             return AX_torch.detach().cpu().numpy().astype(X_dtype)
 
         return f_scipy
