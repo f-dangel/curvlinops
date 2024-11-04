@@ -36,15 +36,14 @@ def allclose_report(
     Args:
         tensor1: First tensor for comparison.
         tensor2: Second tensor for comparison.
-        rtol: Relative tolerance. Default: ``1e-5``.
-        atol: Absolute tolerance. Default: ``1e-8``.
+        rtol: Relative tolerance. Default is ``1e-5``.
+        atol: Absolute tolerance. Default is ``1e-8``.
 
     Returns:
         ``True`` if the tensors are close, ``False`` otherwise.
     """
     close = tensor1.allclose(tensor2, rtol=rtol, atol=atol)
     if not close:
-        # print non-close values
         nonclose_idx = tensor1.isclose(tensor2, rtol=rtol, atol=atol).logical_not_()
         for idx, t1, t2 in zip(
             nonclose_idx.argwhere(),

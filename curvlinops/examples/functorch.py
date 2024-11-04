@@ -151,14 +151,14 @@ def functorch_ggn(
     return blocks_to_matrix(ggn_fn(X, y, anchor_dict, params_dict))
 
 
-def functorch_gradient(
+def functorch_gradient_and_loss(
     model_func: Module,
     loss_func: Module,
     params: List[Tensor],
     data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
     input_key: Optional[str] = None,
-) -> Tuple[Tensor]:
-    """Compute the gradient with functorch.
+) -> Tuple[List[Tensor], Tensor]:
+    """Compute the gradient and loss with functorch.
 
     Args:
         model_func: A function that maps the mini-batch input X to predictions.
@@ -171,7 +171,7 @@ def functorch_gradient(
         input_key: Key to obtain the input tensor when ``X`` is a dict-like object.
 
     Returns:
-        Gradient in same format as the parameters.
+        Loss, and gradient in same format as the parameters.
     """
     (dev,) = {p.device for p in params}
     X, y = _concatenate_batches(data, input_key, device=dev)
@@ -190,8 +190,9 @@ def functorch_gradient(
 
     params_argnum = 2
     grad_fn = grad(loss, argnums=params_argnum)
+    loss_value = loss(X, y, params_dict)
 
-    return tuple(grad_fn(X, y, params_dict).values())
+    return list(grad_fn(X, y, params_dict).values()), loss_value
 
 
 def functorch_empirical_fisher(

@@ -24,9 +24,9 @@ def test_HessianLinearOperator(
     Args:
         case: Tuple of model, loss function, parameters, data, and batch size getter.
         adjoint: Whether to test the adjoint operator.
-        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
         block_sizes_fn: The function that generates the block sizes used to define
             block diagonal approximations from the parameters.
+        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
     """
     model_func, loss_func, params, data, batch_size_fn = case
     block_sizes = block_sizes_fn(params)

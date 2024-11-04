@@ -33,7 +33,7 @@ from curvlinops import (
     GGNLinearOperator,
     NeumannInverseLinearOperator,
 )
-from curvlinops.examples.functorch import functorch_ggn, functorch_gradient
+from curvlinops.examples.functorch import functorch_ggn, functorch_gradient_and_loss
 from curvlinops.examples.utils import report_nonclose
 
 # make deterministic
@@ -70,7 +70,7 @@ params = [p for p in model.parameters() if p.requires_grad]
 loss_function = nn.MSELoss(reduction="mean").to(DEVICE)
 
 
-# %
+# %%
 #
 # Next, let's compute the ingredients for the natural gradient.
 #
@@ -151,7 +151,7 @@ inv_damped_GGN_mat = numpy.linalg.inv(damped_GGN_mat)
 #  Next, let's compute the gradient with :code:`functorch`, using a utility
 #  function from :code:`curvlinops.examples`:
 
-gradient_functorch = functorch_gradient(model, loss_function, params, data)
+gradient_functorch, _ = functorch_gradient_and_loss(model, loss_function, params, data)
 # convert to numpy (vector) format
 gradient_functorch = (
     nn.utils.parameters_to_vector(gradient_functorch).detach().cpu().numpy()
