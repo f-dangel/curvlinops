@@ -1240,6 +1240,7 @@ class KFACLinearOperator(_LinearOperator):
         """Incorporate the Kronecker matrices of another KFAC using EMA.
 
         Updates the Kronecker factors of the current KFAC linear operator in-place.
+        For a Kronecker factor ``K``, the EMA is ``K ← β K + (1 - β) K_other``.
 
         Args:
             other: The other KFAC linear operator whose Kronecker factors are
