@@ -96,7 +96,7 @@ Hessian_blocked_linop = HessianLinearOperator(
     params,
     dataloader,
     block_sizes=[s for s in num_tensors_layer if s != 0],
-)
+).to_scipy()
 F_linop = FisherMCLinearOperator(model, loss_function, params, dataloader)
 KFAC_linop = KFACLinearOperator(
     model, loss_function, params, dataloader, separate_weight_and_bias=False

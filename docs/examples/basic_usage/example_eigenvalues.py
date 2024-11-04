@@ -204,7 +204,9 @@ report_nonclose(top_k_evals_functorch, top_k_evals_power, rtol=2e-2, atol=1e-6)
 # the linear operator's progress bar, which allows us to count the number of
 # matrix-vector products invoked by both eigen-solvers:
 
-H = HessianLinearOperator(model, loss_function, params, data, progressbar=True)
+H = HessianLinearOperator(
+    model, loss_function, params, data, progressbar=True
+).to_scipy()
 
 # determine number of matrix-vector products used by `eigsh`
 with StringIO() as buf, redirect_stderr(buf):
