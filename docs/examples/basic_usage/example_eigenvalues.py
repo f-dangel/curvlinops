@@ -218,7 +218,7 @@ print(f"eigsh used {queries_eigsh} matrix-vector products.")
 
 # determine number of matrix-vector products used by power iteration
 with StringIO() as buf, redirect_stderr(buf):
-    top_k_evals_power, _ = power_method(H, k=k)
+    top_k_evals_power, _ = power_method(H, k=k, tol=1e-4)
     # The tqdm progressbar will print "matmat" for each batch in a matrix-vector
     # product. Therefore, we need to divide by the number of batches
     queries_power = buf.getvalue().count("matmat") // len(data)
@@ -230,9 +230,7 @@ assert queries_power > queries_eigsh
 #
 # Sadly, the power iteration also does not offer computational benefits, consuming
 # more matrix-vector products than :code:`eigsh`. While it is elegant and simple,
-# it cannot compete with :code:`eigsh`, at least in the comparison provided here
-# (note that we used a relative small tolerance for the power iteration, and it will
-# likely deteriorate further if we decrease the tolerance).
+# it cannot compete with :code:`eigsh`, at least in the comparison provided here.
 #
 # Therefore, we recommend using :code:`eigsh` for computing eigenvalues. This method
 # becomes accessible because :code:`curvlinops` interfaces with SciPy's linear
