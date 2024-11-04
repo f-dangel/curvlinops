@@ -6,7 +6,7 @@ from typing import Callable, Iterable, List, MutableMapping, Optional, Tuple, Un
 
 import numpy
 from scipy.sparse.linalg import LinearOperator
-from torch import Size, Tensor, cat, device, dtype, from_numpy, rand, tensor, zeros_like
+from torch import Size, Tensor, as_tensor, cat, device, dtype, rand, tensor, zeros_like
 from torch.autograd import grad
 from torch.nn import Module, Parameter
 from tqdm import tqdm
@@ -24,7 +24,7 @@ class PyTorchLinearOperator:
     One main difference is that the linear operators cannot only multiply
     vectors/matrices specified as single PyTorch tensors, but also
     vectors/matrices specified in tensor list format. This is common in
-    PyTorch, where the space a linear operator acts on is a tensor product
+    PyTorch, where the space a linear operator acts on is a tensor product.
 
     Functions that need to be implemented are ``_matmat`` and ``_adjoint``.
 
@@ -347,7 +347,7 @@ class PyTorchLinearOperator:
                 The output matrix in NumPy format.
             """
             X_dtype = X.dtype
-            X_torch = from_numpy(X).to(device, dtype)
+            X_torch = as_tensor(X, dtype=dtype, device=device)
             AX_torch = f(X_torch)
             return AX_torch.detach().cpu().numpy().astype(X_dtype)
 
@@ -439,7 +439,7 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
             )
 
         in_shape = [tuple(p.shape) for p in params] if in_shape is None else in_shape
-        out_shape = [tuple(p.shape) for p in params] if in_shape is None else in_shape
+        out_shape = [tuple(p.shape) for p in params] if out_shape is None else out_shape
         super().__init__(in_shape, out_shape)
 
         self._params = params
@@ -538,7 +538,7 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
         Yields:
             Mini-batches ``(X, y)``.
         """
-        data_iter = iter(self._data)
+        data_iter = self._data
 
         if self._progressbar:
             desc = f"{self.__class__.__name__}{'' if desc is None else f'.{desc}'}"
