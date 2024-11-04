@@ -28,14 +28,16 @@ def split_list(x: List, sizes: List[int]) -> List[List]:
     return [x[boundaries[i] : boundaries[i + 1]] for i in range(len(sizes))]
 
 
-def allclose_report(tensor1: Tensor, tensor2: Tensor, rtol: float, atol: float) -> bool:
+def allclose_report(
+    tensor1: Tensor, tensor2: Tensor, rtol: float = 1e-5, atol: float = 1e-8
+) -> bool:
     """Same as ``allclose``, but prints entries that differ.
 
     Args:
         tensor1: First tensor for comparison.
         tensor2: Second tensor for comparison.
-        rtol: Relative tolerance.
-        atol: Absolute tolerance.
+        rtol: Relative tolerance. Default is ``1e-5``.
+        atol: Absolute tolerance. Default is ``1e-8``.
 
     Returns:
         ``True`` if the tensors are close, ``False`` otherwise.
