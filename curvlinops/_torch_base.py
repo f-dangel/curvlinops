@@ -15,7 +15,19 @@ from typing import (
 
 import numpy
 from scipy.sparse.linalg import LinearOperator
-from torch import Size, Tensor, cat, device, dtype, from_numpy, rand, tensor, zeros_like
+from torch import (
+    Size,
+    Tensor,
+    as_tensor,
+    bfloat16,
+    cat,
+    device,
+    dtype,
+    from_numpy,
+    rand,
+    tensor,
+    zeros_like,
+)
 from torch.autograd import grad
 from torch.nn import Module, Parameter
 from tqdm import tqdm
@@ -33,7 +45,7 @@ class PyTorchLinearOperator:
     One main difference is that the linear operators cannot only multiply
     vectors/matrices specified as single PyTorch tensors, but also
     vectors/matrices specified in tensor list format. This is common in
-    PyTorch, where the space a linear operator acts on is a tensor product
+    PyTorch, where the space a linear operator acts on is a tensor product.
 
     Functions that need to be implemented are ``_matmat`` and ``_adjoint``.
 
@@ -44,7 +56,6 @@ class PyTorchLinearOperator:
     Attributes:
         SELF_ADJOINT: Whether the linear operator is self-adjoint. If ``True``,
             ``_adjoint`` does not need to be implemented. Default: ``False``.
-
     """
 
     SELF_ADJOINT: bool = False
@@ -362,8 +373,12 @@ class PyTorchLinearOperator:
                 The output matrix in NumPy format.
             """
             X_dtype = X.dtype
-            X_torch = from_numpy(X).to(device, dtype)
+            X_torch = as_tensor(X, dtype=dtype, device=device)
             AX_torch = f(X_torch)
+            # calling .numpy() on a BF-16 tensor is not supported, see
+            # (https://github.com/pytorch/pytorch/issues/90574)
+            if AX_torch.dtype == bfloat16:
+                AX_torch = AX_torch.float()
             return AX_torch.detach().cpu().numpy().astype(X_dtype)
 
         return f_scipy
@@ -396,6 +411,8 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
         data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
+        in_shape: Optional[List[Tuple[int, ...]]] = None,
+        out_shape: Optional[List[Tuple[int, ...]]] = None,
         num_data: Optional[int] = None,
         block_sizes: Optional[List[int]] = None,
         batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
@@ -427,6 +444,10 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
                 model's forward pass could depend on the order in which mini-batches
                 are presented (BatchNorm, Dropout). Default: ``True``. This is a
                 safeguard, only turn it off if you know what you are doing.
+            in_shape: Shapes of the linear operator's input tensor product space.
+                If ``None``, will use the shapes of ``params``.
+            out_shape: Shapes of the linear operator's output tensor product space.
+                If ``None``, will use the shapes of ``params``.
             num_data: Number of data points. If ``None``, it is inferred from the data
                 at the cost of one traversal through the data loader.
             block_sizes: This argument will be ignored if the linear operator does not
@@ -566,7 +587,7 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
         Yields:
             Mini-batches ``(X, y)``.
         """
-        data_iter = iter(self._data)
+        data_iter = self._data
 
         if self._progressbar:
             desc = f"{self.__class__.__name__}{'' if desc is None else f'.{desc}'}"
@@ -624,6 +645,33 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
                 loss.detach_()
 
             yield (X, y), prediction, loss, grad_params
+
+    def gradient_and_loss(self) -> Tuple[List[Tensor], Tensor]:
+        """Evaluate the gradient and loss on the data.
+
+        (Not really part of the LinearOperator interface.)
+
+        Returns:
+            Gradient and loss on the data set.
+
+        Raises:
+            ValueError: If there is no loss function.
+        """
+        if self._loss_func is None:
+            raise ValueError("No loss function specified.")
+
+        total_loss = tensor([0.0], device=self._device, dtype=self._infer_dtype())
+        total_grad = [zeros_like(p) for p in self._params]
+
+        for X, y in self._loop_over_data(desc="gradient_and_loss"):
+            loss = self._loss_func(self._model_func(X), y)
+            normalization_factor = self._get_normalization_factor(X, y)
+
+            for grad_param, current in zip(total_grad, grad(loss, self._params)):
+                grad_param.add_(current, alpha=normalization_factor)
+            total_loss.add_(loss.detach(), alpha=normalization_factor)
+
+        return total_grad, total_loss
 
     def to_device(self, device: device):
         """Load linear operator to a device (inplace).
@@ -735,7 +783,6 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
         Raises:
             RuntimeError: If any of the pairs mismatch.
         """
-
         X1, X2 = Xs
         if isinstance(X1, MutableMapping) and isinstance(X2, MutableMapping):
             for k in X1.keys():
