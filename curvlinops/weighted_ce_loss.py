@@ -32,8 +32,8 @@ class CrossEntropyLossWeighted(CrossEntropyLoss):
         self.reduction = actual_reduction
 
         # apply the weights
-        weights = self.data_weights[data_idx].clamp(min=0.0, max=1.0)
-        loss = loss * weights
+        sigma = self.data_weights[data_idx].clamp(min=0.0, max=1.0)
+        loss = loss * sigma
 
         # do the reduction
         if self.reduction == "sum":

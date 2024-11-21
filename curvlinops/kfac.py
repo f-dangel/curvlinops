@@ -45,6 +45,7 @@ from curvlinops.kfac_utils import (
     extract_patches,
     loss_hessian_matrix_sqrt,
 )
+from curvlinops.weighted_ce_loss import CrossEntropyLossWeighted
 
 # Type for a matrix/vector that can be represented as a list of tensors with the same
 # shape as the parameters, or a single matrix/vector of shape `[D, D]`/`[D]` where `D`
@@ -126,7 +127,12 @@ class KFACLinearOperator(_LinearOperator):
         _SUPPORTED_MODULES: Tuple of supported layers.
     """
 
-    _SUPPORTED_LOSSES = (MSELoss, CrossEntropyLoss, BCEWithLogitsLoss)
+    _SUPPORTED_LOSSES = (
+        MSELoss,
+        CrossEntropyLoss,
+        BCEWithLogitsLoss,
+        CrossEntropyLossWeighted,
+    )
     _SUPPORTED_MODULES = (Linear, Conv2d)
     _SUPPORTED_FISHER_TYPE: FisherType = FisherType
     _SUPPORTED_KFAC_APPROX: KFACType = KFACType
@@ -301,14 +307,15 @@ class KFACLinearOperator(_LinearOperator):
         """
         if num_per_example_loss_terms is None:
             # Determine the number of per-example loss terms
-            num_loss_terms = sum(
-                (
-                    y.numel()
-                    if isinstance(self._loss_func, CrossEntropyLoss)
-                    else y.shape[:-1].numel()
-                )
-                for (_, y) in self._loop_over_data(desc="_num_per_example_loss_terms")
-            )
+            num_loss_terms = 0
+            for _, y in self._loop_over_data(desc="_num_per_example_loss_terms"):
+                if isinstance(self._loss_func, CrossEntropyLoss):
+                    num_loss_terms += y.numel()
+                elif isinstance(self._loss_func, CrossEntropyLossWeighted):
+                    num_loss_terms += y.numel() / 2
+                else:
+                    num_loss_terms += y.shape[:-1].numel()
+
             if num_loss_terms % self._N_data != 0:
                 raise ValueError(
                     "The number of loss terms must be divisible by the number of data "
@@ -618,7 +625,7 @@ class KFACLinearOperator(_LinearOperator):
                 ``FisherType.FORWARD_ONLY``.
         """
         # if >2d output we convert to an equivalent 2d output
-        if isinstance(self._loss_func, CrossEntropyLoss):
+        if isinstance(self._loss_func, (CrossEntropyLoss, CrossEntropyLossWeighted)):
             output = rearrange(output, "batch c ... -> (batch ...) c")
             y = rearrange(y, "batch ... -> (batch ...)")
         else:
@@ -654,8 +661,37 @@ class KFACLinearOperator(_LinearOperator):
 
         elif self._fisher_type == FisherType.MC:
             for mc in range(self._mc_samples):
-                y_sampled = self.draw_label(output)
-                loss = self._loss_func(output, y_sampled)
+                y_sampled = self.draw_label(output)  # shape (N,)
+
+                if isinstance(self, CrossEntropyLossWeighted):
+                    # need shape (N, 2)
+                    _, data_idx = y_sampled.split([1, 1], dim=1)
+                    data_idx = data_idx.squeeze(1)  # shape (N,)
+
+                    y_sampled = stack([y_sampled, data_idx], dim=1)  # shape (N, 2)
+
+                    # the normal loss is 1 / N \sum_i \sigma(v_i) \ell(f(x_i), y_i)
+                    # KFAC's pseudo-loss is 1 / sqrt(N) \sum_i \sqrt(\sigma(v_i)) \ell(f(x_i), y_i)
+                    original_reduction = self._loss_func.reduction
+                    self._loss_func.reduction = "none"
+                    loss_unreduced = self._loss_func(output, y_sampled)
+                    self._loss_func.reduction = original_reduction
+
+                    sigma = self._loss_func.data_weights[data_idx].clamp(
+                        min=0.0, max=1.0
+                    )
+                    loss_scaled = loss_unreduced / sigma.sqrt()
+
+                    # reduce
+                    if self._loss_func.reduction == "mean":
+                        loss = loss_scaled.mean()
+                    elif self._loss_func.reduction == "sum":
+                        loss = loss_scaled.sum()
+                    else:
+                        raise ValueError
+
+                else:
+                    loss = self._loss_func(output, y_sampled)
                 loss = self._maybe_adjust_loss_scale(loss, output)
                 grad(loss, self._params, retain_graph=mc != self._mc_samples - 1)
 
@@ -722,7 +758,7 @@ class KFACLinearOperator(_LinearOperator):
             )
             return output.clone().detach() + perturbation
 
-        elif isinstance(self._loss_func, CrossEntropyLoss):
+        elif isinstance(self._loss_func, (CrossEntropyLoss, CrossEntropyLossWeighted)):
             probs = output.softmax(dim=1)
             labels = probs.multinomial(
                 num_samples=1, generator=self._generator
