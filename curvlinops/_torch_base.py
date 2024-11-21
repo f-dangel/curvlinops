@@ -624,7 +624,7 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
     ###############################################################################
 
     def data_prediction_loss_gradient(
-        self,
+        self, desc: str = "batch_prediction_loss_gradient"
     ) -> Iterator[
         Tuple[
             Tuple[Union[Tensor, MutableMapping], Tensor],
@@ -633,8 +633,17 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
             Optional[List[Tensor]],
         ]
     ]:
-        """Yield input, prediction, loss, and gradient for each batch."""
-        for X, y in self._loop_over_data(desc="batch_prediction_loss_gradient"):
+        """Yield input, prediction, loss, and gradient for each batch.
+
+        Args:
+            desc: Description for the progress bar (if the linear operator's
+                progress bar is enabled). Default: ``'batch_prediction_loss_gradient'``.
+
+        Yields:
+            Tuple of ((input, label), prediction, loss, gradient) for each batch of
+            the data.
+        """
+        for X, y in self._loop_over_data(desc=desc):
             prediction = self._model_func(X)
             if self._loss_func is None:
                 loss, grad_params = None, None
@@ -660,16 +669,17 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
         if self._loss_func is None:
             raise ValueError("No loss function specified.")
 
-        total_loss = tensor([0.0], device=self._device, dtype=self._infer_dtype())
+        total_loss = tensor(
+            [0.0], device=self._device, dtype=self._infer_dtype()
+        ).squeeze()
         total_grad = [zeros_like(p) for p in self._params]
 
-        for X, y in self._loop_over_data(desc="gradient_and_loss"):
-            loss = self._loss_func(self._model_func(X), y)
-            normalization_factor = self._get_normalization_factor(X, y)
-
-            for grad_param, current in zip(total_grad, grad(loss, self._params)):
-                grad_param.add_(current, alpha=normalization_factor)
-            total_loss.add_(loss.detach(), alpha=normalization_factor)
+        for _, _, loss, grad_params in self.data_prediction_loss_gradient(
+            desc="gradient_and_loss"
+        ):
+            total_loss.add_(loss)
+            for total_g, g in zip(total_grad, grad_params):
+                total_g.add_(g)
 
         return total_grad, total_loss
 
