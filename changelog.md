@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added/New
 
+- Make linear operators purely PyTorch with a SciPy export option
+  - `GGNLinearOperator` ([PR](https://github.com/f-dangel/curvlinops/pull/146))
+
 ### Fixed/Removed
 
 ### Internal
