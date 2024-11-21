@@ -23,7 +23,6 @@ from torch import (
     cat,
     device,
     dtype,
-    from_numpy,
     rand,
     tensor,
     zeros_like,
@@ -832,6 +831,9 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
         Args:
             rtol: Relative tolerance for comparison. Defaults to ``1e-5``.
             atol: Absolute tolerance for comparison. Defaults to ``1e-8``.
+
+        Raises:
+            RuntimeError: If the matrix-vector product is not deterministic.
         """
         v = rand(self.shape[1], device=self._device, dtype=self._infer_dtype())
         Av1 = self @ v
