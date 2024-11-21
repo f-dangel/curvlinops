@@ -112,7 +112,9 @@ def ggn_block_diagonal(
         The block-diagonal GGN.
     """
     # compute the full GGN then zero out the off-diagonal blocks
-    ggn = GGNLinearOperator(model, loss_func, params, data, batch_size_fn=batch_size_fn)
+    ggn = GGNLinearOperator(
+        model, loss_func, params, data, batch_size_fn=batch_size_fn
+    ).to_scipy()
     ggn = from_numpy(ggn @ eye(ggn.shape[1]))
     sizes = [p.numel() for p in params]
     # ggn_blocks[i, j] corresponds to the block of (params[i], params[j])

@@ -78,7 +78,7 @@ loss_function = nn.CrossEntropyLoss(reduction="mean").to(DEVICE)
 # Fisher and compute their matrix representations by multiplying them onto the
 # identity matrix:
 
-GGN = GGNLinearOperator(model, loss_function, params, data)
+GGN = GGNLinearOperator(model, loss_function, params, data).to_scipy()
 F = FisherMCLinearOperator(model, loss_function, params, data)
 
 D = GGN.shape[0]

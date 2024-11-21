@@ -158,7 +158,7 @@ ggn = GGNLinearOperator(
     [(data, data["labels"])],  # We still need to input a list of "(X, y)" pairs!
     check_deterministic=False,
     batch_size_fn=batch_size_fn,  # Remember to specify this!
-)
+).to_scipy()
 
 G = ggn @ np.eye(ggn.shape[0])
 

@@ -6,7 +6,18 @@ from typing import Callable, Iterable, List, MutableMapping, Optional, Tuple, Un
 
 import numpy
 from scipy.sparse.linalg import LinearOperator
-from torch import Size, Tensor, as_tensor, cat, device, dtype, rand, tensor, zeros_like
+from torch import (
+    Size,
+    Tensor,
+    as_tensor,
+    bfloat16,
+    cat,
+    device,
+    dtype,
+    rand,
+    tensor,
+    zeros_like,
+)
 from torch.autograd import grad
 from torch.nn import Module, Parameter
 from tqdm import tqdm
@@ -32,7 +43,12 @@ class PyTorchLinearOperator:
     operator, which can be useful for interfacing with SciPy routines. To achieve this,
     the functions ``_infer_device`` and ``_infer_dtype`` must be implemented.
 
+    Attributes:
+        SELF_ADJOINT: Whether the linear operator is self-adjoint. If ``True``,
+            ``_adjoint`` does not need to be implemented. Default: ``False``.
     """
+
+    SELF_ADJOINT: bool = False
 
     def __init__(
         self, in_shape: List[Tuple[int, ...]], out_shape: List[Tuple[int, ...]]
@@ -106,18 +122,7 @@ class PyTorchLinearOperator:
         Returns:
             The adjoint of the linear operator.
         """
-        return self._adjoint()
-
-    def _adjoint(self) -> PyTorchLinearOperator:
-        """Adjoint of the linear operator.
-
-        Returns: # noqa: D402
-            The adjoint of the linear operator.
-
-        Raises:
-            NotImplementedError: Must be implemented by the subclass.
-        """
-        raise NotImplementedError
+        return self if self.SELF_ADJOINT else self._adjoint()
 
     def _check_input_and_preprocess(
         self, X: Union[List[Tensor], Tensor]
@@ -349,6 +354,10 @@ class PyTorchLinearOperator:
             X_dtype = X.dtype
             X_torch = as_tensor(X, dtype=dtype, device=device)
             AX_torch = f(X_torch)
+            # calling .numpy() on a BF-16 tensor is not supported, see
+            # (https://github.com/pytorch/pytorch/issues/90574)
+            if AX_torch.dtype == bfloat16:
+                AX_torch = AX_torch.float()
             return AX_torch.detach().cpu().numpy().astype(X_dtype)
 
         return f_scipy
