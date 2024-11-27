@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Make linear operators purely PyTorch with a SciPy export option
   - `GGNLinearOperator` ([PR](https://github.com/f-dangel/curvlinops/pull/146))
+  - `TransposedJacobianLinearOperator` and `JacobianLinearOperator`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/147))
 
 ### Fixed/Removed
 
