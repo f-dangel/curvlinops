@@ -2,7 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Callable, Iterable, List, MutableMapping, Optional, Tuple, Union
+from typing import (
+    Callable,
+    Iterable,
+    Iterator,
+    List,
+    MutableMapping,
+    Optional,
+    Tuple,
+    Union,
+)
 
 import numpy
 from scipy.sparse.linalg import LinearOperator
@@ -123,6 +132,17 @@ class PyTorchLinearOperator:
             The adjoint of the linear operator.
         """
         return self if self.SELF_ADJOINT else self._adjoint()
+
+    def _adjoint(self) -> PyTorchLinearOperator:
+        """Adjoint of the linear operator.
+
+        Returns: # noqa: D402
+            The adjoint of the linear operator.
+
+        Raises:
+            NotImplementedError: Must be implemented by the subclass.
+        """
+        raise NotImplementedError
 
     def _check_input_and_preprocess(
         self, X: Union[List[Tensor], Tensor]
@@ -367,15 +387,20 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
     """Base class for PyTorch linear operators of deep learning curvature matrices.
 
     To implement a new curvature linear operator, subclass this class and implement
-    the ``_matmat_batch`` and ``_adjoint`` methods.
+    the ``_matmat_batch`` and ``_adjoint`` methods. If the linear operator is not
+    defined as a map in the neural network's parameter space, you also need to
+    implement ``_get_in_shape`` and ``_get_out_shape``.
 
     Attributes:
         SUPPORTS_BLOCKS: Whether the linear operator supports multiplication with
             a block-diagonal approximation rather than the full matrix.
             Default: ``False``.
+        FIXED_DATA_ORDER: Whether the data loader must return the same data
+            for every iteration. Default: ``False``.
     """
 
     SUPPORTS_BLOCKS: bool = False
+    FIXED_DATA_ORDER: bool = False
 
     def __init__(
         self,
@@ -447,10 +472,6 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
                 "When using dict-like custom data, `batch_size_fn` is required."
             )
 
-        in_shape = [tuple(p.shape) for p in params] if in_shape is None else in_shape
-        out_shape = [tuple(p.shape) for p in params] if out_shape is None else out_shape
-        super().__init__(in_shape, out_shape)
-
         self._params = params
         if block_sizes is not None:
             if not self.SUPPORTS_BLOCKS:
@@ -481,6 +502,8 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
             else num_data
         )
 
+        super().__init__(self._get_in_shape(), self._get_out_shape())
+
         if check_deterministic:
             old_device = self._device
             self.to_device(device("cpu"))
@@ -490,6 +513,22 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
                 raise e
             finally:
                 self.to_device(old_device)
+
+    def _get_in_shape(self) -> List[Tuple[int, ...]]:
+        """Return linear operator's input space dimensions.
+
+        Returns:
+            Shapes of the linear operator's input tensor product space.
+        """
+        return [tuple(p.shape) for p in self._params]
+
+    def _get_out_shape(self) -> List[Tuple[int, ...]]:
+        """Return linear operator's output space dimensions.
+
+        Returns:
+            Shapes of the linear operator's output tensor product space.
+        """
+        return [tuple(p.shape) for p in self._params]
 
     def _matmat(self, M: List[Tensor]) -> List[Tensor]:
         """Matrix-matrix multiplication.
@@ -583,6 +622,38 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
     #                             DETERMINISTIC CHECKS                            #
     ###############################################################################
 
+    def data_prediction_loss_gradient(
+        self, desc: str = "batch_prediction_loss_gradient"
+    ) -> Iterator[
+        Tuple[
+            Tuple[Union[Tensor, MutableMapping], Tensor],
+            Tensor,
+            Optional[Tensor],
+            Optional[List[Tensor]],
+        ]
+    ]:
+        """Yield (input, label), prediction, loss, and gradient for each batch.
+
+        Args:
+            desc: Description for the progress bar (if the linear operator's
+                progress bar is enabled). Default: ``'batch_prediction_loss_gradient'``.
+
+        Yields:
+            Tuple of ((input, label), prediction, loss, gradient) for each batch of
+            the data.
+        """
+        for X, y in self._loop_over_data(desc=desc):
+            prediction = self._model_func(X)
+            if self._loss_func is None:
+                loss, grad_params = None, None
+            else:
+                normalization_factor = self._get_normalization_factor(X, y)
+                loss = self._loss_func(prediction, y).mul_(normalization_factor)
+                grad_params = [g.detach() for g in grad(loss, self._params)]
+                loss.detach_()
+
+            yield (X, y), prediction, loss, grad_params
+
     def gradient_and_loss(self) -> Tuple[List[Tensor], Tensor]:
         """Evaluate the gradient and loss on the data.
 
@@ -597,16 +668,17 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
         if self._loss_func is None:
             raise ValueError("No loss function specified.")
 
-        total_loss = tensor([0.0], device=self._device, dtype=self._infer_dtype())
+        total_loss = tensor(
+            [0.0], device=self._device, dtype=self._infer_dtype()
+        ).squeeze()
         total_grad = [zeros_like(p) for p in self._params]
 
-        for X, y in self._loop_over_data(desc="gradient_and_loss"):
-            loss = self._loss_func(self._model_func(X), y)
-            normalization_factor = self._get_normalization_factor(X, y)
-
-            for grad_param, current in zip(total_grad, grad(loss, self._params)):
-                grad_param.add_(current, alpha=normalization_factor)
-            total_loss.add_(loss.detach(), alpha=normalization_factor)
+        for _, _, loss, grad_params in self.data_prediction_loss_gradient(
+            desc="gradient_and_loss"
+        ):
+            total_loss.add_(loss)
+            for total_g, g in zip(total_grad, grad_params):
+                total_g.add_(g)
 
         return total_grad, total_loss
 
@@ -632,7 +704,8 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
 
         - Two independent applications of matvec onto the same vector yield different
           results
-        - Two independent loss/gradient computations yield different results
+        - Two independent total loss/gradient computations yield different results
+        - If ``FIXED_DATA_ORDER`` is ``True`` and any mini-batch quantity differs.
 
         Note:
             Deterministic checks should be performed on CPU. We noticed that even when
@@ -647,29 +720,126 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
         Raises:
             RuntimeError: If non-deterministic behavior is detected.
         """
+        rtol, atol = 5e-5, 1e-6
+
+        if self._loss_func is None:
+            total_grad1, total_grad2 = None, None
+            total_loss1, total_loss2 = None, None
+        else:
+            total_grad1 = [zeros_like(p) for p in self._params]
+            total_grad2 = [zeros_like(p) for p in self._params]
+            total_loss1 = tensor(0.0, device=self._device, dtype=self._infer_dtype())
+            total_loss2 = tensor(0.0, device=self._device, dtype=self._infer_dtype())
+
+        # loop twice over the data loader, accumulate total quantities and compare
+        # batch quantities if the linear operator demands fixed data order
+        for ((X1, y1), pred1, loss1, grad1), ((X2, y2), pred2, loss2, grad2) in zip(
+            self.data_prediction_loss_gradient(), self.data_prediction_loss_gradient()
+        ):
+            if self.FIXED_DATA_ORDER:
+                self.__check_deterministic_batch(
+                    (X1, X2),
+                    (y1, y2),
+                    (pred1, pred2),
+                    (loss1, loss2),
+                    (grad1, grad2),
+                    rtol=rtol,
+                    atol=atol,
+                )
+
+            # accumulate total quantities
+            if self._loss_func is not None:
+                total_loss1.add_(loss1)
+                total_loss2.add_(loss2)
+                for total_g1, g1 in zip(total_grad1, grad1):
+                    total_g1.add_(g1)
+                for total_g2, g2 in zip(total_grad2, grad2):
+                    total_g2.add_(g2)
+
+        if self._loss_func is not None:
+            if not allclose_report(loss1, loss2, rtol=rtol, atol=atol):
+                raise RuntimeError("Check for deterministic total loss failed.")
+
+            if any(
+                not allclose_report(g1, g2, atol=atol, rtol=rtol)
+                for g1, g2 in zip(total_grad1, total_grad2)
+            ):
+                raise RuntimeError("Check for deterministic total gradient failed.")
+
+        self.__check_deterministic_matvec(rtol=rtol, atol=atol)
+
+    def __check_deterministic_batch(
+        self,
+        Xs: Tuple[Union[Tensor, MutableMapping], Union[Tensor, MutableMapping]],
+        ys: Tuple[Tensor, Tensor],
+        predictions: Tuple[Tensor, Tensor],
+        losses: Tuple[Optional[Tensor], Optional[Tensor]],
+        gradients: Tuple[Optional[List[Tensor]], Optional[List[Tensor]]],
+        rtol: float = 1e-5,
+        atol: float = 1e-8,
+    ):
+        """Compare two outputs of ``self.data_prediction_loss_gradient``.
+
+        Args:
+            Xs: The two data inputs to compare.
+            ys: The two data targets to compare.
+            predictions: The two predictions to compare.
+            losses: The two losses to compare.
+            gradients: The two gradients to compare.
+            rtol: Relative tolerance for comparison. Default is 1e-5.
+            atol: Absolute tolerance for comparison. Default is 1e-8.
+
+        Raises:
+            RuntimeError: If any of the pairs mismatch.
+        """
+        X1, X2 = Xs
+        if isinstance(X1, MutableMapping) and isinstance(X2, MutableMapping):
+            for k in X1.keys():
+                v1, v2 = X1[k], X2[k]
+                if isinstance(v1, Tensor) and not allclose_report(
+                    v1, v2, rtol=rtol, atol=atol
+                ):
+                    raise RuntimeError("Check for deterministic X failed.")
+        elif not allclose_report(X1, X2, rtol=rtol, atol=atol):
+            raise RuntimeError("Check for deterministic X failed.")
+
+        y1, y2 = ys
+        if not allclose_report(y1, y2, rtol=rtol, atol=atol):
+            raise RuntimeError("Check for deterministic y failed.")
+
+        pred1, pred2 = predictions
+        if not allclose_report(pred1, pred2, rtol=rtol, atol=atol):
+            raise RuntimeError("Check for deterministic batch prediction failed.")
+
+        loss1, loss2 = losses
+        grad1, grad2 = gradients
+        if self._loss_func is not None:
+            if not allclose_report(loss1, loss2, rtol=rtol, atol=atol):
+                raise RuntimeError("Check for deterministic batch loss failed.")
+
+            if any(
+                not allclose_report(g1, g2, rtol=rtol, atol=atol)
+                for g1, g2 in zip(grad1, grad2)
+            ):
+                raise RuntimeError("Check for deterministic batch gradient failed.")
+
+    def __check_deterministic_matvec(self, rtol: float = 1e-5, atol: float = 1e-8):
+        """Probe whether the linear operator's matrix-vector product is deterministic.
+
+        Performs two sequential matrix-vector products and compares them.
+
+        Args:
+            rtol: Relative tolerance for comparison. Defaults to ``1e-5``.
+            atol: Absolute tolerance for comparison. Defaults to ``1e-8``.
+
+        Raises:
+            RuntimeError: If the matrix-vector product is not deterministic.
+        """
         v = rand(self.shape[1], device=self._device, dtype=self._infer_dtype())
         Av1 = self @ v
         Av2 = self @ v
-
-        rtol, atol = 5e-5, 1e-6
         if not allclose_report(Av1, Av2, rtol=rtol, atol=atol):
             raise RuntimeError("Check for deterministic matvec failed.")
-
-        if self._loss_func is None:
-            return
-
-        # only carried out if there is a loss function
-        grad1, loss1 = self.gradient_and_loss()
-        grad2, loss2 = self.gradient_and_loss()
-
-        if not allclose_report(loss1, loss2, rtol=rtol, atol=atol):
-            raise RuntimeError("Check for deterministic loss failed.")
-
-        if len(grad1) != len(grad2) or any(
-            not allclose_report(g1, g2, atol=atol, rtol=rtol)
-            for g1, g2 in zip(grad1, grad2)
-        ):
-            raise RuntimeError("Check for deterministic gradient failed.")
 
     ###############################################################################
     #                                 SCIPY EXPORT                                #

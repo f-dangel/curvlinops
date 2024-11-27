@@ -44,18 +44,25 @@ def allclose_report(
     """
     close = tensor1.allclose(tensor2, rtol=rtol, atol=atol)
     if not close:
+        # print non-close values
         nonclose_idx = tensor1.isclose(tensor2, rtol=rtol, atol=atol).logical_not_()
+        nonclose_entries = 0
         for idx, t1, t2 in zip(
             nonclose_idx.argwhere(),
             tensor1[nonclose_idx].flatten(),
             tensor2[nonclose_idx].flatten(),
         ):
             print(f"at index {idx.tolist()}: {t1:.5e} ≠ {t2:.5e}, ratio: {t1 / t2:.5e}")
+            nonclose_entries += 1
 
         # print largest and smallest absolute entries
         amax1, amax2 = tensor1.abs().max().item(), tensor2.abs().max().item()
         print(f"Abs max: {amax1:.5e} vs. {amax2:.5e}.")
         amin1, amin2 = tensor1.abs().min().item(), tensor2.abs().min().item()
         print(f"Abs min: {amin1:.5e} vs. {amin2:.5e}.")
+
+        # print number of nonclose values and tolerances
+        print(f"Non-close entries: {nonclose_entries} / {tensor1.numel()}.")
+        print(f"rtol = {rtol}, atol = {atol}.")
 
     return close
