@@ -387,9 +387,9 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
     """Base class for PyTorch linear operators of deep learning curvature matrices.
 
     To implement a new curvature linear operator, subclass this class and implement
-    the ``_matmat_batch`` and ``_adjoint`` methods. If the linear operator does not
-    map between the neural network's parameter space, you also need to implement
-    ``_get_in_shape`` and ``_get_out_shape``.
+    the ``_matmat_batch`` and ``_adjoint`` methods. If the linear operator is not
+    defined as a map in the neural network's parameter space, you also need to
+    implement ``_get_in_shape`` and ``_get_out_shape``.
 
     Attributes:
         SUPPORTS_BLOCKS: Whether the linear operator supports multiplication with
@@ -632,7 +632,7 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
             Optional[List[Tensor]],
         ]
     ]:
-        """Yield input, prediction, loss, and gradient for each batch.
+        """Yield (input, label), prediction, loss, and gradient for each batch.
 
         Args:
             desc: Description for the progress bar (if the linear operator's
