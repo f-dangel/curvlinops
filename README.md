@@ -3,7 +3,7 @@
 [![Python
 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/release/python-380/)
 ![tests](https://github.com/f-dangel/curvature-linear-operators/actions/workflows/test.yaml/badge.svg)
-[![Coveralls](https://coveralls.io/repos/github/f-dangel/curvlinops/badge.svg?branch=master)](https://coveralls.io/github/f-dangel/curvlinops)
+[![Coveralls](https://coveralls.io/repos/github/f-dangel/curvlinops/badge.svg?branch=main)](https://coveralls.io/github/f-dangel/curvlinops)
 
 This library implements
 [`scipy.sparse.linalg.LinearOperator`](https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.linalg.LinearOperator.html)s
