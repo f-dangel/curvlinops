@@ -23,7 +23,6 @@ from torch import (
     cat,
     device,
     dtype,
-    from_numpy,
     rand,
     tensor,
     zeros_like,
