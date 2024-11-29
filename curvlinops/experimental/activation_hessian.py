@@ -94,8 +94,7 @@ class ActivationHessianLinearOperator(CurvatureLinearOperator):
             ValueError: If ``data`` contains more than one batch.
 
         Example:
-            >>> from numpy import eye, allclose
-            >>> from torch import manual_seed, rand
+            >>> from torch import manual_seed, rand, eye, allclose
             >>> from torch.nn import Linear, MSELoss, Sequential, ReLU
             >>>
             >>> loss_func = MSELoss()
@@ -106,14 +105,14 @@ class ActivationHessianLinearOperator(CurvatureLinearOperator):
             >>>
             >>> hessian = ActivationHessianLinearOperator( # Hessian w.r.t. ReLU input
             ...     model, loss_func, ("1", "input", 0), data
-            ... ).to_scipy()
+            ... )
             >>> hessian.shape # batch size * feature dimension (10 * 3)
             (30, 30)
             >>>
             >>> # The ReLU's input is the first Linear's output, let's check that
             >>> hessian2 = ActivationHessianLinearOperator( # Hessian w.r.t. first output
             ...     model, loss_func, ("0", "output", 0), data
-            ... ).to_scipy()
+            ... )
             >>> I = eye(hessian.shape[1])
             >>> allclose(hessian @ I, hessian2 @ I)
             True
