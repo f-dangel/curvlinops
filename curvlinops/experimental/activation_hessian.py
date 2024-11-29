@@ -15,13 +15,11 @@ from typing import (
 )
 
 from backpack.hessianfree.hvp import hessian_vector_product
-from numpy import ndarray
-from torch import Tensor, from_numpy, zeros_like
+from torch import Tensor, zeros_like
 from torch.autograd import grad
 from torch.nn import Module
 from torch.utils.hooks import RemovableHandle
 
-from curvlinops._base import _LinearOperator
 from curvlinops._torch_base import CurvatureLinearOperator
 
 
