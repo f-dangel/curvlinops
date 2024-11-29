@@ -1473,7 +1473,7 @@ class EKFACLinearOperator(KFACLinearOperator):
         # Initialize the cache for activations
         self._cached_activations: Dict[str, Tensor] = {}
         # Initialize the corrected eigenvalues for EKFAC
-        self._corrected_eigenvalues: Dict[str, Tensor] = {}
+        self._corrected_eigenvalues: Dict[str, Union[Tensor, Dict[str, Tensor]]] = {}
 
         if check_deterministic:
             old_device = self._device
