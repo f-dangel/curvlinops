@@ -1410,14 +1410,10 @@ class EKFACLinearOperator(KFACLinearOperator):
             seed: The seed for the random number generator used to draw labels
                 from the model's predictive distribution. Defaults to ``2147483647``.
             fisher_type: The type of Fisher/GGN to approximate.
-                If ``FisherType.TYPE2``, the exact Hessian of the loss w.r.t. the model
-                outputs is used. This requires as many backward passes as the output
-                dimension, i.e. the number of classes for classification. This is
-                sometimes also called type-2 Fisher. If ``FisherType.MC``, the
-                expectation is approximated by sampling ``mc_samples`` labels from the
-                model's predictive distribution. If ``FisherType.EMPIRICAL``, the
-                empirical gradients are used which corresponds to the uncentered
-                gradient covariance, or the empirical Fisher.
+                If ``FisherType.MC``, the expectation is approximated by sampling
+                ``mc_samples`` labels from the model's predictive distribution.
+                If ``FisherType.EMPIRICAL``, the empirical gradients are used which
+                corresponds to the uncentered gradient covariance/empirical Fisher.
                 Defaults to ``FisherType.MC``.
             mc_samples: The number of Monte-Carlo samples to use per data point.
                 Has to be set to ``1`` when ``fisher_type != FisherType.MC``.
@@ -1447,6 +1443,9 @@ class EKFACLinearOperator(KFACLinearOperator):
             batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
                 needs to be specified. The intended behavior is to consume the first
                 entry of the iterates from ``data`` and return their batch size.
+
+        Raises:
+            RuntimeError: If the check for deterministic behavior fails.
         """
         super().__init__(
             model_func=model_func,
@@ -1704,7 +1703,7 @@ class EKFACLinearOperator(KFACLinearOperator):
     def _accumulate_corrected_eigenvalues(
         self, grad_output: Tensor, module: Module, module_name: str
     ):
-        """Accumulate the corrected eigenvalues.
+        r"""Accumulate the corrected eigenvalues.
 
         The corrected eigenvalues are computed as
         :math:`\lambda_{\text{corrected}} = (Q_g^T G Q_a)^2`, where

@@ -414,10 +414,12 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
         self, aaT_eigvals: Tensor, ggT_eigvals: Tensor, name: str
     ) -> Union[Tensor, Dict[str, Tensor]]:
         """Compute the inverses of the damped eigenvalues for a given layer.
+
         Args:
             aaT_eigvals: Eigenvalues of the input covariance matrix.
             ggT_eigvals: Eigenvalues of the gradient covariance matrix.
             name: Name of the layer for which to damp and invert eigenvalues.
+
         Returns:
             Inverses of the damped eigenvalues.
         """
