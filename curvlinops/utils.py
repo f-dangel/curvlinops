@@ -36,8 +36,8 @@ def allclose_report(
     Args:
         tensor1: First tensor for comparison.
         tensor2: Second tensor for comparison.
-        rtol: Relative tolerance. Default: ``1e-5``.
-        atol: Absolute tolerance. Default: ``1e-8``.
+        rtol: Relative tolerance. Default is ``1e-5``.
+        atol: Absolute tolerance. Default is ``1e-8``.
 
     Returns:
         ``True`` if the tensors are close, ``False`` otherwise.
@@ -61,10 +61,8 @@ def allclose_report(
         amin1, amin2 = tensor1.abs().min().item(), tensor2.abs().min().item()
         print(f"Abs min: {amin1:.5e} vs. {amin2:.5e}.")
 
-        # print number of nonclose values
+        # print number of nonclose values and tolerances
         print(f"Non-close entries: {nonclose_entries} / {tensor1.numel()}.")
-
-        # print tolerances:
         print(f"rtol = {rtol}, atol = {atol}.")
 
     return close

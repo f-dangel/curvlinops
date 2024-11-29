@@ -37,7 +37,7 @@ extensions = [
     "sphinx.ext.autosectionlabel",
     "sphinx.ext.intersphinx",
     "sphinx_gallery.gen_gallery",
-    'sphinx.ext.viewcode', # show source code links
+    "sphinx.ext.viewcode",  # show source code links
 ]
 
 # -- Intersphinx config -----------------------------------------------------
@@ -48,6 +48,7 @@ intersphinx_mapping = {
     "scipy": ("http://docs.scipy.org/doc/scipy/reference/", None),
     "numpy": ("http://docs.scipy.org/doc/numpy/", None),
     "matplotlib": ("https://matplotlib.org/stable/", None),
+    "curvlinops": ("https://curvlinops.readthedocs.io/en/latest/", None),
 }
 
 # -- Sphinx Gallery config ---------------------------------------------------

@@ -16,8 +16,15 @@ import torch
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from torch import nn
+from tueplots import bundles
 
-from curvlinops import EFLinearOperator, GGNLinearOperator, HessianLinearOperator
+from curvlinops import (
+    EFLinearOperator,
+    FisherMCLinearOperator,
+    GGNLinearOperator,
+    HessianLinearOperator,
+    KFACLinearOperator,
+)
 
 # make deterministic
 torch.manual_seed(0)
@@ -61,6 +68,7 @@ num_params = sum(p.numel() for p in params)
 num_params_layer = [
     sum(p.numel() for p in child.parameters()) for child in model.children()
 ]
+num_tensors_layer = [len(list(child.parameters())) for child in model.children()]
 
 loss_function = nn.CrossEntropyLoss(reduction="mean").to(DEVICE)
 
@@ -82,6 +90,17 @@ Hessian_linop = HessianLinearOperator(
 ).to_scipy()
 GGN_linop = GGNLinearOperator(model, loss_function, params, dataloader).to_scipy()
 EF_linop = EFLinearOperator(model, loss_function, params, dataloader).to_scipy()
+Hessian_blocked_linop = HessianLinearOperator(
+    model,
+    loss_function,
+    params,
+    dataloader,
+    block_sizes=[s for s in num_tensors_layer if s != 0],
+).to_scipy()
+F_linop = FisherMCLinearOperator(model, loss_function, params, dataloader).to_scipy()
+KFAC_linop = KFACLinearOperator(
+    model, loss_function, params, dataloader, separate_weight_and_bias=False
+)
 
 # %%
 #
@@ -92,6 +111,9 @@ identity = numpy.eye(num_params).astype(Hessian_linop.dtype)
 Hessian_mat = Hessian_linop @ identity
 GGN_mat = GGN_linop @ identity
 EF_mat = EF_linop @ identity
+Hessian_blocked_mat = Hessian_blocked_linop @ identity
+F_mat = F_linop @ identity
+KFAC_mat = KFAC_linop @ identity
 
 # %%
 # Visualization
@@ -99,11 +121,17 @@ EF_mat = EF_linop @ identity
 #
 # We will show the matrix entries on a shared domain for better comparability.
 
-matrices = [Hessian_mat, GGN_mat, EF_mat]
-titles = ["Hessian", "GGN", "Empirical Fisher"]
+matrices = [Hessian_mat, GGN_mat, EF_mat, Hessian_blocked_mat, F_mat, KFAC_mat]
+titles = [
+    "Hessian",
+    "Generalized Gauss-Newton",
+    "Empirical Fisher",
+    "Block-diagonal Hessian",
+    "Monte-Carlo Fisher",
+    "KFAC",
+]
 
-rows, columns = 1, 3
-img_width = 7
+rows, columns = 2, 3
 
 
 def plot(
@@ -123,20 +151,33 @@ def plot(
     min_value = min(transform(mat).min() for mat in matrices)
     max_value = max(transform(mat).max() for mat in matrices)
 
-    fig, axes = plt.subplots(
-        nrows=rows, ncols=columns, figsize=(columns * img_width, rows * img_width)
-    )
+    fig, axes = plt.subplots(nrows=rows, ncols=columns, sharex=True, sharey=True)
+    fig.supxlabel("Layer")
+    fig.supylabel("Layer")
 
     for idx, (ax, mat, title) in enumerate(zip(axes.flat, matrices, titles)):
         ax.set_title(title)
         img = ax.imshow(transform(mat), vmin=min_value, vmax=max_value)
 
-        # layer structure
-        for pos in numpy.cumsum(num_params_layer):
+        # layer blocks
+        boundaries = [0] + numpy.cumsum(num_params_layer).tolist()
+        for pos in boundaries:
             if pos not in [0, num_params]:
-                style = {"color": "w", "lw": 0.5, "ls": "--"}
+                style = {"color": "w", "lw": 0.5, "ls": "-"}
                 ax.axhline(y=pos - 1, xmin=0, xmax=num_params - 1, **style)
                 ax.axvline(x=pos - 1, ymin=0, ymax=num_params - 1, **style)
+
+        # label positions
+        label_positions = [
+            (boundaries[layer_idx] + boundaries[layer_idx + 1]) / 2
+            for layer_idx in range(len(boundaries) - 1)
+            if boundaries[layer_idx] != boundaries[layer_idx + 1]
+        ]
+        labels = [str(i + 1) for i in range(len(label_positions))]
+        ax.set_xticks(label_positions)
+        ax.set_xticklabels(labels)
+        ax.set_yticks(label_positions)
+        ax.set_yticklabels(labels)
 
         # colorbar
         last = idx == len(matrices) - 1
@@ -148,16 +189,21 @@ def plot(
     return fig, axes
 
 
+# use `tueplots` to make the plot look pretty
+plot_config = bundles.icml2024(column="full", nrows=1.5 * rows, ncols=columns)
+
 # %%
 #
 # We will show their logarithmic absolute value:
 
 
-def logabs(mat, epsilon=1e-5):
-    return numpy.log10(numpy.abs(mat) + epsilon)
+def logabs(mat, epsilon=1e-6):
+    return numpy.log10(numpy.clip(numpy.abs(mat), a_min=epsilon, a_max=None))
 
 
-plot(logabs, transform_title="Logarithmic absolute entries")
+with plt.rc_context(plot_config):
+    plot(logabs, transform_title="Logarithmic absolute entries")
+    plt.savefig("curvature_matrices_log_abs.pdf", bbox_inches="tight")
 
 # %%
 #
@@ -168,7 +214,8 @@ def unchanged(mat):
     return mat
 
 
-plot(unchanged, transform_title="Unaltered matrix entries")
+with plt.rc_context(plot_config):
+    plot(unchanged, transform_title="Unaltered matrix entries")
 
 # %%
 #

@@ -1,7 +1,5 @@
 """Contains LinearOperator implementation of the GGN."""
 
-from __future__ import annotations
-
 from collections.abc import MutableMapping
 from typing import List, Union
 
@@ -60,7 +58,7 @@ class GGNLinearOperator(CurvatureLinearOperator):
 
         Returns:
             Result of GGN multiplication in list format. Has the same shape as
-            ``M_``, i.e. each tensor in the list has the shape of a parameter and a
+            ``M``, i.e. each tensor in the list has the shape of a parameter and a
             trailing dimension of matrix columns.
         """
         output = self._model_func(X)

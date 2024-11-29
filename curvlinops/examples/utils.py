@@ -31,9 +31,13 @@ def report_nonclose(
     if allclose(array1, array2, rtol=rtol, atol=atol, equal_nan=equal_nan):
         print("Compared arrays match.")
     else:
+        nonclose_entries = 0
         for a1, a2 in zip(array1.flatten(), array2.flatten()):
             if not isclose(a1, a2, atol=atol, rtol=rtol, equal_nan=equal_nan):
                 print(f"{a1} ≠ {a2} (ratio {a1 / a2:.5f})")
+                nonclose_entries += 1
         print(f"Max: {array1.max():.5f}, {array2.max():.5f}")
         print(f"Min: {array1.min():.5f}, {array2.min():.5f}")
+        print(f"Nonclose entries: {nonclose_entries} / {array1.size}")
+        print(f"rtol = {rtol}, atol= {atol}")
         raise ValueError("Compared arrays don't match.")
