@@ -16,6 +16,7 @@ from torch.nn import CrossEntropyLoss, Module, MSELoss, Parameter
 
 from curvlinops import (
     CGInverseLinearOperator,
+    EKFACLinearOperator,
     GGNLinearOperator,
     KFACInverseLinearOperator,
     KFACLinearOperator,
@@ -200,6 +201,9 @@ def test_NeumannInverseLinearOperator_toy():
 
     report_nonclose(inv_neumann, inv_ground_truth, rtol=1e-3, atol=1e-5)
     report_nonclose(inv_neumann @ y, inv_ground_truth @ y, rtol=1e-3, atol=1e-5)
+
+
+"""KFACInverseLinearOperator with KFACLinearOperator tests."""
 
 
 @mark.parametrize("fisher_type", KFACLinearOperator._SUPPORTED_FISHER_TYPE)
@@ -521,7 +525,11 @@ def test_KFAC_inverse_exactly_damped_matmat(
         assert len(inv_KFAC._inverse_gradient_covariances) == 0
 
 
+@mark.parametrize(
+    "use_exact_damping", [True, False], ids=["exact_damping", "heuristic_damping"]
+)
 def test_KFAC_inverse_damped_torch_matmat(
+    use_exact_damping: bool,
     case: Tuple[
         Module,
         Union[MSELoss, CrossEntropyLoss],
@@ -554,7 +562,11 @@ def test_KFAC_inverse_damped_torch_matmat(
         check_deterministic=False,
     )
     KFAC.dtype = float64
-    inv_KFAC = KFACInverseLinearOperator(KFAC, damping=(delta, delta))
+    kwargs = {
+        "use_exact_damping": use_exact_damping,
+        "use_heuristic_damping": not use_exact_damping,
+    }
+    inv_KFAC = KFACInverseLinearOperator(KFAC, damping=delta, **kwargs)
     device = KFAC._device
 
     num_vectors = 2
@@ -584,7 +596,11 @@ def test_KFAC_inverse_damped_torch_matmat(
     report_nonclose(inv_KFAC_X, kfac_x_numpy)
 
 
+@mark.parametrize(
+    "use_exact_damping", [True, False], ids=["exact_damping", "heuristic_damping"]
+)
 def test_KFAC_inverse_damped_torch_matvec(
+    use_exact_damping: bool,
     case: Tuple[
         Module,
         Union[MSELoss, CrossEntropyLoss],
@@ -617,7 +633,11 @@ def test_KFAC_inverse_damped_torch_matvec(
         check_deterministic=False,
     )
     KFAC.dtype = float64
-    inv_KFAC = KFACInverseLinearOperator(KFAC, damping=(delta, delta))
+    kwargs = {
+        "use_exact_damping": use_exact_damping,
+        "use_heuristic_damping": not use_exact_damping,
+    }
+    inv_KFAC = KFACInverseLinearOperator(KFAC, damping=delta, **kwargs)
     device = KFAC._device
 
     x = torch.rand(KFAC.shape[1], dtype=dtype, device=device)
@@ -739,4 +759,315 @@ def test_torch_matvec_list_output_shapes(cnn_case):
     out_list = inv_kfac.torch_matvec(vec)
     assert len(out_list) == len(kfac._params)
     for out_i, p_i in zip(out_list, kfac._params):
+        assert out_i.shape == p_i.shape
+
+
+"""KFACInverseLinearOperator with EKFACLinearOperator tests."""
+
+
+@mark.parametrize("cache", [True, False], ids=["cached", "uncached"])
+@mark.parametrize(
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+def test_EKFAC_inverse_exactly_damped_matmat(
+    case: Tuple[
+        Module,
+        Union[MSELoss, CrossEntropyLoss],
+        List[Parameter],
+        Iterable[Tuple[torch.Tensor, torch.Tensor]],
+    ],
+    cache: bool,
+    exclude: str,
+    separate_weight_and_bias: bool,
+    delta: float = 1e-2,
+):
+    """Test matrix-matrix multiplication by an inverse (exactly) damped EKFAC approximation."""
+    model_func, loss_func, params, data, batch_size_fn = case
+    dtype = torch.float64  # use double precision for better numerical stability
+    model_func = model_func.to(dtype=dtype)
+    loss_func = loss_func.to(dtype=dtype)
+    params = [p.to(dtype=dtype) for p in params]
+    data = [
+        (
+            (cast_input(x, dtype), y)
+            if isinstance(loss_func, CrossEntropyLoss)
+            else (cast_input(x, dtype), y.to(dtype=dtype))
+        )
+        for x, y in data
+    ]
+
+    if exclude is not None:
+        names = {p.data_ptr(): name for name, p in model_func.named_parameters()}
+        params = [p for p in params if exclude not in names[p.data_ptr()]]
+
+    EKFAC = EKFACLinearOperator(
+        model_func,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        separate_weight_and_bias=separate_weight_and_bias,
+        check_deterministic=False,
+    )
+    EKFAC.dtype = float64
+
+    # manual exactly damped inverse
+    inv_EKFAC_naive = (
+        torch.inverse(
+            EKFAC.torch_matmat(
+                torch.eye(EKFAC.shape[0], dtype=dtype, device=EKFAC._device)
+            )
+            + delta * torch.eye(EKFAC.shape[0], dtype=dtype, device=EKFAC._device)
+        )
+        .cpu()
+        .numpy()
+    )
+
+    # check that passing a tuple for exact damping will fail
+    with raises(ValueError):
+        inv_EKFAC = KFACInverseLinearOperator(
+            EKFAC, damping=(delta, delta), use_exact_damping=True
+        )
+
+    # use exact damping with KFACInverseLinearOperator
+    inv_EKFAC = KFACInverseLinearOperator(
+        EKFAC, damping=delta, cache=cache, use_exact_damping=True
+    )
+
+    num_vectors = 2
+    X = random.rand(EKFAC.shape[1], num_vectors)
+    # test for equivalence
+    report_nonclose(inv_EKFAC @ X, inv_EKFAC_naive @ X)
+
+    assert inv_EKFAC._cache == cache
+    # test that the cache is empty
+    assert len(inv_EKFAC._inverse_input_covariances) == 0
+    assert len(inv_EKFAC._inverse_gradient_covariances) == 0
+
+
+def test_EKFAC_inverse_damped_torch_matmat(
+    case: Tuple[
+        Module,
+        Union[MSELoss, CrossEntropyLoss],
+        List[Parameter],
+        Iterable[Tuple[torch.Tensor, torch.Tensor]],
+    ],
+    delta: float = 1e-2,
+):
+    """Test torch matrix-matrix multiplication by an inverse damped EKFAC approximation."""
+    model_func, loss_func, params, data, batch_size_fn = case
+    dtype = torch.float64  # use double precision for better numerical stability
+    model_func = model_func.to(dtype=dtype)
+    loss_func = loss_func.to(dtype=dtype)
+    params = [p.to(dtype=dtype) for p in params]
+    data = [
+        (
+            (cast_input(x, dtype), y)
+            if isinstance(loss_func, CrossEntropyLoss)
+            else (cast_input(x, dtype), y.to(dtype=dtype))
+        )
+        for x, y in data
+    ]
+
+    EKFAC = EKFACLinearOperator(
+        model_func,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        check_deterministic=False,
+    )
+    EKFAC.dtype = float64
+    inv_EKFAC = KFACInverseLinearOperator(EKFAC, damping=delta, use_exact_damping=True)
+    device = EKFAC._device
+
+    num_vectors = 2
+    X = torch.rand(EKFAC.shape[1], num_vectors, dtype=dtype, device=device)
+    inv_EKFAC_X = inv_EKFAC.torch_matmat(X)
+    assert inv_EKFAC_X.dtype == X.dtype
+    assert inv_EKFAC_X.device == X.device
+    assert inv_EKFAC_X.shape == (EKFAC.shape[0], num_vectors)
+    inv_EKFAC_X = inv_EKFAC_X.cpu().numpy()
+
+    # Test list input format
+    x_list = EKFAC._torch_preprocess(X)
+    inv_EKFAC_x_list = inv_EKFAC.torch_matmat(x_list)
+    inv_EKFAC_x_list = torch.cat(
+        [rearrange(M, "k ... -> (...) k") for M in inv_EKFAC_x_list]
+    )
+    report_nonclose(inv_EKFAC_X, inv_EKFAC_x_list.cpu().numpy())
+
+    # Test against multiplication with dense matrix
+    identity = torch.eye(inv_EKFAC.shape[1], dtype=dtype, device=device)
+    inv_KFAC_mat = inv_EKFAC.torch_matmat(identity)
+    inv_KFAC_mat_x = inv_KFAC_mat @ X
+    report_nonclose(inv_EKFAC_X, inv_KFAC_mat_x.cpu().numpy())
+
+    # Test against _matmat
+    kfac_x_numpy = inv_EKFAC @ X.cpu().numpy()
+    report_nonclose(inv_EKFAC_X, kfac_x_numpy)
+
+
+def test_EKFAC_inverse_damped_torch_matvec(
+    case: Tuple[
+        Module,
+        Union[MSELoss, CrossEntropyLoss],
+        List[Parameter],
+        Iterable[Tuple[torch.Tensor, torch.Tensor]],
+    ],
+    delta: float = 1e-2,
+):
+    """Test torch matrix-vector multiplication by an inverse damped EKFAC approximation."""
+    model_func, loss_func, params, data, batch_size_fn = case
+    dtype = torch.float64  # use double precision for better numerical stability
+    model_func = model_func.to(dtype=dtype)
+    loss_func = loss_func.to(dtype=dtype)
+    params = [p.to(dtype=dtype) for p in params]
+    data = [
+        (
+            (cast_input(x, dtype), y)
+            if isinstance(loss_func, CrossEntropyLoss)
+            else (cast_input(x, dtype), y.to(dtype=dtype))
+        )
+        for x, y in data
+    ]
+
+    EKFAC = EKFACLinearOperator(
+        model_func,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        check_deterministic=False,
+    )
+    EKFAC.dtype = float64
+    inv_KFAC = KFACInverseLinearOperator(EKFAC, damping=delta, use_exact_damping=True)
+    device = EKFAC._device
+
+    x = torch.rand(EKFAC.shape[1], dtype=dtype, device=device)
+    inv_EKFAC_x = inv_KFAC.torch_matvec(x)
+    assert inv_EKFAC_x.dtype == x.dtype
+    assert inv_EKFAC_x.device == x.device
+    assert inv_EKFAC_x.shape == x.shape
+
+    # Test list input format
+    # split parameter blocks
+    dims = [p.numel() for p in EKFAC._params]
+    split_x = x.split(dims)
+    # unflatten parameter dimension
+    assert len(split_x) == len(EKFAC._params)
+    x_list = [res.reshape(p.shape) for res, p in zip(split_x, EKFAC._params)]
+    inv_ekfac_x_list = inv_KFAC.torch_matvec(x_list)
+    inv_ekfac_x_list = torch.cat(
+        [rearrange(M, "... -> (...)") for M in inv_ekfac_x_list]
+    )
+    report_nonclose(inv_EKFAC_x.cpu().numpy(), inv_ekfac_x_list.cpu().numpy())
+
+    # Test against multiplication with dense matrix
+    identity = torch.eye(inv_KFAC.shape[1], dtype=dtype, device=device)
+    inv_EKFAC_mat = inv_KFAC.torch_matmat(identity)
+    inv_EKFAC_mat_x = inv_EKFAC_mat @ x
+    report_nonclose(inv_EKFAC_x.cpu().numpy(), inv_EKFAC_mat_x.cpu().numpy())
+
+    # Test against _matmat
+    report_nonclose(inv_KFAC @ x.cpu().numpy(), inv_EKFAC_x.cpu().numpy())
+
+
+def test_EKFAC_inverse_save_and_load_state_dict():
+    """Test that KFACInverseLinearOperator can be saved and loaded from state dict."""
+    torch.manual_seed(0)
+    batch_size, D_in, D_out = 4, 3, 2
+    X = torch.rand(batch_size, D_in)
+    y = torch.rand(batch_size, D_out)
+    model = torch.nn.Linear(D_in, D_out)
+
+    params = list(model.parameters())
+    # create and compute EKFAC
+    ekfac = EKFACLinearOperator(
+        model,
+        MSELoss(reduction="sum"),
+        params,
+        [(X, y)],
+    )
+
+    # create inverse KFAC
+    inv_ekfac = KFACInverseLinearOperator(
+        ekfac, damping=1e-2, use_exact_damping=True, retry_double_precision=False
+    )
+    _ = inv_ekfac @ eye(ekfac.shape[1])  # to trigger inverse computation
+
+    # save state dict
+    state_dict = inv_ekfac.state_dict()
+    torch.save(state_dict, "inv_ekfac_state_dict.pt")
+
+    # create new inverse EKFAC with different linop input and try to load state dict
+    wrong_ekfac = EKFACLinearOperator(model, CrossEntropyLoss(), params, [(X, y)])
+    inv_ekfac_wrong = KFACInverseLinearOperator(
+        wrong_ekfac, damping=1e-2, use_exact_damping=True
+    )
+    with raises(ValueError, match="mismatch"):
+        inv_ekfac_wrong.load_state_dict(torch.load("inv_ekfac_state_dict.pt"))
+
+    # create new inverse KFAC and load state dict
+    inv_ekfac_new = KFACInverseLinearOperator(ekfac, use_exact_damping=True)
+    inv_ekfac_new.load_state_dict(torch.load("inv_ekfac_state_dict.pt"))
+    # clean up
+    os.remove("inv_ekfac_state_dict.pt")
+
+    # check that the two inverse KFACs are equal
+    compare_state_dicts(inv_ekfac.state_dict(), inv_ekfac_new.state_dict())
+    test_vec = torch.rand(inv_ekfac.shape[1])
+    report_nonclose(inv_ekfac @ test_vec, inv_ekfac_new @ test_vec)
+
+
+def test_EKFAC_inverse_from_state_dict():
+    """Test that KFACInverseLinearOperator can be created from state dict."""
+    torch.manual_seed(0)
+    batch_size, D_in, D_out = 4, 3, 2
+    X = torch.rand(batch_size, D_in)
+    y = torch.rand(batch_size, D_out)
+    model = torch.nn.Linear(D_in, D_out)
+
+    params = list(model.parameters())
+    # create and compute EKFAC
+    ekfac = EKFACLinearOperator(
+        model,
+        MSELoss(reduction="sum"),
+        params,
+        [(X, y)],
+    )
+
+    # create inverse KFAC and save state dict
+    inv_ekfac = KFACInverseLinearOperator(
+        ekfac, damping=1e-2, use_exact_damping=True, retry_double_precision=False
+    )
+    state_dict = inv_ekfac.state_dict()
+
+    # create new KFAC from state dict
+    inv_ekfac_new = KFACInverseLinearOperator.from_state_dict(state_dict, ekfac)
+
+    # check that the two inverse KFACs are equal
+    compare_state_dicts(inv_ekfac.state_dict(), inv_ekfac_new.state_dict())
+    test_vec = torch.rand(ekfac.shape[1])
+    report_nonclose(inv_ekfac @ test_vec, inv_ekfac_new @ test_vec)
+
+
+def test_torch_matvec_list_output_shapes_ekfac(cnn_case):
+    """Test output shapes with list input format (issue #124)."""
+    model, loss_func, params, data, batch_size_fn = cnn_case
+    ekfac = EKFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+    )
+    inv_ekfac = KFACInverseLinearOperator(ekfac, damping=1e-2, use_exact_damping=True)
+    vec = [torch.rand_like(p) for p in ekfac._params]
+    out_list = inv_ekfac.torch_matvec(vec)
+    assert len(out_list) == len(ekfac._params)
+    for out_i, p_i in zip(out_list, ekfac._params):
         assert out_i.shape == p_i.shape
