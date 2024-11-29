@@ -371,14 +371,13 @@ class PyTorchLinearOperator:
             Returns:
                 The output matrix in NumPy format.
             """
-            X_dtype = X.dtype
             X_torch = as_tensor(X, dtype=dtype, device=device)
             AX_torch = f(X_torch)
             # calling .numpy() on a BF-16 tensor is not supported, see
             # (https://github.com/pytorch/pytorch/issues/90574)
             if AX_torch.dtype == bfloat16:
                 AX_torch = AX_torch.float()
-            return AX_torch.detach().cpu().numpy().astype(X_dtype)
+            return AX_torch.detach().cpu().numpy().astype(X.dtype)
 
         return f_scipy
 
@@ -410,8 +409,6 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
         data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
-        in_shape: Optional[List[Tuple[int, ...]]] = None,
-        out_shape: Optional[List[Tuple[int, ...]]] = None,
         num_data: Optional[int] = None,
         block_sizes: Optional[List[int]] = None,
         batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
@@ -443,10 +440,6 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
                 model's forward pass could depend on the order in which mini-batches
                 are presented (BatchNorm, Dropout). Default: ``True``. This is a
                 safeguard, only turn it off if you know what you are doing.
-            in_shape: Shapes of the linear operator's input tensor product space.
-                If ``None``, will use the shapes of ``params``.
-            out_shape: Shapes of the linear operator's output tensor product space.
-                If ``None``, will use the shapes of ``params``.
             num_data: Number of data points. If ``None``, it is inferred from the data
                 at the cost of one traversal through the data loader.
             block_sizes: This argument will be ignored if the linear operator does not
