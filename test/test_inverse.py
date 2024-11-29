@@ -141,7 +141,7 @@ def test_Neumann_inverse_damped_GGN_matvec(inv_case, delta: float = 1e-2):
     scale = 1.0 if eval_max < 2 else 1.9 / eval_max
 
     # NOTE This may break when other cases are added because slow convergence
-    inv_GGN = NeumannInverseLinearOperator(GGN + damping, num_terms=5_500, scale=scale)
+    inv_GGN = NeumannInverseLinearOperator(GGN + damping, num_terms=7_000, scale=scale)
 
     x = random.rand(GGN.shape[1])
     report_nonclose(inv_GGN @ x, inv_GGN_functorch @ x, rtol=1e-1, atol=1e-1)

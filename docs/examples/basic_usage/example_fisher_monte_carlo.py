@@ -163,12 +163,14 @@ else:
 
 seed1 = 123456
 F1_mat = (
-    FisherMCLinearOperator(model, loss_function, params, data, seed=seed1) @ identity
+    FisherMCLinearOperator(model, loss_function, params, data, seed=seed1).to_scipy()
+    @ identity
 )
 
 seed2 = 654321
 F2_mat = (
-    FisherMCLinearOperator(model, loss_function, params, data, seed=seed2) @ identity
+    FisherMCLinearOperator(model, loss_function, params, data, seed=seed2).to_scipy()
+    @ identity
 )
 
 # now, we get two different deterministic approximations
