@@ -521,7 +521,7 @@ class KFACLinearOperator(_LinearOperator):
         """
         return_tensor, M_torch = self._check_input_type_and_preprocess(M_torch)
         if not (self._input_covariances or self._gradient_covariances):
-            self._compute_kfac()
+            self.compute_kronecker_factors()
 
         for mod_name, param_pos in self._mapping.items():
             # cache the weight shape to ensure correct shapes are returned
@@ -614,7 +614,7 @@ class KFACLinearOperator(_LinearOperator):
         """
         return self
 
-    def _compute_kfac(self):
+    def compute_kronecker_factors(self):
         """Compute and cache KFAC's Kronecker factors for future ``matmat``s."""
         self._reset_matrix_properties()
 
@@ -1009,8 +1009,8 @@ class KFACLinearOperator(_LinearOperator):
     def trace(self) -> Tensor:
         r"""Trace of the KFAC approximation.
 
-        Will call ``_compute_kfac`` if it has not been called before and will cache the
-        trace until ``_compute_kfac`` is called again. Uses the property of the
+        Will call ``compute_kronecker_factors`` if it has not been called before and will cache the
+        trace until ``compute_kronecker_factors`` is called again. Uses the property of the
         Kronecker product that
         :math:`\text{tr}(A \otimes B) = \text{tr}(A) \text{tr}(B)`.
 
@@ -1020,8 +1020,8 @@ class KFACLinearOperator(_LinearOperator):
         if self._trace is not None:
             return self._trace
 
-        if not self._input_covariances and not self._gradient_covariances:
-            self._compute_kfac()
+        if not (self._input_covariances or self._gradient_covariances):
+            self.compute_kronecker_factors()
 
         self._trace = 0.0
         for mod_name, param_pos in self._mapping.items():
@@ -1045,8 +1045,8 @@ class KFACLinearOperator(_LinearOperator):
     def det(self) -> Tensor:
         r"""Determinant of the KFAC approximation.
 
-        Will call ``_compute_kfac`` if it has not been called before and will cache the
-        determinant until ``_compute_kfac`` is called again. Uses the property of the
+        Will call ``compute_kronecker_factors`` if it has not been called before and will cache the
+        determinant until ``compute_kronecker_factors`` is called again. Uses the property of the
         Kronecker product that :math:`\det(A \otimes B) = \det(A)^{m} \det(B)^{n}`,
         where
         :math:`A \in \mathbb{R}^{n \times n}` and :math:`B \in \mathbb{R}^{m \times m}`.
@@ -1057,8 +1057,8 @@ class KFACLinearOperator(_LinearOperator):
         if self._det is not None:
             return self._det
 
-        if not self._input_covariances and not self._gradient_covariances:
-            self._compute_kfac()
+        if not (self._input_covariances or self._gradient_covariances):
+            self.compute_kronecker_factors()
 
         self._det = 1.0
         for mod_name, param_pos in self._mapping.items():
@@ -1091,8 +1091,8 @@ class KFACLinearOperator(_LinearOperator):
         r"""Log determinant of the KFAC approximation.
 
         More numerically stable than the ``det`` property.
-        Will call ``_compute_kfac`` if it has not been called before and will cache the
-        log determinant until ``_compute_kfac`` is called again. Uses the property of
+        Will call ``compute_kronecker_factors`` if it has not been called before and will cache the
+        log determinant until ``compute_kronecker_factors`` is called again. Uses the property of
         the Kronecker product that
         :math:`\log \det(A \otimes B) = m \log \det(A) + n \log \det(B)`, where
         :math:`A \in \mathbb{R}^{n \times n}` and :math:`B \in \mathbb{R}^{m \times m}`.
@@ -1103,8 +1103,8 @@ class KFACLinearOperator(_LinearOperator):
         if self._logdet is not None:
             return self._logdet
 
-        if not self._input_covariances and not self._gradient_covariances:
-            self._compute_kfac()
+        if not (self._input_covariances or self._gradient_covariances):
+            self.compute_kronecker_factors()
 
         self._logdet = 0.0
         for mod_name, param_pos in self._mapping.items():
@@ -1136,8 +1136,8 @@ class KFACLinearOperator(_LinearOperator):
     def frobenius_norm(self) -> Tensor:
         r"""Frobenius norm of the KFAC approximation.
 
-        Will call ``_compute_kfac`` if it has not been called before and will cache the
-        Frobenius norm until ``_compute_kfac`` is called again. Uses the property of the
+        Will call ``compute_kronecker_factors`` if it has not been called before and will cache the
+        Frobenius norm until ``compute_kronecker_factors`` is called again. Uses the property of the
         Kronecker product that :math:`\|A \otimes B\|_F = \|A\|_F \|B\|_F`.
 
         Returns:
@@ -1146,8 +1146,8 @@ class KFACLinearOperator(_LinearOperator):
         if self._frobenius_norm is not None:
             return self._frobenius_norm
 
-        if not self._input_covariances and not self._gradient_covariances:
-            self._compute_kfac()
+        if not (self._input_covariances or self._gradient_covariances):
+            self.compute_kronecker_factors()
 
         self._frobenius_norm = 0.0
         for mod_name, param_pos in self._mapping.items():
@@ -1483,6 +1483,13 @@ class EKFACLinearOperator(KFACLinearOperator):
             finally:
                 self.to_device(old_device)
 
+    def _maybe_compute_ekfac(self):
+        """Compute the EKFAC approximation when necessary."""
+        if not self._corrected_eigenvalues:
+            if not (self._input_covariances or self._gradient_covariances):
+                self.compute_kronecker_factors()
+            self.compute_eigenvalue_correction()
+
     def torch_matmat(self, M_torch: ParameterMatrixType) -> ParameterMatrixType:
         """Apply EKFAC to a matrix (multiple vectors) in PyTorch.
 
@@ -1504,8 +1511,7 @@ class EKFACLinearOperator(KFACLinearOperator):
             ``[D, K]`` with some ``K``.
         """
         return_tensor, M_torch = self._check_input_type_and_preprocess(M_torch)
-        if not self._corrected_eigenvalues:
-            self._compute_ekfac()
+        self._maybe_compute_ekfac()
 
         for mod_name, param_pos in self._mapping.items():
             # cache the weight shape to ensure correct shapes are returned
@@ -1551,25 +1557,10 @@ class EKFACLinearOperator(KFACLinearOperator):
 
         return M_torch
 
-    def _compute_ekfac(self):
-        """Compute and cache EKFAC approximation for future ``matmat``s."""
-        # Compute the KFAC approximation
-        self._compute_kfac()
-
-        # Compute the eigenvectors of the KFAC approximation
-        if not (
-            self._input_covariances_eigenvectors
-            or self._gradient_covariances_eigenvectors
-        ):
-            self._compute_eigenvectors()
-
-        # Compute the corrected eigenvalues for the EKFAC approximation
-        self._compute_corrected_eigenvalues()
-
     def _compute_eigenvectors(self):
         """Compute the eigenvectors of the KFAC approximation."""
         if not (self._input_covariances or self._gradient_covariances):
-            self._compute_kfac()
+            self.compute_kronecker_factors()
 
         for mod_name in self._mapping.keys():
             # Free up memory by deleting the Kronecker factors
@@ -1586,8 +1577,16 @@ class EKFACLinearOperator(KFACLinearOperator):
                 self._gradient_covariances_eigenvectors[mod_name] = ggT_eigvecs
                 del ggT
 
-    def _compute_corrected_eigenvalues(self):
+    def compute_eigenvalue_correction(self):
         """Compute and cache the corrected eigenvalues for EKFAC."""
+        self._reset_matrix_properties()
+
+        # Compute the eigenvectors of the KFAC approximation
+        if not (
+            self._input_covariances_eigenvectors
+            or self._gradient_covariances_eigenvectors
+        ):
+            self._compute_eigenvectors()
 
         # install forward and backward hooks
         hook_handles: List[RemovableHandle] = []
@@ -1952,8 +1951,9 @@ class EKFACLinearOperator(KFACLinearOperator):
     def trace(self) -> Tensor:
         r"""Trace of the EKFAC approximation.
 
-        Will call ``_compute_ekfac`` if it has not been called before and will cache the
-        trace until ``_compute_ekfac`` is called again.
+        Will call ``compute_kronecker_factors`` and ``compute_eigenvalue_correction`` if
+        either of them has not been called before and will cache the trace until one of
+        them is called again.
 
         Returns:
             Trace of the EKFAC approximation.
@@ -1961,8 +1961,7 @@ class EKFACLinearOperator(KFACLinearOperator):
         if self._trace is not None:
             return self._trace
 
-        if not self._corrected_eigenvalues:
-            self._compute_ekfac()
+        self._maybe_compute_ekfac()
 
         # Compute the trace using the corrected eigenvalues
         self._trace = 0.0
@@ -1979,8 +1978,9 @@ class EKFACLinearOperator(KFACLinearOperator):
     def det(self) -> Tensor:
         r"""Determinant of the EKFAC approximation.
 
-        Will call ``_compute_ekfac`` if it has not been called before and will cache the
-        determinant until ``_compute_ekfac`` is called again.
+        Will call ``compute_kronecker_factors`` and ``compute_eigenvalue_correction`` if
+        either of them has not been called before and will cache the determinant until
+        one of them is called again.
 
         Returns:
             Determinant of the EKFAC approximation.
@@ -1988,12 +1988,7 @@ class EKFACLinearOperator(KFACLinearOperator):
         if self._det is not None:
             return self._det
 
-        if (
-            not self._input_covariances
-            and not self._gradient_covariances
-            and not self._corrected_eigenvalues
-        ):
-            self._compute_ekfac()
+        self._maybe_compute_ekfac()
 
         # Compute the determinant using the corrected eigenvalues
         self._det = 1.0
@@ -2011,8 +2006,9 @@ class EKFACLinearOperator(KFACLinearOperator):
         r"""Log determinant of the EKFAC approximation.
 
         More numerically stable than the ``det`` property.
-        Will call ``_compute_ekfac`` if it has not been called before and will cache the
-        log determinant until ``_compute_ekfac`` is called again.
+        Will call ``compute_kronecker_factors`` and ``compute_eigenvalue_correction`` if
+        either of them has not been called before and will cache the logdet until one of
+        them is called again.
 
         Returns:
             Log determinant of the EKFAC approximation.
@@ -2020,12 +2016,7 @@ class EKFACLinearOperator(KFACLinearOperator):
         if self._logdet is not None:
             return self._logdet
 
-        if (
-            not self._input_covariances
-            and not self._gradient_covariances
-            and not self._corrected_eigenvalues
-        ):
-            self._compute_kfac()
+        self._maybe_compute_ekfac()
 
         # Compute the log determinant using the corrected eigenvalues
         self._logdet = 0.0
@@ -2042,8 +2033,9 @@ class EKFACLinearOperator(KFACLinearOperator):
     def frobenius_norm(self) -> Tensor:
         r"""Frobenius norm of the EKFAC approximation.
 
-        Will call ``_compute_ekfac`` if it has not been called before and will cache the
-        Frobenius norm until ``_compute_ekfac`` is called again.
+        Will call ``compute_kronecker_factors`` and ``compute_eigenvalue_correction`` if
+        either of them has not been called before and will cache the Frobenius norm
+        until one of them is called again.
 
         Returns:
             Frobenius norm of the EKFAC approximation.
@@ -2051,12 +2043,7 @@ class EKFACLinearOperator(KFACLinearOperator):
         if self._frobenius_norm is not None:
             return self._frobenius_norm
 
-        if (
-            not self._input_covariances
-            and not self._gradient_covariances
-            and not self._corrected_eigenvalues
-        ):
-            self._compute_ekfac()
+        self._maybe_compute_ekfac()
 
         # Compute the Frobenius norm using the corrected eigenvalues
         self._frobenius_norm = 0.0

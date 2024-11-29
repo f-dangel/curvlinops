@@ -592,14 +592,16 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
             ``[D, K]`` with some ``K``.
         """
         return_tensor, M_torch = self._A._check_input_type_and_preprocess(M_torch)
-        if (
-            isinstance(self._A, EKFACLinearOperator)
-            and not self._A._input_covariances_eigenvectors
-            and not self._A._gradient_covariances_eigenvectors
-        ):
-            self._A._compute_ekfac()
-        elif not self._A._input_covariances and not self._A._gradient_covariances:
-            self._A._compute_kfac()
+
+        # Maybe compute (E)KFAC
+        has_covariances = self._A._input_covariances or self._A._gradient_covariances
+        if isinstance(self._A, EKFACLinearOperator):
+            if not self._A._corrected_eigenvalues:
+                if not has_covariances:
+                    self._A.compute_kronecker_factors()
+                self._A.compute_eigenvalue_correction()
+        elif not has_covariances:
+            self._A.compute_kronecker_factors()
 
         for mod_name, param_pos in self._A._mapping.items():
             # retrieve the inverses of the Kronecker factors from cache or invert them.

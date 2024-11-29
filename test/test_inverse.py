@@ -257,7 +257,7 @@ def test_KFAC_inverse_damped_matmat(
         check_deterministic=False,
     )
     KFAC.dtype = float64
-    KFAC._compute_kfac()
+    KFAC.compute_kronecker_factors()
 
     # add damping manually
     for aaT in KFAC._input_covariances.values():
@@ -354,7 +354,7 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901
         check_deterministic=False,
     )
     KFAC.dtype = float64
-    KFAC._compute_kfac()
+    KFAC.compute_kronecker_factors()
 
     # add heuristic damping manually
     heuristic_damping = {}

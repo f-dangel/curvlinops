@@ -746,7 +746,7 @@ def test_trace(case, exclude, separate_weight_and_bias, check_deterministic):
 
     # Check that the trace property is properly cached and reset
     assert kfac._trace == trace
-    kfac._compute_kfac()
+    kfac.compute_kronecker_factors()
     assert kfac._trace is None
 
 
@@ -786,7 +786,7 @@ def test_frobenius_norm(case, exclude, separate_weight_and_bias, check_determini
 
     # Check that the frobenius_norm property is properly cached and reset
     assert kfac._frobenius_norm == frobenius_norm
-    kfac._compute_kfac()
+    kfac.compute_kronecker_factors()
     assert kfac._frobenius_norm is None
 
 
@@ -821,7 +821,7 @@ def test_det(case, exclude, separate_weight_and_bias, check_deterministic):
 
     # add damping manually to avoid singular matrices
     if not check_deterministic:
-        kfac._compute_kfac()
+        kfac.compute_kronecker_factors()
     assert kfac._input_covariances or kfac._gradient_covariances
     delta = 1.0  # requires much larger damping value compared to ``logdet``
     for aaT in kfac._input_covariances.values():
@@ -842,7 +842,7 @@ def test_det(case, exclude, separate_weight_and_bias, check_deterministic):
 
     # Check that the det property is properly cached and reset
     assert kfac._det == determinant
-    kfac._compute_kfac()
+    kfac.compute_kronecker_factors()
     assert kfac._det is None
 
 
@@ -877,7 +877,7 @@ def test_logdet(case, exclude, separate_weight_and_bias, check_deterministic):
 
     # add damping manually to avoid singular matrices
     if not check_deterministic:
-        kfac._compute_kfac()
+        kfac.compute_kronecker_factors()
     assert kfac._input_covariances or kfac._gradient_covariances
     delta = 1e-3  # only requires much smaller damping value compared to ``det``
     for aaT in kfac._input_covariances.values():
@@ -899,7 +899,7 @@ def test_logdet(case, exclude, separate_weight_and_bias, check_deterministic):
 
     # Check that the logdet property is properly cached and reset
     assert kfac._logdet == log_det
-    kfac._compute_kfac()
+    kfac.compute_kronecker_factors()
     assert kfac._logdet is None
 
 
@@ -1192,7 +1192,7 @@ def test_kfac_does_affect_grad():
         # suppress computation of KFAC matrices
         check_deterministic=False,
     )
-    kfac._compute_kfac()
+    kfac.compute_kronecker_factors()
 
     # make sure gradients are unchanged
     for grad_before, p in zip(grads_before, params):
