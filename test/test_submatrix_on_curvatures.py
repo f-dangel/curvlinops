@@ -64,7 +64,7 @@ def setup_submatrix_linear_operator(case, operator_case, submatrix_case):
     col_idxs = submatrix_case["col_idx_fn"](dim)
 
     A = operator_case(model_func, loss_func, params, data, batch_size_fn=batch_size_fn)
-    if isinstance(A, (HessianLinearOperator, GGNLinearOperator)):
+    if isinstance(A, (HessianLinearOperator, GGNLinearOperator, EFLinearOperator)):
         A = A.to_scipy()
     A_sub = SubmatrixLinearOperator(A, row_idxs, col_idxs)
 

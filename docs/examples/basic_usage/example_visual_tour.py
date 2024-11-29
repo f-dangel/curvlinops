@@ -89,7 +89,7 @@ Hessian_linop = HessianLinearOperator(
     model, loss_function, params, dataloader
 ).to_scipy()
 GGN_linop = GGNLinearOperator(model, loss_function, params, dataloader).to_scipy()
-EF_linop = EFLinearOperator(model, loss_function, params, dataloader)
+EF_linop = EFLinearOperator(model, loss_function, params, dataloader).to_scipy()
 Hessian_blocked_linop = HessianLinearOperator(
     model,
     loss_function,

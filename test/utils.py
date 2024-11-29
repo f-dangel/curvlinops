@@ -35,9 +35,8 @@ from torch.nn import (
     Upsample,
 )
 
-from curvlinops import GGNLinearOperator
+from curvlinops import FisherMCLinearOperator, GGNLinearOperator
 from curvlinops._torch_base import PyTorchLinearOperator
-from curvlinops.fisher import FisherMCLinearOperator
 from curvlinops.utils import allclose_report
 
 
