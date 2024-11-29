@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     ([PR](https://github.com/f-dangel/curvlinops/pull/147))
   - `FisherMCLinearOperator`
     ([PR](https://github.com/f-dangel/curvlinops/pull/148))
+  - `EFLinearOperator`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/149))
 
 ### Fixed/Removed
 
