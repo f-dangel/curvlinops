@@ -119,7 +119,7 @@ class EFLinearOperator(CurvatureLinearOperator):
         Args:
             X: Input to the DNN.
             y: Ground truth.
-            M_list: Matrix to be multiplied with in tensor list format.
+            M: Matrix to be multiplied with in tensor list format.
                 Tensors have same shape as trainable model parameters, and an
                 additional trailing axis for the matrix columns.
 
