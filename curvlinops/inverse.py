@@ -523,9 +523,7 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
         if isinstance(self._A, EKFACLinearOperator):
             aaT_eigenvectors = self._A._input_covariances_eigenvectors.get(name)
             ggT_eigenvectors = self._A._gradient_covariances_eigenvectors.get(name)
-            eigenvalues: Union[Tensor, Dict[str, Tensor]] = (
-                self._A._corrected_eigenvalues.get(name)
-            )
+            eigenvalues = self._A._corrected_eigenvalues[name]
             if isinstance(eigenvalues, dict):
                 inv_damped_eigenvalues: Dict[str, Tensor] = {}
                 for key, val in eigenvalues.items():
