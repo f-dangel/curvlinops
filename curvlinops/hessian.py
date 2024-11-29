@@ -1,20 +1,18 @@
-"""Contains LinearOperator implementation of the Hessian."""
-
-from __future__ import annotations
+"""Contains a linear operator implementation of the Hessian."""
 
 from collections.abc import MutableMapping
-from typing import List, Tuple, Union
+from typing import List, Union
 
 from backpack.hessianfree.hvp import hessian_vector_product
 from torch import Tensor, zeros_like
 from torch.autograd import grad
 
-from curvlinops._base import _LinearOperator
+from curvlinops._torch_base import CurvatureLinearOperator
 from curvlinops.utils import split_list
 
 
-class HessianLinearOperator(_LinearOperator):
-    r"""Hessian as SciPy linear operator.
+class HessianLinearOperator(CurvatureLinearOperator):
+    r"""Linear operator for the Hessian of an empirical risk.
 
     Consider the empirical risk
 
@@ -37,57 +35,50 @@ class HessianLinearOperator(_LinearOperator):
     Attributes:
         SUPPORTS_BLOCKS: Whether the linear operator supports block operations.
             Default is ``True``.
+        SELF_ADJOINT: Whether the linear operator is self-adjoint (``True`` for
+            Hessians).
     """
 
+    SELF_ADJOINT: bool = True
     SUPPORTS_BLOCKS: bool = True
 
     def _matmat_batch(
-        self, X: Union[Tensor, MutableMapping], y: Tensor, M_list: List[Tensor]
-    ) -> Tuple[Tensor, ...]:
+        self, X: Union[Tensor, MutableMapping], y: Tensor, M: List[Tensor]
+    ) -> List[Tensor]:
         """Apply the mini-batch Hessian to a matrix.
 
         Args:
             X: Input to the DNN.
             y: Ground truth.
-            M_list: Matrix to be multiplied with in list format.
+            M: Matrix to be multiplied with in tensor list format.
                 Tensors have same shape as trainable model parameters, and an
-                additional leading axis for the matrix columns.
+                additional trailing axis for the matrix columns.
 
         Returns:
             Result of Hessian multiplication in list format. Has the same shape as
-            ``M_list``, i.e. each tensor in the list has the shape of a parameter and a
-            leading dimension of matrix columns.
+            ``M``, i.e. each tensor in the list has the shape of a parameter and a
+            trailing dimension of matrix columns.
         """
         loss = self._loss_func(self._model_func(X), y)
 
         # Re-cycle first backward pass from the HVP's double-backward
         grad_params = grad(loss, self._params, create_graph=True)
 
-        num_vecs = M_list[0].shape[0]
-        result = [zeros_like(M) for M in M_list]
+        (num_vecs,) = {m.shape[-1] for m in M}
+        HM = [zeros_like(m) for m in M]
 
         # per-block HMP
-        for M_block, p_block, g_block, res_block in zip(
-            split_list(M_list, self._block_sizes),
+        for M_block, p_block, g_block, HM_block in zip(
+            split_list(M, self._block_sizes),
             split_list(self._params, self._block_sizes),
             split_list(grad_params, self._block_sizes),
-            split_list(result, self._block_sizes),
+            split_list(HM, self._block_sizes),
         ):
             for n in range(num_vecs):
                 col_n = hessian_vector_product(
-                    loss, p_block, [M[n] for M in M_block], grad_params=g_block
+                    loss, p_block, [M[..., n] for M in M_block], grad_params=g_block
                 )
                 for p, col in enumerate(col_n):
-                    res_block[p][n].add_(col)
+                    HM_block[p][..., n].add_(col)
 
-        return tuple(result)
-
-    def _adjoint(self) -> HessianLinearOperator:
-        """Return the linear operator representing the adjoint.
-
-        The Hessian is real symmetric, and hence self-adjoint.
-
-        Returns:
-            Self.
-        """
-        return self
+        return HM

@@ -55,7 +55,7 @@ loss_function = nn.MSELoss(reduction="mean").to(DEVICE)
 # Setting up a linear operator for the Hessian is straightforward.
 
 data = [(X, y)]
-H = HessianLinearOperator(model, loss_function, params, data)
+H = HessianLinearOperator(model, loss_function, params, data).to_scipy()
 
 # %%
 #
@@ -116,7 +116,7 @@ plt.colorbar()
 #
 # Setting up a linear operator for the Fisher/GGN is identical to the Hessian.
 
-GGN = GGNLinearOperator(model, loss_function, params, data)
+GGN = GGNLinearOperator(model, loss_function, params, data).to_scipy()
 
 # %%
 #

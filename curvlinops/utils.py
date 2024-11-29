@@ -1,15 +1,16 @@
 """General utility functions."""
 
-from typing import List
+from typing import List, Tuple, Union
 
 from numpy import cumsum
+from torch import Tensor
 
 
-def split_list(x: List, sizes: List[int]) -> List[List]:
+def split_list(x: Union[List, Tuple], sizes: List[int]) -> List[List]:
     """Split a list into multiple lists of specified size.
 
     Args:
-        x: List to be split.
+        x: List or tuple to be split.
         sizes: Sizes of the resulting lists.
 
     Returns:
@@ -24,4 +25,44 @@ def split_list(x: List, sizes: List[int]) -> List[List]:
             + f" of {sum(sizes)} entries."
         )
     boundaries = cumsum([0] + sizes)
-    return [x[boundaries[i] : boundaries[i + 1]] for i in range(len(sizes))]
+    return [list(x[boundaries[i] : boundaries[i + 1]]) for i in range(len(sizes))]
+
+
+def allclose_report(
+    tensor1: Tensor, tensor2: Tensor, rtol: float = 1e-5, atol: float = 1e-8
+) -> bool:
+    """Same as ``allclose``, but prints entries that differ.
+
+    Args:
+        tensor1: First tensor for comparison.
+        tensor2: Second tensor for comparison.
+        rtol: Relative tolerance. Default is ``1e-5``.
+        atol: Absolute tolerance. Default is ``1e-8``.
+
+    Returns:
+        ``True`` if the tensors are close, ``False`` otherwise.
+    """
+    close = tensor1.allclose(tensor2, rtol=rtol, atol=atol)
+    if not close:
+        # print non-close values
+        nonclose_idx = tensor1.isclose(tensor2, rtol=rtol, atol=atol).logical_not_()
+        nonclose_entries = 0
+        for idx, t1, t2 in zip(
+            nonclose_idx.argwhere(),
+            tensor1[nonclose_idx].flatten(),
+            tensor2[nonclose_idx].flatten(),
+        ):
+            print(f"at index {idx.tolist()}: {t1:.5e} ≠ {t2:.5e}, ratio: {t1 / t2:.5e}")
+            nonclose_entries += 1
+
+        # print largest and smallest absolute entries
+        amax1, amax2 = tensor1.abs().max().item(), tensor2.abs().max().item()
+        print(f"Abs max: {amax1:.5e} vs. {amax2:.5e}.")
+        amin1, amin2 = tensor1.abs().min().item(), tensor2.abs().min().item()
+        print(f"Abs min: {amin1:.5e} vs. {amin2:.5e}.")
+
+        # print number of nonclose values and tolerances
+        print(f"Non-close entries: {nonclose_entries} / {tensor1.numel()}.")
+        print(f"rtol = {rtol}, atol = {atol}.")
+
+    return close

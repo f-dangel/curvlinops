@@ -136,7 +136,7 @@ fishers = [
         loss_function,
         [p for p in model.parameters() if p.requires_grad],
         data_loader,
-    )
+    ).to_scipy()
     for model, loss_function, data_loader in zip(models, loss_functions, data_loaders)
 ]
 

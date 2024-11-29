@@ -34,6 +34,8 @@ from torch.nn import (
 )
 
 from curvlinops import GGNLinearOperator
+from curvlinops._torch_base import PyTorchLinearOperator
+from curvlinops.utils import allclose_report
 
 
 def get_available_devices() -> List[device]:
@@ -110,7 +112,9 @@ def ggn_block_diagonal(
         The block-diagonal GGN.
     """
     # compute the full GGN then zero out the off-diagonal blocks
-    ggn = GGNLinearOperator(model, loss_func, params, data, batch_size_fn=batch_size_fn)
+    ggn = GGNLinearOperator(
+        model, loss_func, params, data, batch_size_fn=batch_size_fn
+    ).to_scipy()
     ggn = from_numpy(ggn @ eye(ggn.shape[1]))
     sizes = [p.numel() for p in params]
     # ggn_blocks[i, j] corresponds to the block of (params[i], params[j])
@@ -404,3 +408,95 @@ def compare_state_dicts(state_dict: dict, state_dict_new: dict):
             )
         else:
             assert value == value_new
+
+
+def rand_accepted_formats(
+    shapes: List[Tuple[int, ...]],
+    is_vec: bool,
+    dtype: dtype,
+    device: device,
+    num_vecs: int = 1,
+) -> Tuple[List[Tensor], Tensor, ndarray]:
+    """Generate a random vector/matrix in all accepted formats.
+
+    Args:
+        shapes: Sizes of the tensor product space.
+        is_vec: Whether to generate representations of a vector or a matrix.
+        dtype: Data type of the generated tensors.
+        device: Device of the generated tensors.
+        num_vecs: Number of vectors to generate. Ignored if ``is_vec`` is ``False``.
+            Default: ``1``.
+
+    Returns:
+        M_tensor_list: Random vector/matrix in tensor list format.
+        M_tensor: Random vector/matrix in tensor format.
+        M_ndarray: Random vector/matrix in numpy format.
+    """
+    M_tensor_list = [
+        rand(*shape, num_vecs, dtype=dtype, device=device) for shape in shapes
+    ]
+    M_tensor = cat([M.flatten(end_dim=-2) for M in M_tensor_list])
+
+    if is_vec:
+        M_tensor_list = [M.squeeze(-1) for M in M_tensor_list]
+        M_tensor.squeeze(-1)
+
+    M_ndarray = M_tensor.cpu().numpy()
+
+    return M_tensor_list, M_tensor, M_ndarray
+
+
+def compare_matmat(
+    op: PyTorchLinearOperator,
+    mat: Tensor,
+    adjoint: bool,
+    is_vec: bool,
+    num_vecs: int = 2,
+    rtol: float = 1e-5,
+    atol: float = 1e-8,
+):
+    """Test the matrix-vector product of a PyTorch linear operator.
+
+    Try all accepted formats for the input, as well as the SciPy-exported operator.
+
+    Args:
+        op: The operator to test.
+        mat: The matrix representation of the linear operator.
+        adjoint: Whether to test the adjoint operator.
+        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
+        num_vecs: Number of vectors to test (ignored if ``is_vec`` is ``True``).
+            Default: ``2``.
+        rtol: Relative tolerance for the comparison. Default: ``1e-5``.
+        atol: Absolute tolerance for the comparison. Default: ``1e-8``.
+    """
+    if adjoint:
+        op, mat = op.adjoint(), mat.conj().T
+
+    num_vecs = 1 if is_vec else num_vecs
+    dt = op._infer_dtype()
+    dev = op._infer_device()
+    x_list, x_tensor, x_numpy = rand_accepted_formats(
+        [tuple(s) for s in op._in_shape], is_vec, dt, dev, num_vecs=num_vecs
+    )
+
+    tol = {"atol": atol, "rtol": rtol}
+
+    # input in tensor format
+    mat_x = mat @ x_tensor
+    assert allclose_report(op @ x_tensor, mat_x, **tol)
+
+    # input in numpy format
+    op_scipy = op.to_scipy()
+    op_x = op_scipy @ x_numpy
+    assert type(op_x) is ndarray
+    assert allclose_report(from_numpy(op_x).to(dev), mat_x, **tol)
+
+    # input in tensor list format
+    mat_x = [
+        m_x.reshape(s if is_vec else (*s, num_vecs))
+        for m_x, s in zip(mat_x.split(op._out_shape_flat), op._out_shape)
+    ]
+    op_x = op @ x_list
+    assert len(op_x) == len(mat_x)
+    for o_x, m_x in zip(op_x, mat_x):
+        assert allclose_report(o_x, m_x, **tol)

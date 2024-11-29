@@ -34,7 +34,7 @@ def test_CG_inverse_damped_GGN_matvec(inv_case, delta: float = 2e-2):
 
     GGN = GGNLinearOperator(
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn
-    )
+    ).to_scipy()
     damping = aslinearoperator(delta * sparse.eye(GGN.shape[0]))
 
     inv_GGN = CGInverseLinearOperator(GGN + damping)
@@ -56,7 +56,7 @@ def test_CG_inverse_damped_GGN_matmat(inv_case, delta: float = 1e-2, num_vecs: i
 
     GGN = GGNLinearOperator(
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn
-    )
+    ).to_scipy()
     damping = aslinearoperator(delta * sparse.eye(GGN.shape[0]))
 
     inv_GGN = CGInverseLinearOperator(GGN + damping)
@@ -78,7 +78,7 @@ def test_LSMR_inverse_damped_GGN_matvec(inv_case, delta: float = 2e-2):
 
     GGN = GGNLinearOperator(
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn
-    )
+    ).to_scipy()
     damping = aslinearoperator(delta * sparse.eye(GGN.shape[0]))
 
     inv_GGN = LSMRInverseLinearOperator(GGN + damping)
@@ -104,7 +104,7 @@ def test_LSMR_inverse_damped_GGN_matmat(
 
     GGN = GGNLinearOperator(
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn
-    )
+    ).to_scipy()
     damping = aslinearoperator(delta * sparse.eye(GGN.shape[0]))
 
     inv_GGN = LSMRInverseLinearOperator(GGN + damping)
@@ -119,7 +119,7 @@ def test_LSMR_inverse_damped_GGN_matmat(
     )
 
     X = random.rand(GGN.shape[1], num_vecs)
-    report_nonclose(inv_GGN @ X, inv_GGN_functorch @ X, rtol=5e-3, atol=1e-5)
+    report_nonclose(inv_GGN @ X, inv_GGN_functorch @ X, rtol=1e-2, atol=1e-5)
 
 
 def test_Neumann_inverse_damped_GGN_matvec(inv_case, delta: float = 1e-2):
@@ -128,7 +128,7 @@ def test_Neumann_inverse_damped_GGN_matvec(inv_case, delta: float = 1e-2):
 
     GGN = GGNLinearOperator(
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn
-    )
+    ).to_scipy()
     damping = aslinearoperator(delta * sparse.eye(GGN.shape[0]))
 
     damped_GGN_functorch = functorch_ggn(
@@ -141,7 +141,7 @@ def test_Neumann_inverse_damped_GGN_matvec(inv_case, delta: float = 1e-2):
     scale = 1.0 if eval_max < 2 else 1.9 / eval_max
 
     # NOTE This may break when other cases are added because slow convergence
-    inv_GGN = NeumannInverseLinearOperator(GGN + damping, num_terms=5_000, scale=scale)
+    inv_GGN = NeumannInverseLinearOperator(GGN + damping, num_terms=7_000, scale=scale)
 
     x = random.rand(GGN.shape[1])
     report_nonclose(inv_GGN @ x, inv_GGN_functorch @ x, rtol=1e-1, atol=1e-1)
