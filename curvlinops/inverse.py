@@ -593,7 +593,7 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
                         M_torch[pos], aaT_eigvecs, "m i j, k j -> m i k"
                     )
                 else:
-                    M_torch[pos].div_(ggT_eigvals.add_(self._damping))
+                    M_torch[pos].div_(ggT_eigvals.add(self._damping))
                 M_torch[pos] = einsum(
                     ggT_eigvecs, M_torch[pos], "i j, m j ... -> m i ..."
                 )
