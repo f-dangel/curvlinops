@@ -6,8 +6,7 @@ from test.utils import cast_input, compare_matmat, compare_state_dicts, eye_like
 from typing import Iterable, List, Tuple, Union
 
 import torch
-from einops import rearrange
-from numpy import array, eye, float64, random
+from numpy import array, eye, random
 from numpy.linalg import eigh, inv
 from pytest import mark, raises
 from scipy import sparse
