@@ -554,8 +554,12 @@ def compare_matmat_expectation(
 def eye_like(A: Tensor) -> Tensor:
     """Create an identity matrix of same size as ``A``.
 
+    Args:
+        A: The tensor whose size determines the identity matrix.
+
     Returns:
         The identity matrix of ``A``'s size.
     """
-    dim = A.shape[0]
+    dim1, dim_2 = A.shape
+    (dim,) = {dim1, dim_2}
     return torch_eye(dim, device=A.device, dtype=A.dtype)

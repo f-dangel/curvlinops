@@ -92,8 +92,7 @@ class ActivationHessianLinearOperator(CurvatureLinearOperator):
             ValueError: If ``data`` contains more than one batch.
 
         Example:
-            >>> from numpy import eye, allclose
-            >>> from torch import manual_seed, rand
+            >>> from torch import manual_seed, rand, eye, allclose
             >>> from torch.nn import Linear, MSELoss, Sequential, ReLU
             >>>
             >>> loss_func = MSELoss()
@@ -104,14 +103,14 @@ class ActivationHessianLinearOperator(CurvatureLinearOperator):
             >>>
             >>> hessian = ActivationHessianLinearOperator( # Hessian w.r.t. ReLU input
             ...     model, loss_func, ("1", "input", 0), data
-            ... ).to_scipy()
+            ... )
             >>> hessian.shape # batch size * feature dimension (10 * 3)
             (30, 30)
             >>>
             >>> # The ReLU's input is the first Linear's output, let's check that
             >>> hessian2 = ActivationHessianLinearOperator( # Hessian w.r.t. first output
             ...     model, loss_func, ("0", "output", 0), data
-            ... ).to_scipy()
+            ... )
             >>> I = eye(hessian.shape[1])
             >>> allclose(hessian @ I, hessian2 @ I)
             True
@@ -171,10 +170,13 @@ class ActivationHessianLinearOperator(CurvatureLinearOperator):
             X: Input to the DNN.
             y: Ground truth.
             M: Matrix to be multiplied with in tensor list format.
+                Tensors have same shape as trainable model parameters, and an
+                additional trailing axis for the matrix columns.
 
         Returns:
             Result of activation Hessian multiplication in list format. Has the same
-            shape as ``M``.
+            shape as ``M``, i.e. each tensor in the list has the shape of a
+            parameter and a trailing dimension of matrix columns.
         """
         activation_storage = []
         with store_activation(self._model_func, *self._activation, activation_storage):
@@ -187,7 +189,6 @@ class ActivationHessianLinearOperator(CurvatureLinearOperator):
 
         # collect
         HM = [zeros_like(m) for m in M]
-
         (num_vectors,) = {m.shape[-1] for m in M}
         for n in range(num_vectors):
             HM_col = hessian_vector_product(

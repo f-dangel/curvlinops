@@ -16,8 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     ([PR](https://github.com/f-dangel/curvlinops/pull/148))
   - `EFLinearOperator`
     ([PR](https://github.com/f-dangel/curvlinops/pull/149))
+  - `ActivationHessianLinearOperator`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/157))
 
 ### Fixed/Removed
+
+- Bug in `KFACInverseLinearOperator` where the damping was repeatedly (for every
+  matrix-vector product) added to the eigenvalues corresponding to the bias parameters
+  when `use_exact_damping=True` and `KFACLinearOperator._separate_weight_and_bias=True`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/156))
 
 ### Internal
 
