@@ -120,6 +120,7 @@ class ActivationHessianLinearOperator(CurvatureLinearOperator):
         # Ensure there is only one batch
         data_iter = iter(data)
         next(data_iter)
+
         with contextlib.suppress(StopIteration):
             next(data_iter)
             raise ValueError(f"{self.__class__.__name__} requires a single batch.")

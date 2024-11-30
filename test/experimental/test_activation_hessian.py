@@ -88,7 +88,7 @@ def test_ActivationHessianLinearOperator(dev: device):
 
     # compute the Hessian matrix representation
     H = ActivationHessianLinearOperator(model, loss_func, activation, data)
-    H_mat = H @ eye(H.shape[1], device=dev, dtype=X.dtype)
+    H_mat = H @ eye(H.shape[1], dtype=X.dtype, device=dev)
 
     # we know that the Hessian of softmax CE loss is ``diag(p(x)) - p(x) p(x)ᵀ``
     # where ``p(x)`` is the softmax probability on a single datum ``x``. On a batch,
