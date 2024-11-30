@@ -15,13 +15,12 @@ from test.utils import (
 )
 from typing import Dict, Iterable, List, Tuple, Union
 
-from einops import rearrange
 from einops.layers.torch import Rearrange
 from numpy import eye, random
 from numpy.linalg import det, norm, slogdet
 from pytest import mark, raises, skip
 from scipy.linalg import block_diag
-from torch import Tensor, allclose, cat, cuda, device
+from torch import Tensor, allclose, cuda, device
 from torch import eye as torch_eye
 from torch import (
     float64,
@@ -633,9 +632,10 @@ def test_KFACLinearOperator(case, adjoint: bool, is_vec: bool):
 
     device = kfac._device
     dtype = kfac._infer_dtype()
-    kfac_mat = kfac @  torch_eye(kfac.shape[1], device=device, dtype=dtype)
+    kfac_mat = kfac @ torch_eye(kfac.shape[1], device=device, dtype=dtype)
 
     compare_matmat(kfac, kfac_mat, adjoint, is_vec, rtol=1e-5, atol=1e-7)
+
 
 @mark.parametrize(
     "check_deterministic",
