@@ -521,7 +521,11 @@ def test_KFAC_inverse_exactly_damped_matmat(
         assert len(inv_KFAC._inverse_gradient_covariances) == 0
 
 
+@mark.parametrize(
+    "use_exact_damping", [True, False], ids=["exact_damping", "heuristic_damping"]
+)
 def test_KFAC_inverse_damped_torch_matmat(
+    use_exact_damping: bool,
     case: Tuple[
         Module,
         Union[MSELoss, CrossEntropyLoss],
@@ -554,7 +558,11 @@ def test_KFAC_inverse_damped_torch_matmat(
         check_deterministic=False,
     )
     KFAC.dtype = float64
-    inv_KFAC = KFACInverseLinearOperator(KFAC, damping=(delta, delta))
+    kwargs = {
+        "use_exact_damping": use_exact_damping,
+        "use_heuristic_damping": not use_exact_damping,
+    }
+    inv_KFAC = KFACInverseLinearOperator(KFAC, damping=delta, **kwargs)
     device = KFAC._device
 
     num_vectors = 2
@@ -584,7 +592,11 @@ def test_KFAC_inverse_damped_torch_matmat(
     report_nonclose(inv_KFAC_X, kfac_x_numpy)
 
 
+@mark.parametrize(
+    "use_exact_damping", [True, False], ids=["exact_damping", "heuristic_damping"]
+)
 def test_KFAC_inverse_damped_torch_matvec(
+    use_exact_damping: bool,
     case: Tuple[
         Module,
         Union[MSELoss, CrossEntropyLoss],
@@ -617,7 +629,11 @@ def test_KFAC_inverse_damped_torch_matvec(
         check_deterministic=False,
     )
     KFAC.dtype = float64
-    inv_KFAC = KFACInverseLinearOperator(KFAC, damping=(delta, delta))
+    kwargs = {
+        "use_exact_damping": use_exact_damping,
+        "use_heuristic_damping": not use_exact_damping,
+    }
+    inv_KFAC = KFACInverseLinearOperator(KFAC, damping=delta, **kwargs)
     device = KFAC._device
 
     x = torch.rand(KFAC.shape[1], dtype=dtype, device=device)
