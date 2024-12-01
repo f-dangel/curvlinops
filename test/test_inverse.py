@@ -521,11 +521,11 @@ def test_KFAC_inverse_exactly_damped_matmat(
         assert len(inv_KFAC._inverse_gradient_covariances) == 0
 
 
-@mark.parametrize(
-    "use_exact_damping", [True, False], ids=["exact_damping", "heuristic_damping"]
-)
+@mark.parametrize("use_exact_damping", [True, False], ids=["exact_damping", ""])
+@mark.parametrize("use_heuristic_damping", [True, False], ids=["heuristic_damping", ""])
 def test_KFAC_inverse_damped_torch_matmat(
     use_exact_damping: bool,
+    use_heuristic_damping: bool,
     case: Tuple[
         Module,
         Union[MSELoss, CrossEntropyLoss],
@@ -560,8 +560,12 @@ def test_KFAC_inverse_damped_torch_matmat(
     KFAC.dtype = float64
     kwargs = {
         "use_exact_damping": use_exact_damping,
-        "use_heuristic_damping": not use_exact_damping,
+        "use_heuristic_damping": use_heuristic_damping,
     }
+    if use_exact_damping and use_heuristic_damping:
+        with raises(ValueError, match="Either use heuristic damping or exact damping"):
+            KFACInverseLinearOperator(KFAC, damping=delta, **kwargs)
+        return
     inv_KFAC = KFACInverseLinearOperator(KFAC, damping=delta, **kwargs)
     device = KFAC._device
 
@@ -592,11 +596,11 @@ def test_KFAC_inverse_damped_torch_matmat(
     report_nonclose(inv_KFAC_X, kfac_x_numpy)
 
 
-@mark.parametrize(
-    "use_exact_damping", [True, False], ids=["exact_damping", "heuristic_damping"]
-)
+@mark.parametrize("use_exact_damping", [True, False], ids=["exact_damping", ""])
+@mark.parametrize("use_heuristic_damping", [True, False], ids=["heuristic_damping", ""])
 def test_KFAC_inverse_damped_torch_matvec(
     use_exact_damping: bool,
+    use_heuristic_damping: bool,
     case: Tuple[
         Module,
         Union[MSELoss, CrossEntropyLoss],
@@ -631,8 +635,12 @@ def test_KFAC_inverse_damped_torch_matvec(
     KFAC.dtype = float64
     kwargs = {
         "use_exact_damping": use_exact_damping,
-        "use_heuristic_damping": not use_exact_damping,
+        "use_heuristic_damping": use_heuristic_damping,
     }
+    if use_exact_damping and use_heuristic_damping:
+        with raises(ValueError, match="Either use heuristic damping or exact damping"):
+            KFACInverseLinearOperator(KFAC, damping=delta, **kwargs)
+        return
     inv_KFAC = KFACInverseLinearOperator(KFAC, damping=delta, **kwargs)
     device = KFAC._device
 
