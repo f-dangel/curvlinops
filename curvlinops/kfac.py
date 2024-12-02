@@ -1719,17 +1719,18 @@ class EKFACLinearOperator(KFACLinearOperator):
         ggT_eigenvectors = self._gradient_covariances_eigenvectors.get(module_name)
 
         # Rearrange the activations for computing per-example gradients
-        activations = self._cached_activations[module_name]
-        if isinstance(module, Conv2d):
-            activations = extract_patches(
-                activations,
-                module.kernel_size,
-                module.stride,
-                module.padding,
-                module.dilation,
-                module.groups,
-            )
-        activations = rearrange(activations, "batch ... d_in -> batch (...) d_in")
+        activations = self._cached_activations.get(module_name)
+        if activations is not None:
+            if isinstance(module, Conv2d):
+                activations = extract_patches(
+                    activations,
+                    module.kernel_size,
+                    module.stride,
+                    module.padding,
+                    module.dilation,
+                    module.groups,
+                )
+            activations = rearrange(activations, "batch ... d_in -> batch (...) d_in")
 
         if (
             not self._separate_weight_and_bias
