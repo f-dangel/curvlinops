@@ -1647,29 +1647,7 @@ class EKFACLinearOperator(KFACLinearOperator):
         """
         if len(inputs) != 1:
             raise ValueError("Modules with multiple inputs are not supported.")
-        x = inputs[0].data.detach()
-
-        # Rearrange the inputs in the correct shape for computing per-example gradients
-        if isinstance(module, Conv2d):
-            x = extract_patches(
-                x,
-                module.kernel_size,
-                module.stride,
-                module.padding,
-                module.dilation,
-                module.groups,
-            )
-
-        params = self._mapping[module_name]
-        if (
-            "weight" in params.keys()
-            and "bias" in params.keys()
-            and not self._separate_weight_and_bias
-        ):
-            x = cat([x, x.new_ones(*x.shape[:-1], 1)], dim=-1)
-        x = rearrange(x, "batch ... d_in -> batch (...) d_in")
-
-        self._cached_activations[module_name] = x
+        self._cached_activations[module_name] = inputs[0].data.detach()
 
     def _register_tensor_hook_on_output_to_accumulate_corrected_eigenvalues(
         self, module: Module, inputs: Tuple[Tensor], output: Tensor, module_name: str
@@ -1740,15 +1718,31 @@ class EKFACLinearOperator(KFACLinearOperator):
         aaT_eigenvectors = self._input_covariances_eigenvectors.get(module_name)
         ggT_eigenvectors = self._gradient_covariances_eigenvectors.get(module_name)
 
+        # Rearrange the activations for computing per-example gradients
+        activations = self._cached_activations[module_name]
+        if isinstance(module, Conv2d):
+            activations = extract_patches(
+                activations,
+                module.kernel_size,
+                module.stride,
+                module.padding,
+                module.dilation,
+                module.groups,
+            )
+        activations = rearrange(activations, "batch ... d_in -> batch (...) d_in")
+
         if (
             not self._separate_weight_and_bias
             and "weight" in param_pos.keys()
             and "bias" in param_pos.keys()
         ):
+            activations = cat(
+                [activations, activations.new_ones(*activations.shape[:-1], 1)], dim=-1
+            )
             # Compute per-example gradient using the cached activations
             per_example_gradient = einsum(
                 g,
-                self._cached_activations[module_name],
+                activations,
                 "batch shared d_out, batch shared d_in -> batch d_out d_in",
             )
             # Transform the per-example gradient to the eigenbasis and square it
@@ -1773,7 +1767,7 @@ class EKFACLinearOperator(KFACLinearOperator):
                 per_example_gradient = (
                     einsum(
                         g,
-                        self._cached_activations[module_name],
+                        activations,
                         "batch shared d_out, batch shared d_in -> batch d_out d_in",
                     )
                     if p_name == "weight"
