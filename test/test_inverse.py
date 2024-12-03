@@ -754,7 +754,7 @@ def test_KFAC_inverse_save_and_load_state_dict(
     inv_kfac = KFACInverseLinearOperator(
         kfac, damping=1e-2, retry_double_precision=False, cache=cache, **kwargs
     )
-    test_vec = torch.rand(inv_kfac.shape[1])
+    test_vec = random.rand(inv_kfac.shape[1])
     test_mvp = inv_kfac @ test_vec  # triggers inverse computation and maybe caching
 
     # save state dict
@@ -831,7 +831,7 @@ def test_KFAC_inverse_from_state_dict(
     inv_kfac = KFACInverseLinearOperator(
         kfac, damping=1e-2, retry_double_precision=False, cache=cache, **kwargs
     )
-    test_vec = torch.rand(kfac.shape[1])
+    test_vec = random.rand(kfac.shape[1])
     test_mvp = inv_kfac @ test_vec  # triggers inverse computation and maybe caching
     state_dict = inv_kfac.state_dict()
 
