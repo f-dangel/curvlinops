@@ -394,9 +394,21 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901
             ggT.sub_(eye_like(ggT), alpha=damping_ggT)
 
     # check that passing a tuple for heuristic damping will fail
-    with raises(ValueError):
+    with raises(
+        ValueError, match="Heuristic and exact damping require a single damping value."
+    ):
         inv_KFAC = KFACInverseLinearOperator(
             KFAC, damping=(delta, delta), use_heuristic_damping=True
+        )
+
+    # check that using exact and heuristic damping at the same time fails
+    with raises(ValueError, match="Either use heuristic damping or exact damping"):
+        KFACInverseLinearOperator(
+            KFAC,
+            damping=delta,
+            cache=cache,
+            use_exact_damping=True,
+            use_heuristic_damping=True,
         )
 
     # use heuristic damping with KFACInverseLinearOperator
@@ -482,9 +494,21 @@ def test_KFAC_inverse_exactly_damped_matmat(
     inv_KFAC_naive = torch.inverse(KFAC_mat + delta * eye_like(KFAC_mat))
 
     # check that passing a tuple for exact damping will fail
-    with raises(ValueError):
+    with raises(
+        ValueError, match="Heuristic and exact damping require a single damping value."
+    ):
         inv_KFAC = KFACInverseLinearOperator(
             KFAC, damping=(delta, delta), use_exact_damping=True
+        )
+
+    # check that using exact and heuristic damping at the same time fails
+    with raises(ValueError, match="Either use heuristic damping or exact damping"):
+        KFACInverseLinearOperator(
+            KFAC,
+            damping=delta,
+            cache=cache,
+            use_exact_damping=True,
+            use_heuristic_damping=True,
         )
 
     # use exact damping with KFACInverseLinearOperator
@@ -505,28 +529,61 @@ def test_KFAC_inverse_exactly_damped_matmat(
         assert len(inv_KFAC._inverse_gradient_covariances) == 0
 
 
-def test_KFAC_inverse_save_and_load_state_dict():
+@mark.parametrize("use_exact_damping", [True, False], ids=["exact_damping", ""])
+@mark.parametrize("use_heuristic_damping", [True, False], ids=["heuristic_damping", ""])
+@mark.parametrize("cache", [True, False], ids=["cached", "uncached"])
+@mark.parametrize(
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+def test_KFAC_inverse_save_and_load_state_dict(
+    use_exact_damping: bool,
+    use_heuristic_damping: bool,
+    cache: bool,
+    exclude: str,
+    separate_weight_and_bias: bool,
+):
     """Test that KFACInverseLinearOperator can be saved and loaded from state dict."""
     torch.manual_seed(0)
-    batch_size, D_in, D_out = 4, 3, 2
+    batch_size, D_in, D_hidden, D_out = 4, 3, 5, 2
     X = torch.rand(batch_size, D_in)
     y = torch.rand(batch_size, D_out)
-    model = torch.nn.Linear(D_in, D_out)
+    model = torch.nn.Sequential(
+        torch.nn.Linear(D_in, D_hidden),
+        torch.nn.ReLU(),
+        torch.nn.Linear(D_hidden, D_hidden, bias=False),
+        torch.nn.ReLU(),
+        torch.nn.Linear(D_hidden, D_out),
+    )
 
     params = list(model.parameters())
+    if exclude is not None:
+        names = {p.data_ptr(): name for name, p in model.named_parameters()}
+        params = [p for p in params if exclude not in names[p.data_ptr()]]
+
     # create and compute KFAC
     kfac = KFACLinearOperator(
         model,
         MSELoss(reduction="sum"),
         params,
         [(X, y)],
+        separate_weight_and_bias=separate_weight_and_bias,
     )
 
     # create inverse KFAC
+    kwargs = {
+        "use_exact_damping": use_exact_damping,
+        "use_heuristic_damping": use_heuristic_damping,
+    }
+    if use_exact_damping and use_heuristic_damping:
+        return
     inv_kfac = KFACInverseLinearOperator(
-        kfac, damping=1e-2, use_heuristic_damping=True, retry_double_precision=False
+        kfac, damping=1e-2, retry_double_precision=False, cache=cache, **kwargs
     )
-    _ = inv_kfac @ torch.eye(kfac.shape[1])  # to trigger inverse computation
+    # trigger inverse computation and maybe caching
+    _ = inv_kfac @ torch.eye(kfac.shape[1])
 
     # save state dict
     state_dict = inv_kfac.state_dict()
@@ -546,31 +603,63 @@ def test_KFAC_inverse_save_and_load_state_dict():
 
     # check that the two inverse KFACs are equal
     compare_state_dicts(inv_kfac.state_dict(), inv_kfac_new.state_dict())
-    test_vec = torch.rand(inv_kfac.shape[1])
-    report_nonclose(inv_kfac @ test_vec, inv_kfac_new @ test_vec)
 
 
-def test_KFAC_inverse_from_state_dict():
+@mark.parametrize("use_exact_damping", [True, False], ids=["exact_damping", ""])
+@mark.parametrize("use_heuristic_damping", [True, False], ids=["heuristic_damping", ""])
+@mark.parametrize("cache", [True, False], ids=["cached", "uncached"])
+@mark.parametrize(
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+def test_KFAC_inverse_from_state_dict(
+    use_exact_damping: bool,
+    use_heuristic_damping: bool,
+    cache: bool,
+    exclude: str,
+    separate_weight_and_bias: bool,
+):
     """Test that KFACInverseLinearOperator can be created from state dict."""
     torch.manual_seed(0)
-    batch_size, D_in, D_out = 4, 3, 2
+    batch_size, D_in, D_hidden, D_out = 4, 3, 5, 2
     X = torch.rand(batch_size, D_in)
     y = torch.rand(batch_size, D_out)
-    model = torch.nn.Linear(D_in, D_out)
+    model = torch.nn.Sequential(
+        torch.nn.Linear(D_in, D_hidden),
+        torch.nn.ReLU(),
+        torch.nn.Linear(D_hidden, D_hidden, bias=False),
+        torch.nn.ReLU(),
+        torch.nn.Linear(D_hidden, D_out),
+    )
 
     params = list(model.parameters())
+    if exclude is not None:
+        names = {p.data_ptr(): name for name, p in model.named_parameters()}
+        params = [p for p in params if exclude not in names[p.data_ptr()]]
+
     # create and compute KFAC
     kfac = KFACLinearOperator(
         model,
         MSELoss(reduction="sum"),
         params,
         [(X, y)],
+        separate_weight_and_bias=separate_weight_and_bias,
     )
 
     # create inverse KFAC and save state dict
+    kwargs = {
+        "use_exact_damping": use_exact_damping,
+        "use_heuristic_damping": use_heuristic_damping,
+    }
+    if use_exact_damping and use_heuristic_damping:
+        return
     inv_kfac = KFACInverseLinearOperator(
-        kfac, damping=1e-2, use_heuristic_damping=True, retry_double_precision=False
+        kfac, damping=1e-2, retry_double_precision=False, cache=cache, **kwargs
     )
+    test_vec = torch.rand(kfac.shape[1])
+    test_mvp = inv_kfac @ test_vec  # triggers inverse computation and maybe caching
     state_dict = inv_kfac.state_dict()
 
     # create new KFAC from state dict
@@ -578,5 +667,4 @@ def test_KFAC_inverse_from_state_dict():
 
     # check that the two inverse KFACs are equal
     compare_state_dicts(inv_kfac.state_dict(), inv_kfac_new.state_dict())
-    test_vec = torch.rand(kfac.shape[1])
-    report_nonclose(inv_kfac @ test_vec, inv_kfac_new @ test_vec)
+    report_nonclose(test_mvp, inv_kfac_new @ test_vec)
