@@ -521,17 +521,27 @@ def test_KFAC_inverse_exactly_damped_matmat(
         assert len(inv_KFAC._inverse_gradient_covariances) == 0
 
 
+@mark.parametrize("use_exact_damping", [True, False], ids=["exact_damping", ""])
+@mark.parametrize("use_heuristic_damping", [True, False], ids=["heuristic_damping", ""])
+@mark.parametrize("cache", [True, False], ids=["cached", "uncached"])
 @mark.parametrize(
-    "use_exact_damping", [True, False], ids=["exact_damping", "heuristic_damping"]
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
 )
 def test_KFAC_inverse_damped_torch_matmat(
-    use_exact_damping: bool,
     case: Tuple[
         Module,
         Union[MSELoss, CrossEntropyLoss],
         List[Parameter],
         Iterable[Tuple[torch.Tensor, torch.Tensor]],
     ],
+    use_exact_damping: bool,
+    use_heuristic_damping: bool,
+    cache: bool,
+    exclude: str,
+    separate_weight_and_bias: bool,
     delta: float = 1e-2,
 ):
     """Test torch matrix-matrix multiplication by an inverse damped KFAC approximation."""
@@ -549,20 +559,29 @@ def test_KFAC_inverse_damped_torch_matmat(
         for x, y in data
     ]
 
+    if exclude is not None:
+        names = {p.data_ptr(): name for name, p in model_func.named_parameters()}
+        params = [p for p in params if exclude not in names[p.data_ptr()]]
+
     KFAC = KFACLinearOperator(
         model_func,
         loss_func,
         params,
         data,
+        separate_weight_and_bias=separate_weight_and_bias,
         batch_size_fn=batch_size_fn,
         check_deterministic=False,
     )
     KFAC.dtype = float64
     kwargs = {
         "use_exact_damping": use_exact_damping,
-        "use_heuristic_damping": not use_exact_damping,
+        "use_heuristic_damping": use_heuristic_damping,
     }
-    inv_KFAC = KFACInverseLinearOperator(KFAC, damping=delta, **kwargs)
+    if use_exact_damping and use_heuristic_damping:
+        with raises(ValueError, match="Either use heuristic damping or exact damping"):
+            KFACInverseLinearOperator(KFAC, damping=delta, cache=cache, **kwargs)
+        return
+    inv_KFAC = KFACInverseLinearOperator(KFAC, damping=delta, cache=cache, **kwargs)
     device = KFAC._device
 
     num_vectors = 2
@@ -592,17 +611,27 @@ def test_KFAC_inverse_damped_torch_matmat(
     report_nonclose(inv_KFAC_X, kfac_x_numpy)
 
 
+@mark.parametrize("use_exact_damping", [True, False], ids=["exact_damping", ""])
+@mark.parametrize("use_heuristic_damping", [True, False], ids=["heuristic_damping", ""])
+@mark.parametrize("cache", [True, False], ids=["cached", "uncached"])
 @mark.parametrize(
-    "use_exact_damping", [True, False], ids=["exact_damping", "heuristic_damping"]
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
 )
 def test_KFAC_inverse_damped_torch_matvec(
-    use_exact_damping: bool,
     case: Tuple[
         Module,
         Union[MSELoss, CrossEntropyLoss],
         List[Parameter],
         Iterable[Tuple[torch.Tensor, torch.Tensor]],
     ],
+    use_exact_damping: bool,
+    use_heuristic_damping: bool,
+    cache: bool,
+    exclude: str,
+    separate_weight_and_bias: bool,
     delta: float = 1e-2,
 ):
     """Test torch matrix-vector multiplication by an inverse damped KFAC approximation."""
@@ -620,20 +649,29 @@ def test_KFAC_inverse_damped_torch_matvec(
         for x, y in data
     ]
 
+    if exclude is not None:
+        names = {p.data_ptr(): name for name, p in model_func.named_parameters()}
+        params = [p for p in params if exclude not in names[p.data_ptr()]]
+
     KFAC = KFACLinearOperator(
         model_func,
         loss_func,
         params,
         data,
+        separate_weight_and_bias=separate_weight_and_bias,
         batch_size_fn=batch_size_fn,
         check_deterministic=False,
     )
     KFAC.dtype = float64
     kwargs = {
         "use_exact_damping": use_exact_damping,
-        "use_heuristic_damping": not use_exact_damping,
+        "use_heuristic_damping": use_heuristic_damping,
     }
-    inv_KFAC = KFACInverseLinearOperator(KFAC, damping=delta, **kwargs)
+    if use_exact_damping and use_heuristic_damping:
+        with raises(ValueError, match="Either use heuristic damping or exact damping"):
+            KFACInverseLinearOperator(KFAC, damping=delta, cache=cache, **kwargs)
+        return
+    inv_KFAC = KFACInverseLinearOperator(KFAC, damping=delta, cache=cache, **kwargs)
     device = KFAC._device
 
     x = torch.rand(KFAC.shape[1], dtype=dtype, device=device)
@@ -663,28 +701,61 @@ def test_KFAC_inverse_damped_torch_matvec(
     report_nonclose(inv_KFAC @ x.cpu().numpy(), inv_KFAC_x.cpu().numpy())
 
 
-def test_KFAC_inverse_save_and_load_state_dict():
+@mark.parametrize("use_exact_damping", [True, False], ids=["exact_damping", ""])
+@mark.parametrize("use_heuristic_damping", [True, False], ids=["heuristic_damping", ""])
+@mark.parametrize("cache", [True, False], ids=["cached", "uncached"])
+@mark.parametrize(
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+def test_KFAC_inverse_save_and_load_state_dict(
+    use_exact_damping: bool,
+    use_heuristic_damping: bool,
+    cache: bool,
+    exclude: str,
+    separate_weight_and_bias: bool,
+):
     """Test that KFACInverseLinearOperator can be saved and loaded from state dict."""
     torch.manual_seed(0)
-    batch_size, D_in, D_out = 4, 3, 2
+    batch_size, D_in, D_hidden, D_out = 4, 3, 5, 2
     X = torch.rand(batch_size, D_in)
     y = torch.rand(batch_size, D_out)
-    model = torch.nn.Linear(D_in, D_out)
+    model = torch.nn.Sequential(
+        torch.nn.Linear(D_in, D_hidden),
+        torch.nn.ReLU(),
+        torch.nn.Linear(D_hidden, D_hidden, bias=False),
+        torch.nn.ReLU(),
+        torch.nn.Linear(D_hidden, D_out),
+    )
 
     params = list(model.parameters())
+    if exclude is not None:
+        names = {p.data_ptr(): name for name, p in model.named_parameters()}
+        params = [p for p in params if exclude not in names[p.data_ptr()]]
+
     # create and compute KFAC
     kfac = KFACLinearOperator(
         model,
         MSELoss(reduction="sum"),
         params,
         [(X, y)],
+        separate_weight_and_bias=separate_weight_and_bias,
     )
 
     # create inverse KFAC
+    kwargs = {
+        "use_exact_damping": use_exact_damping,
+        "use_heuristic_damping": use_heuristic_damping,
+    }
+    if use_exact_damping and use_heuristic_damping:
+        return
     inv_kfac = KFACInverseLinearOperator(
-        kfac, damping=1e-2, use_heuristic_damping=True, retry_double_precision=False
+        kfac, damping=1e-2, retry_double_precision=False, cache=cache, **kwargs
     )
-    _ = inv_kfac @ eye(kfac.shape[1])  # to trigger inverse computation
+    test_vec = random.rand(inv_kfac.shape[1])
+    test_mvp = inv_kfac @ test_vec  # triggers inverse computation and maybe caching
 
     # save state dict
     state_dict = inv_kfac.state_dict()
@@ -704,31 +775,64 @@ def test_KFAC_inverse_save_and_load_state_dict():
 
     # check that the two inverse KFACs are equal
     compare_state_dicts(inv_kfac.state_dict(), inv_kfac_new.state_dict())
-    test_vec = torch.rand(inv_kfac.shape[1])
-    report_nonclose(inv_kfac @ test_vec, inv_kfac_new @ test_vec)
+    report_nonclose(test_mvp, inv_kfac_new @ test_vec)
 
 
-def test_KFAC_inverse_from_state_dict():
+@mark.parametrize("use_exact_damping", [True, False], ids=["exact_damping", ""])
+@mark.parametrize("use_heuristic_damping", [True, False], ids=["heuristic_damping", ""])
+@mark.parametrize("cache", [True, False], ids=["cached", "uncached"])
+@mark.parametrize(
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+def test_KFAC_inverse_from_state_dict(
+    use_exact_damping: bool,
+    use_heuristic_damping: bool,
+    cache: bool,
+    exclude: str,
+    separate_weight_and_bias: bool,
+):
     """Test that KFACInverseLinearOperator can be created from state dict."""
     torch.manual_seed(0)
-    batch_size, D_in, D_out = 4, 3, 2
+    batch_size, D_in, D_hidden, D_out = 4, 3, 5, 2
     X = torch.rand(batch_size, D_in)
     y = torch.rand(batch_size, D_out)
-    model = torch.nn.Linear(D_in, D_out)
+    model = torch.nn.Sequential(
+        torch.nn.Linear(D_in, D_hidden),
+        torch.nn.ReLU(),
+        torch.nn.Linear(D_hidden, D_hidden, bias=False),
+        torch.nn.ReLU(),
+        torch.nn.Linear(D_hidden, D_out),
+    )
 
     params = list(model.parameters())
+    if exclude is not None:
+        names = {p.data_ptr(): name for name, p in model.named_parameters()}
+        params = [p for p in params if exclude not in names[p.data_ptr()]]
+
     # create and compute KFAC
     kfac = KFACLinearOperator(
         model,
         MSELoss(reduction="sum"),
         params,
         [(X, y)],
+        separate_weight_and_bias=separate_weight_and_bias,
     )
 
     # create inverse KFAC and save state dict
+    kwargs = {
+        "use_exact_damping": use_exact_damping,
+        "use_heuristic_damping": use_heuristic_damping,
+    }
+    if use_exact_damping and use_heuristic_damping:
+        return
     inv_kfac = KFACInverseLinearOperator(
-        kfac, damping=1e-2, use_heuristic_damping=True, retry_double_precision=False
+        kfac, damping=1e-2, retry_double_precision=False, cache=cache, **kwargs
     )
+    test_vec = random.rand(kfac.shape[1])
+    test_mvp = inv_kfac @ test_vec  # triggers inverse computation and maybe caching
     state_dict = inv_kfac.state_dict()
 
     # create new KFAC from state dict
@@ -736,8 +840,7 @@ def test_KFAC_inverse_from_state_dict():
 
     # check that the two inverse KFACs are equal
     compare_state_dicts(inv_kfac.state_dict(), inv_kfac_new.state_dict())
-    test_vec = torch.rand(kfac.shape[1])
-    report_nonclose(inv_kfac @ test_vec, inv_kfac_new @ test_vec)
+    report_nonclose(test_mvp, inv_kfac_new @ test_vec)
 
 
 def test_torch_matvec_list_output_shapes(cnn_case):

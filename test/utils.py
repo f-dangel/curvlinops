@@ -395,9 +395,11 @@ def compare_state_dicts(state_dict: dict, state_dict_new: dict):
         elif isinstance(value, tuple):
             assert len(value) == len(value_new)
             assert all(isinstance(v, type(v2)) for v, v2 in zip(value, value_new))
-            assert all(
-                allclose(as_tensor(v), as_tensor(v2)) for v, v2 in zip(value, value_new)
-            )
+            for v, v2 in zip(value, value_new):
+                if v is None:
+                    assert v2 is None
+                else:
+                    assert allclose(as_tensor(v), as_tensor(v2))
         else:
             assert value == value_new
 

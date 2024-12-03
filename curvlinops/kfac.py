@@ -1147,9 +1147,8 @@ class KFACLinearOperator(_LinearOperator):
             input_covariances_keys = set(self._input_covariances.keys())
             gradient_covariances_keys = set(self._gradient_covariances.keys())
             mapping_keys = set(self._mapping.keys())
-            if (
-                input_covariances_keys != mapping_keys
-                or gradient_covariances_keys != mapping_keys
+            if (input_covariances_keys and input_covariances_keys != mapping_keys) or (
+                gradient_covariances_keys and gradient_covariances_keys != mapping_keys
             ):
                 raise ValueError(
                     "Input or gradient covariance keys in state dict do not match "
