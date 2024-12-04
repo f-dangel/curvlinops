@@ -320,7 +320,6 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901
     """Test matrix-matrix multiplication by an inverse (heuristically) damped KFAC
     approximation.
 
-
     Args:
         adjoint: Whether to test the adjoint operator.
         is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
@@ -583,7 +582,7 @@ def test_KFAC_inverse_save_and_load_state_dict(
         kfac, damping=1e-2, retry_double_precision=False, cache=cache, **kwargs
     )
     # trigger inverse computation and maybe caching
-    _ = inv_kfac @ torch.eye(kfac.shape[1])
+    inv_kfac_as_mat = inv_kfac @ torch.eye(kfac.shape[1])
 
     # save state dict
     state_dict = inv_kfac.state_dict()
@@ -603,6 +602,7 @@ def test_KFAC_inverse_save_and_load_state_dict(
 
     # check that the two inverse KFACs are equal
     compare_state_dicts(inv_kfac.state_dict(), inv_kfac_new.state_dict())
+    report_nonclose(inv_kfac_as_mat, inv_kfac_new @ torch.eye(kfac.shape[1]))
 
 
 @mark.parametrize("use_exact_damping", [True, False], ids=["exact_damping", ""])
