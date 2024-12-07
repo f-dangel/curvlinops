@@ -826,7 +826,7 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
             atol: Absolute tolerance for comparison. Defaults to ``1e-8``.
 
         Raises:
-            RuntimeError: If the matrix-vector product is not deterministic.
+            RuntimeError: If the two matrix-vector products yield different results.
         """
         v = rand(self.shape[1], device=self._device, dtype=self._infer_dtype())
         Av1 = self @ v

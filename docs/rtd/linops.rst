@@ -21,7 +21,7 @@ Fisher (approximate)
    :members: __init__
 
 .. autoclass:: curvlinops.KFACLinearOperator
-   :members: __init__, to_device, torch_matmat, torch_matvec, trace, det, logdet, frobenius_norm
+   :members: __init__, to_device, trace, det, logdet, frobenius_norm
 
 Uncentered gradient covariance (empirical Fisher)
 -------------------------------------------------
@@ -51,7 +51,7 @@ Inverses
    :members: __init__, set_neumann_hyperparameters
 
 .. autoclass:: curvlinops.KFACInverseLinearOperator
-   :members: __init__, torch_matmat, torch_matvec
+   :members: __init__
 
 Sub-matrices
 ------------

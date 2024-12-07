@@ -167,7 +167,6 @@ class ActivationHessianLinearOperator(CurvatureLinearOperator):
     def _matmat_batch(self, X: Tensor, y: Tensor, M: List[Tensor]) -> List[Tensor]:
         """Apply the activation Hessian to a matrix in tensor list format.
 
-
         Args:
             X: Input to the DNN.
             y: Ground truth.

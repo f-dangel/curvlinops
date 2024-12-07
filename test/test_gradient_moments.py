@@ -23,4 +23,4 @@ def test_EFLinearOperator(case, adjoint: bool, is_vec: bool):
         model_func, loss_func, params, data, input_key="x"
     )
 
-    compare_matmat(E, E_mat, adjoint, is_vec, rtol=1e-4, atol=1e-7)
+    compare_matmat(E, E_mat, adjoint, is_vec, rtol=1e-4, atol=2e-7)

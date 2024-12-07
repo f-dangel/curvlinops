@@ -100,7 +100,7 @@ Hessian_blocked_linop = HessianLinearOperator(
 F_linop = FisherMCLinearOperator(model, loss_function, params, dataloader).to_scipy()
 KFAC_linop = KFACLinearOperator(
     model, loss_function, params, dataloader, separate_weight_and_bias=False
-)
+).to_scipy()
 
 # %%
 #

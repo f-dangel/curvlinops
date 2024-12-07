@@ -1,7 +1,7 @@
 """Implements linear operator inverses."""
 
 from math import sqrt
-from typing import Any, Callable, Dict, Optional, Tuple, TypeVar, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar, Union
 from warnings import warn
 
 from einops import einsum, rearrange
@@ -10,7 +10,8 @@ from scipy.sparse.linalg import LinearOperator, cg, lsmr
 from torch import Tensor, cat, cholesky_inverse, eye, float64, outer
 from torch.linalg import cholesky, eigh
 
-from curvlinops.kfac import KFACLinearOperator, ParameterMatrixType
+from curvlinops._torch_base import PyTorchLinearOperator
+from curvlinops.kfac import KFACLinearOperator
 
 KFACInvType = TypeVar(
     "KFACInvType", Optional[Tensor], Tuple[Optional[Tensor], Optional[Tensor]]
@@ -292,8 +293,14 @@ class NeumannInverseLinearOperator(_InverseLinearOperator):
         return self._scale * result
 
 
-class KFACInverseLinearOperator(_InverseLinearOperator):
-    """Class to invert instances of the ``KFACLinearOperator``."""
+class KFACInverseLinearOperator(PyTorchLinearOperator):
+    """Class to invert instances of the ``KFACLinearOperator``.
+
+    Attributes:
+        SELF_ADJOINT: Whether the operator is self-adjoint. ``True`` for KFAC-inverse.
+    """
+
+    SELF_ADJOINT: bool = True
 
     def __init__(
         self,
@@ -347,8 +354,12 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
             raise ValueError(
                 "The input `A` must be an instance of `KFACLinearOperator`."
             )
-        super().__init__(A.dtype, A.shape)
+        super().__init__(
+            [tuple(s) for s in A._in_shape], [tuple(s) for s in A._out_shape]
+        )
         self._A = A
+        self._infer_device = A._infer_device
+        self._infer_dtype = A._infer_dtype
         if use_heuristic_damping and use_exact_damping:
             raise ValueError("Either use heuristic damping or exact damping, not both.")
         if (use_heuristic_damping or use_exact_damping) and isinstance(damping, tuple):
@@ -507,12 +518,12 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
         return aaT_inv, ggT_inv
 
     def _left_and_right_multiply(
-        self, M_joint: Tensor, aaT_inv: KFACInvType, ggT_inv: KFACInvType
+        self, X_joint: Tensor, aaT_inv: KFACInvType, ggT_inv: KFACInvType
     ) -> Tensor:
         """Left and right multiply matrix with inverse Kronecker factors.
 
         Args:
-            M_joint: Matrix for multiplication.
+            X_joint: Matrix for multiplication.
             aaT_inv: Inverse of the input covariance Kronecker factor. ``None`` for
                 biases.
             ggT_inv: Inverse of the gradient covariance Kronecker factor.
@@ -526,22 +537,26 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
             aaT_eigvecs, aaT_eigvals = aaT_inv
             ggT_eigvecs, ggT_eigvals = ggT_inv
             # Transform in eigenbasis.
-            M_joint = einsum(
-                ggT_eigvecs, M_joint, aaT_eigvecs, "i j, m i k, k l -> m j l"
+            X_joint = einsum(
+                ggT_eigvecs, X_joint, aaT_eigvecs, "i j, i k m, k l -> j l m"
             )
             # Divide by damped eigenvalues to perform the inversion.
-            M_joint.div_(outer(ggT_eigvals, aaT_eigvals).add_(self._damping))
+            X_joint = einsum(
+                X_joint,
+                outer(ggT_eigvals, aaT_eigvals).add_(self._damping).pow_(-1),
+                "j l m, j l -> j l m",
+            )
             # Transform back to standard basis.
-            M_joint = einsum(
-                ggT_eigvecs, M_joint, aaT_eigvecs, "i j, m j k, l k -> m i l"
+            X_joint = einsum(
+                ggT_eigvecs, X_joint, aaT_eigvecs, "i j, j k m, l k -> i l m"
             )
         else:
-            M_joint = einsum(ggT_inv, M_joint, aaT_inv, "i j, m j k, k l -> m i l")
-        return M_joint
+            X_joint = einsum(ggT_inv, X_joint, aaT_inv, "i j, j k m, k l -> i l m")
+        return X_joint
 
     def _separate_left_and_right_multiply(
         self,
-        M_torch: Tensor,
+        X: Tensor,
         param_pos: Dict[str, int],
         aaT_inv: KFACInvType,
         ggT_inv: KFACInvType,
@@ -549,7 +564,7 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
         """Multiply matrix with inverse Kronecker factors for separated weight and bias.
 
         Args:
-            M_torch: Matrix for multiplication.
+            X: Matrix for multiplication.
             param_pos: Dictionary with positions of the weight and bias parameters.
             aaT_inv: Inverse of the input covariance Kronecker factor. ``None`` for
                 biases.
@@ -568,59 +583,51 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
             # for weights we need to multiply from the right with aaT
             # for weights and biases we need to multiply from the left with ggT
             if p_name == "weight":
-                M_w = rearrange(M_torch[pos], "m c_out ... -> m c_out (...)")
+                X_w = rearrange(X[pos], "c_out ... m -> c_out (...) m")
                 aaT_fac = aaT_eigvecs if self._use_exact_damping else aaT_inv
                 # If `use_exact_damping` is `True`, we transform to eigenbasis
-                M_torch[pos] = einsum(M_w, aaT_fac, "m i j, j k -> m i k")
+                X[pos] = einsum(X_w, aaT_fac, "i j m, j k -> i k m")
 
             ggT_fac = ggT_eigvecs if self._use_exact_damping else ggT_inv
             dims = (
-                "m i ... -> m j ..."
+                "i ... m -> j ... m"
                 if self._use_exact_damping
-                else " m j ... -> m i ..."
+                else "j ... m -> i ... m"
             )
             # If `use_exact_damping` is `True`, we transform to eigenbasis
-            M_torch[pos] = einsum(ggT_fac, M_torch[pos], f"i j, {dims}")
+            X[pos] = einsum(ggT_fac, X[pos], f"i j, {dims}")
 
             if self._use_exact_damping:
                 # Divide by damped eigenvalues to perform the inversion and transform
                 # back to standard basis.
                 if p_name == "weight":
-                    M_torch[pos].div_(
-                        outer(ggT_eigvals, aaT_eigvals).add_(self._damping)
+                    X[pos] = einsum(
+                        X[pos],
+                        outer(ggT_eigvals, aaT_eigvals).add_(self._damping).pow_(-1),
+                        "i j m, i j -> i j m",
                     )
-                    M_torch[pos] = einsum(
-                        M_torch[pos], aaT_eigvecs, "m i j, k j -> m i k"
-                    )
+                    X[pos] = einsum(X[pos], aaT_eigvecs, "i j m, k j -> i k m")
                 else:
-                    M_torch[pos].div_(ggT_eigvals.add(self._damping))
-                M_torch[pos] = einsum(
-                    ggT_eigvecs, M_torch[pos], "i j, m j ... -> m i ..."
-                )
+                    X[pos] = einsum(
+                        X[pos],
+                        ggT_eigvals.add(self._damping).pow_(-1),
+                        "j ... m, j -> j ... m",
+                    )
+                X[pos] = einsum(ggT_eigvecs, X[pos], "i j, j ... m -> i ... m")
 
-        return M_torch
+        return X
 
-    def torch_matmat(self, M_torch: ParameterMatrixType) -> ParameterMatrixType:
-        """Apply the inverse of KFAC to a matrix (multiple vectors) in PyTorch.
-
-        This allows for matrix-matrix products with the inverse KFAC approximation in
-        PyTorch without converting tensors to numpy arrays, which avoids unnecessary
-        device transfers when working with GPUs and flattening/concatenating.
+    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+        """Matrix-matrix multiplication with the KFAC inverse.
 
         Args:
-            M_torch: Matrix for multiplication. If list of tensors, each entry has the
-                same shape as a parameter with an additional leading dimension of size
-                ``K`` for the columns, i.e. ``[(K,) + p1.shape), (K,) + p2.shape, ...]``.
-                If tensor, has shape ``[D, K]`` with some ``K``.
+            X: Matrix for multiplication. Is a list of tensors where each entry has the
+                same shape as a parameter with an additional trailing dimension of size
+                ``K`` for the columns, i.e. ``[(*p1.shape, K), (*p2.shape, K), ...]``.
 
         Returns:
-            Matrix-multiplication result ``KFAC⁻¹ @ M``. Return type is the same as the
-            type of the input. If list of tensors, each entry has the same shape as a
-            parameter with an additional leading dimension of size ``K`` for the columns,
-            i.e. ``[(K,) + p1.shape, (K,) + p2.shape, ...]``. If tensor, has shape
-            ``[D, K]`` with some ``K``.
+            Matrix-multiplication result ``KFAC⁻¹ @ M``. Has same shape as ``X``.
         """
-        return_tensor, M_torch = self._A._check_input_type_and_preprocess(M_torch)
         if not self._A._input_covariances and not self._A._gradient_covariances:
             self._A._compute_kfac()
 
@@ -629,7 +636,7 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
             aaT_inv, ggT_inv = self._compute_or_get_cached_inverse(mod_name)
             # cache the weight shape to ensure correct shapes are returned
             if "weight" in param_pos:
-                weight_shape = M_torch[param_pos["weight"]].shape
+                weight_shape = X[param_pos["weight"]].shape
 
             # bias and weights are treated jointly
             if (
@@ -638,70 +645,22 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
                 and "bias" in param_pos.keys()
             ):
                 w_pos, b_pos = param_pos["weight"], param_pos["bias"]
-                M_w = rearrange(M_torch[w_pos], "m c_out ... -> m c_out (...)")
-                M_joint = cat([M_w, M_torch[b_pos].unsqueeze(2)], dim=2)
-                M_joint = self._left_and_right_multiply(M_joint, aaT_inv, ggT_inv)
-                w_cols = M_w.shape[2]
-                M_torch[w_pos], M_torch[b_pos] = M_joint.split([w_cols, 1], dim=2)
+                X_w = rearrange(X[w_pos], "c_out ... m -> c_out (...) m")
+                X_joint = cat([X_w, X[b_pos].unsqueeze(1)], dim=1)
+                X_joint = self._left_and_right_multiply(X_joint, aaT_inv, ggT_inv)
+                w_cols = X_w.shape[1]
+                X[w_pos], X[b_pos] = X_joint.split([w_cols, 1], dim=1)
+                X[b_pos] = X[b_pos].squeeze(1)
             else:
-                M_torch = self._separate_left_and_right_multiply(
-                    M_torch, param_pos, aaT_inv, ggT_inv
+                X = self._separate_left_and_right_multiply(
+                    X, param_pos, aaT_inv, ggT_inv
                 )
 
             # restore original shapes
             if "weight" in param_pos:
-                M_torch[param_pos["weight"]] = M_torch[param_pos["weight"]].view(
-                    weight_shape
-                )
+                X[param_pos["weight"]] = X[param_pos["weight"]].view(weight_shape)
 
-        if return_tensor:
-            M_torch = cat([rearrange(M, "k ... -> (...) k") for M in M_torch])
-
-        return M_torch
-
-    def torch_matvec(self, v_torch: ParameterMatrixType) -> ParameterMatrixType:
-        """Apply the inverse of KFAC to a vector in PyTorch.
-
-        This allows for matrix-vector products with the inverse KFAC approximation in
-        PyTorch without converting tensors to numpy arrays, which avoids unnecessary
-        device transfers when working with GPUs and flattening/concatenating.
-
-        Args:
-            v_torch: Vector for multiplication. If list of tensors, each entry has the
-                same shape as a parameter, i.e. ``[p1.shape, p2.shape, ...]``.
-                If tensor, has shape ``[D]``.
-
-        Returns:
-            Matrix-multiplication result ``KFAC⁻¹ @ v``. Return type is the same as the
-            type of the input. If list of tensors, each entry has the same shape as a
-            parameter, i.e. ``[p1.shape, p2.shape, ...]``. If tensor, has shape ``[D]``.
-
-        Raises:
-            ValueError: If the input tensor has the wrong data type.
-        """
-        if isinstance(v_torch, list):
-            v_torch = [v_torch_i.unsqueeze(0) for v_torch_i in v_torch]
-            result = self.torch_matmat(v_torch)
-            return [res.squeeze(0) for res in result]
-        elif isinstance(v_torch, Tensor):
-            return self.torch_matmat(v_torch.unsqueeze(-1)).squeeze(-1)
-        else:
-            raise ValueError(
-                f"Invalid input type: {type(v_torch)}. Expected list of tensors or tensor."
-            )
-
-    def _matmat(self, M: ndarray) -> ndarray:
-        """Apply the inverse of KFAC to a matrix (multiple vectors).
-
-        Args:
-            M: Matrix for multiplication. Has shape ``[D, K]`` with some ``K``.
-
-        Returns:
-            Matrix-multiplication result ``KFAC⁻¹ @ M``. Has shape ``[D, K]``.
-        """
-        M_torch = self._A._preprocess(M)
-        M_torch = self.torch_matmat(M_torch)
-        return self._A._postprocess(M_torch)
+        return X
 
     def state_dict(self) -> Dict[str, Any]:
         """Return the state of the inverse KFAC linear operator.
