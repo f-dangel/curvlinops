@@ -30,8 +30,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parameters when `use_exact_damping=True` and
   `KFACLinearOperator._separate_weight_and_bias=True`
   ([PR](https://github.com/f-dangel/curvlinops/pull/156))
-- Bug in `KFACLinearOperator.load_state_dict`
-  ([PR](https://github.com/f-dangel/curvlinops/pull/158))
 - More test cases for `KFACInverseLinearOperator` and bug fix in
     `.load_state_dict` ([PR](https://github.com/f-dangel/curvlinops/pull/158))
 
