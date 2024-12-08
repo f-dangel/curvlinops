@@ -6,7 +6,7 @@ from typing import Callable, Iterable, List, Optional, Tuple, Union
 
 from einops import rearrange, reduce
 from einops.layers.torch import Rearrange
-from numpy import eye, ndarray
+from numpy import ndarray
 from torch import (
     Tensor,
     allclose,
@@ -15,6 +15,7 @@ from torch import (
     cuda,
     device,
     dtype,
+    eye,
     from_numpy,
     rand,
     randint,
@@ -33,7 +34,7 @@ from torch.nn import (
     Upsample,
 )
 
-from curvlinops import GGNLinearOperator
+from curvlinops._base import _LinearOperator
 from curvlinops._torch_base import PyTorchLinearOperator
 from curvlinops.utils import allclose_report
 
@@ -89,7 +90,8 @@ def regression_targets(size: Tuple[int]) -> Tensor:
     return rand(*size)
 
 
-def ggn_block_diagonal(
+def block_diagonal(
+    linear_operator: _LinearOperator,
     model: Module,
     loss_func: Module,
     params: List[Parameter],
@@ -97,28 +99,29 @@ def ggn_block_diagonal(
     batch_size_fn: Optional[Callable[[MutableMapping], int]] = None,
     separate_weight_and_bias: bool = True,
 ) -> ndarray:
-    """Compute the block-diagonal GGN.
+    """Compute the block-diagonal of the matrix induced by a linear operator.
 
     Args:
+        linear_operator: The linear operator.
         model: The neural network.
         loss_func: The loss function.
-        params: The parameters w.r.t. which the GGN block-diagonals will be computed.
+        params: The parameters w.r.t. which the block-diagonal will be computed for.
         data: A data loader.
         batch_size_fn: A function that returns the batch size given a dict-like ``X``.
         separate_weight_and_bias: Whether to treat weight and bias of a layer as
-            separate blocks in the block-diagonal GGN. Default: ``True``.
+            separate blocks in the block-diagonal. Default: ``True``.
 
     Returns:
-        The block-diagonal GGN.
+        The block-diagonal matrix.
     """
-    # compute the full GGN then zero out the off-diagonal blocks
-    ggn = GGNLinearOperator(
-        model, loss_func, params, data, batch_size_fn=batch_size_fn
-    ).to_scipy()
-    ggn = from_numpy(ggn @ eye(ggn.shape[1]))
+    # compute the full matrix then zero out the off-diagonal blocks
+    linop = linear_operator(model, loss_func, params, data, batch_size_fn=batch_size_fn)
+    linop = linop @ eye(linop.shape[1])
     sizes = [p.numel() for p in params]
-    # ggn_blocks[i, j] corresponds to the block of (params[i], params[j])
-    ggn_blocks = [list(block.split(sizes, dim=1)) for block in ggn.split(sizes, dim=0)]
+    # matrix_blocks[i, j] corresponds to the block of (params[i], params[j])
+    matrix_blocks = [
+        list(block.split(sizes, dim=1)) for block in linop.split(sizes, dim=0)
+    ]
 
     # find out which blocks to keep
     num_params = len(params)
@@ -146,10 +149,10 @@ def ggn_block_diagonal(
 
     for i, j in product(range(num_params), range(num_params)):
         if (i, j) not in keep:
-            ggn_blocks[i][j].zero_()
+            matrix_blocks[i][j].zero_()
 
     # concatenate all blocks
-    return cat([cat(row_blocks, dim=1) for row_blocks in ggn_blocks], dim=0).numpy()
+    return cat([cat(row_blocks, dim=1) for row_blocks in matrix_blocks], dim=0).numpy()
 
 
 class WeightShareModel(Sequential):
