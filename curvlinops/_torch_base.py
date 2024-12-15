@@ -453,7 +453,6 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
                 entry of the iterates from ``data`` and return their batch size.
 
         Raises:
-            RuntimeError: If the check for deterministic behavior fails.
             ValueError: If ``block_sizes`` is specified but the linear operator does not
                 support blocks.
             ValueError: If the sum of blocks does not equal the number of parameters.

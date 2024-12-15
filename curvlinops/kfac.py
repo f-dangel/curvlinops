@@ -25,7 +25,7 @@ from math import sqrt
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
 from einops import einsum, rearrange, reduce
-from torch import Generator, Tensor, cat, device, eye, randn, stack
+from torch import Generator, Tensor, cat, eye, randn, stack
 from torch.autograd import grad
 from torch.nn import (
     BCEWithLogitsLoss,
@@ -219,7 +219,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
                 entry of the iterates from ``data`` and return their batch size.
 
         Raises:
-            RuntimeError: If the check for deterministic behavior fails.
             ValueError: If the loss function is not supported.
             ValueError: If ``fisher_type != FisherType.MC`` and ``mc_samples != 1``.
             ValueError: If ``X`` is not a tensor and ``batch_size_fn`` is not specified.
@@ -1032,9 +1031,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
         Returns:
             Linear operator of KFAC approximation.
-
-        Raises:
-            RuntimeError: If the check for deterministic behavior fails.
         """
         loss_func = {
             "MSELoss": MSELoss,
