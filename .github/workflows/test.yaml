@@ -1,13 +1,6 @@
 name: Test
 
-on:
-  push:
-    branches:
-      - '*'
-  pull_request:
-    branches:
-      - '*'
-
+on: [push, pull_request]
 
 jobs:
   tests:
@@ -29,13 +22,8 @@ jobs:
         python -m pip install --upgrade pip
         make install-test
     - name: Run test
-      if: contains('refs/heads/main', github.ref)
       run: |
         make test
-    - name: Run test-light
-      if: contains('refs/heads/main', github.ref) != 1
-      run: |
-        make test-light
 
     - name: Test coveralls - python ${{ matrix.python-version }}
       run: coveralls --service=github
