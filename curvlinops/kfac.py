@@ -332,7 +332,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
         if not self._input_covariances and not self._gradient_covariances:
             self._compute_kfac()
 
-        KM = [None for m in M]
+        KM = [None for _ in M]
 
         for mod_name, param_pos in self._mapping.items():
             # cache the weight shape to ensure correct shapes are returned
@@ -987,9 +987,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
             input_covariances_keys = set(self._input_covariances.keys())
             gradient_covariances_keys = set(self._gradient_covariances.keys())
             mapping_keys = set(self._mapping.keys())
-            if (
-                input_covariances_keys != mapping_keys
-                or gradient_covariances_keys != mapping_keys
+            if (input_covariances_keys and input_covariances_keys != mapping_keys) or (
+                gradient_covariances_keys and gradient_covariances_keys != mapping_keys
             ):
                 raise ValueError(
                     "Input or gradient covariance keys in state dict do not match "

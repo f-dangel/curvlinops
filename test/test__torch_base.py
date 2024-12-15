@@ -6,6 +6,8 @@ from pytest import raises
 from torch import Tensor, randperm, zeros
 
 from curvlinops._torch_base import CurvatureLinearOperator, PyTorchLinearOperator
+from curvlinops.examples.functorch import functorch_gradient_and_loss
+from curvlinops.utils import allclose_report
 
 
 def test_input_formatting():
@@ -152,3 +154,28 @@ def test_check_deterministic_batch(case):
         _ = FixedBatchesIdentityLinearOperator(
             model_func, loss_func, params, data, batch_size_fn=batch_size_fn
         )
+
+
+def test_gradient_and_loss(case):
+    """Test the gradient and loss computation over a data loader."""
+    model, loss_func, params, data, batch_size_fn = case
+
+    linop = CurvatureLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        # turn off because this would trigger the un-implemented `matmat`
+        check_deterministic=False,
+        batch_size_fn=batch_size_fn,
+    )
+    gradient, loss = linop.gradient_and_loss()
+
+    gradient_functorch, loss_functorch = functorch_gradient_and_loss(
+        model, loss_func, params, data, input_key="x"
+    )
+
+    assert allclose_report(loss, loss_functorch)
+    assert len(gradient) == len(gradient_functorch)
+    for g, g_functorch in zip(gradient, gradient_functorch):
+        assert allclose_report(g, g_functorch)

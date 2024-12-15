@@ -15,15 +15,24 @@ from test.utils import (
 )
 from typing import Dict, Iterable, List, Tuple, Union
 
-from einops import rearrange
 from einops.layers.torch import Rearrange
-from numpy import eye
+from numpy import eye, random
 from numpy.linalg import det, norm, slogdet
 from pytest import mark, raises, skip
 from scipy.linalg import block_diag
-from torch import Tensor, allclose, cat, cuda, device
+from torch import Tensor, allclose, cuda, device
 from torch import eye as torch_eye
-from torch import isinf, isnan, load, manual_seed, rand, rand_like, randperm, save
+from torch import (
+    float64,
+    isinf,
+    isnan,
+    load,
+    manual_seed,
+    rand,
+    rand_like,
+    randperm,
+    save,
+)
 from torch.nn import (
     BCEWithLogitsLoss,
     CrossEntropyLoss,
@@ -1202,3 +1211,35 @@ def test_string_in_enum(fisher_type: str, kfac_approx: str):
         fisher_type=fisher_type,
         kfac_approx=kfac_approx,
     )
+
+
+@mark.parametrize("dev", DEVICES, ids=DEVICES_IDS)
+def test_bug_132_dtype_deterministic_checks(dev: device):
+    """Test whether the vectors used in the deterministic checks have correct data type.
+
+    This bug was reported in https://github.com/f-dangel/curvlinops/issues/132.
+
+    Args:
+        dev: The device to run the test on.
+    """
+    # make deterministic
+    manual_seed(0)
+    random.seed(0)
+
+    # create a toy problem, load everything to float64
+    dt = float64
+    N = 4
+    D_in = 3
+    D_out = 2
+
+    X = rand(N, D_in, dtype=dt, device=dev)
+    y = rand(N, D_out, dtype=dt, device=dev)
+    data = [(X, y)]
+
+    model = Linear(D_in, D_out).to(dev, dt)
+    params = [p for p in model.parameters() if p.requires_grad]
+
+    loss_func = MSELoss().to(dev, dt)
+
+    # run deterministic checks
+    KFACLinearOperator(model, loss_func, params, data, check_deterministic=True)

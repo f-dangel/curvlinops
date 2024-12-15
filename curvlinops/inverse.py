@@ -13,11 +13,6 @@ from torch.linalg import cholesky, eigh
 from curvlinops._torch_base import PyTorchLinearOperator
 from curvlinops.kfac import KFACLinearOperator
 
-# Type for a matrix/vector that can be represented as a list of tensors with the same
-# shape as the parameters, or a single matrix/vector of shape `[D, D]`/`[D]` where `D`
-# is the number of parameters.
-ParameterMatrixType = TypeVar("ParameterMatrixType", Tensor, List[Tensor])
-
 KFACInvType = TypeVar(
     "KFACInvType", Optional[Tensor], Tuple[Optional[Tensor], Optional[Tensor]]
 )

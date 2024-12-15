@@ -15,9 +15,20 @@ from typing import (
 
 import numpy
 from scipy.sparse.linalg import LinearOperator
-from torch import Size, Tensor, cat, device, dtype, from_numpy, rand, tensor, zeros_like
+from torch import (
+    Size,
+    Tensor,
+    as_tensor,
+    bfloat16,
+    cat,
+    device,
+    dtype,
+    rand,
+    tensor,
+    zeros_like,
+)
 from torch.autograd import grad
-from torch.nn import Module, Parameter
+from torch.nn import Parameter
 from tqdm import tqdm
 
 from curvlinops.utils import allclose_report
@@ -33,7 +44,7 @@ class PyTorchLinearOperator:
     One main difference is that the linear operators cannot only multiply
     vectors/matrices specified as single PyTorch tensors, but also
     vectors/matrices specified in tensor list format. This is common in
-    PyTorch, where the space a linear operator acts on is a tensor product
+    PyTorch, where the space a linear operator acts on is a tensor product.
 
     Functions that need to be implemented are ``_matmat`` and ``_adjoint``.
 
@@ -44,7 +55,6 @@ class PyTorchLinearOperator:
     Attributes:
         SELF_ADJOINT: Whether the linear operator is self-adjoint. If ``True``,
             ``_adjoint`` does not need to be implemented. Default: ``False``.
-
     """
 
     SELF_ADJOINT: bool = False
@@ -361,10 +371,13 @@ class PyTorchLinearOperator:
             Returns:
                 The output matrix in NumPy format.
             """
-            X_dtype = X.dtype
-            X_torch = from_numpy(X).to(device, dtype)
+            X_torch = as_tensor(X, dtype=dtype, device=device)
             AX_torch = f(X_torch)
-            return AX_torch.detach().cpu().numpy().astype(X_dtype)
+            # calling .numpy() on a BF-16 tensor is not supported, see
+            # (https://github.com/pytorch/pytorch/issues/90574)
+            if AX_torch.dtype == bfloat16:
+                AX_torch = AX_torch.float()
+            return AX_torch.detach().cpu().numpy().astype(X.dtype)
 
         return f_scipy
 
@@ -373,9 +386,9 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
     """Base class for PyTorch linear operators of deep learning curvature matrices.
 
     To implement a new curvature linear operator, subclass this class and implement
-    the ``_matmat_batch`` and ``_adjoint`` methods. If the linear operator does not
-    map between the neural network's parameter space, you also need to implement
-    ``_get_in_shape`` and ``_get_out_shape``.
+    the ``_matmat_batch`` and ``_adjoint`` methods. If the linear operator is not
+    defined as a map in the neural network's parameter space, you also need to
+    implement ``_get_in_shape`` and ``_get_out_shape``.
 
     Attributes:
         SUPPORTS_BLOCKS: Whether the linear operator supports multiplication with
@@ -559,7 +572,7 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
         Yields:
             Mini-batches ``(X, y)``.
         """
-        data_iter = iter(self._data)
+        data_iter = self._data
 
         if self._progressbar:
             desc = f"{self.__class__.__name__}{'' if desc is None else f'.{desc}'}"
@@ -595,7 +608,9 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
     #                             DETERMINISTIC CHECKS                            #
     ###############################################################################
 
-    def data_prediction_loss_gradient(self) -> Iterator[
+    def data_prediction_loss_gradient(
+        self, desc: str = "batch_prediction_loss_gradient"
+    ) -> Iterator[
         Tuple[
             Tuple[Union[Tensor, MutableMapping], Tensor],
             Tensor,
@@ -603,12 +618,17 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
             Optional[List[Tensor]],
         ]
     ]:
-        """Yield input, prediction, loss, and gradient for each batch.
+        """Yield (input, label), prediction, loss, and gradient for each batch.
+
+        Args:
+            desc: Description for the progress bar (if the linear operator's
+                progress bar is enabled). Default: ``'batch_prediction_loss_gradient'``.
 
         Yields:
-            The batch, prediction, loss, and gradient.
+            Tuple of ((input, label), prediction, loss, gradient) for each batch of
+            the data.
         """
-        for X, y in self._loop_over_data(desc="batch_prediction_loss_gradient"):
+        for X, y in self._loop_over_data(desc=desc):
             prediction = self._model_func(X)
             if self._loss_func is None:
                 loss, grad_params = None, None
@@ -619,6 +639,34 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
                 loss.detach_()
 
             yield (X, y), prediction, loss, grad_params
+
+    def gradient_and_loss(self) -> Tuple[List[Tensor], Tensor]:
+        """Evaluate the gradient and loss on the data.
+
+        (Not really part of the LinearOperator interface.)
+
+        Returns:
+            Gradient and loss on the data set.
+
+        Raises:
+            ValueError: If there is no loss function.
+        """
+        if self._loss_func is None:
+            raise ValueError("No loss function specified.")
+
+        total_loss = tensor(
+            [0.0], device=self._device, dtype=self._infer_dtype()
+        ).squeeze()
+        total_grad = [zeros_like(p) for p in self._params]
+
+        for _, _, loss, grad_params in self.data_prediction_loss_gradient(
+            desc="gradient_and_loss"
+        ):
+            total_loss.add_(loss)
+            for total_g, g in zip(total_grad, grad_params):
+                total_g.add_(g)
+
+        return total_grad, total_loss
 
     def _check_deterministic(self):
         """Check that the linear operator is deterministic.
@@ -705,7 +753,6 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
         Raises:
             RuntimeError: If any of the pairs mismatch.
         """
-
         X1, X2 = Xs
         if isinstance(X1, MutableMapping) and isinstance(X2, MutableMapping):
             for k in X1.keys():

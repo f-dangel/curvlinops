@@ -92,8 +92,7 @@ class ActivationHessianLinearOperator(CurvatureLinearOperator):
             ValueError: If ``data`` contains more than one batch.
 
         Example:
-            >>> from numpy import eye, allclose
-            >>> from torch import manual_seed, rand
+            >>> from torch import manual_seed, rand, eye, allclose
             >>> from torch.nn import Linear, MSELoss, Sequential, ReLU
             >>>
             >>> loss_func = MSELoss()
@@ -121,6 +120,7 @@ class ActivationHessianLinearOperator(CurvatureLinearOperator):
         # Ensure there is only one batch
         data_iter = iter(data)
         next(data_iter)
+
         with contextlib.suppress(StopIteration):
             next(data_iter)
             raise ValueError(f"{self.__class__.__name__} requires a single batch.")
@@ -171,10 +171,13 @@ class ActivationHessianLinearOperator(CurvatureLinearOperator):
             X: Input to the DNN.
             y: Ground truth.
             M: Matrix to be multiplied with in tensor list format.
+                Tensors have same shape as trainable model parameters, and an
+                additional trailing axis for the matrix columns.
 
         Returns:
             Result of activation Hessian multiplication in list format. Has the same
-            shape as ``M``.
+            shape as ``M``, i.e. each tensor in the list has the shape of a
+            parameter and a trailing dimension of matrix columns.
         """
         activation_storage = []
         with store_activation(self._model_func, *self._activation, activation_storage):

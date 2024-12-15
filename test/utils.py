@@ -25,7 +25,7 @@ from torch.nn import (
     Upsample,
 )
 
-from curvlinops import GGNLinearOperator
+from curvlinops import FisherMCLinearOperator, GGNLinearOperator
 from curvlinops._torch_base import PyTorchLinearOperator
 from curvlinops.fisher import FisherMCLinearOperator
 from curvlinops.utils import allclose_report
@@ -396,9 +396,11 @@ def compare_state_dicts(state_dict: dict, state_dict_new: dict):
         elif isinstance(value, tuple):
             assert len(value) == len(value_new)
             assert all(isinstance(v, type(v2)) for v, v2 in zip(value, value_new))
-            assert all(
-                allclose(as_tensor(v), as_tensor(v2)) for v, v2 in zip(value, value_new)
-            )
+            for v, v2 in zip(value, value_new):
+                if v is None:
+                    assert v2 is None
+                else:
+                    assert allclose(as_tensor(v), as_tensor(v2))
         else:
             assert value == value_new
 
@@ -555,8 +557,12 @@ def compare_matmat_expectation(
 def eye_like(A: Tensor) -> Tensor:
     """Create an identity matrix of same size as ``A``.
 
+    Args:
+        A: The tensor whose size determines the identity matrix.
+
     Returns:
         The identity matrix of ``A``'s size.
     """
-    dim = A.shape[0]
+    dim1, dim_2 = A.shape
+    (dim,) = {dim1, dim_2}
     return torch_eye(dim, device=A.device, dtype=A.dtype)
