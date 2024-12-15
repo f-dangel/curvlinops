@@ -190,7 +190,6 @@ class ActivationHessianLinearOperator(CurvatureLinearOperator):
 
         # collect
         HM = [zeros_like(m) for m in M]
-
         (num_vectors,) = {m.shape[-1] for m in M}
         for n in range(num_vectors):
             HM_col = hessian_vector_product(
