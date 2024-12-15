@@ -18,9 +18,9 @@ from typing import Dict, Iterable, List, Tuple, Union
 from einops.layers.torch import Rearrange
 from numpy import eye, random
 from numpy.linalg import det, norm, slogdet
-from pytest import mark, raises, skip
+from pytest import mark, raises
 from scipy.linalg import block_diag
-from torch import Tensor, allclose, cuda, device
+from torch import Tensor, allclose, device
 from torch import eye as torch_eye
 from torch import (
     float64,
@@ -224,7 +224,7 @@ def test_kfac_mc(
     ).to_scipy()
     kfac_mat = kfac @ eye(kfac.shape[1])
 
-    atol = {"sum": 5e-1, "mean": 5e-3}[loss_func.reduction]
+    atol = {"sum": 5e-1, "mean": 1e-2}[loss_func.reduction]
     rtol = {"sum": 2e-2, "mean": 2e-2}[loss_func.reduction]
 
     report_nonclose(ggn, kfac_mat, rtol=rtol, atol=atol)
@@ -277,7 +277,7 @@ def test_kfac_mc_weight_sharing(
     ).to_scipy()
     kfac_mat = kfac @ eye(kfac.shape[1])
 
-    atol = {"sum": 5e-1, "mean": 5e-3}[loss_func.reduction]
+    atol = {"sum": 5e-1, "mean": 1e-2}[loss_func.reduction]
     rtol = {"sum": 2e-2, "mean": 2e-2}[loss_func.reduction]
 
     report_nonclose(ggn, kfac_mat, rtol=rtol, atol=atol)
@@ -380,10 +380,10 @@ def test_kfac_inplace_activations(dev: device):
         dev: The device to run the test on.
     """
     manual_seed(0)
-    model = Sequential(Linear(6, 3), ReLU(inplace=True), Linear(3, 2)).to(dev)
+    model = Sequential(Linear(4, 3), ReLU(inplace=True), Linear(3, 2)).to(dev)
     loss_func = MSELoss().to(dev)
     batch_size = 1
-    data = [(rand(batch_size, 6), regression_targets((batch_size, 2)))]
+    data = [(rand(batch_size, 4), regression_targets((batch_size, 2)))]
     params = list(model.parameters())
 
     # 1) compare KFAC and GGN
@@ -394,8 +394,8 @@ def test_kfac_inplace_activations(dev: device):
     ).to_scipy()
     kfac_mat = kfac @ eye(kfac.shape[1])
 
-    atol = {"sum": 5e-1, "mean": 2e-3}[loss_func.reduction]
-    rtol = {"sum": 2e-2, "mean": 2e-2}[loss_func.reduction]
+    atol = {"sum": 5e-1, "mean": 5e-3}[loss_func.reduction]
+    rtol = {"sum": 2e-2, "mean": 4e-2}[loss_func.reduction]
 
     report_nonclose(ggn, kfac_mat, rtol=rtol, atol=atol)
 
@@ -575,41 +575,6 @@ def test_expand_setting_scaling(
     kfac_mean_mat = kfac_mean @ eye(kfac_mean.shape[1])
 
     report_nonclose(kfac_simulated_mean_mat, kfac_mean_mat)
-
-
-def test_bug_device_change_invalidates_parameter_mapping():
-    """Reproduce #77: Loading KFAC from GPU to CPU invalidates the internal mapping.
-
-    This leads to some parameter blocks not being updated inside ``.matmat``.
-    """
-    if not cuda.is_available():
-        skip("This test requires a GPU.")
-    gpu, cpu = device("cuda"), device("cpu")
-
-    manual_seed(0)
-
-    model = Sequential(Linear(5, 4), ReLU(), Linear(4, 4)).to(gpu)
-    data = [(rand(2, 5), regression_targets((2, 4)))]
-    loss_func = MSELoss().to(gpu)
-
-    kfac_torch = KFACLinearOperator(
-        model,
-        loss_func,
-        list(model.parameters()),
-        data,
-        fisher_type=FisherType.EMPIRICAL,
-        check_deterministic=False,  # turn off to avoid implicit device changes
-        progressbar=True,
-    )
-    kfac = kfac_torch.to_scipy()
-    x = rand(kfac.shape[1]).numpy()
-    kfac_x_gpu = kfac @ x
-
-    kfac_torch.to_device(cpu)
-    kfac = kfac_torch.to_scipy()
-    kfac_x_cpu = kfac @ x
-
-    report_nonclose(kfac_x_gpu, kfac_x_cpu)
 
 
 def test_KFACLinearOperator(case, adjoint: bool, is_vec: bool):

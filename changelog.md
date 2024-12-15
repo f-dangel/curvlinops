@@ -32,6 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([PR](https://github.com/f-dangel/curvlinops/pull/156))
 - More test cases for `KFACInverseLinearOperator` and bug fix in
     `.load_state_dict` ([PR](https://github.com/f-dangel/curvlinops/pull/158))
+- Remove `.to_device` function of linear operators, always carry out deterministic
+  checks on the linear operator's device (previously always on CPU)
+  ([PR](https://github.com/f-dangel/curvlinops/pull/160))
 
 ### Internal
 

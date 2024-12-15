@@ -28,7 +28,7 @@ from torch import (
     zeros_like,
 )
 from torch.autograd import grad
-from torch.nn import Module, Parameter
+from torch.nn import Parameter
 from tqdm import tqdm
 
 from curvlinops.utils import allclose_report
@@ -453,7 +453,6 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
                 entry of the iterates from ``data`` and return their batch size.
 
         Raises:
-            RuntimeError: If the check for deterministic behavior fails.
             ValueError: If ``block_sizes`` is specified but the linear operator does not
                 support blocks.
             ValueError: If the sum of blocks does not equal the number of parameters.
@@ -498,14 +497,7 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
         super().__init__(self._get_in_shape(), self._get_out_shape())
 
         if check_deterministic:
-            old_device = self._device
-            self.to_device(device("cpu"))
-            try:
-                self._check_deterministic()
-            except RuntimeError as e:
-                raise e
-            finally:
-                self.to_device(old_device)
+            self._check_deterministic()
 
     def _get_in_shape(self) -> List[Tuple[int, ...]]:
         """Return linear operator's input space dimensions.
@@ -675,21 +667,6 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
 
         return total_grad, total_loss
 
-    def to_device(self, device: device):
-        """Load linear operator to a device (inplace).
-
-        Args:
-            device: Target device.
-        """
-        self._device = device
-
-        if isinstance(self._model_func, Module):
-            self._model_func = self._model_func.to(self._device)
-        self._params = [p.to(device) for p in self._params]
-
-        if isinstance(self._loss_func, Module):
-            self._loss_func = self._loss_func.to(self._device)
-
     def _check_deterministic(self):
         """Check that the linear operator is deterministic.
 
@@ -699,16 +676,6 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
           results
         - Two independent total loss/gradient computations yield different results
         - If ``FIXED_DATA_ORDER`` is ``True`` and any mini-batch quantity differs.
-
-        Note:
-            Deterministic checks should be performed on CPU. We noticed that even when
-            it passes on CPU, it can fail on GPU; probably due to non-deterministic
-            operations.
-
-        # TODO This can be impractical if the CPU is less powerful than the GPU.
-        # Also, it would be desirable to confirm deterministic behavior on the compute
-        # device that will be used for matvecs. Try refactoring by using device-agnostic
-        # tolerances. Then remove the ``to_device`` method.
 
         Raises:
             RuntimeError: If non-deterministic behavior is detected.

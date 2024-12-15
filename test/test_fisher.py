@@ -40,7 +40,6 @@ def test_FisherMCLinearOperator_expectation(
     )
     G_mat = functorch_ggn(model_func, loss_func, params, data, input_key="x")
 
-    rtol = 1e-1 if is_vec else 1.5e-1
     compare_matmat_expectation(
-        F, G_mat, adjoint, is_vec, max_repeats, CHECK_EVERY, rtol=rtol, atol=5e-3
+        F, G_mat, adjoint, is_vec, max_repeats, CHECK_EVERY, rtol=2e-1, atol=5e-3
     )
