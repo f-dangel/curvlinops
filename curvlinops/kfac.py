@@ -331,7 +331,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
         if not self._input_covariances and not self._gradient_covariances:
             self._compute_kfac()
 
-        KM = [None for _ in M]
+        KM = [None] * len(M)
 
         for mod_name, param_pos in self._mapping.items():
             # cache the weight shape to ensure correct shapes are returned
