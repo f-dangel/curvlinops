@@ -80,6 +80,7 @@ lint = [
 
 # Dependencies needed to build/view the documentation.
 docs = [
+    "memory_profiler",
     "transformers",
     "datasets",
     "matplotlib",
