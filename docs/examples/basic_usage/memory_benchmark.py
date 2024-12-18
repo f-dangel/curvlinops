@@ -15,7 +15,9 @@ from torch import cuda, device, manual_seed, rand
 from curvlinops import KFACInverseLinearOperator, KFACLinearOperator
 
 
-def run_peakmem_benchmark(linop_str: str, problem_str: str, device_str: str, op: str):
+def run_peakmem_benchmark(
+    linop_str: str, problem_str: str, device_str: str, op_str: str
+):
     """Execute the memory benchmark for a given linear operator class and save results.
 
     Args:
@@ -44,6 +46,24 @@ def run_peakmem_benchmark(linop_str: str, problem_str: str, device_str: str, op:
         if is_cuda:
             cuda.synchronize()
 
+    def f_precompute():
+        manual_seed(0)  # make deterministic
+
+        model, loss_function, params, data = setup_problem(problem_str, dev)
+        linop = setup_linop(linop_str, model, loss_function, params, data)
+
+        if isinstance(linop, KFACLinearOperator):
+            linop._compute_kfac()
+
+        if isinstance(linop, KFACInverseLinearOperator):
+            linop._A._compute_kfac()
+            # damp and invert the Kronecker matrices
+            for mod_name in linop._A._mapping:
+                linop._compute_or_get_cached_inverse(mod_name)
+
+        if is_cuda:
+            cuda.synchronize()
+
     def f_matvec():
         manual_seed(0)  # make deterministic
 
@@ -65,26 +85,30 @@ def run_peakmem_benchmark(linop_str: str, problem_str: str, device_str: str, op:
         if is_cuda:
             cuda.synchronize()
 
-    f = {"gradient_and_loss": f_gradient_and_loss, "matvec": f_matvec}[op]
+    func = {
+        "gradient_and_loss": f_gradient_and_loss,
+        "precompute": f_precompute,
+        "matvec": f_matvec,
+    }[op_str]
 
     if is_cuda:
-        f()
+        func()
         cuda.synchronize()
         peakmem_bytes = cuda.max_memory_allocated()
         cuda.reset_peak_memory_stats()
     else:
-        peakmem_bytes = memory_usage(f, interval=1e-4, max_usage=True) * 2**20
+        peakmem_bytes = memory_usage(func, interval=1e-4, max_usage=True) * 2**20
 
     peakmem_gib = peakmem_bytes / 2**30
     print(
-        f"[Memory, {op}] {linop_str} on {problem_str} and {device_str}: {peakmem_gib:.2f} GiB"
+        f"[Memory] {linop_str}'s {op_str} on {problem_str} and {device_str}:"
+        + f" {peakmem_gib:.2f} GiB"
     )
 
-    savepath = benchpath(linop_str, problem_str, device_str, metric="peakmem").replace(
-        ".json", f"_{op}.json"
-    )
-    with open(savepath, "w") as f_result:
-        json.dump({"peakmem": peakmem_gib}, f_result)
+    with open(
+        benchpath(linop_str, problem_str, device_str, op_str, metric="peakmem"), "w"
+    ) as f:
+        json.dump({"peakmem": peakmem_gib}, f)
 
 
 if __name__ == "__main__":
