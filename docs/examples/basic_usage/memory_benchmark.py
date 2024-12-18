@@ -12,7 +12,7 @@ from example_benchmark import (
 from memory_profiler import memory_usage
 from torch import cuda, device, manual_seed, rand
 
-from curvlinops import KFACLinearOperator
+from curvlinops import KFACInverseLinearOperator, KFACLinearOperator
 
 
 def run_peakmem_benchmark(linop_str: str, problem_str: str, device_str: str, op: str):
@@ -35,7 +35,11 @@ def run_peakmem_benchmark(linop_str: str, problem_str: str, device_str: str, op:
         linop = setup_linop(
             linop_str, model, loss_function, params, data, check_deterministic=False
         )
-        _ = linop.gradient_and_loss()
+
+        if isinstance(linop, KFACInverseLinearOperator):
+            _ = linop._A.gradient_and_loss()
+        else:
+            _ = linop.gradient_and_loss()
 
         if is_cuda:
             cuda.synchronize()
@@ -49,6 +53,13 @@ def run_peakmem_benchmark(linop_str: str, problem_str: str, device_str: str, op:
 
         if isinstance(linop, KFACLinearOperator):
             linop._compute_kfac()
+
+        if isinstance(linop, KFACInverseLinearOperator):
+            linop._A._compute_kfac()
+            # damp and invert the Kronecker matrices
+            for mod_name in linop._A._mapping:
+                linop._compute_or_get_cached_inverse(mod_name)
+
         _ = linop @ v
 
         if is_cuda:

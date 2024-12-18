@@ -45,6 +45,7 @@ from curvlinops import (
     FisherMCLinearOperator,
     GGNLinearOperator,
     HessianLinearOperator,
+    KFACInverseLinearOperator,
     KFACLinearOperator,
 )
 from curvlinops._torch_base import PyTorchLinearOperator
@@ -145,6 +146,7 @@ LINOP_STRS = [
     "Empirical Fisher",
     "Monte-Carlo Fisher",
     "KFAC",
+    "KFAC inverse",
 ]
 
 # %%
@@ -190,9 +192,15 @@ def setup_linop(
         "Empirical Fisher": EFLinearOperator,
         "Monte-Carlo Fisher": FisherMCLinearOperator,
         "KFAC": KFACLinearOperator,
+        "KFAC inverse": KFACLinearOperator,
     }[linop_str]
 
-    return linop_cls(*args, **kwargs)
+    linop = linop_cls(*args, **kwargs)
+
+    if linop_str == "KFAC inverse":
+        linop = KFACInverseLinearOperator(linop, damping=1e-3, cache=True)
+
+    return linop
 
 
 # %%
@@ -274,11 +282,25 @@ def run_time_benchmark(linop_str: str, problem_str: str, device_str: str):
 
     # Define the function that will be profiled
     def f():
-        _ = linop.gradient_and_loss()
+        if isinstance(linop, KFACInverseLinearOperator):
+            _ = linop._A.gradient_and_loss()
+        else:
+            _ = linop.gradient_and_loss()
+
         # for KFAC, we want to disentangle how long it takes to compute the Kronecker
         # factors versus how long a matrix-vector product with KFAC takes
         if isinstance(linop, KFACLinearOperator):
             linop._compute_kfac()
+
+        # for inverse KFAC, we want to disentangle how long it takes to compute the
+        # Kronecker factors versus, and to invert them, versus how long a matrix-vector
+        # product with the inverse takes
+        if isinstance(linop, KFACInverseLinearOperator):
+            linop._A._compute_kfac()
+            # damp and invert the Kronecker matrices
+            for mod_name in linop._A._mapping:
+                linop._compute_or_get_cached_inverse(mod_name)
+
         _ = linop @ v
 
         # Wait until all operations on the GPU are done
@@ -352,8 +374,12 @@ def extract_times(
         "matvec": r".*curvlinops/_torch_base\.py\(\d+\): __matmul__",
         "gradient_and_loss": r".*curvlinops/_torch_base\.py\(\d+\): gradient_and_loss",
     }
-    if linop_str == "KFAC":
+    if linop_str in {"KFAC", "KFAC inverse"}:
         patterns["precompute"] = r".*curvlinops/kfac\.py\(\d+\): _compute_kfac"
+    if linop_str == "KFAC inverse":
+        patterns["invert"] = (
+            r".*curvlinops/inverse\.py\(\d+\): _compute_or_get_cached_inverse"
+        )
 
     # Print timings
     results = {}
@@ -416,6 +442,9 @@ def visualize_time_benchmark(
 
         if name == "KFAC":
             ax.barh(name, results["precompute"], color="green", label="precompute")
+        if name == "KFAC inverse":
+            ax.barh(name, results["precompute"] + results["invert"], color="green")
+
         ax.barh(
             name, results["matvec"], color="blue", label="matvec" if idx == 0 else None
         )
@@ -485,7 +514,8 @@ if __name__ == "__main__":
 # may not reflect the relative cost of linear operators on larger problems and GPUs.
 # However, we should see a rough tendency that Hessian-vector products are more costly
 # than GGN-vector products, and that KFAC costs only a few gradients to pre-compute,
-# while being very cheap to multiply with.
+# while being very cheap to multiply with. Also, inverting KFAC adds some additional
+# run time.
 #
 # Memory benchmark
 # ================
