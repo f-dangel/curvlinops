@@ -311,7 +311,8 @@ def run_time_benchmark(linop_str: str, problem_str: str, device_str: str):
     # extract the time spent in each function
     with profiler.profile(
         # TODO make GPU profiling work
-        activities=[profiler.ProfilerActivity.CPU],
+        activities=[profiler.ProfilerActivity.CPU]
+        + ([profiler.ProfilerActivity.CUDA] if is_cuda else []),
         with_stack=True,
         # NOTE This may likely break or not be necessary in future versions of PyTorch
         # https://github.com/pytorch/pytorch/issues/100253#issuecomment-1579804477
