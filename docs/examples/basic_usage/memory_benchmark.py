@@ -3,6 +3,7 @@ from argparse import ArgumentParser
 
 from example_benchmark import (
     LINOP_STRS,
+    OP_STRS,
     PROBLEM_STRS,
     benchpath,
     setup_linop,
@@ -100,7 +101,7 @@ if __name__ == "__main__":
         "--op",
         type=str,
         help="The operation to benchmark.",
-        choices=["gradient_and_loss", "matvec"],
+        choices=OP_STRS,
     )
 
     args = parser.parse_args()
