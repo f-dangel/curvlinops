@@ -40,11 +40,14 @@ from torch.nn import (
 )
 from tueplots import bundles
 
-from curvlinops import GGNLinearOperator, HessianLinearOperator
-from curvlinops._torch_base import CurvatureLinearOperator
-from curvlinops.fisher import FisherMCLinearOperator
-from curvlinops.gradient_moments import EFLinearOperator
-from curvlinops.kfac import KFACLinearOperator
+from curvlinops import (
+    EFLinearOperator,
+    FisherMCLinearOperator,
+    GGNLinearOperator,
+    HessianLinearOperator,
+    KFACLinearOperator,
+)
+from curvlinops._torch_base import PyTorchLinearOperator
 
 # %%
 #
@@ -105,25 +108,25 @@ def setup_problem(
     if problem_str != "synthetic_mnist_cnn":
         raise ValueError(f"Unknown problem: {problem_str}")
 
-    batch_size = 128
+    batch_size = 64
     X = rand(batch_size, 1, 28, 28)
     y = randint(0, 10, (batch_size,))
     data = [(X, y)]
 
     model = Sequential(
-        Conv2d(1, 32, 3, padding=1),
+        Conv2d(1, 16, 3, padding=1),
         MaxPool2d(2),
         ReLU(),
-        Conv2d(32, 32, 3, padding=1),
+        Conv2d(16, 16, 3, padding=1),
         MaxPool2d(2),
         ReLU(),
-        Conv2d(32, 32, 3, padding=1),
+        Conv2d(16, 16, 3, padding=1),
         MaxPool2d(2),
         ReLU(),
         Flatten(),
-        Linear(288, 128),
+        Linear(144, 64),
         ReLU(),
-        Linear(128, 10),
+        Linear(64, 10),
     ).to(dev)
     loss_function = CrossEntropyLoss().to(dev)
     params = [p for p in model.parameters() if p.requires_grad]
@@ -156,7 +159,7 @@ def setup_linop(
     params: List[Parameter],
     data: Iterable[Tuple[Tensor, Tensor]],
     check_deterministic: bool = True,
-) -> CurvatureLinearOperator:
+) -> PyTorchLinearOperator:
     """Set up the linear operator.
 
     Args:
