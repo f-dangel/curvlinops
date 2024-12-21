@@ -116,7 +116,7 @@ def block_diagonal(
     """
     # compute the full matrix then zero out the off-diagonal blocks
     linop = linear_operator(model, loss_func, params, data, batch_size_fn=batch_size_fn)
-    linop = linop @ eye(linop.shape[1])
+    linop = as_tensor(linop @ eye(linop.shape[1]))
     sizes = [p.numel() for p in params]
     # matrix_blocks[i, j] corresponds to the block of (params[i], params[j])
     matrix_blocks = [
