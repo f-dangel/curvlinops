@@ -32,7 +32,7 @@ def run_peakmem_benchmark(
     def f_gradient_and_loss():
         manual_seed(0)  # make deterministic
 
-        model, loss_function, params, data = setup_problem(problem_str, dev)
+        model, loss_function, params, data = setup_problem(problem_str, linop_str, dev)
         # NOTE Disable deterministic check as it will otherwise compute matvecs
         linop = setup_linop(
             linop_str, model, loss_function, params, data, check_deterministic=False
@@ -49,7 +49,7 @@ def run_peakmem_benchmark(
     def f_precompute():
         manual_seed(0)  # make deterministic
 
-        model, loss_function, params, data = setup_problem(problem_str, dev)
+        model, loss_function, params, data = setup_problem(problem_str, linop_str, dev)
         linop = setup_linop(linop_str, model, loss_function, params, data)
 
         if isinstance(linop, KFACLinearOperator):
@@ -67,7 +67,7 @@ def run_peakmem_benchmark(
     def f_matvec():
         manual_seed(0)  # make deterministic
 
-        model, loss_function, params, data = setup_problem(problem_str, dev)
+        model, loss_function, params, data = setup_problem(problem_str, linop_str, dev)
         linop = setup_linop(linop_str, model, loss_function, params, data)
         v = rand(linop.shape[1], device=dev)
 

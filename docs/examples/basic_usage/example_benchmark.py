@@ -24,6 +24,7 @@ from time import perf_counter
 from typing import Iterable, List, Tuple
 
 import matplotlib.pyplot as plt
+from benchmark_utils import setup_shakespeare_nanogpt, setup_synthetic_imagenet_resnet50
 from torch import Tensor, arange, cuda, device, manual_seed, rand, randint
 from torch.nn import (
     Conv2d,
@@ -87,32 +88,27 @@ USETEX = not CI
 # created:
 
 # Supported problems
-PROBLEM_STRS = ["synthetic_mnist_cnn"]
+PROBLEM_STRS = [
+    "synthetic_mnist_cnn",
+    "synthetic_imagenet_resnet50",
+    "shakespeare_nanogpt",
+]
 
 
-def setup_problem(
-    problem_str: str, dev: device
-) -> Tuple[Module, Module, List[Parameter], Iterable[Tuple[Tensor, Tensor]]]:
-    """Set up the neural net, loss function, parameters, and data.
+def setup_synthetic_mnist_cnn(
+    batch_size: int = 64,
+) -> Tuple[Sequential, CrossEntropyLoss, List[Tuple[Tensor, Tensor]]]:
+    """Set up a synthetic MNIST CNN problem for the benchmark.
 
     Args:
-        problem_str: The problem to set up.
-        dev: The device to use.
+        batch_size: The batch size to use. Default is ``64``.
 
     Returns:
-        The neural net, loss function, parameters, and data.
-
-    Raises:
-        ValueError: If the problem is unknown.
+        The neural net, loss function, and data.
     """
-    if problem_str != "synthetic_mnist_cnn":
-        raise ValueError(f"Unknown problem: {problem_str}")
-
-    batch_size = 64
     X = rand(batch_size, 1, 28, 28)
     y = randint(0, 10, (batch_size,))
     data = [(X, y)]
-
     model = Sequential(
         Conv2d(1, 16, 3, padding=1),
         MaxPool2d(2),
@@ -127,9 +123,50 @@ def setup_problem(
         Linear(144, 64),
         ReLU(),
         Linear(64, 10),
-    ).to(dev)
-    loss_function = CrossEntropyLoss().to(dev)
-    params = [p for p in model.parameters() if p.requires_grad]
+    )
+    loss_function = CrossEntropyLoss()
+
+    return model, loss_function, data
+
+
+def setup_problem(
+    problem_str: str, linop_str: str, dev: device
+) -> Tuple[Module, Module, List[Parameter], Iterable[Tuple[Tensor, Tensor]]]:
+    """Set up the neural net, loss function, parameters, and data.
+
+    Args:
+        problem_str: The problem to set up.
+        linop_str: The linear operator that is investigated.
+        dev: The device to use.
+
+    Returns:
+        The neural net, loss function, parameters, and data.
+    """
+    setup_func = {
+        "synthetic_mnist_cnn": setup_synthetic_mnist_cnn,
+        "synthetic_imagenet_resnet50": setup_synthetic_imagenet_resnet50,
+        "shakespeare_nanogpt": setup_shakespeare_nanogpt,
+    }[problem_str]
+    model, loss_function, data = setup_func()
+
+    # Put model in evaluation mode so curvature matrices are well-defined
+    # even on data sets
+    model = model.eval().to(dev)
+    loss_function = loss_function.to(dev)
+
+    # Only use parameters of supported layers for KFAC
+    if linop_str in {"KFAC", "KFAC inverse"}:
+        params = []
+        supported_layers = [
+            m for m in model.modules() if isinstance(m, (Linear, Conv2d))
+        ]
+        for m in supported_layers:
+            # ignore the last layer of GPT because it has 50k outputs, which
+            # will yield an extremely large Kronecker factor
+            if all(d <= 50_000 for d in m.weight.shape):
+                params.extend([p for p in m.parameters() if p.requires_grad])
+    else:
+        params = [p for p in model.parameters() if p.requires_grad]
 
     return model, loss_function, params, data
 
@@ -187,7 +224,9 @@ def setup_linop(
 
     if linop_str == "Block-diagonal Hessian":
         num_tensors_layer = [
-            len(list(child.parameters())) for child in model.children()
+            len(list(child.parameters()))
+            for child in model.modules()
+            if not list(child.children())
         ]
         kwargs["block_sizes"] = [s for s in num_tensors_layer if s != 0]
 
@@ -278,7 +317,7 @@ def run_time_benchmark(
     # Set up the problem
     dev = device(device_str)
     is_cuda = "cuda" in str(dev)
-    model, loss_function, params, data = setup_problem(problem_str, dev)
+    model, loss_function, params, data = setup_problem(problem_str, linop_str, dev)
     linop = setup_linop(linop_str, model, loss_function, params, data)
     v = rand(linop.shape[1], device=dev)
 
@@ -294,6 +333,9 @@ def run_time_benchmark(
             linop._compute_kfac()
         if isinstance(linop, KFACInverseLinearOperator):
             linop._A._compute_kfac()
+            # damp and invert the Kronecker matrices
+            for mod_name in linop._A._mapping:
+                linop._compute_or_get_cached_inverse(mod_name)
 
     def f_matvec():
         _ = linop @ v
@@ -341,7 +383,9 @@ if __name__ == "__main__":
     for device_str, problem_str, linop_str, op_str in product(
         DEVICE_STRS, PROBLEM_STRS, LINOP_STRS, OP_STRS
     ):
-        run_time_benchmark(linop_str, problem_str, device_str, op_str, num_repeats=10)
+        run_time_benchmark(
+            linop_str, problem_str, device_str, op_str, num_repeats=1
+        )  # 0)
 
 # %%
 #
