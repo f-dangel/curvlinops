@@ -82,6 +82,7 @@ lint = [
 docs = [
     "memory_profiler",
     "transformers",
+    "tiktoken",
     "datasets",
     "matplotlib",
     "sphinx-gallery",
