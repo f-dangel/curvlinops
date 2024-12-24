@@ -386,9 +386,7 @@ if __name__ == "__main__":
     for device_str, problem_str, linop_str, op_str in product(
         DEVICE_STRS, PROBLEM_STRS, LINOP_STRS, OP_STRS
     ):
-        run_time_benchmark(
-            linop_str, problem_str, device_str, op_str, num_repeats=1
-        )  # 0)
+        run_time_benchmark(linop_str, problem_str, device_str, op_str, num_repeats=10)
 
 # %%
 #
