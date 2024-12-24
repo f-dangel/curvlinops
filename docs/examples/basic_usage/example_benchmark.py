@@ -88,15 +88,18 @@ USETEX = not CI
 # created:
 
 # Supported problems
-PROBLEM_STRS = [
-    "synthetic_mnist_cnn",
-    "synthetic_imagenet_resnet50",
-    "shakespeare_nanogpt",
-]
+if CI:
+    PROBLEM_STRS = ["synthetic_mnist_cnn"]
+else:
+    PROBLEM_STRS = [
+        "synthetic_mnist_cnn",
+        "synthetic_imagenet_resnet50",
+        "shakespeare_nanogpt",
+    ]
 
 
 def setup_synthetic_mnist_cnn(
-    batch_size: int = 64,
+    batch_size: int = 512,
 ) -> Tuple[Sequential, CrossEntropyLoss, List[Tuple[Tensor, Tensor]]]:
     """Set up a synthetic MNIST CNN problem for the benchmark.
 
