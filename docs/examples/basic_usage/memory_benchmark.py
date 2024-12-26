@@ -3,14 +3,20 @@ from argparse import ArgumentParser
 
 from example_benchmark import (
     LINOP_STRS,
+    HAS_JVP,
     OP_STRS,
     PROBLEM_STRS,
     benchpath,
     setup_linop,
     setup_problem,
+    SKIP_EXISTING,
 )
+from os import path
+from contextlib import nullcontext
+from benchmark_utils import GPTWrapper
 from memory_profiler import memory_usage
 from torch import cuda, device, manual_seed, rand
+from torch.nn.attention import SDPBackend, sdpa_kernel
 
 from curvlinops import KFACInverseLinearOperator, KFACLinearOperator
 
@@ -26,6 +32,14 @@ def run_peakmem_benchmark(
         device_str: The device.
         write_results: Whether to write the results to a file. Default is ``True``.
     """
+    savepath = benchpath(linop_str, problem_str, device_str, op_str, metric="peakmem")
+    if SKIP_EXISTING and path.exists(savepath):
+        print(
+            f"[Memory] Skipping {linop_str} on {problem_str} and {device_str} for "
+            + f"{op_str}"
+        )
+        return
+
     dev = device(device_str)
     is_cuda = "cuda" in str(dev)
 
@@ -50,7 +64,10 @@ def run_peakmem_benchmark(
         manual_seed(0)  # make deterministic
 
         model, loss_function, params, data = setup_problem(problem_str, linop_str, dev)
-        linop = setup_linop(linop_str, model, loss_function, params, data)
+        # NOTE Disable deterministic check as it will otherwise compute matvecs
+        linop = setup_linop(
+            linop_str, model, loss_function, params, data, check_deterministic=False
+        )
 
         if isinstance(linop, KFACLinearOperator):
             linop._compute_kfac()
@@ -68,7 +85,10 @@ def run_peakmem_benchmark(
         manual_seed(0)  # make deterministic
 
         model, loss_function, params, data = setup_problem(problem_str, linop_str, dev)
-        linop = setup_linop(linop_str, model, loss_function, params, data)
+        # NOTE Disable deterministic check as it will otherwise compute matvecs
+        linop = setup_linop(
+            linop_str, model, loss_function, params, data, check_deterministic=False
+        )
         v = rand(linop.shape[1], device=dev)
 
         if isinstance(linop, KFACLinearOperator):
@@ -80,7 +100,15 @@ def run_peakmem_benchmark(
             for mod_name in linop._A._mapping:
                 linop._compute_or_get_cached_inverse(mod_name)
 
-        _ = linop @ v
+        # Double-backward through efficient attention is unsupported, disable fused kernels
+        # (https://github.com/pytorch/pytorch/issues/116350#issuecomment-1954667011)
+        attention_double_backward = isinstance(linop, HAS_JVP) and isinstance(
+            model, GPTWrapper
+        )
+        with (
+            sdpa_kernel(SDPBackend.MATH) if attention_double_backward else nullcontext()
+        ):
+            _ = linop @ v
 
         if is_cuda:
             cuda.synchronize()
@@ -105,9 +133,7 @@ def run_peakmem_benchmark(
         + f" {peakmem_gib:.2f} GiB"
     )
 
-    with open(
-        benchpath(linop_str, problem_str, device_str, op_str, metric="peakmem"), "w"
-    ) as f:
+    with open(savepath, "w") as f:
         json.dump({"peakmem": peakmem_gib}, f)
 
 

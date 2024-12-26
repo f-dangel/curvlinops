@@ -7,7 +7,7 @@ from typing import List, Tuple
 import numpy as np
 import requests
 from torch import Tensor, from_numpy, rand, randint, stack, zeros_like
-from torch.nn import CrossEntropyLoss, Module
+from torch.nn import CrossEntropyLoss, Module, Parameter
 from torchvision.models import ResNet50_Weights, resnet50
 
 HEREDIR = path.dirname(path.abspath(__file__))
@@ -74,12 +74,12 @@ class GPTWrapper(Module):
 
 
 def setup_shakespeare_nanogpt(
-    batch_size: int = 8,
+    batch_size: int = 2,
 ) -> Tuple[GPTWrapper, CrossEntropyLoss, List[Tuple[Tensor, Tensor]]]:
     """Set up the nanoGPT model and Shakespeare dataset for the benchmark.
 
     Args:
-        batch_size: The batch size to use. Default is ``4``.
+        batch_size: The batch size to use. Default is ``2``.
 
     Returns:
         A tuple containing the nanoGPT model, the loss function, and the data.
@@ -93,6 +93,11 @@ def setup_shakespeare_nanogpt(
     block_size = config.block_size
 
     base = GPT(config)
+    # Remove weight tying as this will break the parameter-to-layer detection
+    base.transformer.wte.weight = Parameter(
+        data=base.transformer.wte.weight.data.detach().clone()
+    )
+
     model = GPTWrapper(base).eval()
     loss_function = CrossEntropyLoss(ignore_index=-1)
 
@@ -120,7 +125,7 @@ def setup_synthetic_imagenet_resnet50(
     """Set up ResNet50 on synthetic ImageNet for the benchmark.
 
     Args:
-        batch_size: The batch size to use. Default is ``8``.
+        batch_size: The batch size to use. Default is ``32``.
 
     Returns:
         A tuple containing the ResNet50 model, the loss function

@@ -14,6 +14,9 @@ compared to a gradient computation.
 Let's get the imports out of the way.
 """
 
+from benchmark_utils import GPTWrapper
+from contextlib import nullcontext
+from torch.nn.attention import SDPBackend, sdpa_kernel
 import inspect
 import json
 from itertools import product
@@ -66,14 +69,26 @@ HEREDIR = path.dirname(HERE)
 RESULTDIR = path.join(HEREDIR, "benchmark")
 makedirs(RESULTDIR, exist_ok=True)
 
-# Available devices
-DEVICE_STRS = ["cpu"] + (["cuda"] if cuda.is_available() else [])
-
+# Linear operators that use JVPs need to handle attention differently because PyTorch's
+# efficient attention does not implement double-backward yet. See
+# https://github.com/pytorch/pytorch/issues/116350
+HAS_JVP = (
+    HessianLinearOperator,
+    GGNLinearOperator,
+    FisherMCLinearOperator,
+    EFLinearOperator,
+)
 
 # LaTeX is not available in Github actions.
 # Therefore, we are turning it off if the script executes on GHA.
 CI = bool(getenv("CI"))
-USETEX = not CI
+USETEX = False  # not CI
+
+# Devices to run the benchmark on
+DEVICE_STRS = ["cpu"] if CI else ["cuda"]
+
+# Whether to skip runs for which measurements already exists
+SKIP_EXISTING = True
 
 # %%
 #
@@ -180,7 +195,9 @@ def setup_problem(
 
 LINOP_STRS = [
     "Hessian",
-    "Block-diagonal Hessian",
+    # NOTE Hessian block-diagonal takes much longer because we have to loop
+    # the HVPs over blocks; therefore we exclude it from the benchmark
+    # "Block-diagonal Hessian",
     "Generalized Gauss-Newton",
     "Empirical Fisher",
     "Monte-Carlo Fisher",
@@ -226,12 +243,28 @@ def setup_linop(
     kwargs = {"check_deterministic": check_deterministic, "num_data": num_data}
 
     if linop_str == "Block-diagonal Hessian":
-        num_tensors_layer = [
-            len(list(child.parameters()))
-            for child in model.modules()
-            if not list(child.children())
-        ]
-        kwargs["block_sizes"] = [s for s in num_tensors_layer if s != 0]
+        # Figure out parameters that are in a layer (defined by an nn.Module) that
+        # forms a block, and get the parameter ids for each block
+        ids = [p.data_ptr() for p in params]
+        blocks = []
+
+        for mod in model.modules():
+            total = [p.data_ptr() for p in mod.parameters() if p.data_ptr() in ids]
+            children = [
+                p.data_ptr()
+                for child in mod.children()
+                for p in child.parameters()
+                if p.data_ptr() in total
+            ]
+            if block := [ptr for ptr in total if ptr not in children]:
+                blocks.append(block)
+
+        # re-order parameters so that parameters of blocks are consecutive
+        blocks_flat = sum(blocks, [])
+        new_order = [ids.index(ptr) for ptr in blocks_flat]
+        params = [params[i] for i in new_order]
+
+        kwargs["block_sizes"] = [len(block) for block in blocks]
 
     linop_cls = {
         "Hessian": HessianLinearOperator,
@@ -243,7 +276,11 @@ def setup_linop(
         "KFAC inverse": KFACLinearOperator,
     }[linop_str]
 
-    linop = linop_cls(*args, **kwargs)
+    # Double-backward through efficient attention is unsupported, disable fused kernels
+    # (https://github.com/pytorch/pytorch/issues/116350#issuecomment-1954667011)
+    attention_double_backward = linop_cls in HAS_JVP and isinstance(model, GPTWrapper)
+    with sdpa_kernel(SDPBackend.MATH) if attention_double_backward else nullcontext():
+        linop = linop_cls(*args, **kwargs)
 
     if linop_str == "KFAC inverse":
         linop = KFACInverseLinearOperator(linop, damping=1e-3, cache=True)
@@ -278,7 +315,8 @@ def benchpath(
     """
     return path.join(
         RESULTDIR,
-        f"{metric}_{linop_str}_{problem_str}_{device_str}_{op_str}.json",
+        f"{metric}_{linop_str.replace(' ', '-')}_{problem_str}_{device_str}"
+        + f"_{op_str}.json",
     )
 
 
@@ -315,13 +353,23 @@ def run_time_benchmark(
         num_repeats: The number of repeats. Default is ``1``. Will use the smallest
             run time of all repeats as proxy for run time.
     """
+    savepath = benchpath(linop_str, problem_str, device_str, op_str)
+    if SKIP_EXISTING and path.exists(savepath):
+        print(
+            f"[Time] Skipping {linop_str} on {problem_str} and {device_str} for "
+            + f"{op_str}"
+        )
+        return
+
     manual_seed(0)  # make deterministic
 
     # Set up the problem
     dev = device(device_str)
     is_cuda = "cuda" in str(dev)
     model, loss_function, params, data = setup_problem(problem_str, linop_str, dev)
-    linop = setup_linop(linop_str, model, loss_function, params, data)
+    linop = setup_linop(
+        linop_str, model, loss_function, params, data, check_deterministic=False
+    )
     v = rand(linop.shape[1], device=dev)
 
     # Select function that will be profiled
@@ -341,7 +389,15 @@ def run_time_benchmark(
                 linop._compute_or_get_cached_inverse(mod_name)
 
     def f_matvec():
-        _ = linop @ v
+        # Double-backward through efficient attention is unsupported, disable fused kernels
+        # (https://github.com/pytorch/pytorch/issues/116350#issuecomment-1954667011)
+        attention_double_backward = isinstance(linop, HAS_JVP) and isinstance(
+            model, GPTWrapper
+        )
+        with (
+            sdpa_kernel(SDPBackend.MATH) if attention_double_backward else nullcontext()
+        ):
+            _ = linop @ v
 
     # carry out pre-computation if we want to perform matvecs, because we don't
     # want them to be included in the measurement.
@@ -374,7 +430,7 @@ def run_time_benchmark(
         + f"\n\tBest: {best:.4f} s\n\tRepeats: {[round(t, 5) for t in times]}"
     )
 
-    with open(benchpath(linop_str, problem_str, device_str, op_str), "w") as f:
+    with open(savepath, "w") as f:
         json.dump({"time": best}, f)
 
 
@@ -558,6 +614,9 @@ def run_verbose(cmd: List[str]) -> CompletedProcess:
 #
 # Let's run the benchmark:
 
+# Release all allocated GPU memory so it can be used by the memory benchmark script
+if cuda.is_available():
+    cuda.empty_cache()
 
 if __name__ == "__main__":
     # measure memory consumption in individual Python sessions to avoid memory
@@ -639,7 +698,7 @@ def visualize_peakmem_benchmark(
 
 
 if __name__ == "__main__":
-    plot_config = bundles.icml2024(column="full" if CI else "half", usetex=True)
+    plot_config = bundles.icml2024(column="full" if CI else "half", usetex=USETEX)
 
     for problem_str, device_str in product(PROBLEM_STRS, DEVICE_STRS):
         with plt.rc_context(plot_config):
