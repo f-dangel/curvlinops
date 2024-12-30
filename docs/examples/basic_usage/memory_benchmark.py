@@ -1,19 +1,19 @@
 import json
 from argparse import ArgumentParser
+from contextlib import nullcontext
+from os import path
 
+from benchmark_utils import GPTWrapper
 from example_benchmark import (
-    LINOP_STRS,
     HAS_JVP,
+    LINOP_STRS,
     OP_STRS,
     PROBLEM_STRS,
+    SKIP_EXISTING,
     benchpath,
     setup_linop,
     setup_problem,
-    SKIP_EXISTING,
 )
-from os import path
-from contextlib import nullcontext
-from benchmark_utils import GPTWrapper
 from memory_profiler import memory_usage
 from torch import cuda, device, manual_seed, rand
 from torch.nn.attention import SDPBackend, sdpa_kernel
