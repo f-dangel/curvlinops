@@ -1,13 +1,11 @@
 """Utility functions for setting up nanoGPT."""
 
 import inspect
-from os import makedirs, path
-from subprocess import run
+from os import path
 from typing import List, Tuple
 
-import numpy as np
 import requests
-from torch import Tensor, from_numpy, rand, randint, stack, zeros_like
+from torch import Tensor, rand, randint, stack, zeros_like
 from torch.nn import CrossEntropyLoss, Module, Parameter
 from torchvision.models import ResNet50_Weights, resnet50
 
@@ -19,14 +17,8 @@ if "__file__" not in globals():
 HEREDIR = path.dirname(path.abspath(__file__))
 
 
-def maybe_download_nanogpt_shakespeare() -> str:
-    """Download the nanoGPT model and Shakespeare data pre-processing script and run it.
-
-    Only performs the download and pre-processing if the data does not exist.
-
-    Returns:
-        The directory containing the Shakespeare data.
-    """
+def maybe_download_nanogpt():
+    """Download the nanoGPT model definition."""
     commit = "f08abb45bd2285627d17da16daea14dda7e7253e"
     repo = "https://raw.githubusercontent.com/karpathy/nanoGPT/"
 
@@ -37,19 +29,6 @@ def maybe_download_nanogpt_shakespeare() -> str:
         url = requests.get(model_url)
         with open(model_path, "w") as f:
             f.write(url.content.decode("utf-8"))
-
-    # download the data pre-processing script from Shakespeare and execute it
-    data_url = f"{repo}{commit}/data/shakespeare/prepare.py"
-    data_dir = path.join(HEREDIR, "shakespeare")
-    makedirs(data_dir, exist_ok=True)
-    data_path = path.join(data_dir, "prepare.py")
-    if not path.exists(data_path):
-        url = requests.get(data_url)
-        with open(data_path, "w") as f:
-            f.write(url.content.decode("utf-8"))
-        run(["python", data_path])
-
-    return data_dir
 
 
 class GPTWrapper(Module):
@@ -79,10 +58,10 @@ class GPTWrapper(Module):
         return logits.view(-1, logits.size(-1))
 
 
-def setup_shakespeare_nanogpt(
+def setup_synthetic_shakespeare_nanogpt(
     batch_size: int = 2,
 ) -> Tuple[GPTWrapper, CrossEntropyLoss, List[Tuple[Tensor, Tensor]]]:
-    """Set up the nanoGPT model and Shakespeare dataset for the benchmark.
+    """Set up the nanoGPT model and synthetic Shakespeare dataset for the benchmark.
 
     Args:
         batch_size: The batch size to use. Default is ``2``.
@@ -91,8 +70,7 @@ def setup_shakespeare_nanogpt(
         A tuple containing the nanoGPT model, the loss function, and the data.
     """
     # download nanogpt_model and import GPT and GPTConfig from it
-    # also download the Shakespeare dataset
-    data_dir = maybe_download_nanogpt_shakespeare()
+    maybe_download_nanogpt()
     from nanogpt_model import GPT, GPTConfig
 
     config = GPTConfig()
@@ -107,20 +85,14 @@ def setup_shakespeare_nanogpt(
     model = GPTWrapper(base).eval()
     loss_function = CrossEntropyLoss(ignore_index=-1)
 
-    # load one batch of Shakespeare
-    train_data = np.memmap(path.join(data_dir, "train.bin"), dtype=np.uint16, mode="r")
-    ix = randint(len(train_data) - block_size, (batch_size,))
-    X = stack(
-        [from_numpy((train_data[i : i + block_size]).astype(np.int64)) for i in ix]
-    )
-    y = stack(
-        [
-            from_numpy((train_data[i + 1 : i + 1 + block_size]).astype(np.int64))
-            for i in ix
-        ]
-    )
+    # generate a synthetic Shakespeare and load one batch
+    vocab_size = config.vocab_size
+    train_data = randint(0, vocab_size, (5 * block_size,)).long()
+    ix = randint(train_data.numel() - block_size, (batch_size,))
+    X = stack([train_data[i : i + block_size] for i in ix])
+    y = stack([train_data[i + 1 : i + 1 + block_size] for i in ix])
     # flatten the target because the GPT wrapper flattens the logits
-    data = [(X, y.view(-1))]
+    data = [(X, y.flatten())]
 
     return model, loss_function, data
 

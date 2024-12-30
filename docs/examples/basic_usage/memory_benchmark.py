@@ -30,7 +30,7 @@ def run_peakmem_benchmark(  # noqa: C901
         linop_str: The linear operator.
         problem_str: The problem.
         device_str: The device.
-        write_results: Whether to write the results to a file. Default is ``True``.
+        op_str: The operation that is benchmarked.
     """
     savepath = benchpath(linop_str, problem_str, device_str, op_str, metric="peakmem")
     if SKIP_EXISTING and path.exists(savepath):

@@ -9,7 +9,8 @@ compared to a gradient computation.
 .. warning::
     For pedagogical reasons, this example considers a small synthetic problem which may
     not reflect the relative cost of linear operators on larger problems. However, the
-    following example can easily be applied to such larger problems.
+    following example can easily be applied to larger problems that are not executed
+    when building the documentation.
 
 Let's get the imports out of the way.
 """
@@ -27,8 +28,8 @@ from typing import Iterable, List, Tuple
 import matplotlib.pyplot as plt
 from benchmark_utils import (
     GPTWrapper,
-    setup_shakespeare_nanogpt,
     setup_synthetic_imagenet_resnet50,
+    setup_synthetic_shakespeare_nanogpt,
 )
 from torch import Tensor, arange, cuda, device, manual_seed, rand, randint
 from torch.nn import (
@@ -112,7 +113,7 @@ else:
     PROBLEM_STRS = [
         "synthetic_mnist_cnn",
         "synthetic_imagenet_resnet50",
-        "shakespeare_nanogpt",
+        "synthetic_shakespeare_nanogpt",
     ]
 
 
@@ -166,7 +167,7 @@ def setup_problem(
     setup_func = {
         "synthetic_mnist_cnn": setup_synthetic_mnist_cnn,
         "synthetic_imagenet_resnet50": setup_synthetic_imagenet_resnet50,
-        "shakespeare_nanogpt": setup_shakespeare_nanogpt,
+        "synthetic_shakespeare_nanogpt": setup_synthetic_shakespeare_nanogpt,
     }[problem_str]
     model, loss_function, data = setup_func()
 
