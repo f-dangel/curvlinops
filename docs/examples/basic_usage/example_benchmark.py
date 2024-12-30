@@ -14,11 +14,9 @@ compared to a gradient computation.
 Let's get the imports out of the way.
 """
 
-from benchmark_utils import GPTWrapper
-from contextlib import nullcontext
-from torch.nn.attention import SDPBackend, sdpa_kernel
 import inspect
 import json
+from contextlib import nullcontext
 from itertools import product
 from math import floor
 from os import getenv, makedirs, path
@@ -27,7 +25,11 @@ from time import perf_counter
 from typing import Iterable, List, Tuple
 
 import matplotlib.pyplot as plt
-from benchmark_utils import setup_shakespeare_nanogpt, setup_synthetic_imagenet_resnet50
+from benchmark_utils import (
+    GPTWrapper,
+    setup_shakespeare_nanogpt,
+    setup_synthetic_imagenet_resnet50,
+)
 from torch import Tensor, arange, cuda, device, manual_seed, rand, randint
 from torch.nn import (
     Conv2d,
@@ -40,6 +42,7 @@ from torch.nn import (
     ReLU,
     Sequential,
 )
+from torch.nn.attention import SDPBackend, sdpa_kernel
 from tueplots import bundles
 
 from curvlinops import (
@@ -475,7 +478,7 @@ def visualize_time_benchmark(
 
     # Visualize the run time of each linear operator
     for idx, name in enumerate(linop_strs):
-        # gater results:
+        # gather results:
         results = {}
         for op_str in OP_STRS:
             with open(benchpath(name, problem_str, device_str, op_str), "r") as f:
@@ -483,14 +486,24 @@ def visualize_time_benchmark(
 
         if name in {"KFAC", "KFAC inverse"}:
             ax.barh(
-                name,
-                results["precompute"],
+                idx - 0.2,
+                width=results["precompute"],
                 color="green",
                 label="precompute" if name == "KFAC" else None,
+                height=0.4,
             )
-        ax.barh(
-            name, results["matvec"], color="blue", label="matvec" if idx == 0 else None
-        )
+            ax.barh(
+                idx + 0.2,
+                width=results["matvec"],
+                color="blue",
+                label="matvec" if name == "KFAC" else None,
+                height=0.4,
+            )
+        else:
+            ax.barh(idx, width=results["matvec"], color="blue")
+
+    ax.set_yticks(list(range(len(linop_strs))))
+    ax.set_yticklabels(linop_strs)
 
     # Add an additional axis that shows run time in multiples of gradients
     with open(
@@ -660,7 +673,7 @@ def visualize_peakmem_benchmark(
     # Visualize the peak memory consumption of each linear operator's matvec
     for name in linop_strs:
         with open(
-            benchpath(name, problem_str, device_str, op_str, metric="peakmem"), "r"
+            benchpath(name, problem_str, device_str, "matvec", metric="peakmem"), "r"
         ) as f:
             mem = json.load(f)["peakmem"]
         ax.barh(name, mem, color="blue")
