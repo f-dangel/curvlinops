@@ -344,7 +344,11 @@ def benchpath(
 
 
 def run_time_benchmark(
-    linop_str: str, problem_str: str, device_str: str, op_str: str, num_repeats: int = 1
+    linop_str: str,
+    problem_str: str,
+    device_str: str,
+    op_str: str,
+    num_repeats: int = 1,  # noqa: C901
 ):
     """Execute the benchmark for a given linear operator class and save results.
 
