@@ -1,5 +1,6 @@
 """Utility functions for setting up nanoGPT."""
 
+import inspect
 from os import makedirs, path
 from subprocess import run
 from typing import List, Tuple
@@ -9,6 +10,11 @@ import requests
 from torch import Tensor, from_numpy, rand, randint, stack, zeros_like
 from torch.nn import CrossEntropyLoss, Module, Parameter
 from torchvision.models import ResNet50_Weights, resnet50
+
+# In the execution with sphinx-gallery, __file__ is not defined and we need
+# to set it manually using the trick from https://stackoverflow.com/a/53293924
+if "__file__" not in globals():
+    __file__ = inspect.getfile(lambda: None)
 
 HEREDIR = path.dirname(path.abspath(__file__))
 
