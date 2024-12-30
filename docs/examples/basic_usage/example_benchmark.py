@@ -85,7 +85,7 @@ HAS_JVP = (
 # LaTeX is not available in Github actions.
 # Therefore, we are turning it off if the script executes on GHA.
 CI = bool(getenv("CI"))
-USETEX = False  # not CI
+USETEX = not CI
 
 # Devices to run the benchmark on
 DEVICE_STRS = ["cpu"] if CI else ["cuda"]
