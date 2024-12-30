@@ -343,9 +343,9 @@ def benchpath(
 # The function that executes the profiling and extracts the run times looks as follows:
 
 
-def run_time_benchmark(
+def run_time_benchmark(  # noqa: C901
     linop_str: str, problem_str: str, device_str: str, op_str: str, num_repeats: int = 1
-):  # noqa: C901
+):
     """Execute the benchmark for a given linear operator class and save results.
 
     Args:
