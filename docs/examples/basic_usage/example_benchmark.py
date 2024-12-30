@@ -19,7 +19,7 @@ import json
 from contextlib import nullcontext
 from itertools import product
 from math import floor
-from os import getenv, makedirs, path
+from os import environ, makedirs, path
 from subprocess import CalledProcessError, CompletedProcess, run
 from time import perf_counter
 from typing import Iterable, List, Tuple
@@ -82,13 +82,13 @@ HAS_JVP = (
     EFLinearOperator,
 )
 
-# LaTeX is not available in Github actions.
-# Therefore, we are turning it off if the script executes on GHA.
-CI = bool(getenv("CI"))
-USETEX = not CI
+# When running on RTD, we only want to execute the small example and also
+# take into account that there is no LaTeX installation
+ON_RTD = environ.get("READTHEDOCS", "False") == "True"
+USETEX = not ON_RTD
 
 # Devices to run the benchmark on
-DEVICE_STRS = ["cpu"] if CI else ["cuda"]
+DEVICE_STRS = ["cpu"] if ON_RTD else ["cuda"]
 
 # Whether to skip runs for which measurements already exists
 SKIP_EXISTING = True
@@ -106,7 +106,7 @@ SKIP_EXISTING = True
 # created:
 
 # Supported problems
-if CI:
+if ON_RTD:
     PROBLEM_STRS = ["synthetic_mnist_cnn"]
 else:
     PROBLEM_STRS = [
@@ -558,7 +558,7 @@ def figpath(problem_str: str, device_str: str, metric: str = "time") -> str:
 # Let's take a look at the results:
 
 if __name__ == "__main__":
-    plot_config = bundles.icml2024(column="full" if CI else "half", usetex=USETEX)
+    plot_config = bundles.icml2024(column="full" if ON_RTD else "half", usetex=USETEX)
 
     for problem_str, device_str in product(PROBLEM_STRS, DEVICE_STRS):
         with plt.rc_context(plot_config):
@@ -711,7 +711,7 @@ def visualize_peakmem_benchmark(
 
 
 if __name__ == "__main__":
-    plot_config = bundles.icml2024(column="full" if CI else "half", usetex=USETEX)
+    plot_config = bundles.icml2024(column="full" if ON_RTD else "half", usetex=USETEX)
 
     for problem_str, device_str in product(PROBLEM_STRS, DEVICE_STRS):
         with plt.rc_context(plot_config):
