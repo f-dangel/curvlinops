@@ -45,6 +45,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Always run full tests
   ([PR](https://github.com/f-dangel/curvlinops/pull/161))
+- Migrate linting from `flake8` to `ruff`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/164))
 
 ## [2.0.1] - 2024-10-25
 
