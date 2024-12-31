@@ -59,12 +59,12 @@ class GPTWrapper(Module):
 
 
 def setup_synthetic_shakespeare_nanogpt(
-    batch_size: int = 2,
+    batch_size: int = 4,
 ) -> Tuple[GPTWrapper, CrossEntropyLoss, List[Tuple[Tensor, Tensor]]]:
     """Set up the nanoGPT model and synthetic Shakespeare dataset for the benchmark.
 
     Args:
-        batch_size: The batch size to use. Default is ``2``.
+        batch_size: The batch size to use. Default is ``4``.
 
     Returns:
         A tuple containing the nanoGPT model, the loss function, and the data.
@@ -98,12 +98,12 @@ def setup_synthetic_shakespeare_nanogpt(
 
 
 def setup_synthetic_imagenet_resnet50(
-    batch_size: int = 32,
+    batch_size: int = 64,
 ) -> Tuple[Module, CrossEntropyLoss, List[Tuple[Tensor, Tensor]]]:
     """Set up ResNet50 on synthetic ImageNet for the benchmark.
 
     Args:
-        batch_size: The batch size to use. Default is ``32``.
+        batch_size: The batch size to use. Default is ``64``.
 
     Returns:
         A tuple containing the ResNet50 model, the loss function
