@@ -239,7 +239,7 @@ class WeightShareModel(Sequential):
         # Example: Transformer for translation: (batch, sequence_length, c)
         # (although second and third dimension would have to be transposed for
         # classification)
-        if x.ndim > 2 and self.loss == "CE":
+        if x.ndim > 2 and self.loss == "CE":  # noqa: PLR2004
             x = rearrange(x, "batch ... c -> batch c ...")
         return x
 

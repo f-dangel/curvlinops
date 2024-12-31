@@ -169,11 +169,10 @@ def power_method(
 
             if eigenvalue is None:
                 eigenvalue = tmp_eigenvalue
+            elif abs(eigenvalue - tmp_eigenvalue) / (abs(eigenvalue) + 1e-6) < tol:
+                break
             else:
-                if abs(eigenvalue - tmp_eigenvalue) / (abs(eigenvalue) + 1e-6) < tol:
-                    break
-                else:
-                    eigenvalue = tmp_eigenvalue
+                eigenvalue = tmp_eigenvalue
 
         eigenvalues.append(eigenvalue)
         eigenvectors.append(v)

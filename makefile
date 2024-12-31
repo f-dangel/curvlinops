@@ -29,8 +29,8 @@ help:
 	@echo "        Run black on the project"
 	@echo "black-check"
 	@echo "        Check if black would change files"
-	@echo "flake8"
-	@echo "        Run flake8 on the project"
+	@echo "ruff"
+	@echo "        Run ruff on the project"
 	@echo "conda-env"
 	@echo "        Create conda environment 'curvlinops' with dev setup"
 	@echo "darglint-check"
@@ -97,10 +97,10 @@ black:
 black-check:
 	@black . --config=black.toml --check
 
-.PHONY: flake8
+.PHONY: ruff
 
-flake8:
-	@flake8 .
+ruff:
+	@ruff check .
 
 .PHONY: darglint-check
 
@@ -122,6 +122,6 @@ conda-env:
 lint:
 	make black-check
 	make isort-check
-	make flake8
+	make ruff
 	make darglint-check
 	make pydocstyle-check

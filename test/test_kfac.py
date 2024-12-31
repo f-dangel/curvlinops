@@ -560,7 +560,7 @@ def test_expand_setting_scaling(
             # MSE loss averages over number of output channels
             loss_term_factor *= output_random_variable_size
         for ggT in kfac_sum_torch._gradient_covariances.values():
-            ggT /= kfac_sum_torch._N_data * loss_term_factor
+            ggT.div_(kfac_sum_torch._N_data * loss_term_factor)
     kfac_simulated_mean_mat = kfac_sum @ eye(kfac_sum.shape[1])
 
     # KFAC with mean reduction

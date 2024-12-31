@@ -548,7 +548,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
             ValueError: If the output is not 2d.
             NotImplementedError: If the loss function is not supported.
         """
-        if output.ndim != 2:
+        if output.ndim != 2:  # noqa: PLR2004
             raise ValueError("Only a 2d output is supported.")
 
         if isinstance(self._loss_func, MSELoss):

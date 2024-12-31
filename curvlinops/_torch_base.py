@@ -191,7 +191,7 @@ class PyTorchLinearOperator:
         Raises:
             ValueError: If the input tensor has an invalid shape.
         """
-        if X.ndim > 2 or X.shape[0] != self.shape[1]:
+        if X.ndim > 2 or X.shape[0] != self.shape[1]:  # noqa: PLR2004
             raise ValueError(
                 f"Input tensor must have shape ({self.shape[1]},) or "
                 + f"({self.shape[1]}, K), with K arbitrary. Got {X.shape}."
@@ -583,8 +583,8 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
             # Assume everything is handled by the model
             # if `X` is a custom data format
             if isinstance(X, Tensor):
-                X = X.to(self._device)
-            y = y.to(self._device)
+                X = X.to(self._device)  # noqa: PLW2901
+            y = y.to(self._device)  # noqa: PLW2901
             yield (X, y)
 
     def _get_normalization_factor(

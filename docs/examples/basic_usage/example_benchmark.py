@@ -185,7 +185,7 @@ def setup_problem(
         for m in supported_layers:
             # ignore the last layer of GPT because it has 50k outputs, which
             # will yield an extremely large Kronecker factor
-            if all(d <= 50_000 for d in m.weight.shape):
+            if all(d <= 50_000 for d in m.weight.shape):  # noqa: PLR2004
                 params.extend([p for p in m.parameters() if p.requires_grad])
     else:
         params = [p for p in model.parameters() if p.requires_grad]
@@ -523,7 +523,7 @@ def visualize_time_benchmark(
     num_gradients = x_max / reference
     spacing = 1 / 4
     num_ticks = 1 + floor(num_gradients / spacing)
-    while num_ticks > 8:
+    while num_ticks > 8:  # noqa: PLR2004
         spacing *= 2
         num_ticks = 1 + floor(num_gradients / spacing)
 
@@ -701,7 +701,7 @@ def visualize_peakmem_benchmark(
     num_gradients = x_max / reference
     spacing = 1 / 4
     num_ticks = 1 + floor(num_gradients / spacing)
-    while num_ticks > 8:
+    while num_ticks > 8:  # noqa: PLR2004
         spacing *= 2
         num_ticks = 1 + floor(num_gradients / spacing)
 

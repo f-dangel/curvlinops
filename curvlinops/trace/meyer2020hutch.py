@@ -86,7 +86,7 @@ class HutchPPTraceEstimator:
             ``basis_dim = s1`` and draw ``s2`` samples from Hutch++ such that
             ``2 * s1 + s2 = s``.
         """
-        if len(A.shape) != 2 or A.shape[0] != A.shape[1]:
+        if len(A.shape) != 2 or A.shape[0] != A.shape[1]:  # noqa: PLR2004
             raise ValueError(f"A must be square. Got shape {A.shape}.")
         self._A = A
 
