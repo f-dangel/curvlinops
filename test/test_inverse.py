@@ -2,7 +2,6 @@
 
 import os
 from math import sqrt
-from test.utils import cast_input, compare_matmat, compare_state_dicts, eye_like
 from typing import Iterable, List, Tuple, Union
 
 import torch
@@ -23,6 +22,7 @@ from curvlinops import (
 )
 from curvlinops.examples.functorch import functorch_ggn
 from curvlinops.examples.utils import report_nonclose
+from test.utils import cast_input, compare_matmat, compare_state_dicts, eye_like
 
 KFAC_MIN_DAMPING = 1e-8
 

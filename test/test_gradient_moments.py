@@ -1,9 +1,8 @@
 """Contains tests for ``curvlinops/gradient_moments.py``."""
 
-from test.utils import compare_matmat
-
 from curvlinops import EFLinearOperator
 from curvlinops.examples.functorch import functorch_empirical_fisher
+from test.utils import compare_matmat
 
 
 def test_EFLinearOperator(case, adjoint: bool, is_vec: bool):

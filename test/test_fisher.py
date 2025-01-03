@@ -1,11 +1,10 @@
 """Contains tests for ``curvlinops/fisher.py``."""
 
-from test.utils import compare_matmat_expectation
-
 from pytest import mark
 
 from curvlinops import FisherMCLinearOperator
 from curvlinops.examples.functorch import functorch_ggn
+from test.utils import compare_matmat_expectation
 
 MAX_REPEATS_MC_SAMPLES = [(10_000, 1), (100, 100)]
 MAX_REPEATS_MC_SAMPLES_IDS = [

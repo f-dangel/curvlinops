@@ -21,10 +21,6 @@ help:
 	@echo "        Run pytest on test and report coverage"
 	@echo "install-lint"
 	@echo "        Install curvlinops and the linter tools"
-	@echo "isort"
-	@echo "        Run isort (sort imports) on the project"
-	@echo "isort-check"
-	@echo "        Check if isort (sort imports) would change files"
 	@echo "ruff-format"
 	@echo "        Run ruff format on the project"
 	@echo "ruff-format-check"
@@ -81,14 +77,6 @@ test-light:
 install-lint:
 	@pip install -e .[lint]
 
-.PHONY: isort isort-check
-
-isort:
-	@isort .
-
-isort-check:
-	@isort . --check --diff
-
 .PHONY: ruff-format ruff-format-check
 
 ruff-format:
@@ -121,7 +109,6 @@ conda-env:
 
 lint:
 	make ruff-format-check
-	make isort-check
 	make ruff
 	make darglint-check
 	make pydocstyle-check

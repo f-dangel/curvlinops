@@ -67,7 +67,6 @@ lint = [
     "ruff",
     "darglint",
     "pydocstyle",
-    "isort",
 ]
 
 # Dependencies needed to build/view the documentation.
@@ -87,25 +86,17 @@ docs = [
 ###############################################################################
 [tool.setuptools_scm]
 
-[tool.isort]
-profile = "black"
-multi_line_output = 3
-include_trailing_comma = true
-force_grid_wrap = 0
-use_parentheses = true
-
 [tool.pydocstyle]
 convention = "google"
 match = '.*\.py'
 match_dir = '^(?!(test|.git)).*'
 
 [tool.ruff]
-# Same as flake8's max-line-length
 line-length = 88
 
 [tool.ruff.lint]
-# Enable all rules from flake8 (E, F), plus additional ones
-select = ["E", "F", "B", "C", "W", "B9", "PLE", "PLW", "PLR"]
+# Enable all rules from flake8 (E, F), plus additional ones including isort (I)
+select = ["E", "F", "B", "C", "W", "B9", "PLE", "PLW", "PLR", "I"]
 ignore = [
     # E501 max-line-length (replaced by B950 (max-line-length + 10%))
     "E501",
@@ -131,13 +122,6 @@ ignore = [
     "PLW2901",
 ]
 
-[tool.ruff.lint.per-file-ignores]
-# Add any per-file ignores here if needed
-
-[tool.ruff.lint.flake8-bugbear]
-# Allow assert statements in tests
-extend-immutable-calls = ["pytest.raises", "pytest.warns", "pytest.mark.skip"]
-
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
@@ -151,3 +135,9 @@ exclude = [
     "build",
     "dist",
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# Add any per-file ignores here if needed
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["pytest.raises", "pytest.warns", "pytest.mark.skip"]
