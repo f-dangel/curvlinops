@@ -44,9 +44,9 @@ RTD = getenv("READTHEDOCS")
 PLOT_CONFIG = bundles.icml2024(column="full" if RTD else "half", usetex=not RTD)
 
 # Dimension of the matrices whose traces we will estimate
-DIM = 1000 if RTD else 2000
+DIM = 800 if RTD else 2000
 # Number of repeats for the Hutchinson estimator to compute error bars
-NUM_REPEATS = 20 if RTD else 100
+NUM_REPEATS = 15 if RTD else 100
 
 seed(0)  # make deterministic
 
@@ -182,11 +182,13 @@ Y_mat = create_power_law_matrix(c=2.0)
 # the estimate and the true trace, normalized by the true trace. Here is a function that
 # computes these relative trace errors for a given matrix:
 
+NUM_MATVECS = unique(logspace(0, 3, 40, dtype=int))
+
 
 def compute_relative_trace_errors(
     Y_mat: ndarray,
     basis_dims: Tuple[int, ...] = (10, 100),
-    num_matvecs: ndarray = unique(logspace(0, 3, 40, dtype=int)),
+    num_matvecs: ndarray = NUM_MATVECS,
 ) -> Dict[str, Dict[str, ndarray]]:
     """Compute the relative trace errors for Hutchinson's method and Hutch++.
 
@@ -200,9 +202,6 @@ def compute_relative_trace_errors(
     """
     Y = aslinearoperator(Y_mat)
     exact_trace = trace(Y_mat)
-
-    # Initialize results dictionary
-    results = {}
 
     # compute median and quartiles for Hutchinson's method
     num_samples = list(num_matvecs)
@@ -219,13 +218,14 @@ def compute_relative_trace_errors(
     quartile1 = percentile(errors, 25, axis=0)
     quartile3 = percentile(errors, 75, axis=0)
 
-    results["hutch"] = {
-        "med": med,
-        "quartile1": quartile1,
-        "quartile3": quartile3,
-        "num_matvecs": num_matvecs,
+    results = {
+        "hutch": {
+            "med": med,
+            "quartile1": quartile1,
+            "quartile3": quartile3,
+            "num_matvecs": num_matvecs,
+        }
     }
-
     # compute median and quartiles for Hutch++ with different basis dimensions
     for basis_dim in basis_dims:
         # Hutch++ spends basis_dim matvecs to build the basis
