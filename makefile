@@ -26,7 +26,9 @@ help:
 	@echo "ruff-format-check"
 	@echo "        Check if ruff format would change files"
 	@echo "ruff"
-	@echo "        Run ruff on the project"
+	@echo "        Run ruff on the project and fix errors"
+	@echo "ruff-check"
+	@echo "        Run ruff check on the project without fixing errors"
 	@echo "conda-env"
 	@echo "        Create conda environment 'curvlinops' with dev setup"
 	@echo "darglint-check"
@@ -85,10 +87,13 @@ ruff-format:
 ruff-format-check:
 	@ruff format --check .
 
-.PHONY: ruff
+.PHONY: ruff-check
 
 ruff:
 	@ruff check . --fix
+
+ruff-check:
+	@ruff check .
 
 .PHONY: darglint-check
 
