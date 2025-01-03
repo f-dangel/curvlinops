@@ -136,7 +136,7 @@ class PermutedBatchLoader:
                     if isinstance(value, Tensor):
                         X[key] = X[key][permutation]
             else:
-                X = X[permutation]  # noqa: PLW2901
+                X = X[permutation]
 
             yield X, y[permutation]
 

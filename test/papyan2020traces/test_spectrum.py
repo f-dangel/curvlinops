@@ -47,7 +47,7 @@ def test_approximate_boundaries():
 
     for inputs, results in cases:
         output = approximate_boundaries(A, boundaries=inputs)
-        assert len(output) == 2  # noqa: PLR2004
+        assert len(output) == 2
         assert isinstance(output[0], float)
         assert isinstance(output[1], float)
         assert allclose(output, results)
@@ -69,7 +69,7 @@ def test_approximate_boundaries_abs():
 
     for inputs, results in cases:
         output = approximate_boundaries_abs(A, boundaries=inputs)
-        assert len(output) == 2  # noqa: PLR2004
+        assert len(output) == 2
         assert isinstance(output[0], float)
         assert isinstance(output[1], float)
         assert allclose(output, results)

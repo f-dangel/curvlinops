@@ -523,7 +523,7 @@ def visualize_time_benchmark(
     num_gradients = x_max / reference
     spacing = 1 / 4
     num_ticks = 1 + floor(num_gradients / spacing)
-    while num_ticks > 8:  # noqa: PLR2004
+    while num_ticks > 8:
         spacing *= 2
         num_ticks = 1 + floor(num_gradients / spacing)
 
@@ -701,7 +701,7 @@ def visualize_peakmem_benchmark(
     num_gradients = x_max / reference
     spacing = 1 / 4
     num_ticks = 1 + floor(num_gradients / spacing)
-    while num_ticks > 8:  # noqa: PLR2004
+    while num_ticks > 8:
         spacing *= 2
         num_ticks = 1 + floor(num_gradients / spacing)
 

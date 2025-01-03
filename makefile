@@ -100,7 +100,7 @@ black-check:
 .PHONY: ruff
 
 ruff:
-	@ruff check .
+	@ruff check . --fix
 
 .PHONY: darglint-check
 

@@ -115,7 +115,7 @@ for task_idx in range(T):
     for epoch in range(num_epochs):
         for batch_idx, (X, y) in enumerate(data_loader):
             optimizer.zero_grad()
-            X, y = X.to(DEVICE), y.to(DEVICE)  # noqa: PLW2901
+            X, y = X.to(DEVICE), y.to(DEVICE)
             loss = loss_function(model(X), y)
             loss.backward()
             optimizer.step()

@@ -126,6 +126,10 @@ ignore = [
     "B905",
     # Too many arguments in function definition (9 > 5)
     "PLR0913",
+    # Magic value comparison
+    "PLR2004",
+    # Loop variable overwritten by assignment target
+    "PLW2901",
 ]
 
 [tool.ruff.lint.per-file-ignores]

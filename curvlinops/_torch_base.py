@@ -583,8 +583,8 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
             # Assume everything is handled by the model
             # if `X` is a custom data format
             if isinstance(X, Tensor):
-                X = X.to(self._device)  # noqa: PLW2901
-            y = y.to(self._device)  # noqa: PLW2901
+                X = X.to(self._device)
+            y = y.to(self._device)
             yield (X, y)
 
     def _get_normalization_factor(
