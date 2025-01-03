@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that benchmarks the linear operators
   ([PR](https://github.com/f-dangel/curvlinops/pull/162))
 
+- Add a [use case
+  example](https://curvlinops.readthedocs.io/en/latest/basic_usage/example_trace_diagonal_estimation.html)
+  on trace estimation
+  ([PR](https://github.com/f-dangel/curvlinops/pull/165))
+
 - Make linear operators purely PyTorch with a SciPy export option
   - `GGNLinearOperator` ([PR](https://github.com/f-dangel/curvlinops/pull/146))
   - `TransposedJacobianLinearOperator` and `JacobianLinearOperator`
