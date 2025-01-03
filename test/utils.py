@@ -8,9 +8,20 @@ from typing import Callable, Iterable, List, Optional, Tuple, Union
 from einops import rearrange, reduce
 from einops.layers.torch import Rearrange
 from numpy import eye, ndarray
-from torch import Tensor, allclose, as_tensor, cat, cuda, device, dtype
+from torch import (
+    Tensor,
+    allclose,
+    as_tensor,
+    cat,
+    cuda,
+    device,
+    dtype,
+    from_numpy,
+    rand,
+    randint,
+    zeros_like,
+)
 from torch import eye as torch_eye
-from torch import from_numpy, rand, randint, zeros_like
 from torch.nn import (
     AdaptiveAvgPool2d,
     BCEWithLogitsLoss,
@@ -239,7 +250,7 @@ class WeightShareModel(Sequential):
         # Example: Transformer for translation: (batch, sequence_length, c)
         # (although second and third dimension would have to be transposed for
         # classification)
-        if x.ndim > 2 and self.loss == "CE":
+        if x.ndim > 2 and self.loss == "CE":  # noqa: PLR2004
             x = rearrange(x, "batch ... c -> batch c ...")
         return x
 

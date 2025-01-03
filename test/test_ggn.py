@@ -1,9 +1,8 @@
 """Contains tests for ``curvlinops/ggn``."""
 
-from test.utils import compare_matmat
-
 from curvlinops import GGNLinearOperator
 from curvlinops.examples.functorch import functorch_ggn
+from test.utils import compare_matmat
 
 
 def test_GGNLinearOperator_matvec(case, adjoint: bool, is_vec: bool):

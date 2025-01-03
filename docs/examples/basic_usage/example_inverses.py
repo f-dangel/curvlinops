@@ -249,7 +249,7 @@ plt.colorbar(image, ax=ax[1], shrink=0.5)
 # of the matrix to be inverted:
 max_eigval = eigsh(damped_GGN, k=1, which="LM", return_eigenvectors=False)[0]
 # eigenvalues (scale * damped_GGN_mat) are in [0; 2)
-scale = 1.0 if max_eigval < 2.0 else 1.99 / max_eigval
+scale = 1.0 if max_eigval < 2.0 else 1.99 / max_eigval  # noqa: PLR2004
 
 # %%
 #

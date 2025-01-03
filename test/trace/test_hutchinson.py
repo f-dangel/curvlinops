@@ -1,12 +1,11 @@
 """Test ``curvlinops.trace.hutchinson``."""
 
-from test.trace import DISTRIBUTION_IDS, DISTRIBUTIONS, _test_convergence
-
 from numpy import trace
 from numpy.random import rand, seed
 from pytest import mark
 
 from curvlinops import HutchinsonTraceEstimator
+from test.trace import DISTRIBUTION_IDS, DISTRIBUTIONS, _test_convergence
 
 
 @mark.parametrize("distribution", DISTRIBUTIONS, ids=DISTRIBUTION_IDS)

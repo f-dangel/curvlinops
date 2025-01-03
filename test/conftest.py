@@ -1,7 +1,14 @@
 """Contains pytest fixtures that are visible by other files."""
 
-import test.utils
 from collections.abc import MutableMapping
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
+
+from numpy import random
+from pytest import fixture
+from torch import Tensor, manual_seed
+from torch.nn import Module, MSELoss, Parameter
+
+import test.utils
 from test.cases import (
     ADJOINT_CASES,
     ADJOINT_IDS,
@@ -20,12 +27,6 @@ from test.kfac_cases import (
     SINGLE_LAYER_CASES,
     SINGLE_LAYER_WEIGHT_SHARING_CASES,
 )
-from typing import Callable, Dict, Iterable, List, Optional, Tuple
-
-from numpy import random
-from pytest import fixture
-from torch import Tensor, manual_seed
-from torch.nn import Module, MSELoss, Parameter
 
 
 def initialize_case(

@@ -455,7 +455,8 @@ class KFACInverseLinearOperator(PyTorchLinearOperator):
                     warn(
                         f"Failed to compute Cholesky decomposition in {aaT.dtype} "
                         f"precision with error {error}. "
-                        "Retrying in double precision..."
+                        "Retrying in double precision...",
+                        stacklevel=2,
                     )
                     # Retry in double precision
                     original_type = aaT.dtype
@@ -476,7 +477,8 @@ class KFACInverseLinearOperator(PyTorchLinearOperator):
                     warn(
                         f"Failed to compute Cholesky decomposition in {ggT.dtype} "
                         f"precision with error {error}. "
-                        "Retrying in double precision..."
+                        "Retrying in double precision...",
+                        stacklevel=2,
                     )
                     # Retry in double precision
                     original_dtype = ggT.dtype

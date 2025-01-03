@@ -1,6 +1,5 @@
 """Contains tests for ``curvlinops/hessian``."""
 
-from test.utils import compare_matmat
 from typing import Callable, List, Optional
 
 from torch import block_diag
@@ -9,6 +8,7 @@ from torch.nn import Parameter
 from curvlinops import HessianLinearOperator
 from curvlinops.examples.functorch import functorch_hessian
 from curvlinops.utils import split_list
+from test.utils import compare_matmat
 
 
 def test_HessianLinearOperator(

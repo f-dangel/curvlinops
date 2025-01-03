@@ -1,9 +1,8 @@
 """Contains tests for ``curvlinops/jacobian``."""
 
-from test.utils import compare_matmat
-
 from curvlinops import JacobianLinearOperator, TransposedJacobianLinearOperator
 from curvlinops.examples.functorch import functorch_jacobian
+from test.utils import compare_matmat
 
 
 def test_JacobianLinearOperator(case, adjoint: bool, is_vec: bool):

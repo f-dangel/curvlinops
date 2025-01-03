@@ -2,7 +2,6 @@
 
 import os
 from math import sqrt
-from test.utils import cast_input, compare_matmat, compare_state_dicts, eye_like
 from typing import Iterable, List, Tuple, Union
 
 import torch
@@ -23,6 +22,7 @@ from curvlinops import (
 )
 from curvlinops.examples.functorch import functorch_ggn
 from curvlinops.examples.utils import report_nonclose
+from test.utils import cast_input, compare_matmat, compare_state_dicts, eye_like
 
 KFAC_MIN_DAMPING = 1e-8
 
@@ -137,7 +137,7 @@ def test_Neumann_inverse_damped_GGN_matvec(inv_case, delta: float = 1e-2):
 
     # set scale such that Neumann series converges
     eval_max = eigh(damped_GGN_functorch)[0][-1]
-    scale = 1.0 if eval_max < 2 else 1.9 / eval_max
+    scale = 1.0 if eval_max < 2 else 1.9 / eval_max  # noqa: PLR2004
 
     # NOTE This may break when other cases are added because slow convergence
     inv_GGN = NeumannInverseLinearOperator(GGN + damping, num_terms=7_000, scale=scale)
@@ -303,7 +303,7 @@ def test_KFAC_inverse_damped_matmat(
 @mark.parametrize(
     "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
 )
-def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901
+def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901, PLR0912, PLR0915
     case: Tuple[
         Module,
         Union[MSELoss, CrossEntropyLoss],

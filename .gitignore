@@ -5,3 +5,4 @@ src/
 .vscode/*
 .coverage
 .eggs
+**.DS_Store
