@@ -64,7 +64,6 @@ test = [
 
 # Dependencies needed for linting.
 lint = [
-    "black",
     "ruff",
     "darglint",
     "pydocstyle",
@@ -138,3 +137,17 @@ ignore = [
 [tool.ruff.lint.flake8-bugbear]
 # Allow assert statements in tests
 extend-immutable-calls = ["pytest.raises", "pytest.warns", "pytest.mark.skip"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+exclude = [
+    ".eggs",
+    ".git",
+    ".pytest_cache",
+    "docs/rtd",
+    "build",
+    "dist",
+]

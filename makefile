@@ -4,7 +4,7 @@ help:
 	@echo "install"
 	@echo "        Install curvlinops and dependencies"
 	@echo "uninstall"
-	@echo "        Unstall curvlinops"
+	@echo "        Uninstall curvlinops"
 	@echo "lint"
 	@echo "        Run all linting actions"
 	@echo "docs"
@@ -25,10 +25,10 @@ help:
 	@echo "        Run isort (sort imports) on the project"
 	@echo "isort-check"
 	@echo "        Check if isort (sort imports) would change files"
-	@echo "black"
-	@echo "        Run black on the project"
-	@echo "black-check"
-	@echo "        Check if black would change files"
+	@echo "ruff-format"
+	@echo "        Run ruff format on the project"
+	@echo "ruff-format-check"
+	@echo "        Check if ruff format would change files"
 	@echo "ruff"
 	@echo "        Run ruff on the project"
 	@echo "conda-env"
@@ -89,13 +89,13 @@ isort:
 isort-check:
 	@isort . --check --diff
 
-.PHONY: black black-check
+.PHONY: ruff-format ruff-format-check
 
-black:
-	@black . --config=black.toml
+ruff-format:
+	@ruff format .
 
-black-check:
-	@black . --config=black.toml --check
+ruff-format-check:
+	@ruff format --check .
 
 .PHONY: ruff
 
@@ -120,7 +120,7 @@ conda-env:
 .PHONY: lint
 
 lint:
-	make black-check
+	make ruff-format-check
 	make isort-check
 	make ruff
 	make darglint-check

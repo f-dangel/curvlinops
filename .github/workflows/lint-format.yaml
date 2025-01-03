@@ -1,9 +1,9 @@
-name: Lint-black
+name: Lint-format
 
 on: [push, pull_request]
 
 jobs:
-  black:
+  ruff-format:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -16,6 +16,6 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         make install-lint
-    - name: Run black
+    - name: Run ruff format
       run: |
-        make black-check
+        make ruff-format-check
