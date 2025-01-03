@@ -55,10 +55,10 @@ seed(0)  # make deterministic
 # Setup
 # -----
 #
-# We will use power law matrices whose eigenvalues are given by :math:`\lambda_i = i^{-c}`,
-# where :math:`i` is the index of the eigenvalue and :math:`c` is a constant that determines
-# the rate of decay of the eigenvalues. A higher value of :math:`c` results in a faster decay
-# of the eigenvalues.
+# We will use power law matrices whose eigenvalues are given by
+# :math:`\lambda_i = i^{-c}`, where :math:`i` is the index of the eigenvalue and
+# :math:`c` is a constant that determines the rate of decay of the eigenvalues. A
+# higher value of :math:`c` results in a faster decay of the eigenvalues.
 #
 # Here is a function that creates such a matrix:
 
@@ -152,17 +152,20 @@ assert is_within_quartiles
 #
 # In the following, we will look at Hutchinson's method and Hutch++, a variance-reduced
 # version of Hutchinson's method. This method deterministically computes the trace in a
-# sub-space whose dimension we can specify, and uses Hutchinson's method to estimate the trace
-# in the remaining space, which reduces the variance at the cost of storing the basis.
+# sub-space whose dimension we can specify, and uses Hutchinson's method to estimate the
+# trace in the remaining space, which reduces the variance at the cost of storing the
+# basis.
 #
-# We will analyze the quality of both methods on power law matrices of different decay rates.
+# We will analyze the quality of both methods on power law matrices of different decay
+# rates.
 #
 # Hutchinson versus Hutch++
 # ^^^^^^^^^^^^^^^^^^^^^^^^^
 #
-# Generally speaking, Hutch++ yields better results when a matrix's spectrum decays rapidly,
-# i.e. the trace is dominated by a small number of large eigenvalues. To reproduce this behavior,
-# we will first consider a power law matrix with high decay rate :math:`c=2.0`:
+# Generally speaking, Hutch++ yields better results when a matrix's spectrum decays
+# rapidly, i.e. the trace is dominated by a small number of large eigenvalues. To
+# reproduce this behavior, we will first consider a power law matrix with high decay
+# rate :math:`c=2.0`:
 
 Y_mat = create_power_law_matrix(c=2.0)
 
@@ -174,21 +177,21 @@ Y_mat = create_power_law_matrix(c=2.0)
 # - Hutch++ with basis dimension 10
 # - Hutch++ with basis dimension 100
 #
-# Our goal is to look at the trace estimator's quality as a function of matrix-vector products.
-# We will use the relative trace error, i.e. the absolute difference between the estimate and
-# the true trace, normalized by the true trace.
-# Here is a function that computes these relative trace errors for a given matrix:
+# Our goal is to look at the trace estimator's quality as a function of matrix-vector
+# products. We will use the relative trace error, i.e. the absolute difference between
+# the estimate and the true trace, normalized by the true trace. Here is a function that
+# computes these relative trace errors for a given matrix:
 
 
 def compute_relative_trace_errors(
-    Y: ndarray,
-    basis_dims: Tuple[int] = (10, 100),
+    Y_mat: ndarray,
+    basis_dims: Tuple[int, ...] = (10, 100),
     num_matvecs: ndarray = unique(logspace(0, 3, 40, dtype=int)),
 ) -> Dict[str, Dict[str, ndarray]]:
     """Compute the relative trace errors for Hutchinson's method and Hutch++.
 
     Args:
-        Y: Matrix to estimate the trace of.
+        Y_mat: Matrix to estimate the trace of.
         basis_dims: Dimensions of the basis for Hutch++.
         num_matvecs: Number of matrix-vector products to use.
 
@@ -202,7 +205,7 @@ def compute_relative_trace_errors(
     results = {}
 
     # compute median and quartiles for Hutchinson's method
-    num_samples = [n for n in num_matvecs]
+    num_samples = list(num_matvecs)
     errors = []
 
     for _ in range(NUM_REPEATS):
@@ -271,12 +274,14 @@ for method, data in results.items():
     # print the first 3 values
     for i in range(3):
         print(
-            f"\t\t- {num_matvecs[i]} matvecs: {med[i]:.5f} ({quartile1[i]:.3f} - {quartile3[i]:.3f})"
+            f"\t\t- {num_matvecs[i]} matvecs: {med[i]:.5f}"
+            + f" ({quartile1[i]:.3f} - {quartile3[i]:.3f})"
         )
 
 # %%
 #
-# We should roughly see that the relative error decreases with more matrix-vector products.
+# We should roughly see that the relative error decreases with more matrix-vector
+# products.
 #
 # Let's visualize the convergence with the following function:
 
@@ -287,7 +292,8 @@ def plot_trace_estimation_results(
     """Plot the trace estimation results.
 
     Args:
-        results: Dictionary with the relative trace errors for Hutchinson's method and Hutch++.
+        results: Dictionary with the relative trace errors for Hutchinson's method
+            and Hutch++.
 
     Returns:
         Figure and axes.
@@ -324,9 +330,9 @@ with plt.rc_context(PLOT_CONFIG):
 
 # %%
 #
-# As expected Hutch++ yields more accurate trace estimates compared to vanilla Hutchinson
-# on this matrix with rapidly decaying eigenvalues. Using a larger basis further improves
-# the results, but at the cost of storing a larger basis.
+# As expected Hutch++ yields more accurate trace estimates compared to vanilla
+# Hutchinson on this matrix with rapidly decaying eigenvalues. Using a larger basis
+# further improves the results, but at the cost of storing a larger basis.
 #
 # Let's repeat the same for a matrix with a slower decay rate :math:`c=0.5`:
 
@@ -339,9 +345,9 @@ with plt.rc_context(PLOT_CONFIG):
 
 # %%
 #
-# On this matrix, the benefits of Hutch++ are much less pronounced; indeed they 
-# will completely disappear if the matrix's spectrum is completely flat, i.e. :math:`c=0`.
-# Thankfully, many curvature matrices in deep learning have a decaying spectrum, which
-# may allow Hutch++ to improve over Hutchinson.
+# On this matrix, the benefits of Hutch++ are much less pronounced; indeed they
+# will completely disappear if the matrix's spectrum is completely flat, i.e.
+# :math:`c=0`. Thankfully, many curvature matrices in deep learning exhibit a decaying
+# spectrum, which may allow Hutch++ to improve over Hutchinson.
 #
 # That's all for now.
