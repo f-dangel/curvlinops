@@ -78,6 +78,8 @@ Trace approximation
 .. autoclass:: curvlinops.HutchPPTraceEstimator
    :members: __init__, sample
 
+.. autofunction:: curvlinops.xtrace
+
 Diagonal approximation
 ======================
 
