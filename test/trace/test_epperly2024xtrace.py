@@ -18,7 +18,25 @@ NUM_MATVEC_IDS = [f"num_matvecs={num_matvecs}" for num_matvecs in NUM_MATVECS]
 def xtrace_naive(
     A: LinearOperator, num_matvecs: int, distribution: str = "rademacher"
 ) -> float:
-    """Naive reference implementation of XTrace."""
+    """Naive reference implementation of XTrace.
+
+    See Algorithm 1.2 in https://arxiv.org/pdf/2301.07825.
+
+    Args:
+        A: A square linear operator.
+        num_matvecs: Total number of matrix-vector products to use. Must be even and
+            less than the dimension of the linear operator.
+        distribution: Distribution of the random vectors used for the trace estimation.
+            Can be either ``'rademacher'`` or ``'normal'``. Default: ``'rademacher'``.
+
+    Returns:
+        The estimated trace of the linear operator.
+
+    Raises:
+        ValueError: If the linear operator is not square or if the number of matrix-
+            vector products is not even or is greater than the dimension of the linear
+            operator.
+    """
     if len(A.shape) != 2 or A.shape[0] != A.shape[1]:
         raise ValueError(f"A must be square. Got shape {A.shape}.")
     dim = A.shape[1]
