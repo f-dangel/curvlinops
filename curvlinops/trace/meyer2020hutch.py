@@ -126,7 +126,7 @@ class HutchPPTraceEstimator:
 
         dim = self._A.shape[1]
         v = random_vector(dim, distribution)
-        # project out subspace
+        # Estimate the trace in complement space, i.e. of (I - Q Q^T) A (I - Q Q^T)
         v -= self._Q @ (self._Q.T @ v)
         Av = self._A @ v
         return self._tr_QT_A_Q + dot(v, Av)

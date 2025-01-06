@@ -11,6 +11,8 @@ class HutchinsonDiagonalEstimator:
 
     For details, see
 
+    - Bekas, C., Kokiopoulou, E., & Saad, Y. (2007). An estimator for the diagonal
+      of a matrix. Applied Numerical Mathematics.
     - Martens, J., Sutskever, I., & Swersky, K. (2012). Estimating the hessian by
       back-propagating curvature. International Conference on Machine Learning (ICML).
 
