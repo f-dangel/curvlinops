@@ -12,7 +12,7 @@ def xtrace(
 ) -> float:
     """Estimate a linear operator's trace using the XTrace algorithm.
 
-    The method is presented in `this paper<https://arxiv.org/pdf/2301.07825>`_:
+    The method is presented in `this paper <https://arxiv.org/pdf/2301.07825>`_:
 
     - Epperly, E. N., Tropp, J. A., & Webber, R. J. (2024). Xtrace: making the most
       of every sample in stochastic trace estimation. SIAM Journal on Matrix Analysis
