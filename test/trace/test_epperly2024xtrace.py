@@ -1,6 +1,6 @@
 """Test ``curvlinops.trace.epperli2024xtrace."""
 
-from test.trace import DISTRIBUTION_IDS, DISTRIBUTIONS, _test_convergence
+from test.trace import DISTRIBUTION_IDS, DISTRIBUTIONS
 
 from numpy import column_stack, dot, isclose, mean, trace
 from numpy.linalg import qr

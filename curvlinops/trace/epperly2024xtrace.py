@@ -1,6 +1,6 @@
 """Implements the XTrace algorithm from Epperly 2024."""
 
-from numpy import column_stack, dot, einsum, mean
+from numpy import column_stack, dot, einsum, mean, ndarray
 from numpy.linalg import inv, qr
 from scipy.sparse.linalg import LinearOperator
 
@@ -66,16 +66,24 @@ def xtrace(
     # simplification then leads to
     traces = tr_QT_A_Q - tr_QT_i_A_Q_i
 
+    def deflate(v: ndarray, s: ndarray) -> ndarray:
+        """Apply (I - s sT) to a vector.
+
+        Args:
+            v: Vector to deflate.
+            s: Deflation vector.
+
+        Returns:
+            Deflated vector.
+        """
+        return v - dot(s, v) * s
+
     # estimate the trace on the complement of Q_i with vanilla Hutchinson using the
     # i-th test vector
     for i in range(num_vecs):
         w_i = W[:, i]
         s_i = S[:, i]
         A_w_i = A_W[:, i]
-
-        def deflate(v):
-            """Apply (I - s_i sT_i) to a vector."""
-            return v - dot(s_i, v) * s_i
 
         # Compute (I - Q_i QT_i) A (I - Q_i QT_i) w_i
         #       = (I - Q_i QT_i) (Aw - AQ_i QT_i w_i)
@@ -84,8 +92,8 @@ def xtrace(
         #       = (I - Q (I - s_i sT_i) QT) (Aw - AQ (I - s_i sT_i) QT w)
         #                                   |--------- A_p_w_i ---------|
         #         |-------------------- PT_A_P_w_i----------------------|
-        A_P_w_i = A_w_i - A_Q @ deflate(Q.T @ w_i)
-        PT_A_P_w_i = A_P_w_i - Q @ deflate(Q.T @ A_P_w_i)
+        A_P_w_i = A_w_i - A_Q @ deflate(Q.T @ w_i, s_i)
+        PT_A_P_w_i = A_P_w_i - Q @ deflate(Q.T @ A_P_w_i, s_i)
 
         tr_w_i = dot(w_i, PT_A_P_w_i)
         traces[i] += tr_w_i
