@@ -41,7 +41,9 @@ from curvlinops.trace.meyer2020hutch import HutchPPTraceEstimator
 # to reduce build time
 RTD = getenv("READTHEDOCS")
 
-PLOT_CONFIG = bundles.icml2024(column="full" if RTD else "half", usetex=not RTD)
+PLOT_CONFIG = bundles.icml2024(
+    column="full" if RTD else "half", usetex=not RTD, nrows=2
+)
 
 # Dimension of the matrices whose traces we will estimate
 DIM = 800 if RTD else 2000
@@ -228,9 +230,10 @@ def compute_relative_trace_errors(
     }
     # compute median and quartiles for Hutch++ with different basis dimensions
     for basis_dim in basis_dims:
-        # Hutch++ spends basis_dim matvecs to build the basis
-        n_matvecs = [n for n in num_matvecs if n > basis_dim]
-        num_samples = [n - basis_dim for n in n_matvecs]
+        # Hutch++ spends basis_dim matvecs to build the basis, and another
+        # basis_dim matvecs to compute the exact trace in that sub-space.
+        n_matvecs = [n for n in num_matvecs if n > 2 * basis_dim]
+        num_samples = [n - 2 * basis_dim for n in n_matvecs]
         errors = []
 
         for _ in range(NUM_REPEATS):
@@ -286,19 +289,20 @@ for method, data in results.items():
 # Let's visualize the convergence with the following function:
 
 
-def plot_trace_estimation_results(
-    results: Dict[str, Dict[str, ndarray]]
-) -> Tuple[plt.Figure, plt.Axes]:
-    """Plot the trace estimation results.
+def plot_estimation_results(
+    results: Dict[str, Dict[str, ndarray]],
+    ax: plt.Axes,
+    target: str = "trace",
+) -> None:
+    """Plot the trace estimation results on the given Axes.
 
     Args:
         results: Dictionary with the relative trace errors for Hutchinson's method
             and Hutch++.
-
-    Returns:
-        Figure and axes.
+        ax: The matplotlib Axes to plot on.
+        target: The property that is approximated (used in ylabel).
+            Default is ``'trace'``.
     """
-    fig, ax = plt.subplots()
     ax.set_xscale("log")
     ax.set_yscale("log")
 
@@ -320,34 +324,41 @@ def plot_trace_estimation_results(
     ax.set_ylabel("Relative trace error")
     ax.legend()
 
-    return fig, ax
-
-
-with plt.rc_context(PLOT_CONFIG):
-    fig, ax = plot_trace_estimation_results(results)
-    plt.savefig("trace_estimation_rapid_decay.pdf", bbox_inches="tight")
-
 
 # %%
 #
-# As expected Hutch++ yields more accurate trace estimates compared to vanilla
-# Hutchinson on this matrix with rapidly decaying eigenvalues. Using a larger basis
-# further improves the results, but at the cost of storing a larger basis.
-#
-# Let's repeat the same for a matrix with a slower decay rate :math:`c=0.5`:
+# We will analyze a matrix with fast spectral decay and a matrix with slow spectral
+# decay.
 
-Y_mat = create_power_law_matrix(c=0.5)
-results = compute_relative_trace_errors(Y_mat)
+# Compute results for matrices with different spectral decay rates
+Y_mat_fast = create_power_law_matrix()  # Fast spectral decay with c=2
+results_fast = compute_relative_trace_errors(Y_mat_fast)
 
+Y_mat_slow = create_power_law_matrix(c=0.5)  # Slow spectral decay with c=0.5
+results_slow = compute_relative_trace_errors(Y_mat_slow)
+
+# Plot the results for both fast and slow spectral decay
 with plt.rc_context(PLOT_CONFIG):
-    fig, ax = plot_trace_estimation_results(results)
-    plt.savefig("trace_estimation_slow_decay.pdf", bbox_inches="tight")
+    fig, axes = plt.subplots(nrows=2, sharex=True)
+    plot_estimation_results(results_fast, axes[0])
+    plot_estimation_results(results_slow, axes[1])
+    axes[0].set_title("Fast spectral decay ($c=2$)")
+    axes[1].set_title("Slow spectral decay ($c=0.5$)")
+
+    # Remove xlabel and legend from the first plot
+    axes[0].set_xlabel(None)
+    axes[0].legend().remove()
+
+    plt.savefig("trace_estimation.pdf", bbox_inches="tight")
 
 # %%
 #
-# On this matrix, the benefits of Hutch++ are much less pronounced; indeed they
-# will completely disappear if the matrix's spectrum is completely flat, i.e.
-# :math:`c=0`. Thankfully, many curvature matrices in deep learning exhibit a decaying
-# spectrum, which may allow Hutch++ to improve over Hutchinson.
+# For fast spectral decay, Hutch++ yields more accurate trace estimates compared to
+# vanilla Hutchinson. Using a larger basis further improves the results, but at the
+# cost of storing a larger basis. For slow spectral decay, the benefits of Hutch++
+# are much less pronounced. They will completely disappear if the matrix's spectrum
+# is completely flat, i.e., :math:`c=0``. Thankfully, many curvature matrices in
+# deep learning exhibit a decaying spectrum, which may allow Hutch++ to improve
+# over Hutchinson.
 #
 # That's all for now.
