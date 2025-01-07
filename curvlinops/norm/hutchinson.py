@@ -24,6 +24,13 @@ def hutchinson_squared_fro(
     Due to the last equality, we can use Hutchinson-style trace estimation to estimate
     the squared Frobenius norm.
 
+    Args:
+        A: A matrix whose squared Frobenius norm is estimated.
+        num_matvecs: Total number of matrix-vector products to use. Must be smaller
+            than the minimum dimension of the matrix.
+        distribution: Distribution of the random vectors used for the trace estimation.
+            Can be either ``'rademacher'`` or ``'normal'``. Default: ``'rademacher'``.
+
     Example:
         >>> from numpy.linalg import norm
         >>> from numpy.random import rand, seed
