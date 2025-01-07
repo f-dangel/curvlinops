@@ -10,8 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Backward-incompatible:** Refactor class-based trace estimators into
   functions ([PR](https://github.com/f-dangel/curvlinops/pull/168)):
-  - If you used `HutchinsonTraceEstimator`, use `hutchinson_trace` instead
-  - If you used `HutchPPTraceEstimator`, use `hutchpp_trace` instead
+  - If you used `HutchinsonTraceEstimator`, switch to `hutchinson_trace`
+  - If you used `HutchPPTraceEstimator`, switch to `hutchpp_trace`
+  - If you used `HutchinsonDiagonalEstimator`, switch to `hutchinson_diag`
+  - If you used `HutchinsonSquaredFrobeniusNormEstimator`, switch to
+    `hutchinson_squared_fro`
 
 - Add a [use case
   example](https://curvlinops.readthedocs.io/en/latest/basic_usage/example_benchmark.html)
