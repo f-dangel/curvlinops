@@ -31,6 +31,9 @@ def hutchinson_squared_fro(
         distribution: Distribution of the random vectors used for the trace estimation.
             Can be either ``'rademacher'`` or ``'normal'``. Default: ``'rademacher'``.
 
+    Returns:
+        The estimated squared Frobenius norm of the matrix.
+
     Example:
         >>> from numpy.linalg import norm
         >>> from numpy.random import rand, seed
