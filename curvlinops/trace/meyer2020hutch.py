@@ -35,7 +35,7 @@ def hutchpp_trace(
     .. math::
         a
         := \mathrm{Tr}(\mathbf{Q}^\top \mathbf{A} \mathbf{Q})
-        + \sum_{n = N+1}^{2N} \mathbf{v}_n^\top
+        + \frac{1}{N} \sum_{n = N+1}^{2N} \mathbf{v}_n^\top
           (\mathbf{I} - \mathbf{Q} \mathbf{Q}^\top)^\top
           \mathbf{A} (\mathbf{I} - \mathbf{Q} \mathbf{Q}^\top) \mathbf{v}_n
         \approx \mathrm{Tr}(\mathbf{A})\,.

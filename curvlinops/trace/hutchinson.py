@@ -25,7 +25,7 @@ def hutchinson_trace(
     :math:`\mathbb{E}[\mathbf{v} \mathbf{v}^\top] = \mathbf{I}` and compute
 
     .. math::
-        := \frac{1}{N} \mathbf{v}_n^\top \mathbf{A} \mathbf{v}_n
+        a := \frac{1}{N} \sum_{n=1}^N \mathbf{v}_n^\top \mathbf{A} \mathbf{v}_n
         \approx \mathrm{Tr}(\mathbf{A})\,.
 
     This estimator is unbiased,
