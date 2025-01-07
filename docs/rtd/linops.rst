@@ -85,8 +85,7 @@ Diagonal approximation
 Frobenius norm approximation
 ============================
 
-.. autoclass:: curvlinops.HutchinsonSquaredFrobeniusNormEstimator
-   :members: __init__, sample
+.. autoclass:: curvlinops.hutchinson_squared_fro
 
 Experimental
 ============

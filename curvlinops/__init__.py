@@ -13,7 +13,7 @@ from curvlinops.inverse import (
 )
 from curvlinops.jacobian import JacobianLinearOperator, TransposedJacobianLinearOperator
 from curvlinops.kfac import FisherType, KFACLinearOperator, KFACType
-from curvlinops.norm.hutchinson import HutchinsonSquaredFrobeniusNormEstimator
+from curvlinops.norm.hutchinson import hutchinson_squared_fro
 from curvlinops.papyan2020traces.spectrum import (
     LanczosApproximateLogSpectrumCached,
     LanczosApproximateSpectrumCached,
@@ -54,5 +54,5 @@ __all__ = [
     # diagonal estimation
     "hutchinson_diag",
     # norm estimation
-    "HutchinsonSquaredFrobeniusNormEstimator",
+    "hutchinson_squared_fro",
 ]
