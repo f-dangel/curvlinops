@@ -1,6 +1,6 @@
 """``curvlinops`` library API."""
 
-from curvlinops.diagonal.hutchinson import HutchinsonDiagonalEstimator
+from curvlinops.diagonal.hutchinson import hutchinson_diag
 from curvlinops.fisher import FisherMCLinearOperator
 from curvlinops.ggn import GGNLinearOperator
 from curvlinops.gradient_moments import EFLinearOperator
@@ -52,7 +52,7 @@ __all__ = [
     "hutchinson_trace",
     "hutchpp_trace",
     # diagonal estimation
-    "HutchinsonDiagonalEstimator",
+    "hutchinson_diag",
     # norm estimation
     "HutchinsonSquaredFrobeniusNormEstimator",
 ]

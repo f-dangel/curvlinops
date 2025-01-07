@@ -79,7 +79,7 @@ Trace approximation
 Diagonal approximation
 ======================
 
-.. autoclass:: curvlinops.HutchinsonDiagonalEstimator
+.. autofunction:: curvlinops.
    :members: __init__, sample
 
 Frobenius norm approximation
