@@ -45,17 +45,17 @@ def xtrace_naive(
             "num_matvecs must be even and less than the dimension of A.",
             f" Got {num_matvecs}.",
         )
-    sketch_dim = num_matvecs // 2
+    num_vecs = num_matvecs // 2
 
-    W = column_stack([random_vector(dim, distribution) for _ in range(sketch_dim)])
+    W = column_stack([random_vector(dim, distribution) for _ in range(num_vecs)])
     A_W = A @ W
 
     traces = []
 
-    for i in range(sketch_dim):
+    for i in range(num_vecs):
         # compute the exact trace in the basis spanned by the sketch matrix without
         # test vector i
-        not_i = [j for j in range(sketch_dim) if j != i]
+        not_i = [j for j in range(num_vecs) if j != i]
         Q_i, _ = qr(A_W[:, not_i])
         A_Q_i = A @ Q_i
         tr_QT_i_A_Q_i = trace(Q_i.T @ A_Q_i)
