@@ -21,8 +21,8 @@ from curvlinops.papyan2020traces.spectrum import (
     lanczos_approximate_spectrum,
 )
 from curvlinops.submatrix import SubmatrixLinearOperator
-from curvlinops.trace.hutchinson import HutchinsonTraceEstimator
-from curvlinops.trace.meyer2020hutch import HutchPPTraceEstimator
+from curvlinops.trace.hutchinson import hutchinson_trace
+from curvlinops.trace.meyer2020hutch import hutchpp_trace
 
 __all__ = [
     # linear operators
@@ -49,8 +49,8 @@ __all__ = [
     "LanczosApproximateSpectrumCached",
     "LanczosApproximateLogSpectrumCached",
     # trace estimation
-    "HutchinsonTraceEstimator",
-    "HutchPPTraceEstimator",
+    "hutchinson_trace",
+    "hutchpp_trace",
     # diagonal estimation
     "HutchinsonDiagonalEstimator",
     # norm estimation

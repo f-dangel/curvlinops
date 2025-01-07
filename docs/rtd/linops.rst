@@ -72,11 +72,9 @@ Spectral density approximation
 Trace approximation
 ===================
 
-.. autoclass:: curvlinops.HutchinsonTraceEstimator
-   :members: __init__, sample
+.. autofunction:: curvlinops.hutchinson_trace
 
-.. autoclass:: curvlinops.HutchPPTraceEstimator
-   :members: __init__, sample
+.. autofunction:: curvlinops.hutchpp_trace
 
 Diagonal approximation
 ======================

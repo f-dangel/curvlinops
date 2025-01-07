@@ -1,52 +1,51 @@
 """Test ``curvlinops.trace``."""
 
-from typing import Union
+from typing import Callable
 
-from numpy import isclose, mean
-
-from curvlinops.trace.hutchinson import HutchinsonTraceEstimator
-from curvlinops.trace.meyer2020hutch import HutchPPTraceEstimator
+from numpy import mean
+from scipy.sparse.linalg import LinearOperator
 
 DISTRIBUTIONS = ["rademacher", "normal"]
 DISTRIBUTION_IDS = [f"distribution={distribution}" for distribution in DISTRIBUTIONS]
 
+NUM_MATVECS = [3, 6]
+NUM_MATVEC_IDS = [f"num_matvecs={num_matvecs}" for num_matvecs in NUM_MATVECS]
+
 
 def _test_convergence(
-    estimator: Union[HutchinsonTraceEstimator, HutchPPTraceEstimator],
+    estimator: Callable[[LinearOperator, int], float],
+    num_matvecs: int,
+    A: LinearOperator,
     tr_A: float,
-    distribution: str,
-    max_samples: int = 20_000,
-    chunk_size: int = 2_000,
-    atol: float = 1e-3,
-    rtol: float = 1e-2,
+    max_total_matvecs: int = 100_000,
+    check_every: int = 100,
+    target_rel_error: float = 1e-3,
 ):
     """Test whether a trace estimator converges to the true trace.
 
     Args:
+        A: Linear operator for which the trace is estimated.
         estimator: The trace estimator.
+        num_matvecs: Number of matrix-vector products used per estimate.
         tr_A: True trace of the linear operator.
-        distribution: Distribution of the random vectors used for the trace estimation.
-        max_samples: Maximum number of samples to draw before error-ing.
-            Default: ``20_000``
-        chunk_size: Number of samples to draw before comparing against the true trace.
-            Default: ``2_000``.
-        atol: Absolute toleranc e used to compare with the exact trace.
+        max_total_matvecs: Maximum number of matrix-vector products to perform.
+            Default: ``100_000``. If convergence has not been reached by then, the test
+            will fail.
+        check_every: Check for convergence every ``check_every`` estimates.
+            Default: ``100``.
+        target_rel_error: Relative error for considering the estimator converged.
             Default: ``1e-3``.
-        rtol: Relative tolerance used to compare with the exact trace.
-            Default: ``1e-2``.
     """
-    samples = []
+    used_matvecs, converged = 0, False
 
-    while len(samples) < max_samples:
-        samples.extend(
-            [estimator.sample(distribution=distribution) for _ in range(chunk_size)]
-        )
-        tr_estimator = mean(samples)
-        if isclose(tr_A, tr_estimator, atol=atol, rtol=rtol):
-            # quit once the estimator has converged
-            break
+    estimates = []
+    while used_matvecs < max_total_matvecs and not converged:
+        estimates.append(estimator(A, num_matvecs))
+        used_matvecs += num_matvecs
 
-        print(f"{len(samples)} samples: Tr(A)={tr_A:.5f}≠{tr_estimator:.5f}.")
+        if len(estimates) % check_every == 0:
+            rel_error = abs(tr_A - mean(estimates)) / abs(tr_A)
+            print(f"Relative error after {used_matvecs} matvecs: {rel_error:.5f}.")
+            converged = rel_error < target_rel_error
 
-    tr_estimator = mean(samples)
-    assert isclose(tr_A, tr_estimator, atol=atol, rtol=rtol)
+    assert converged
