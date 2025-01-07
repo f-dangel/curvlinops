@@ -1,4 +1,4 @@
-"""Test ``curvlinops.diagonal.epperli2024xtrace."""
+"""Test ``curvlinops.diagonal.epperly2024xtrace``."""
 
 from numpy import allclose, column_stack, diag, inf, mean, ndarray
 from numpy.linalg import norm, qr
