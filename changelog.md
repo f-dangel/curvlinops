@@ -8,8 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added/New
 
-- **Backward-incompatible:** Refactor class-based trace estimators into
-  functions ([PR](https://github.com/f-dangel/curvlinops/pull/168)):
+- **Backward-incompatible:** Refactor class-based trace and diagonal estimators
+  into functions ([PR](https://github.com/f-dangel/curvlinops/pull/168)):
   - If you used `HutchinsonTraceEstimator`, switch to `hutchinson_trace`
   - If you used `HutchPPTraceEstimator`, switch to `hutchpp_trace`
   - If you used `HutchinsonDiagonalEstimator`, switch to `hutchinson_diag`
