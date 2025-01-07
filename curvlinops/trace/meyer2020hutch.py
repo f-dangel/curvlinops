@@ -51,6 +51,9 @@ def hutchpp_trace(
         distribution: Distribution of the random vectors used for the trace estimation.
             Can be either ``'rademacher'`` or ``'normal'``. Default: ``'rademacher'``.
 
+    Returns:
+        The estimated trace of the linear operator.
+
     Raises:
         ValueError: If the linear operator is not square or if the number of matrix-
             vector products is greater than the dimension of the linear operator
