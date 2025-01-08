@@ -76,11 +76,15 @@ Trace approximation
 
 .. autofunction:: curvlinops.hutchpp_trace
 
+.. autofunction:: curvlinops.xtrace
+
 Diagonal approximation
 ======================
 
 .. autofunction:: curvlinops.
    :members: __init__, sample
+
+.. autofunction:: curvlinops.xdiag
 
 Frobenius norm approximation
 ============================
