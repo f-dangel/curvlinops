@@ -34,6 +34,12 @@ def hutchinson_squared_fro(
     Returns:
         The estimated squared Frobenius norm of the matrix.
 
+    Raises:
+        ValueError: If the matrix is not two-dimensional or if the number of matrix-
+            vector products is greater than the minimum dimension of the matrix
+            (because then you can evaluate the true squared Frobenius norm directly
+            atthe same cost).
+
     Example:
         >>> from numpy.linalg import norm
         >>> from numpy.random import rand, seed
