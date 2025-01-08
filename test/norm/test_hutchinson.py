@@ -3,7 +3,6 @@
 from functools import partial
 from test.utils import check_estimator_convergence
 
-from numpy import mean
 from numpy.random import rand, seed
 from pytest import mark
 

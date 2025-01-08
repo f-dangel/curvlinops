@@ -7,7 +7,7 @@ from typing import Callable, Iterable, List, Optional, Tuple, Union
 
 from einops import rearrange, reduce
 from einops.layers.torch import Rearrange
-from numpy import eye, mean, ndarray
+from numpy import eye, ndarray
 from torch import Tensor, allclose, as_tensor, cat, cuda, device, dtype
 from torch import eye as torch_eye
 from torch import from_numpy, rand, randint, zeros_like
