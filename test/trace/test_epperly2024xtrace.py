@@ -1,6 +1,8 @@
 """Test ``curvlinops.trace.epperli2024xtrace."""
 
+from functools import partial
 from test.trace import DISTRIBUTION_IDS, DISTRIBUTIONS
+from test.utils import check_estimator_convergence
 
 from numpy import column_stack, dot, isclose, mean, trace
 from numpy.linalg import qr
@@ -11,7 +13,7 @@ from scipy.sparse.linalg import LinearOperator
 from curvlinops import xtrace
 from curvlinops.sampling import random_vector
 
-NUM_MATVECS = [4, 10]
+NUM_MATVECS = [6, 8]
 NUM_MATVEC_IDS = [f"num_matvecs={num_matvecs}" for num_matvecs in NUM_MATVECS]
 
 
@@ -74,43 +76,23 @@ def xtrace_naive(
 
 @mark.parametrize("num_matvecs", NUM_MATVECS, ids=NUM_MATVEC_IDS)
 @mark.parametrize("distribution", DISTRIBUTIONS, ids=DISTRIBUTION_IDS)
-def test_xtrace(
-    distribution: str,
-    num_matvecs: int,
-    max_total_matvecs: int = 10_000,
-    check_every: int = 10,
-    target_rel_error: float = 1e-3,
-):
+def test_xtrace(distribution: str, num_matvecs: int):
     """Test whether the XTrace estimator converges to the true trace.
 
     Args:
         distribution: Distribution of the random vectors used for the trace estimation.
         num_matvecs: Number of matrix-vector multiplications used by one estimator.
-        max_total_matvecs: Maximum number of matrix-vector multiplications to perform.
-            Default: ``1_000``. If convergence has not been reached by then, the test
-            will fail.
-        check_every: Check for convergence every ``check_every`` estimates.
-            Default: ``10``.
-        target_rel_error: Target relative error for considering the estimator converged.
-            Default: ``1e-3``.
     """
     seed(0)
-    A = rand(50, 50)
-    tr_A = trace(A)
-
-    used_matvecs, converged = 0, False
-
-    estimates = []
-    while used_matvecs < max_total_matvecs and not converged:
-        estimates.append(xtrace(A, num_matvecs, distribution=distribution))
-        used_matvecs += num_matvecs
-
-        if len(estimates) % check_every == 0:
-            rel_error = abs(tr_A - mean(estimates)) / abs(tr_A)
-            print(f"Relative error after {used_matvecs} matvecs: {rel_error:.5f}.")
-            converged = rel_error < target_rel_error
-
-    assert converged
+    A = rand(15, 15)
+    estimator = partial(xtrace, A=A, num_matvecs=num_matvecs, distribution=distribution)
+    check_estimator_convergence(
+        estimator,
+        num_matvecs,
+        trace(A),
+        # use half the target tolerance as vanilla Hutchinson
+        target_rel_error=5e-4,
+    )
 
 
 @mark.parametrize("num_matvecs", NUM_MATVECS, ids=NUM_MATVEC_IDS)

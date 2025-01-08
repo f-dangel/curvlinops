@@ -72,27 +72,23 @@ Spectral density approximation
 Trace approximation
 ===================
 
-.. autoclass:: curvlinops.HutchinsonTraceEstimator
-   :members: __init__, sample
+.. autofunction:: curvlinops.hutchinson_trace
 
-.. autoclass:: curvlinops.HutchPPTraceEstimator
-   :members: __init__, sample
+.. autofunction:: curvlinops.hutchpp_trace
 
 .. autofunction:: curvlinops.xtrace
 
 Diagonal approximation
 ======================
 
-.. autoclass:: curvlinops.HutchinsonDiagonalEstimator
-   :members: __init__, sample
+.. autofunction:: curvlinops.hutchinson_diag
 
 .. autofunction:: curvlinops.xdiag
 
 Frobenius norm approximation
 ============================
 
-.. autoclass:: curvlinops.HutchinsonSquaredFrobeniusNormEstimator
-   :members: __init__, sample
+.. autoclass:: curvlinops.hutchinson_squared_fro
 
 Experimental
 ============

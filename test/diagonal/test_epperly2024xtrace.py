@@ -1,16 +1,17 @@
 """Test ``curvlinops.diagonal.epperly2024xtrace``."""
 
-from numpy import allclose, column_stack, diag, inf, mean, ndarray
-from numpy.linalg import norm, qr
+from functools import partial
+from test.diagonal import NUM_MATVEC_IDS, NUM_MATVECS
+from test.utils import check_estimator_convergence
+
+from numpy import allclose, column_stack, diag, mean, ndarray
+from numpy.linalg import qr
 from numpy.random import rand, seed
 from pytest import mark
 from scipy.sparse.linalg import LinearOperator
 
 from curvlinops import xdiag
 from curvlinops.sampling import random_vector
-
-NUM_MATVECS = [4, 10]
-NUM_MATVEC_IDS = [f"num_matvecs={num_matvecs}" for num_matvecs in NUM_MATVECS]
 
 
 def xdiag_naive(A: LinearOperator, num_matvecs: int) -> ndarray:
@@ -64,45 +65,17 @@ def xdiag_naive(A: LinearOperator, num_matvecs: int) -> ndarray:
 
 
 @mark.parametrize("num_matvecs", NUM_MATVECS, ids=NUM_MATVEC_IDS)
-def test_xdiag(
-    num_matvecs: int,
-    max_total_matvecs: int = 50_000,
-    check_every: int = 100,
-    target_rel_error: float = 3e-2,
-):
+def test_xdiag(num_matvecs: int):
     """Test whether the XDiag estimator converges to the true diagonal.
 
     Args:
         num_matvecs: Number of matrix-vector multiplications used by one estimator.
-        max_total_matvecs: Maximum number of matrix-vector multiplications to perform.
-            Default: ``50_000``. If convergence has not been reached by then, the test
-            will fail.
-        check_every: Check for convergence every ``check_every`` estimates.
-            Default: ``100``.
-        target_rel_error: Target relative error for considering the estimator converged.
-            Default: ``3e-2``.
     """
     seed(0)
     A = rand(30, 30)
-    diag_A = diag(A)
 
-    used_matvecs, converged = 0, False
-
-    estimates = []
-    while used_matvecs < max_total_matvecs and not converged:
-        estimates.append(xdiag(A, num_matvecs))
-        used_matvecs += num_matvecs
-
-        if len(estimates) % check_every == 0:
-            # use the infinity norm from Section 4.4 in the XTrace paper used to
-            # evaluate diagonal estimators
-            rel_error = norm(diag_A - mean(estimates, axis=0), ord=inf) / norm(
-                diag_A, ord=inf
-            )
-            print(f"Relative error after {used_matvecs} matvecs: {rel_error:.5f}.")
-            converged = rel_error < target_rel_error
-
-    assert converged
+    estimator = partial(xdiag, A=A, num_matvecs=num_matvecs)
+    check_estimator_convergence(estimator, num_matvecs, diag(A), target_rel_error=3e-2)
 
 
 @mark.parametrize("num_matvecs", NUM_MATVECS, ids=NUM_MATVEC_IDS)
