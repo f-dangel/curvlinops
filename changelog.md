@@ -54,6 +54,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Always run full tests
   ([PR](https://github.com/f-dangel/curvlinops/pull/161))
 
+- Modify logo
+  ([PR](https://github.com/f-dangel/curvlinops/pull/169))
+
 ## [2.0.1] - 2024-10-25
 
 Minor bug fixes and documentation polishing.

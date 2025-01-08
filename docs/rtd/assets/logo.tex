@@ -35,9 +35,15 @@
     minimum width   = \width,
     text width      = {\width-2*\textborder},
     align           = center,
+    fill opacity    = 0.9,
     fill            = TUanthrazit!50,
     rounded corners = \rounding]
-    at (CenterPoint) {{#1}}; % TEXT HERE?
+    (front)
+    at (CenterPoint) {#1};
+    % overlay front with Hessian silhouette
+    \begin{pgfonlayer}{background}
+      \node [inner sep=0pt] at (front) {\includegraphics[width=\width]{hessian.pdf}};
+    \end{pgfonlayer}
     % "3D" top
     \draw [rounded corners = \rounding, draw=white, fill=TUanthrazit!70] %
     ($(CenterPoint) + (-\width/2. - 2*\rounding, \height/2.)$) -- %
@@ -58,15 +64,15 @@
 \begin{document}
 
 \begin{tikzpicture}
-  \node [inner sep=1pt] (A) {\cube{$\bm{A}_{\includegraphics[height=0.15cm]{torch.pdf}}$}};
+  \node [inner sep=1pt] (A) {\cube{$\bm{A}$}};
 
-  \node [anchor=south east, xshift=-0cm, yshift=-0.2cm] (v) at (A.north west)
-  {$\bm{v}_{\includegraphics[height=0.15cm]{scipy.pdf}}$};
+  \node [anchor=south east, xshift=1.05cm, yshift=0.0cm] (v) at (A.north west)
+  {\textbf{cur}$\bm{v}_{\includegraphics[height=0.15cm]{torch.pdf}}$\textbf{linops}};
 
   \node (Av) [anchor=north west, xshift=-1ex, yshift=0.2cm] at (A.south east)
-  {$\bm{Av}_{\includegraphics[height=0.15cm]{scipy.pdf}}$};
+  {$\bm{Av}_{\includegraphics[height=0.15cm]{torch.pdf}}$};
 
-  \draw [->, >=stealth, thick] (v.south) |- (A.west);
+  \draw [->, >=stealth, thick] ($(v.south)+(-2ex,0)$) |- (A.west);
 
   \draw [->, >=stealth, thick] (A.east) -| (Av.north);
 \end{tikzpicture}
