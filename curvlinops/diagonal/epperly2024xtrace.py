@@ -58,7 +58,10 @@ def xdiag(A: LinearOperator, num_matvecs: int) -> ndarray:
     D = 1 / (RT_inv**2).sum(0) ** 0.5
     S = einsum("ij,j->ij", RT_inv, D)
     # Further simplification then leads to
-    diagonal = diag_Q_QT_A - einsum("ij,ji->i", Q @ S, S.T @ QT_A) / num_vecs
+    diagonal = (
+        diag_Q_QT_A
+        - einsum("ij,jk,lk,li->i", Q, S, S, QT_A, optimize="optimal") / num_vecs
+    )
 
     def deflate(v: ndarray, s: ndarray) -> ndarray:
         """Apply (I - s sT) to a vector.
