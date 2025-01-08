@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added/New
 
+- Add diagonal estimation with the XDiag algorithm
+  ([paper](https://arxiv.org/pdf/2301.07825),
+   [PR](https://github.com/f-dangel/curvlinops/pull/167))
+
+- Add trace estimation with the XTrace algorithm
+  ([paper](https://arxiv.org/pdf/2301.07825),
+   [PR](https://github.com/f-dangel/curvlinops/pull/166))
+
 - Add a [use case
   example](https://curvlinops.readthedocs.io/en/latest/basic_usage/example_benchmark.html)
   that benchmarks the linear operators
