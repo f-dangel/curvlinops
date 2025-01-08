@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added/New
 
+- **Backward-incompatible:** Refactor class-based trace and diagonal estimators
+  into functions ([PR](https://github.com/f-dangel/curvlinops/pull/168)):
+  - If you used `HutchinsonTraceEstimator`, switch to `hutchinson_trace`
+  - If you used `HutchPPTraceEstimator`, switch to `hutchpp_trace`
+  - If you used `HutchinsonDiagonalEstimator`, switch to `hutchinson_diag`
+  - If you used `HutchinsonSquaredFrobeniusNormEstimator`, switch to
+    `hutchinson_squared_fro`
+
 - Add diagonal estimation with the XDiag algorithm
   ([paper](https://arxiv.org/pdf/2301.07825),
    [PR](https://github.com/f-dangel/curvlinops/pull/167))
@@ -26,7 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on trace estimation
   ([PR](https://github.com/f-dangel/curvlinops/pull/165))
 
-- Make linear operators purely PyTorch with a SciPy export option
+- **Backward-incompatible:** Make linear operators purely PyTorch with a SciPy
+  export option
   - `GGNLinearOperator` ([PR](https://github.com/f-dangel/curvlinops/pull/146))
   - `TransposedJacobianLinearOperator` and `JacobianLinearOperator`
     ([PR](https://github.com/f-dangel/curvlinops/pull/147))
@@ -50,8 +59,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([PR](https://github.com/f-dangel/curvlinops/pull/156))
 - More test cases for `KFACInverseLinearOperator` and bug fix in
     `.load_state_dict` ([PR](https://github.com/f-dangel/curvlinops/pull/158))
-- Remove `.to_device` function of linear operators, always carry out deterministic
-  checks on the linear operator's device (previously always on CPU)
+- **Backward-incompatible:** Remove `.to_device` function of linear operators,
+  always carry out deterministic checks on the linear operator's device
+  (previously always on CPU)
   ([PR](https://github.com/f-dangel/curvlinops/pull/160))
 
 ### Internal
