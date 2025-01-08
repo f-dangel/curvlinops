@@ -81,8 +81,7 @@ Trace approximation
 Diagonal approximation
 ======================
 
-.. autofunction:: curvlinops.
-   :members: __init__, sample
+.. autofunction:: curvlinops.hutchinson_diag
 
 .. autofunction:: curvlinops.xdiag
 
