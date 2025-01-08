@@ -1,13 +1,8 @@
 """Test ``curvlinops.trace.meyer2020hutch."""
 
 from functools import partial
-from test.trace import (
-    DISTRIBUTION_IDS,
-    DISTRIBUTIONS,
-    NUM_MATVEC_IDS,
-    NUM_MATVECS,
-    _test_convergence,
-)
+from test.trace import DISTRIBUTION_IDS, DISTRIBUTIONS, NUM_MATVEC_IDS, NUM_MATVECS
+from test.utils import check_estimator_convergence
 
 from numpy import trace
 from numpy.random import rand, seed
@@ -27,13 +22,13 @@ def test_hutchpp_trace(num_matvecs: int, distribution: str):
     """
     seed(0)
     A = rand(10, 10)
-    tr_A = trace(A)
-    estimator = partial(hutchpp_trace, distribution=distribution)
-    _test_convergence(
+    estimator = partial(
+        hutchpp_trace, A=A, num_matvecs=num_matvecs, distribution=distribution
+    )
+    check_estimator_convergence(
         estimator,
         num_matvecs,
-        A,
-        tr_A,
+        trace(A),
         # use half the target tolerance as vanilla Hutchinson
         target_rel_error=5e-4,
     )

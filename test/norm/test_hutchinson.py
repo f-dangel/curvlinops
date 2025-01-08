@@ -1,5 +1,8 @@
 """Test ``curvlinops.norm.hutchinson``."""
 
+from functools import partial
+from test.utils import check_estimator_convergence
+
 from numpy import mean
 from numpy.random import rand, seed
 from pytest import mark
@@ -23,25 +26,8 @@ def test_hutchinson_squared_fro(num_matvecs: int, distribution: str):
         distribution: Distribution of the random vectors used for the estimation.
     """
     seed(0)
-    A = rand(20, 30)
-    A_squared_fro = (A**2).sum()
-
-    max_total_matvecs = 100_000
-    check_every = 100
-    target_rel_error = 2e-3
-
-    used_matvecs, converged = 0, False
-
-    estimates = []
-    while used_matvecs < max_total_matvecs and not converged:
-        estimates.append(
-            hutchinson_squared_fro(A, num_matvecs, distribution=distribution)
-        )
-        used_matvecs += num_matvecs
-
-        if len(estimates) % check_every == 0:
-            rel_error = abs(A_squared_fro - mean(estimates)) / A_squared_fro
-            print(f"Relative error after {used_matvecs} matvecs: {rel_error:.5f}.")
-            converged = rel_error < target_rel_error
-
-    assert converged
+    A = rand(10, 15)
+    estimator = partial(
+        hutchinson_squared_fro, A=A, num_matvecs=num_matvecs, distribution=distribution
+    )
+    check_estimator_convergence(estimator, num_matvecs, (A**2).sum())
