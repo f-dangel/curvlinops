@@ -22,6 +22,7 @@ from curvlinops.papyan2020traces.spectrum import (
     lanczos_approximate_spectrum,
 )
 from curvlinops.submatrix import SubmatrixLinearOperator
+from curvlinops.trace.epperly2024xtrace import xtrace
 from curvlinops.trace.hutchinson import HutchinsonTraceEstimator
 from curvlinops.trace.meyer2020hutch import HutchPPTraceEstimator
 
@@ -52,6 +53,7 @@ __all__ = [
     # trace estimation
     "HutchinsonTraceEstimator",
     "HutchPPTraceEstimator",
+    "xtrace",
     # diagonal estimation
     "HutchinsonDiagonalEstimator",
     "xdiag",
