@@ -86,6 +86,8 @@ Diagonal approximation
 .. autoclass:: curvlinops.HutchinsonDiagonalEstimator
    :members: __init__, sample
 
+.. autofunction:: curvlinops.xdiag
+
 Frobenius norm approximation
 ============================
 

@@ -1,5 +1,6 @@
 """``curvlinops`` library API."""
 
+from curvlinops.diagonal.epperly2024xtrace import xdiag
 from curvlinops.diagonal.hutchinson import HutchinsonDiagonalEstimator
 from curvlinops.fisher import FisherMCLinearOperator
 from curvlinops.ggn import GGNLinearOperator
@@ -55,6 +56,7 @@ __all__ = [
     "xtrace",
     # diagonal estimation
     "HutchinsonDiagonalEstimator",
+    "xdiag",
     # norm estimation
     "HutchinsonSquaredFrobeniusNormEstimator",
 ]
