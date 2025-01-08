@@ -52,7 +52,7 @@ def xtrace(
     # compute the orthogonal basis for all test vectors, and its associated trace
     Q, R = qr(A_W)
     A_Q = A @ Q
-    tr_QT_A_Q = einsum("ij,ji->", Q.T, A_Q)
+    tr_QT_A_Q = einsum("ij,ij->", Q, A_Q)
 
     # compute the traces in the bases that would result had we left out the i-th
     # test vector in the QR decomposition
