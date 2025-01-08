@@ -59,7 +59,7 @@ def xtrace(
     RT_inv = inv(R.T)
     D = 1 / (RT_inv**2).sum(0) ** 0.5
     S = einsum("ij,j->ij", RT_inv, D)
-    tr_QT_i_A_Q_i = einsum("ij,jk,kl,li->i", S.T, Q.T, A_Q, S)
+    tr_QT_i_A_Q_i = einsum("ij,ki,kl,lj->j", S, Q, A_Q, S, optimize="optimal")
 
     # Traces in the bases {Q_i}. This follows by writing Tr(QT_i A Q_i) = Tr(A Q_i QT_i)
     # then using the relation that Q_i QT_i = Q (I - s_i sT_i) QT. Further
