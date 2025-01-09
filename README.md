@@ -62,7 +62,5 @@ Other features that could be supported in the future include:
     decomposition](https://arxiv.org/abs/2008.11865)
 
 ###### Logo mage credits
-- SciPy logo: Unknown, [CC BY-SA
-  4.0](https://creativecommons.org/licenses/by-sa/4.0), via Wikimedia Commons
 - PyTorch logo: https://github.com/soumith, [CC BY-SA
   4.0](https://creativecommons.org/licenses/by-sa/4.0), via Wikimedia Commons
