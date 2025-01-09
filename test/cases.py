@@ -2,13 +2,6 @@
 
 from collections import UserDict
 from collections.abc import MutableMapping
-from test.utils import (
-    WeightShareModel,
-    binary_classification_targets,
-    classification_targets,
-    get_available_devices,
-    regression_targets,
-)
 
 from torch import rand, rand_like
 from torch.nn import (
@@ -28,6 +21,13 @@ from torch.nn import (
 from torch.utils.data import DataLoader, TensorDataset
 
 from curvlinops.kfac import KFACType
+from test.utils import (
+    WeightShareModel,
+    binary_classification_targets,
+    classification_targets,
+    get_available_devices,
+    regression_targets,
+)
 
 DEVICES = get_available_devices()
 DEVICES_IDS = [f"dev={d}" for d in DEVICES]
