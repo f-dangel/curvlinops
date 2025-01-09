@@ -1,18 +1,6 @@
 """Contains tests for ``curvlinops.kfac``."""
 
 import os
-from test.cases import DEVICES, DEVICES_IDS
-from test.utils import (
-    Conv2dModel,
-    UnetModel,
-    WeightShareModel,
-    binary_classification_targets,
-    classification_targets,
-    compare_matmat,
-    compare_state_dicts,
-    ggn_block_diagonal,
-    regression_targets,
-)
 from typing import Dict, Iterable, List, Tuple, Union
 
 from einops.layers.torch import Rearrange
@@ -20,9 +8,10 @@ from numpy import eye, random
 from numpy.linalg import det, norm, slogdet
 from pytest import mark, raises
 from scipy.linalg import block_diag
-from torch import Tensor, allclose, device
-from torch import eye as torch_eye
 from torch import (
+    Tensor,
+    allclose,
+    device,
     float64,
     isinf,
     isnan,
@@ -33,6 +22,7 @@ from torch import (
     randperm,
     save,
 )
+from torch import eye as torch_eye
 from torch.nn import (
     BCEWithLogitsLoss,
     CrossEntropyLoss,
@@ -48,6 +38,18 @@ from torch.nn import (
 from curvlinops.examples.utils import report_nonclose
 from curvlinops.gradient_moments import EFLinearOperator
 from curvlinops.kfac import FisherType, KFACLinearOperator, KFACType
+from test.cases import DEVICES, DEVICES_IDS
+from test.utils import (
+    Conv2dModel,
+    UnetModel,
+    WeightShareModel,
+    binary_classification_targets,
+    classification_targets,
+    compare_matmat,
+    compare_state_dicts,
+    ggn_block_diagonal,
+    regression_targets,
+)
 
 
 @mark.parametrize(
@@ -560,7 +562,7 @@ def test_expand_setting_scaling(
             # MSE loss averages over number of output channels
             loss_term_factor *= output_random_variable_size
         for ggT in kfac_sum_torch._gradient_covariances.values():
-            ggT /= kfac_sum_torch._N_data * loss_term_factor
+            ggT.div_(kfac_sum_torch._N_data * loss_term_factor)
     kfac_simulated_mean_mat = kfac_sum @ eye(kfac_sum.shape[1])
 
     # KFAC with mean reduction

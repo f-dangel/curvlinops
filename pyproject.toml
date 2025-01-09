@@ -64,18 +64,9 @@ test = [
 
 # Dependencies needed for linting.
 lint = [
-    "black",
-    "flake8",
-    "mccabe",
-    "pycodestyle",
-    "pyflakes",
-    "pep8-naming",
-    "flake8-bugbear",
-    "flake8-comprehensions",
-    "flake8-tidy-imports",
+    "ruff",
     "darglint",
     "pydocstyle",
-    "isort",
 ]
 
 # Dependencies needed to build/view the documentation.
@@ -95,14 +86,58 @@ docs = [
 ###############################################################################
 [tool.setuptools_scm]
 
-[tool.isort]
-profile = "black"
-multi_line_output = 3
-include_trailing_comma = true
-force_grid_wrap = 0
-use_parentheses = true
-
 [tool.pydocstyle]
 convention = "google"
 match = '.*\.py'
 match_dir = '^(?!(test|.git)).*'
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+# Enable all rules from flake8 (E, F), plus additional ones including isort (I)
+select = ["E", "F", "B", "C", "W", "B9", "PLE", "PLW", "PLR", "I"]
+ignore = [
+    # E501 max-line-length (replaced by B950 (max-line-length + 10%))
+    "E501",
+    # C408 use {} instead of dict() (ignored because pytorch uses dict)
+    "C408",
+    # E203 whitespace before :
+    "E203",
+    # E231 missing whitespace after ','
+    "E231",
+    # W291 trailing whitespace
+    "W291",
+    # E203 line break before binary operator (replaces W503)
+    "E203",
+    # Line break occurred after a binary operator (replaces W504)
+    "E226",
+    # B905 `zip()` without an explicit `strict=` parameter
+    "B905",
+    # Too many arguments in function definition (9 > 5)
+    "PLR0913",
+    # Magic value comparison
+    "PLR2004",
+    # Loop variable overwritten by assignment target
+    "PLW2901",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+exclude = [
+    ".eggs",
+    ".git",
+    ".pytest_cache",
+    "docs/rtd",
+    "build",
+    "dist",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Add any per-file ignores here if needed
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["pytest.raises", "pytest.warns", "pytest.mark.skip"]

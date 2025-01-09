@@ -1,8 +1,6 @@
 """Test ``curvlinops.diagonal.epperly2024xtrace``."""
 
 from functools import partial
-from test.diagonal import NUM_MATVEC_IDS, NUM_MATVECS
-from test.utils import check_estimator_convergence
 
 from numpy import allclose, column_stack, diag, mean, ndarray
 from numpy.linalg import qr
@@ -12,6 +10,8 @@ from scipy.sparse.linalg import LinearOperator
 
 from curvlinops import xdiag
 from curvlinops.sampling import random_vector
+from test.diagonal import NUM_MATVEC_IDS, NUM_MATVECS
+from test.utils import check_estimator_convergence
 
 
 def xdiag_naive(A: LinearOperator, num_matvecs: int) -> ndarray:

@@ -1,14 +1,14 @@
 """Test ``curvlinops.diagonal.hutchinson``."""
 
 from functools import partial
-from test.diagonal import DISTRIBUTION_IDS, DISTRIBUTIONS, NUM_MATVEC_IDS, NUM_MATVECS
-from test.utils import check_estimator_convergence
 
 from numpy import diag
 from numpy.random import rand, seed
 from pytest import mark
 
 from curvlinops import hutchinson_diag
+from test.diagonal import DISTRIBUTION_IDS, DISTRIBUTIONS, NUM_MATVEC_IDS, NUM_MATVECS
+from test.utils import check_estimator_convergence
 
 
 @mark.parametrize("num_matvecs", NUM_MATVECS, ids=NUM_MATVEC_IDS)

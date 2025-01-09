@@ -1,12 +1,12 @@
 """Test ``curvlinops.norm.hutchinson``."""
 
 from functools import partial
-from test.utils import check_estimator_convergence
 
 from numpy.random import rand, seed
 from pytest import mark
 
 from curvlinops import hutchinson_squared_fro
+from test.utils import check_estimator_convergence
 
 DISTRIBUTIONS = ["rademacher", "normal"]
 DISTRIBUTION_IDS = [f"distribution={distribution}" for distribution in DISTRIBUTIONS]

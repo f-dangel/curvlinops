@@ -21,7 +21,7 @@ from torch.nn.attention import SDPBackend, sdpa_kernel
 from curvlinops import KFACInverseLinearOperator, KFACLinearOperator
 
 
-def run_peakmem_benchmark(  # noqa: C901
+def run_peakmem_benchmark(  # noqa: C901, PLR0915
     linop_str: str, problem_str: str, device_str: str, op_str: str
 ):
     """Execute the memory benchmark for a given linear operator class and save results.

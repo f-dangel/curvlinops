@@ -4,7 +4,7 @@ help:
 	@echo "install"
 	@echo "        Install curvlinops and dependencies"
 	@echo "uninstall"
-	@echo "        Unstall curvlinops"
+	@echo "        Uninstall curvlinops"
 	@echo "lint"
 	@echo "        Run all linting actions"
 	@echo "docs"
@@ -21,16 +21,14 @@ help:
 	@echo "        Run pytest on test and report coverage"
 	@echo "install-lint"
 	@echo "        Install curvlinops and the linter tools"
-	@echo "isort"
-	@echo "        Run isort (sort imports) on the project"
-	@echo "isort-check"
-	@echo "        Check if isort (sort imports) would change files"
-	@echo "black"
-	@echo "        Run black on the project"
-	@echo "black-check"
-	@echo "        Check if black would change files"
-	@echo "flake8"
-	@echo "        Run flake8 on the project"
+	@echo "ruff-format"
+	@echo "        Run ruff format on the project"
+	@echo "ruff-format-check"
+	@echo "        Check if ruff format would change files"
+	@echo "ruff"
+	@echo "        Run ruff on the project and fix errors"
+	@echo "ruff-check"
+	@echo "        Run ruff check on the project without fixing errors"
 	@echo "conda-env"
 	@echo "        Create conda environment 'curvlinops' with dev setup"
 	@echo "darglint-check"
@@ -81,26 +79,21 @@ test-light:
 install-lint:
 	@pip install -e .[lint]
 
-.PHONY: isort isort-check
+.PHONY: ruff-format ruff-format-check
 
-isort:
-	@isort .
+ruff-format:
+	@ruff format .
 
-isort-check:
-	@isort . --check --diff
+ruff-format-check:
+	@ruff format --check .
 
-.PHONY: black black-check
+.PHONY: ruff-check
 
-black:
-	@black . --config=black.toml
+ruff:
+	@ruff check . --fix
 
-black-check:
-	@black . --config=black.toml --check
-
-.PHONY: flake8
-
-flake8:
-	@flake8 .
+ruff-check:
+	@ruff check .
 
 .PHONY: darglint-check
 
@@ -120,8 +113,7 @@ conda-env:
 .PHONY: lint
 
 lint:
-	make black-check
-	make isort-check
-	make flake8
+	make ruff-format-check
+	make ruff-check
 	make darglint-check
 	make pydocstyle-check
