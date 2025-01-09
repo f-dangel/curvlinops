@@ -1,7 +1,5 @@
 """Test ``curvlinops.trace.epperli2024xtrace."""
 
-from test.trace import DISTRIBUTION_IDS, DISTRIBUTIONS
-
 from numpy import column_stack, dot, isclose, mean, trace
 from numpy.linalg import qr
 from numpy.random import rand, seed
@@ -10,6 +8,7 @@ from scipy.sparse.linalg import LinearOperator
 
 from curvlinops import xtrace
 from curvlinops.sampling import random_vector
+from test.trace import DISTRIBUTION_IDS, DISTRIBUTIONS
 
 NUM_MATVECS = [4, 10]
 NUM_MATVEC_IDS = [f"num_matvecs={num_matvecs}" for num_matvecs in NUM_MATVECS]
