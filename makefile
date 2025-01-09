@@ -114,6 +114,6 @@ conda-env:
 
 lint:
 	make ruff-format-check
-	make ruff
+	make ruff-check
 	make darglint-check
 	make pydocstyle-check
