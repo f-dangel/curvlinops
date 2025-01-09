@@ -185,7 +185,7 @@ def setup_problem(
         for m in supported_layers:
             # ignore the last layer of GPT because it has 50k outputs, which
             # will yield an extremely large Kronecker factor
-            if all(d <= 50_000 for d in m.weight.shape):  # noqa: PLR2004
+            if all(d <= 50_000 for d in m.weight.shape):
                 params.extend([p for p in m.parameters() if p.requires_grad])
     else:
         params = [p for p in model.parameters() if p.requires_grad]

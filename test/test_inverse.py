@@ -137,7 +137,7 @@ def test_Neumann_inverse_damped_GGN_matvec(inv_case, delta: float = 1e-2):
 
     # set scale such that Neumann series converges
     eval_max = eigh(damped_GGN_functorch)[0][-1]
-    scale = 1.0 if eval_max < 2 else 1.9 / eval_max  # noqa: PLR2004
+    scale = 1.0 if eval_max < 2 else 1.9 / eval_max
 
     # NOTE This may break when other cases are added because slow convergence
     inv_GGN = NeumannInverseLinearOperator(GGN + damping, num_terms=7_000, scale=scale)

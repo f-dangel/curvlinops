@@ -100,7 +100,7 @@ def loss_hessian_matrix_sqrt(
         NotImplementedError: If the loss function is ``BCEWithLogitsLoss`` but the
             target is not binary.
     """
-    if output_one_datum.ndim != 2 or output_one_datum.shape[0] != 1:  # noqa: PLR2004
+    if output_one_datum.ndim != 2 or output_one_datum.shape[0] != 1:
         raise ValueError(
             f"Expected 'output_one_datum' to be 2d with shape [1, C], got "
             f"{output_one_datum.shape}"

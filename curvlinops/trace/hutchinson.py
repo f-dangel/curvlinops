@@ -58,7 +58,7 @@ class HutchinsonTraceEstimator:
         Raises:
             ValueError: If the operator is not square.
         """
-        if len(A.shape) != 2 or A.shape[0] != A.shape[1]:  # noqa: PLR2004
+        if len(A.shape) != 2 or A.shape[0] != A.shape[1]:
             raise ValueError(f"A must be square. Got shape {A.shape}.")
         self._A = A
 

@@ -292,7 +292,7 @@ class FisherMCLinearOperator(CurvatureLinearOperator):
             NotImplementedError: If the prediction does not have two dimensions.
             NotImplementedError: If binary classification labels are not binary.
         """
-        if output.ndim != 2:  # noqa: PLR2004
+        if output.ndim != 2:
             raise NotImplementedError(f"Only 2d outputs supported. Got {output.shape}")
 
         C = output.shape[1]
