@@ -4,6 +4,7 @@ from numpy import column_stack, einsum
 from scipy.sparse.linalg import LinearOperator
 
 from curvlinops.sampling import random_vector
+from curvlinops.utils import assert_is_square, assert_matvecs_subseed_dim
 
 
 def hutchinson_trace(
@@ -40,17 +41,13 @@ def hutchinson_trace(
     Args:
         A: A square linear operator whose trace is estimated.
         num_matvecs: Total number of matrix-vector products to use. Must be smaller
-            than the dimension of the linear operator.
+            than the dimension of the linear operator (because otherwise one can
+            evaluate the true trace directly at the same cost).
         distribution: Distribution of the random vectors used for the trace estimation.
             Can be either ``'rademacher'`` or ``'normal'``. Default: ``'rademacher'``.
 
     Returns:
         The estimated trace of the linear operator.
-
-    Raises:
-        ValueError: If the linear operator is not square or if the number of matrix-
-            vector products is greater than the dimension of the linear operator
-            (because then you can evaluate the true trace directly at the same cost).
 
     Example:
         >>> from numpy import trace, mean
@@ -68,13 +65,8 @@ def hutchinson_trace(
         >>> round(tr_A, 4), round(tr_A_low_precision, 4), round(tr_A_high_precision, 4)
         (25.7342, 59.7307, 20.033)
     """
-    if len(A.shape) != 2 or A.shape[0] != A.shape[1]:
-        raise ValueError(f"A must be square. Got shape {A.shape}.")
-    dim = A.shape[1]
-    if num_matvecs >= dim:
-        raise ValueError(
-            f"num_matvecs ({num_matvecs}) must be less than A's size ({dim})."
-        )
+    dim = assert_is_square(A)
+    assert_matvecs_subseed_dim(A, num_matvecs)
     G = column_stack([random_vector(dim, distribution) for _ in range(num_matvecs)])
 
     return einsum("ij,ij", G, A @ G) / num_matvecs

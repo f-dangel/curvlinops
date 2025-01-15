@@ -4,6 +4,7 @@ from numpy import column_stack, einsum, ndarray
 from scipy.sparse.linalg import LinearOperator
 
 from curvlinops.sampling import random_vector
+from curvlinops.utils import assert_is_square, assert_matvecs_subseed_dim
 
 
 def hutchinson_diag(
@@ -39,18 +40,14 @@ def hutchinson_diag(
     Args:
         A: A square linear operator whose diagonal is estimated.
         num_matvecs: Total number of matrix-vector products to use. Must be smaller
-            than the dimension of the linear operator.
+            than the dimension of the linear operator (because otherwise one can
+            evaluate the true diagonal directly at the same cost).
         distribution: Distribution of the random vectors used for the diagonal
             estimation. Can be either ``'rademacher'`` or ``'normal'``.
             Default: ``'rademacher'``.
 
     Returns:
         The estimated diagonal of the linear operator.
-
-    Raises:
-        ValueError: If the linear operator is not square or if the number of matrix-
-            vector products is greater than the dimension of the linear operator
-            (because then you can evaluate the true diagonal directly at the same cost).
 
     Example:
         >>> from numpy import diag
@@ -69,13 +66,8 @@ def hutchinson_diag(
         >>> round(error_low_precision, 4), round(error_high_precision, 4)
         (4.616, 1.2441)
     """
-    if len(A.shape) != 2 or A.shape[0] != A.shape[1]:
-        raise ValueError(f"A must be square. Got shape {A.shape}.")
-    dim = A.shape[1]
-    if num_matvecs >= dim:
-        raise ValueError(
-            f"num_matvecs ({num_matvecs}) must be less than A's size ({dim})."
-        )
+    dim = assert_is_square(A)
+    assert_matvecs_subseed_dim(A, num_matvecs)
     G = column_stack([random_vector(dim, distribution) for _ in range(num_matvecs)])
-    AG = A @ G
-    return einsum("ij,ij->i", G, AG) / num_matvecs
+
+    return einsum("ij,ij->i", G, A @ G) / num_matvecs
