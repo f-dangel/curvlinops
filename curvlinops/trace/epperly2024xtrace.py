@@ -5,6 +5,11 @@ from numpy.linalg import inv, qr
 from scipy.sparse.linalg import LinearOperator
 
 from curvlinops.sampling import random_vector
+from curvlinops.utils import (
+    assert_divisible_by,
+    assert_is_square,
+    assert_matvecs_subseed_dim,
+)
 
 
 def xtrace(
@@ -23,26 +28,17 @@ def xtrace(
     Args:
         A: A square linear operator.
         num_matvecs: Total number of matrix-vector products to use. Must be even and
-            less than the dimension of the linear operator.
+            less than the dimension of the linear operator (because otherwise one can
+            evaluate the true trace directly at the same cost).
         distribution: Distribution of the random vectors used for the trace estimation.
             Can be either ``'rademacher'`` or ``'normal'``. Default: ``'rademacher'``.
 
     Returns:
         The estimated trace of the linear operator.
-
-    Raises:
-        ValueError: If the linear operator is not square or if the number of matrix-
-            vector products is not even or is greater than the dimension of the linear
-            operator.
     """
-    if len(A.shape) != 2 or A.shape[0] != A.shape[1]:
-        raise ValueError(f"A must be square. Got shape {A.shape}.")
-    dim = A.shape[1]
-    if num_matvecs % 2 != 0 or num_matvecs >= dim:
-        raise ValueError(
-            "num_matvecs must be even and less than the dimension of A.",
-            f" Got {num_matvecs}.",
-        )
+    dim = assert_is_square(A)
+    assert_matvecs_subseed_dim(A, num_matvecs)
+    assert_divisible_by(num_matvecs, 2, "num_matvecs")
 
     # draw random vectors and compute their matrix-vector products
     num_vecs = num_matvecs // 2
