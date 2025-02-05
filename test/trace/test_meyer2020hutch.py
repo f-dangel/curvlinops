@@ -1,14 +1,14 @@
 """Test ``curvlinops.trace.meyer2020hutch."""
 
 from functools import partial
-from test.trace import DISTRIBUTION_IDS, DISTRIBUTIONS, NUM_MATVEC_IDS, NUM_MATVECS
-from test.utils import check_estimator_convergence
 
 from numpy import trace
 from numpy.random import rand, seed
 from pytest import mark
 
 from curvlinops import hutchpp_trace
+from test.trace import DISTRIBUTION_IDS, DISTRIBUTIONS, NUM_MATVEC_IDS, NUM_MATVECS
+from test.utils import check_estimator_convergence
 
 
 @mark.parametrize("num_matvecs", NUM_MATVECS, ids=NUM_MATVEC_IDS)

@@ -5,6 +5,11 @@ from numpy.linalg import qr
 from scipy.sparse.linalg import LinearOperator
 
 from curvlinops.sampling import random_vector
+from curvlinops.utils import (
+    assert_divisible_by,
+    assert_is_square,
+    assert_matvecs_subseed_dim,
+)
 
 
 def hutchpp_trace(
@@ -47,18 +52,13 @@ def hutchpp_trace(
     Args:
         A: A square linear operator whose trace is estimated.
         num_matvecs: Total number of matrix-vector products to use. Must be smaller
-            than the dimension of the linear operator, and divisible by 3.
+            than the dimension of the linear operator (because otherwise one can
+            evaluate the true trace directly at the same cost), and divisible by 3.
         distribution: Distribution of the random vectors used for the trace estimation.
             Can be either ``'rademacher'`` or ``'normal'``. Default: ``'rademacher'``.
 
     Returns:
         The estimated trace of the linear operator.
-
-    Raises:
-        ValueError: If the linear operator is not square or if the number of matrix-
-            vector products is greater than the dimension of the linear operator
-            (because then you can evaluate the true trace directly at the same cost)
-            or not divisible by 3.
 
     Example:
         >>> from numpy import trace, mean
@@ -76,15 +76,9 @@ def hutchpp_trace(
         >>> round(tr_A, 4), round(tr_A_low_precision, 4), round(tr_A_high_precision, 4)
         (25.7342, 50.3488, 26.052)
     """
-    if len(A.shape) != 2 or A.shape[0] != A.shape[1]:
-        raise ValueError(f"A must be square. Got shape {A.shape}.")
-    dim = A.shape[1]
-    if num_matvecs >= dim or num_matvecs % 3 != 0:
-        raise ValueError(
-            f"num_matvecs ({num_matvecs}) must be less than A's size ({dim})"
-            " and divisible by 3."
-        )
-
+    dim = assert_is_square(A)
+    assert_matvecs_subseed_dim(A, num_matvecs)
+    assert_divisible_by(num_matvecs, 3, "num_matvecs")
     N = num_matvecs // 3
 
     # compute the orthogonal basis for the subspace spanned by AS, and evaluate the

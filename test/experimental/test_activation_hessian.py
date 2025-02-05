@@ -1,8 +1,5 @@
 """Contains tests for ``curvlinops.activation_hessian``."""
 
-from test.cases import DEVICES, DEVICES_IDS
-from test.utils import classification_targets, eye_like
-
 from pytest import mark, raises
 from torch import allclose, block_diag, device, einsum, eye, manual_seed, rand
 from torch.nn import CrossEntropyLoss, Linear, ReLU, Sequential, Sigmoid
@@ -11,6 +8,8 @@ from curvlinops.experimental.activation_hessian import (
     ActivationHessianLinearOperator,
     store_activation,
 )
+from test.cases import DEVICES, DEVICES_IDS
+from test.utils import classification_targets, eye_like
 
 
 @mark.parametrize("dev", DEVICES, ids=DEVICES_IDS)

@@ -1,8 +1,6 @@
 """Test ``curvlinops.trace.epperli2024xtrace."""
 
 from functools import partial
-from test.trace import DISTRIBUTION_IDS, DISTRIBUTIONS
-from test.utils import check_estimator_convergence
 
 from numpy import column_stack, dot, isclose, mean, trace
 from numpy.linalg import qr
@@ -12,6 +10,8 @@ from scipy.sparse.linalg import LinearOperator
 
 from curvlinops import xtrace
 from curvlinops.sampling import random_vector
+from test.trace import DISTRIBUTION_IDS, DISTRIBUTIONS
+from test.utils import check_estimator_convergence
 
 NUM_MATVECS = [6, 8]
 NUM_MATVEC_IDS = [f"num_matvecs={num_matvecs}" for num_matvecs in NUM_MATVECS]
