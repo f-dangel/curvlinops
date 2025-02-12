@@ -15,7 +15,7 @@ def hutchinson_diag(
     For details, see
 
     - Bekas, C., Kokiopoulou, E., & Saad, Y. (2007). An estimator for the diagonal
-    of a matrix. Applied Numerical Mathematics.
+      of a matrix. Applied Numerical Mathematics.
 
     Let :math:`\mathbf{A}` be a square linear operator. We can approximate its diagonal
     :math:`\mathrm{diag}(\mathbf{A})` by drawing random vectors :math:`N`
