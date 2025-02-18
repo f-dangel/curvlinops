@@ -651,11 +651,37 @@ class KFACLinearOperator(_LinearOperator):
 
         for X, y in self._loop_over_data(desc="KFAC matrices"):
             output = self._model_func(X)
+            output, y = self._rearrange_for_larger_than_2d_output(output, y)
             self._compute_loss_and_backward(output, y)
 
         # clean up
         for handle in hook_handles:
             handle.remove()
+
+    def _rearrange_for_larger_than_2d_output(
+        self,
+        output: Tensor,
+        y: Tensor,
+    ) -> Tuple[Tensor, Tensor]:
+        r"""Rearrange the output and target if output is >2d.
+
+        This will determine what kind of Fisher/GGN is approximated.
+
+        Args:
+            output: The model's prediction
+                :math:`\{f_\mathbf{\theta}(\mathbf{x}_n)\}_{n=1}^N`.
+            y: The labels :math:`\{\mathbf{y}_n\}_{n=1}^N`.
+
+        Returns:
+            The rearranged output and target.
+        """
+        if isinstance(self._loss_func, CrossEntropyLoss):
+            output = rearrange(output, "batch c ... -> (batch ...) c")
+            y = rearrange(y, "batch ... -> (batch ...)")
+        else:
+            output = rearrange(output, "batch ... c -> (batch ...) c")
+            y = rearrange(y, "batch ... c -> (batch ...) c")
+        return output, y
 
     def _maybe_adjust_loss_scale(self, loss: Tensor, output: Tensor) -> Tensor:
         """Adjust the scale of the loss tensor if necessary.
@@ -690,17 +716,16 @@ class KFACLinearOperator(_LinearOperator):
             y: The labels :math:`\{\mathbf{y}_n\}_{n=1}^N`.
 
         Raises:
+            ValueError: If the output is not 2d and y is not 1d/2d.
             ValueError: If ``fisher_type`` is not ``FisherType.TYPE2``,
                 ``FisherType.MC``, ``FisherType.EMPIRICAL``, or
                 ``FisherType.FORWARD_ONLY``.
         """
-        # if >2d output we convert to an equivalent 2d output
-        if isinstance(self._loss_func, CrossEntropyLoss):
-            output = rearrange(output, "batch c ... -> (batch ...) c")
-            y = rearrange(y, "batch ... -> (batch ...)")
-        else:
-            output = rearrange(output, "batch ... c -> (batch ...) c")
-            y = rearrange(y, "batch ... c -> (batch ...) c")
+        if output.ndim != 2 or y.ndim not in {1, 2}:
+            raise ValueError(
+                "Only 2d output and 1d/2d target are supported. "
+                f"Got {output.ndim=} and {y.ndim=}."
+            )
 
         if self._fisher_type == FisherType.TYPE2:
             # Compute per-sample Hessian square root, then concatenate over samples.
@@ -1359,6 +1384,7 @@ class EKFACLinearOperator(KFACLinearOperator):
     """
 
     _SUPPORTED_FISHER_TYPE: FisherType = (
+        FisherType.TYPE2,
         FisherType.MC,
         FisherType.EMPIRICAL,
     )
@@ -1484,6 +1510,36 @@ class EKFACLinearOperator(KFACLinearOperator):
                 raise e
             finally:
                 self.to_device(old_device)
+
+    def _rearrange_for_larger_than_2d_output(
+        self,
+        output: Tensor,
+        y: Tensor,
+    ) -> Tuple[Tensor, Tensor]:
+        r"""Rearrange the output and target if output is >2d.
+
+        This will determine what kind of Fisher/GGN is approximated.
+
+        Args:
+            output: The model's prediction
+                :math:`\{f_\mathbf{\theta}(\mathbf{x}_n)\}_{n=1}^N`.
+            y: The labels :math:`\{\mathbf{y}_n\}_{n=1}^N`.
+
+        Returns:
+            The rearranged outputs and targets.
+
+        Raises:
+            ValueError: If the output is not 2d and y is not 1d/2d.
+        """
+        # Our individual gradient implementation for EKFAC does not support computing
+        # the individual gradients for any loss terms that might dependent on each other,
+        # i.e., loss terms other than the per-data point loss terms.
+        if output.ndim != 2 or y.ndim not in {1, 2}:
+            raise ValueError(
+                "Only 2d output and 1d/2d target are supported for EKFAC. "
+                f"Got {output.ndim=} and {y.ndim=}."
+            )
+        return output, y
 
     def _maybe_compute_ekfac(self):
         """Compute the EKFAC approximation when necessary."""
@@ -1621,6 +1677,7 @@ class EKFACLinearOperator(KFACLinearOperator):
         # loop over data set, computing the corrected eigenvalues
         for X, y in self._loop_over_data(desc="Eigenvalue correction"):
             output = self._model_func(X)
+            output, y = self._rearrange_for_larger_than_2d_output(output, y)
             self._compute_loss_and_backward(output, y)
 
         # Clear the cached activations
@@ -1833,6 +1890,7 @@ class EKFACLinearOperator(KFACLinearOperator):
         # loop over data set, computing the per-example gradients
         for X, y in self._loop_over_data(desc="Individual gradients"):
             output = self._model_func(X)
+            output, y = self._rearrange_for_larger_than_2d_output(output, y)
             self._compute_loss_and_backward(output, y)
 
         # Clear the cached activations
