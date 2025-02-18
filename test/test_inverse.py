@@ -777,7 +777,7 @@ def test_torch_matvec_list_output_shapes(cnn_case):
     "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
 )
 def test_EKFAC_inverse_exactly_damped_matmat(
-    case: Tuple[
+    inv_case: Tuple[
         Module,
         Union[MSELoss, CrossEntropyLoss],
         List[Parameter],
@@ -789,7 +789,7 @@ def test_EKFAC_inverse_exactly_damped_matmat(
     delta: float = 1e-2,
 ):
     """Test matrix-matrix multiplication by an inverse (exactly) damped EKFAC approximation."""
-    model_func, loss_func, params, data, batch_size_fn = case
+    model_func, loss_func, params, data, batch_size_fn = inv_case
     dtype = torch.float64  # use double precision for better numerical stability
     model_func = model_func.to(dtype=dtype)
     loss_func = loss_func.to(dtype=dtype)
@@ -853,7 +853,7 @@ def test_EKFAC_inverse_exactly_damped_matmat(
 
 
 def test_EKFAC_inverse_damped_torch_matmat(
-    case: Tuple[
+    inv_case: Tuple[
         Module,
         Union[MSELoss, CrossEntropyLoss],
         List[Parameter],
@@ -862,7 +862,7 @@ def test_EKFAC_inverse_damped_torch_matmat(
     delta: float = 1e-2,
 ):
     """Test torch matrix-matrix multiplication by an inverse damped EKFAC approximation."""
-    model_func, loss_func, params, data, batch_size_fn = case
+    model_func, loss_func, params, data, batch_size_fn = inv_case
     dtype = torch.float64  # use double precision for better numerical stability
     model_func = model_func.to(dtype=dtype)
     loss_func = loss_func.to(dtype=dtype)
@@ -916,7 +916,7 @@ def test_EKFAC_inverse_damped_torch_matmat(
 
 
 def test_EKFAC_inverse_damped_torch_matvec(
-    case: Tuple[
+    inv_case: Tuple[
         Module,
         Union[MSELoss, CrossEntropyLoss],
         List[Parameter],
@@ -925,7 +925,7 @@ def test_EKFAC_inverse_damped_torch_matvec(
     delta: float = 1e-2,
 ):
     """Test torch matrix-vector multiplication by an inverse damped EKFAC approximation."""
-    model_func, loss_func, params, data, batch_size_fn = case
+    model_func, loss_func, params, data, batch_size_fn = inv_case
     dtype = torch.float64  # use double precision for better numerical stability
     model_func = model_func.to(dtype=dtype)
     loss_func = loss_func.to(dtype=dtype)
