@@ -698,11 +698,15 @@ def test_KFAC_inverse_save_and_load_state_dict():
     wrong_kfac = KFACLinearOperator(model, CrossEntropyLoss(), params, [(X, y)])
     inv_kfac_wrong = KFACInverseLinearOperator(wrong_kfac)
     with raises(ValueError, match="mismatch"):
-        inv_kfac_wrong.load_state_dict(torch.load("inv_kfac_state_dict.pt", weights_only=False))
+        inv_kfac_wrong.load_state_dict(
+            torch.load("inv_kfac_state_dict.pt", weights_only=False)
+        )
 
     # create new inverse KFAC and load state dict
     inv_kfac_new = KFACInverseLinearOperator(kfac)
-    inv_kfac_new.load_state_dict(torch.load("inv_kfac_state_dict.pt", weights_only=False))
+    inv_kfac_new.load_state_dict(
+        torch.load("inv_kfac_state_dict.pt", weights_only=False)
+    )
     # clean up
     os.remove("inv_kfac_state_dict.pt")
 
@@ -1009,11 +1013,15 @@ def test_EKFAC_inverse_save_and_load_state_dict():
         wrong_ekfac, damping=1e-2, use_exact_damping=True
     )
     with raises(ValueError, match="mismatch"):
-        inv_ekfac_wrong.load_state_dict(torch.load("inv_ekfac_state_dict.pt", weights_only=False))
+        inv_ekfac_wrong.load_state_dict(
+            torch.load("inv_ekfac_state_dict.pt", weights_only=False)
+        )
 
     # create new inverse KFAC and load state dict
     inv_ekfac_new = KFACInverseLinearOperator(ekfac, use_exact_damping=True)
-    inv_ekfac_new.load_state_dict(torch.load("inv_ekfac_state_dict.pt", weights_only=False))
+    inv_ekfac_new.load_state_dict(
+        torch.load("inv_ekfac_state_dict.pt", weights_only=False)
+    )
     # clean up
     os.remove("inv_ekfac_state_dict.pt")
 
