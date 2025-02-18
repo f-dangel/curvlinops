@@ -19,7 +19,13 @@ from einops.layers.torch import Rearrange
 from numpy import eye, random
 from numpy.linalg import det, norm, slogdet
 from pytest import mark, raises, skip
-from torch import Tensor, allclose, cat, cuda, device
+from torch import (
+    Tensor,
+    allclose,
+    cat,
+    cuda,
+    device,
+)
 from torch import eye as torch_eye
 from torch import (
     float64,
