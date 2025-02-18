@@ -1,6 +1,6 @@
 """General utility functions."""
 
-from typing import List, Tuple, Union
+from typing import Any, List, Tuple, Union
 
 from numpy import cumsum
 from torch import Tensor
@@ -115,3 +115,33 @@ def assert_divisible_by(num: int, divisor: int, name: str):
     """
     if num % divisor != 0:
         raise ValueError(f"{name} ({num}) must be divisible by {divisor}.")
+
+
+def do_statedicts_match(statedict1: dict[str, Any], statedict2: dict[str, Any]) -> bool:
+    """Compare two state dictionaries for equality. Each statedict can be a nested
+    dictionary from string keys to Tensors, floats, ints or another statedict.
+
+    Args:
+        statedict1: First state dictionary to compare.
+        statedict2: Second state dictionary to compare.
+
+    Returns:
+        bool: True if the state dictionaries match exactly, False otherwise.
+
+    Note:
+        Performs deep comparison of nested dictionaries and tensors. For tensors,
+        checks element-wise equality.
+    """
+    if len(statedict1) != len(statedict2):
+        return False
+    for key in statedict1.keys():
+        if isinstance(statedict1[key], dict):
+            if not do_statedicts_match(statedict1[key], statedict2[key]):
+                return False
+        elif isinstance(statedict1, Tensor):
+            if not (statedict1[key] == statedict2[key]).all():
+                return False
+        else:
+            if statedict1[key] != statedict2[key]:
+                return False
+    return True
