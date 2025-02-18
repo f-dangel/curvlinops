@@ -44,6 +44,7 @@ from curvlinops.kfac_utils import (
     extract_patches,
     loss_hessian_matrix_sqrt,
 )
+from curvlinops.utils import do_statedicts_match
 
 FactorType = TypeVar(
     "FactorType", Optional[Tensor], Tuple[Optional[Tensor], Optional[Tensor]]
@@ -1112,7 +1113,14 @@ class KFACLinearOperator(CurvatureLinearOperator):
             ValueError: If the loss function does not match the state dict.
             ValueError: If the loss function reduction does not match the state dict.
         """
-        self._model_func.load_state_dict(state_dict["model_func_state_dict"])
+        # Do not overwrite _model_func, but make sure the parameters match:
+        if not do_statedicts_match(state_dict, self._model_func.state_dict()):
+            raise ValueError(
+                "Passed `state_dict` does not match the `state_dict()` of the:
+                "referenced `model_func`. Update the `state_dict` of the `model_func` "
+                "passed to this class first."
+            )
+
         # Verify that the loss function and its reduction match the state dict
         loss_func_type = {
             "MSELoss": MSELoss,
