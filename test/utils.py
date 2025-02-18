@@ -196,11 +196,11 @@ class WeightShareModel(Sequential):
             setting: The weight-sharing setting of the model.
 
         Raises:
-            ValueError: If ``setting`` is neither ``'expand'`` nor ``'reduce'``.
+            ValueError: If ``setting`` is neither ``'expand'``,``'expand-flatten'``, nor ``'reduce'``.
         """
-        if setting not in {"expand", "reduce"}:
+        if setting not in {"expand", "expand-flatten", "reduce"}:
             raise ValueError(
-                f"Expected 'setting' to be 'expand' or 'reduce', got {setting}."
+                f"Expected 'setting' to be 'expand', 'expand-flatten', or 'reduce', got {setting}."
             )
         self._setting = setting
 
@@ -250,7 +250,10 @@ class WeightShareModel(Sequential):
         # Example: Transformer for translation: (batch, sequence_length, c)
         # (although second and third dimension would have to be transposed for
         # classification)
-        if x.ndim > 2 and self.loss == "CE":
+        if self.setting == "expand-flatten":
+            # Example: Per-sequence loss for transformer with outputs: (batch, sequence_length, c)
+            x = rearrange(x, "batch ... c -> batch (... c)")
+        elif x.ndim > 2 and self.loss == "CE":
             x = rearrange(x, "batch ... c -> batch c ...")
         return x
 
@@ -266,6 +269,10 @@ class Conv2dModel(Module):
             "expand": Sequential(
                 Conv2d(3, 2, 4, padding=4 // 2),
                 Rearrange("batch c h w -> batch h w c"),
+            ),
+            "expand-flatten": Sequential(
+                Conv2d(3, 2, 4, padding=4 // 2),
+                Rearrange("batch c h w -> batch (h w c)"),
             ),
             "reduce": Sequential(
                 Conv2d(3, 2, 4, padding=4 // 2),
@@ -296,11 +303,11 @@ class Conv2dModel(Module):
             setting: The weight-sharing setting of the model.
 
         Raises:
-            ValueError: If ``setting`` is neither ``'expand'`` nor ``'reduce'``.
+            ValueError: If ``setting`` is neither ``'expand'``, ``'expand-flatten'``, nor ``'reduce'``.
         """
-        if setting not in {"expand", "reduce"}:
+        if setting not in {"expand", "expand-flatten", "reduce"}:
             raise ValueError(
-                f"Expected 'setting' to be 'expand' or 'reduce', got {setting}."
+                f"Expected 'setting' to be 'expand', 'expand-flatten', or 'reduce', got {setting}."
             )
         self._setting = setting
         self._model = self._models[setting]
@@ -320,7 +327,7 @@ class Conv2dModel(Module):
 class UnetModel(Module):
     """Simple Unet-like model where the number of spatial locations varies."""
 
-    def __init__(self, loss: Module):
+    def __init__(self, loss: Module, flatten: bool = False):
         """Initialize the model."""
         if loss not in {MSELoss, CrossEntropyLoss, BCEWithLogitsLoss}:
             raise ValueError(
@@ -328,16 +335,20 @@ class UnetModel(Module):
                 f"Got {loss}."
             )
         super().__init__()
+        if issubclass(loss, (MSELoss, BCEWithLogitsLoss)):
+            rearrange_layer = Rearrange("batch c h w -> batch h w c")
+            if flatten:
+                rearrange_layer = Sequential(rearrange_layer, Flatten(start_dim=1))
+        else:
+            rearrange_layer = Identity()
+            if flatten:
+                rearrange_layer = Rearrange("batch c h w -> (batch h w) c")
         self._model = Sequential(
             Conv2d(3, 2, 3, padding=1, stride=2),
             Conv2d(2, 2, 3, padding=3 // 2),
             Upsample(scale_factor=2, mode="nearest"),
             Conv2d(2, 3, 3, padding=1),
-            (
-                Rearrange("batch c h w -> batch h w c")
-                if issubclass(loss, (MSELoss, BCEWithLogitsLoss))
-                else Identity()
-            ),
+            rearrange_layer,
         )
 
     def forward(self, x: Tensor) -> Tensor:
