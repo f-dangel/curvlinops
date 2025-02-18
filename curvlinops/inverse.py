@@ -10,8 +10,8 @@ from scipy.sparse.linalg import LinearOperator, cg, lsmr
 from torch import Tensor, cat, cholesky_inverse, eye, float64, outer
 from torch.linalg import cholesky, eigh
 
+from curvlinops.ekfac import EKFACLinearOperator
 from curvlinops.kfac import (
-    EKFACLinearOperator,
     FactorType,
     KFACLinearOperator,
     ParameterMatrixType,

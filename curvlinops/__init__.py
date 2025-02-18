@@ -1,6 +1,7 @@
 """``curvlinops`` library API."""
 
 from curvlinops.diagonal.hutchinson import HutchinsonDiagonalEstimator
+from curvlinops.ekfac import EKFACLinearOperator
 from curvlinops.fisher import FisherMCLinearOperator
 from curvlinops.ggn import GGNLinearOperator
 from curvlinops.gradient_moments import EFLinearOperator
@@ -13,7 +14,6 @@ from curvlinops.inverse import (
 )
 from curvlinops.jacobian import JacobianLinearOperator, TransposedJacobianLinearOperator
 from curvlinops.kfac import (
-    EKFACLinearOperator,
     FisherType,
     KFACLinearOperator,
     KFACType,
