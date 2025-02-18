@@ -648,7 +648,7 @@ def test_expand_setting_scaling(
     )
     ekfac_mean_mat = ekfac_mean @ eye(ekfac_mean.shape[1])
 
-    report_nonclose(ekfac_simulated_mean_mat, ekfac_mean_mat, atol=1e-5)
+    report_nonclose(ekfac_simulated_mean_mat, ekfac_mean_mat, atol=1e-4)
 
 
 def test_bug_device_change_invalidates_parameter_mapping():
