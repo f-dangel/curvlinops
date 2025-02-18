@@ -956,7 +956,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
         # Do not overwrite _model_func, but make sure the parameters match:
         if not do_statedicts_match(state_dict, self._model_func.state_dict()):
             raise ValueError(
-                "Passed `state_dict` does not match the `state_dict()` of the:
+                "Passed `state_dict` does not match the `state_dict()` of the "
                 "referenced `model_func`. Update the `state_dict` of the `model_func` "
                 "passed to this class first."
             )
