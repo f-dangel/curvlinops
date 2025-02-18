@@ -196,11 +196,13 @@ class WeightShareModel(Sequential):
             setting: The weight-sharing setting of the model.
 
         Raises:
-            ValueError: If ``setting`` is neither ``'expand'``,``'expand-flatten'``, nor ``'reduce'``.
+            ValueError: If ``setting`` is neither ``'expand'``,``'expand-flatten'``, nor
+                ``'reduce'``.
         """
         if setting not in {"expand", "expand-flatten", "reduce"}:
             raise ValueError(
-                f"Expected 'setting' to be 'expand', 'expand-flatten', or 'reduce', got {setting}."
+                "Expected 'setting' to be 'expand', 'expand-flatten', or 'reduce', got "
+                f"{setting}."
             )
         self._setting = setting
 
@@ -251,7 +253,8 @@ class WeightShareModel(Sequential):
         # (although second and third dimension would have to be transposed for
         # classification)
         if self.setting == "expand-flatten":
-            # Example: Per-sequence loss for transformer with outputs: (batch, sequence_length, c)
+            # Example: Per-sequence loss for transformer with outputs:
+            # (batch, sequence_length, c)
             x = rearrange(x, "batch ... c -> batch (... c)")
         elif x.ndim > 2 and self.loss == "CE":
             x = rearrange(x, "batch ... c -> batch c ...")
@@ -303,11 +306,13 @@ class Conv2dModel(Module):
             setting: The weight-sharing setting of the model.
 
         Raises:
-            ValueError: If ``setting`` is neither ``'expand'``, ``'expand-flatten'``, nor ``'reduce'``.
+            ValueError: If ``setting`` is neither ``'expand'``, ``'expand-flatten'``,
+                nor ``'reduce'``.
         """
         if setting not in {"expand", "expand-flatten", "reduce"}:
             raise ValueError(
-                f"Expected 'setting' to be 'expand', 'expand-flatten', or 'reduce', got {setting}."
+                "Expected 'setting' to be 'expand', 'expand-flatten', or 'reduce', got "
+                f"{setting}."
             )
         self._setting = setting
         self._model = self._models[setting]
