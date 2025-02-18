@@ -950,6 +950,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
             state_dict: State dictionary.
 
         Raises:
+            ValueError: If the model function state dict does not match the state dict.
             ValueError: If the loss function does not match the state dict.
             ValueError: If the loss function reduction does not match the state dict.
         """
