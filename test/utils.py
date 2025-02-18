@@ -920,7 +920,7 @@ def _test_save_and_load_state_dict(
         wrong_params,
         [(X, y)],
     )
-    with raises(RuntimeError, match="loading state_dict"):
+    with raises(ValueError, match="`state_dict` does not match"):
         linop_new.load_state_dict(load(PATH, weights_only=False))
 
     # create new linop and load state dict
