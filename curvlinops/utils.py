@@ -146,7 +146,6 @@ def do_statedicts_match(statedict1: dict[str, Any], statedict2: dict[str, Any]) 
         elif isinstance(statedict1, Tensor):
             if not (statedict1[key] == statedict2[key]).all():
                 return False
-        else:
-            if statedict1[key] != statedict2[key]:
-                return False
+        elif statedict1[key] != statedict2[key]:
+            return False
     return True
