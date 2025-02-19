@@ -140,7 +140,7 @@ def do_statedicts_match(statedict1: dict[str, Any], statedict2: dict[str, Any]) 
     if len(statedict1) != len(statedict2):
         return False
     for key in statedict1.keys():
-        if type(statedict1[key]) != type(statedict2[key]):
+        if type(statedict1[key]) is not type(statedict2[key]):
             return False
         if isinstance(statedict1[key], dict):
             if not do_statedicts_match(statedict1[key], statedict2[key]):
