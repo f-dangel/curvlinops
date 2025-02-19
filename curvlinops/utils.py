@@ -1,6 +1,7 @@
 """General utility functions."""
 
-from typing import List, Tuple, Union
+from collections import abc
+from typing import List, Mapping, Sequence, Tuple, Union
 
 from numpy import cumsum
 from torch import Tensor
@@ -115,3 +116,59 @@ def assert_divisible_by(num: int, divisor: int, name: str):
     """
     if num % divisor != 0:
         raise ValueError(f"{name} ({num}) must be divisible by {divisor}.")
+
+
+StateDictType = Union[
+    Mapping[str, "StateDictType"], Sequence["StateDictType"], Tensor, float, int, str
+]
+
+
+def do_statedicts_match(statedict1: StateDictType, statedict2: StateDictType) -> bool:
+    """Compare two state dictionaries for equality. Each statedict can be a nested
+    dictionary from string keys to Tensors, floats, ints or another statedict.
+
+    Args:
+        statedict1: First state dictionary to compare.
+        statedict2: Second state dictionary to compare.
+
+    Returns:
+        bool: True if the state dictionaries match exactly, False otherwise.
+
+    Note:
+        Performs deep comparison of nested dictionaries and tensors. For tensors,
+        checks element-wise equality.
+    """
+    if type(statedict1) is not type(statedict2):
+        return False
+    elif isinstance(statedict1, abc.Mapping):
+        return _do_mappings_match(statedict1, statedict2)
+    elif isinstance(statedict1, abc.Sequence):
+        return _do_sequences_match(statedict1, statedict2)
+    elif isinstance(statedict1, Tensor):
+        return (statedict1 == statedict2).all()
+    else:
+        return statedict1 == statedict2
+
+
+def _do_sequences_match(
+    statedict1: Sequence[StateDictType], statedict2: Sequence[StateDictType]
+) -> bool:
+    if len(statedict1) != len(statedict2):
+        return False
+    for i in range(len(statedict1)):
+        if not do_statedicts_match(statedict1[i], statedict2[i]):
+            return False
+    return True
+
+
+def _do_mappings_match(
+    statedict1: Mapping[str, StateDictType], statedict2: Mapping[str, StateDictType]
+) -> bool:
+    if len(statedict1) != len(statedict2):
+        return False
+    for key in statedict1.keys():
+        if key not in statedict2:
+            return False
+        if not do_statedicts_match(statedict1[key], statedict2[key]):
+            return False
+    return True
