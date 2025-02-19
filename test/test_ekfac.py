@@ -16,6 +16,7 @@ from typing import Dict, Iterable, List, Tuple, Union
 
 from einops import rearrange
 from einops.layers.torch import Rearrange
+from numpy import allclose as np_allclose
 from numpy import eye
 from numpy.linalg import det, norm, slogdet
 from pytest import mark, raises, skip
@@ -36,6 +37,7 @@ from torch.nn import (
 from curvlinops import EFLinearOperator, GGNLinearOperator
 from curvlinops.ekfac import EKFACLinearOperator, FisherType, KFACType
 from curvlinops.examples.utils import report_nonclose
+from curvlinops.kfac import KFACLinearOperator
 
 
 @mark.parametrize(
@@ -1135,3 +1137,158 @@ def test_from_state_dict():
     compare_state_dicts(ekfac.state_dict(), kfac_new.state_dict())
     test_vec = rand(ekfac.shape[1])
     report_nonclose(ekfac @ test_vec, kfac_new @ test_vec)
+
+
+@mark.parametrize("fisher_type", EKFACLinearOperator._SUPPORTED_FISHER_TYPE)
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+@mark.parametrize(
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
+@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
+def test_ekfac_closer_to_exact_than_kfac(
+    inv_case,
+    shuffle: bool,
+    exclude: str,
+    separate_weight_and_bias: bool,
+    fisher_type: FisherType,
+):
+    """Test that EKFAC is closer in Frobenius norm to the exact quantity than KFAC."""
+    model, loss_func, params, data, batch_size_fn = inv_case
+
+    if exclude is not None:
+        names = {p.data_ptr(): name for name, p in model.named_parameters()}
+        params = [p for p in params if exclude not in names[p.data_ptr()]]
+
+    if shuffle:
+        permutation = randperm(len(params))
+        params = [params[i] for i in permutation]
+
+    # Compute exact block-wise ground truth quantity.
+    linop = (
+        EFLinearOperator if fisher_type == FisherType.EMPIRICAL else GGNLinearOperator
+    )
+    exact = block_diagonal(
+        linop,
+        model,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        separate_weight_and_bias=separate_weight_and_bias,
+    )
+
+    # Compute KFAC and EKFAC.
+    kfac = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        separate_weight_and_bias=separate_weight_and_bias,
+        fisher_type=fisher_type,
+        mc_samples=1_000 if fisher_type == FisherType.MC else 1,
+    )
+    kfac_mat = kfac @ eye(kfac.shape[1])
+    ekfac = EKFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        separate_weight_and_bias=separate_weight_and_bias,
+        fisher_type=fisher_type,
+        mc_samples=1_000 if fisher_type == FisherType.MC else 1,
+    )
+    ekfac_mat = ekfac @ eye(ekfac.shape[1])
+
+    # Compute and compare (relative) distances to the exact quantity.
+    exact_norm = norm(exact)
+    exact_kfac_dist = norm(exact - kfac_mat) / exact_norm
+    exact_ekfac_dist = norm(exact - ekfac_mat) / exact_norm
+    if exclude == "weight":
+        # For no_weights the numerical error dominates.
+        assert np_allclose(exact_kfac_dist, exact_ekfac_dist, atol=1e-5)
+    else:
+        assert exact_kfac_dist > exact_ekfac_dist
+
+
+@mark.parametrize("fisher_type", EKFACLinearOperator._SUPPORTED_FISHER_TYPE)
+@mark.parametrize("kfac_approx", EKFACLinearOperator._SUPPORTED_KFAC_APPROX)
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+@mark.parametrize(
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
+@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
+def test_ekfac_closer_to_exact_than_kfac_weight_sharing(
+    cnn_case,
+    shuffle: bool,
+    exclude: str,
+    separate_weight_and_bias: bool,
+    kfac_approx: KFACType,
+    fisher_type: FisherType,
+):
+    """Test that EKFAC is closer in Frobenius norm to the exact quantity than KFAC.
+
+    For models with weight sharing.
+    """
+    model, loss_func, params, data, batch_size_fn = cnn_case
+
+    if exclude is not None:
+        names = {p.data_ptr(): name for name, p in model.named_parameters()}
+        params = [p for p in params if exclude not in names[p.data_ptr()]]
+
+    if shuffle:
+        permutation = randperm(len(params))
+        params = [params[i] for i in permutation]
+
+    # Compute exact block-wise ground truth quantity.
+    linop = (
+        EFLinearOperator if fisher_type == FisherType.EMPIRICAL else GGNLinearOperator
+    )
+    exact = block_diagonal(
+        linop,
+        model,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        separate_weight_and_bias=separate_weight_and_bias,
+    )
+
+    # Compute KFAC and EKFAC.
+    kfac = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        separate_weight_and_bias=separate_weight_and_bias,
+        fisher_type=fisher_type,
+        kfac_approx=kfac_approx,
+    )
+    kfac_mat = kfac @ eye(kfac.shape[1])
+    ekfac = EKFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        separate_weight_and_bias=separate_weight_and_bias,
+        fisher_type=fisher_type,
+        kfac_approx=kfac_approx,
+    )
+    ekfac_mat = ekfac @ eye(ekfac.shape[1])
+
+    # Compute and compare (relative) distances to the exact quantity.
+    exact_norm = norm(exact)
+    exact_kfac_dist = norm(exact - kfac_mat) / exact_norm
+    exact_ekfac_dist = norm(exact - ekfac_mat) / exact_norm
+    assert exact_kfac_dist > exact_ekfac_dist or (
+        np_allclose(exact_kfac_dist, exact_ekfac_dist, atol=1e-6)
+        if exclude == "weight"
+        else False
+    )  # For no_weights the numerical error might dominate.
