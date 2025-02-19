@@ -66,3 +66,52 @@ def allclose_report(
         print(f"rtol = {rtol}, atol = {atol}.")
 
     return close
+
+
+def assert_is_square(A) -> int:
+    """Assert that a matrix or linear operator is square.
+
+    Args:
+        A: Matrix or linear operator to be checked. Must have a ``.shape`` attribute.
+
+    Returns:
+        The dimension of the square matrix.
+
+    Raises:
+        ValueError: If the matrix is not square.
+    """
+    if len(A.shape) != 2 or A.shape[0] != A.shape[1]:
+        raise ValueError(f"Operator must be square. Got shape {A.shape}.")
+    (dim,) = set(A.shape)
+    return dim
+
+
+def assert_matvecs_subseed_dim(A, num_matvecs: int):
+    """Assert that the number of matrix-vector products is smaller than the dimension.
+
+    Args:
+        A: Matrix or linear operator to be checked. Must have a ``.shape`` attribute.
+        num_matvecs: Number of matrix-vector products.
+
+    Raises:
+        ValueError: If the number of matrix-vector products is greater than the dimension.
+    """
+    if any(num_matvecs >= d for d in A.shape):
+        raise ValueError(
+            f"num_matvecs ({num_matvecs}) must be less than A's size ({A.shape})."
+        )
+
+
+def assert_divisible_by(num: int, divisor: int, name: str):
+    """Assert that a number is divisible by another number.
+
+    Args:
+        num: Number to be checked.
+        divisor: Divisor.
+        name: Name of the number.
+
+    Raises:
+        ValueError: If the number is not divisible by the divisor.
+    """
+    if num % divisor != 0:
+        raise ValueError(f"{name} ({num}) must be divisible by {divisor}.")

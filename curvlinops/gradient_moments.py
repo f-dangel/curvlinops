@@ -1,6 +1,4 @@
-"""Contains LinearOperator implementation of gradient moment matrices."""
-
-from __future__ import annotations
+"""Contains linear operator implementation of gradient moment matrices."""
 
 from collections.abc import MutableMapping
 from typing import Callable, Iterable, List, Optional, Tuple, Union
@@ -11,11 +9,11 @@ from torch import Tensor, zeros_like
 from torch.autograd import grad
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss, Parameter
 
-from curvlinops._base import _LinearOperator
+from curvlinops._torch_base import CurvatureLinearOperator
 
 
-class EFLinearOperator(_LinearOperator):
-    r"""Uncentered gradient covariance as SciPy linear operator.
+class EFLinearOperator(CurvatureLinearOperator):
+    r"""Uncentered gradient covariance as PyTorch linear operator.
 
     The uncentered gradient covariance is often called 'empirical Fisher' (EF).
 
@@ -41,23 +39,24 @@ class EFLinearOperator(_LinearOperator):
             \ell(f_{\mathbf{\theta}}(\mathbf{x}_n), \mathbf{y}_n)
         \right)^\top\,.
 
-    .. note::
-        Multiplication with the empirical Fisher is currently implemented with an
-        inefficient for-loop.
+    Attributes:
+        SELF_ADJOINT: Whether the linear operator is self-adjoint. ``True`` for
+            empirical Fisher.
     """
 
     supported_losses = (MSELoss, CrossEntropyLoss, BCEWithLogitsLoss)
+    SELF_ADJOINT: bool = True
 
     def __init__(
         self,
-        model_func: Callable[[Tensor], Tensor],
+        model_func: Callable[[Union[MutableMapping, Tensor]], Tensor],
         loss_func: Union[Callable[[Tensor, Tensor], Tensor], None],
         params: List[Parameter],
         data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
         num_data: Optional[int] = None,
-        batch_size_fn: Optional[Callable[[MutableMapping], int]] = None,
+        batch_size_fn: Optional[Callable[[Union[Tensor, MutableMapping]], int]] = None,
     ):
         """Linear operator for the uncentered gradient covariance/empirical Fisher (EF).
 
@@ -95,7 +94,7 @@ class EFLinearOperator(_LinearOperator):
 
         Raises:
              NotImplementedError: If the loss function differs from ``MSELoss``,
-                 BCEWithLogitsLoss, or ``CrossEntropyLoss``.
+                 ``BCEWithLogitsLoss``, or ``CrossEntropyLoss``.
         """
         if not isinstance(loss_func, self.supported_losses):
             raise NotImplementedError(
@@ -113,21 +112,21 @@ class EFLinearOperator(_LinearOperator):
         )
 
     def _matmat_batch(
-        self, X: Union[Tensor, MutableMapping], y: Tensor, M_list: List[Tensor]
-    ) -> Tuple[Tensor, ...]:
-        """Apply the mini-batch empirical Fisher to a matrix.
+        self, X: Union[Tensor, MutableMapping], y: Tensor, M: List[Tensor]
+    ) -> List[Tensor]:
+        """Apply the mini-batch empirical Fisher to a matrix in tensor list format.
 
         Args:
             X: Input to the DNN.
             y: Ground truth.
-            M_list: Matrix to be multiplied with in list format.
+            M: Matrix to be multiplied with in tensor list format.
                 Tensors have same shape as trainable model parameters, and an
-                additional leading axis for the matrix columns.
+                additional trailing axis for the matrix columns.
 
         Returns:
-            Result of EF multiplication in list format. Has the same shape as
-            ``M_list``, i.e. each tensor in the list has the shape of a parameter and a
-            leading dimension of matrix columns.
+            Result of EF multiplication in tensor list format. Has the same shape as
+            ``M``, i.e. each tensor in the list has the shape of a parameter and a
+            trailing dimension of matrix columns.
         """
         output = self._model_func(X)
         # If >2d output we convert to an equivalent 2d output
@@ -163,24 +162,14 @@ class EFLinearOperator(_LinearOperator):
         )
 
         # Multiply the EF onto each vector in the input matrix
-        result_list = [zeros_like(M) for M in M_list]
-        num_vectors = M_list[0].shape[0]
+        EM = [zeros_like(m) for m in M]
+        (num_vectors,) = {m.shape[-1] for m in M}
         for v in range(num_vectors):
             for idx, ggnvp in enumerate(
                 ggn_vector_product_from_plist(
-                    loss, output, self._params, [M[v] for M in M_list]
+                    loss, output, self._params, [m[..., v] for m in M]
                 )
             ):
-                result_list[idx][v].add_(ggnvp.detach())
+                EM[idx][..., v].add_(ggnvp.detach())
 
-        return tuple(result_list)
-
-    def _adjoint(self) -> EFLinearOperator:
-        """Return the linear operator representing the adjoint.
-
-        The empirical Fisher is real symmetric, and hence self-adjoint.
-
-        Returns:
-            Self.
-        """
-        return self
+        return EM

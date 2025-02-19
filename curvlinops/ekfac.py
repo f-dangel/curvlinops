@@ -7,7 +7,7 @@ from functools import partial
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
 from einops import einsum, rearrange
-from torch import Generator, Tensor, cat, device
+from torch import Generator, Tensor, cat
 from torch.linalg import eigh
 from torch.nn import (
     BCEWithLogitsLoss,
@@ -23,7 +23,6 @@ from curvlinops.kfac import (
     FisherType,
     KFACLinearOperator,
     KFACType,
-    ParameterMatrixType,
 )
 from curvlinops.kfac_utils import extract_patches
 
@@ -166,14 +165,7 @@ class EKFACLinearOperator(KFACLinearOperator):
         self._corrected_eigenvalues: Dict[str, Union[Tensor, Dict[str, Tensor]]] = {}
 
         if check_deterministic:
-            old_device = self._device
-            self.to_device(device("cpu"))
-            try:
-                self._check_deterministic()
-            except RuntimeError as e:
-                raise e
-            finally:
-                self.to_device(old_device)
+            self._check_deterministic()
 
     def _rearrange_for_larger_than_2d_output(
         self,
@@ -212,33 +204,30 @@ class EKFACLinearOperator(KFACLinearOperator):
                 self.compute_kronecker_factors()
             self.compute_eigenvalue_correction()
 
-    def torch_matmat(self, M_torch: ParameterMatrixType) -> ParameterMatrixType:
-        """Apply EKFAC to a matrix (multiple vectors) in PyTorch.
+    def _matmat(self, M: List[Tensor]) -> List[Tensor]:
+        """Apply EKFAC to a matrix (multiple vectors) in tensor list format.
 
         This allows for matrix-matrix products with the EKFAC approximation in PyTorch
         without converting tensors to numpy arrays, which avoids unnecessary
         device transfers when working with GPUs and flattening/concatenating.
 
         Args:
-            M_torch: Matrix for multiplication. If list of tensors, each entry has the
-                same shape as a parameter with an additional leading dimension of size
-                ``K`` for the columns, i.e. ``[(K,) + p1.shape), (K,) + p2.shape, ...]``.
-                If tensor, has shape ``[D, K]`` with some ``K``.
+            M: Matrix for multiplication in tensor list format. Each entry has the
+                same shape as a parameter with an additional trailing dimension of size
+                ``K`` for the columns, i.e. ``[(*p1.shape, K), (*p2.shape, K), ...]``.
 
         Returns:
-            Matrix-multiplication result ``EKFAC @ M``. Return type is the same as the
-            type of the input. If list of tensors, each entry has the same shape as a
-            parameter with an additional leading dimension of size ``K`` for the columns,
-            i.e. ``[(K,) + p1.shape, (K,) + p2.shape, ...]``. If tensor, has shape
-            ``[D, K]`` with some ``K``.
+            Matrix-multiplication result ``EKFAC @ M`` in tensor list format. Has the same
+            shapes as the input.
         """
-        return_tensor, M_torch = self._check_input_type_and_preprocess(M_torch)
         self._maybe_compute_ekfac()
+
+        KM: List[Tensor | None] = [None] * len(M)
 
         for mod_name, param_pos in self._mapping.items():
             # cache the weight shape to ensure correct shapes are returned
             if "weight" in param_pos:
-                weight_shape = M_torch[param_pos["weight"]].shape
+                weight_shape = M[param_pos["weight"]].shape
 
             # Get the EKFAC approximation components for the current module
             aaT_eigenvectors = self._input_covariances_eigenvectors.get(mod_name)
@@ -252,16 +241,19 @@ class EKFACLinearOperator(KFACLinearOperator):
                 and "bias" in param_pos.keys()
             ):
                 w_pos, b_pos = param_pos["weight"], param_pos["bias"]
-                M_w = rearrange(M_torch[w_pos], "m c_out ... -> m c_out (...)")
-                M_joint = cat([M_w, M_torch[b_pos].unsqueeze(2)], dim=2)
+                # v denotes the free dimension for treating multiple vectors in parallel
+                M_w = rearrange(M[w_pos], "m ... v -> m (...) v")
+                M_joint = cat([M_w, M[b_pos].unsqueeze(-2)], dim=-2)
                 M_joint = self._left_and_right_multiply(
                     M_joint, aaT_eigenvectors, ggT_eigenvectors, corrected_eigenvalues
                 )
-                w_cols = M_w.shape[2]
-                M_torch[w_pos], M_torch[b_pos] = M_joint.split([w_cols, 1], dim=2)
+                w_cols = M_w.shape[1]
+                KM[w_pos], KM[b_pos] = M_joint.split([w_cols, 1], dim=-2)
+                KM[b_pos].squeeze_(1)
             else:
-                M_torch = self._separate_left_and_right_multiply(
-                    M_torch,
+                self._separate_left_and_right_multiply(
+                    KM,
+                    M,
                     param_pos,
                     aaT_eigenvectors,
                     ggT_eigenvectors,
@@ -270,14 +262,9 @@ class EKFACLinearOperator(KFACLinearOperator):
 
             # restore original shapes
             if "weight" in param_pos:
-                M_torch[param_pos["weight"]] = M_torch[param_pos["weight"]].view(
-                    weight_shape
-                )
+                KM[param_pos["weight"]] = KM[param_pos["weight"]].view(weight_shape)
 
-        if return_tensor:
-            M_torch = cat([rearrange(M, "k ... -> (...) k") for M in M_torch])
-
-        return M_torch
+        return KM
 
     def _compute_eigenvectors(self):
         """Compute the eigenvectors of the KFAC approximation."""

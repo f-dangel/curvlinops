@@ -25,8 +25,7 @@ from math import sqrt
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, TypeVar, Union
 
 from einops import einsum, rearrange, reduce
-from numpy import ndarray
-from torch import Generator, Tensor, cat, device, eye, randn, stack
+from torch import Generator, Tensor, cat, eye, randn, stack
 from torch.autograd import grad
 from torch.nn import (
     BCEWithLogitsLoss,
@@ -39,17 +38,13 @@ from torch.nn import (
 )
 from torch.utils.hooks import RemovableHandle
 
-from curvlinops._base import _LinearOperator
+from curvlinops._torch_base import CurvatureLinearOperator
 from curvlinops.kfac_utils import (
     extract_averaged_patches,
     extract_patches,
     loss_hessian_matrix_sqrt,
 )
 
-# Type for a matrix/vector that can be represented as a list of tensors with the same
-# shape as the parameters, or a single matrix/vector of shape `[D, D]`/`[D]` where `D`
-# is the number of parameters.
-ParameterMatrixType = TypeVar("ParameterMatrixType", Tensor, List[Tensor])
 FactorType = TypeVar(
     "FactorType", Optional[Tensor], Tuple[Optional[Tensor], Optional[Tensor]]
 )
@@ -82,7 +77,7 @@ class KFACType(str, Enum, metaclass=MetaEnum):
     REDUCE = "reduce"
 
 
-class KFACLinearOperator(_LinearOperator):
+class KFACLinearOperator(CurvatureLinearOperator):
     r"""Linear operator to multiply with the Fisher/GGN's KFAC approximation.
 
     KFAC approximates the per-layer Fisher/GGN with a Kronecker product:
@@ -129,12 +124,14 @@ class KFACLinearOperator(_LinearOperator):
         _SUPPORTED_MODULES: Tuple of supported layers.
         _SUPPORTED_FISHER_TYPE: Enum of supported Fisher types.
         _SUPPORTED_KFAC_APPROX: Enum of supported KFAC approximation types.
+        SELF_ADJOINT: Whether the operator is self-adjoint. ``True`` for KFAC.
     """
 
     _SUPPORTED_LOSSES = (MSELoss, CrossEntropyLoss, BCEWithLogitsLoss)
     _SUPPORTED_MODULES = (Linear, Conv2d)
     _SUPPORTED_FISHER_TYPE: FisherType = FisherType
     _SUPPORTED_KFAC_APPROX: KFACType = KFACType
+    SELF_ADJOINT: bool = True
 
     def __init__(
         self,
@@ -152,7 +149,7 @@ class KFACLinearOperator(_LinearOperator):
         num_per_example_loss_terms: Optional[int] = None,
         separate_weight_and_bias: bool = True,
         num_data: Optional[int] = None,
-        batch_size_fn: Optional[Callable[[MutableMapping], int]] = None,
+        batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
     ):
         """Kronecker-factored approximate curvature (KFAC) proxy of the Fisher/GGN.
 
@@ -228,7 +225,6 @@ class KFACLinearOperator(_LinearOperator):
                 entry of the iterates from ``data`` and return their batch size.
 
         Raises:
-            RuntimeError: If the check for deterministic behavior fails.
             ValueError: If the loss function is not supported.
             ValueError: If ``fisher_type != FisherType.MC`` and ``mc_samples != 1``.
             ValueError: If ``X`` is not a tensor and ``batch_size_fn`` is not specified.
@@ -273,7 +269,6 @@ class KFACLinearOperator(_LinearOperator):
             data,
             progressbar=progressbar,
             check_deterministic=False,
-            shape=shape,
             num_data=num_data,
             batch_size_fn=batch_size_fn,
         )
@@ -281,14 +276,7 @@ class KFACLinearOperator(_LinearOperator):
         self._set_num_per_example_loss_terms(num_per_example_loss_terms)
 
         if check_deterministic:
-            old_device = self._device
-            self.to_device(device("cpu"))
-            try:
-                self._check_deterministic()
-            except RuntimeError as e:
-                raise e
-            finally:
-                self.to_device(old_device)
+            self._check_deterministic()
 
     def _set_num_per_example_loss_terms(
         self, num_per_example_loss_terms: Optional[int]
@@ -330,89 +318,6 @@ class KFACLinearOperator(_LinearOperator):
         self._logdet = None
         self._frobenius_norm = None
 
-    def to_device(self, device: device):
-        """Load the linear operator to another device.
-
-        Args:
-            device: The device to which the linear operator should be moved.
-        """
-        super().to_device(device)
-        for key in self._input_covariances.keys():
-            self._input_covariances[key] = self._input_covariances[key].to(device)
-        for key in self._gradient_covariances.keys():
-            self._gradient_covariances[key] = self._gradient_covariances[key].to(device)
-
-    def _torch_preprocess(self, M: Tensor) -> List[Tensor]:
-        """Convert torch tensor to torch parameter list format.
-
-        Args:
-            M: Matrix for multiplication. Has shape ``[D, K]`` where ``D`` is the
-                number of parameters, and ``K`` is the number of columns.
-
-        Returns:
-            Matrix in list format. Each entry has the same shape as a parameter with
-            an additional leading dimension of size ``K`` for the columns, i.e.
-            ``[(K,) + p1.shape, (K,) + p2.shape, ...]``.
-        """
-        num_vectors = M.shape[1]
-        # split parameter blocks
-        dims = [p.numel() for p in self._params]
-        result = M.split(dims)
-        # column-index first + unflatten parameter dimension
-        shapes = [(num_vectors,) + p.shape for p in self._params]
-        return [res.T.reshape(shape) for res, shape in zip(result, shapes)]
-
-    def _check_input_type_and_preprocess(
-        self, M_torch: ParameterMatrixType
-    ) -> Tuple[bool, List[Tensor]]:
-        """Check input type and maybe preprocess to list format.
-
-        Check whether the input is a tensor or a list of tensors. If it is a tensor,
-        preprocess to list format.
-
-        Args:
-            M_torch: Input to check.
-
-        Returns:
-            ``True`` if the input is a tensor, ``False`` if it is a list of tensors.
-
-        Raises:
-            ValueError: If the input is a list of tensors that have a different number
-                of columns.
-            ValueError: If the input is a list of tensors that have incompatible shapes
-                with the parameters.
-            ValueError: If the input is a tensor and has the wrong shape.
-            ValueError: If the input is a tensor and its shape is incompatible with the
-                KFAC approximation's shape.
-        """
-        if isinstance(M_torch, list):
-            return_tensor = False
-            if len(M_torch) != len(self._params):
-                raise ValueError(
-                    "Number of input tensors must match the number of parameter tensors."
-                )
-            column_values = {M.shape[0] for M in M_torch}
-            if len(column_values) != 1:
-                raise ValueError(
-                    "Number of columns must be equal for all tensors. "
-                    f"Got {column_values}."
-                )
-            K = column_values.pop()
-            for M, p in zip(M_torch, self._params):
-                if M.shape != (K,) + p.shape:
-                    raise ValueError(
-                        "All input tensors must have (K, ) + p.shape. "
-                        f"Got {M.shape}, but expected {(K,) + p.shape}."
-                    )
-        else:
-            return_tensor = True
-            if M_torch.ndim != 2:
-                raise ValueError(f"expected 2-d tensor, not {M_torch.ndim}-d")
-            if M_torch.shape[0] != self.shape[1]:
-                raise ValueError(f"dimension mismatch: {self.shape}, {M_torch.shape}")
-            M_torch = self._torch_preprocess(M_torch)
-        return return_tensor, M_torch
-
     @staticmethod
     def _left_and_right_multiply(
         M_joint: Tensor,
@@ -435,7 +340,7 @@ class KFACLinearOperator(_LinearOperator):
             Matrix-multiplication result ``KFAC @ M_joint``.
         """
         if eigenvalues is None:
-            M_joint = einsum(ggT, M_joint, aaT, "i j, m j k, k l -> m i l")
+            M_joint = einsum(ggT, M_joint, aaT, "i j, j k v, k l -> i l v")
         else:
             # Perform preconditioning in KFE, e.g. see equation (21) in
             # https://arxiv.org/abs/2308.03296.
@@ -443,19 +348,20 @@ class KFACLinearOperator(_LinearOperator):
             ggT_eigvecs = ggT
             # Transform in eigenbasis.
             M_joint = einsum(
-                ggT_eigvecs, M_joint, aaT_eigvecs, "i j, m i k, k l -> m j l"
+                ggT_eigvecs, M_joint, aaT_eigvecs, "i j, i k v, k l -> j l v"
             )
             # Multiply (broadcasted) by eigenvalues.
-            M_joint.mul_(eigenvalues)
+            M_joint.mul_(eigenvalues.unsqueeze(-1))
             # Transform back to standard basis.
             M_joint = einsum(
-                ggT_eigvecs, M_joint, aaT_eigvecs, "i j, m j k, l k -> m i l"
+                ggT_eigvecs, M_joint, aaT_eigvecs, "i j, j k v, l k -> i l v"
             )
         return M_joint
 
     @staticmethod
     def _separate_left_and_right_multiply(
-        M_torch: Tensor,
+        KM: List[Tensor],
+        M: Tensor,
         param_pos: Dict[str, int],
         aaT: FactorType,
         ggT: FactorType,
@@ -464,7 +370,7 @@ class KFACLinearOperator(_LinearOperator):
         """Multiply matrix with Kronecker factors for separated weight and bias.
 
         Args:
-            M_torch: Matrix for multiplication.
+            Mh: Matrix for multiplication.
             param_pos: Dictionary with positions of the weight and bias parameters.
             aaT: Input covariance Kronecker factor or its eigenvectors. ``None`` for
                 biases.
@@ -474,58 +380,55 @@ class KFACLinearOperator(_LinearOperator):
                 non-decomposed KFAC approximation. Defaults to ``None``.
 
         Returns:
-            Matrix-multiplication result ``KFAC @ M_torch``.
+            Matrix-multiplication result ``KFAC @ M``.
         """
         for p_name, pos in param_pos.items():
             # for weights we need to multiply from the right with aaT
             # for weights and biases we need to multiply from the left with ggT
             if p_name == "weight":
-                M_w = rearrange(M_torch[pos], "m c_out ... -> m c_out (...)")
+                M_w = rearrange(M[pos], "m ... v -> m (...) v")
                 # If `eigenvalues` is not `None`, we transform to eigenbasis here
-                M_torch[pos] = einsum(M_w, aaT, "m i j, j k -> m i k")
+                KM[pos] = einsum(M_w, aaT, "c_out j v, j k -> c_out k v")
+            else:
+                KM[pos] = M[pos]
 
             # If `eigenvalues` is not `None`, we convert to eigenbasis here
-            M_torch[pos] = einsum(
-                ggT.T if eigenvalues else ggT, M_torch[pos], "i j, m j ... -> m i ..."
+            KM[pos] = einsum(
+                ggT.T if eigenvalues else ggT, KM[pos], "j k, k ... v -> j ... v"
             )
 
             if eigenvalues is not None:
                 # Multiply (broadcasted) by eigenvalues, convert back to original basis
-                M_torch[pos].mul_(eigenvalues[pos])
+                KM[pos].mul_(eigenvalues[pos].unsqueeze(-1))
                 if p_name == "weight":
-                    M_torch[pos] = einsum(M_torch[pos], aaT, "m i j, k j -> m i k")
-                M_torch[pos] = einsum(ggT, M_torch[pos], "i j, m j ... -> m i ...")
+                    KM[pos] = einsum(KM[pos], aaT, "c_out j v, k j -> c_out k v")
+                KM[pos] = einsum(ggT, KM[pos], "j k, k ... v -> j ... v")
 
-        return M_torch
-
-    def torch_matmat(self, M_torch: ParameterMatrixType) -> ParameterMatrixType:
-        """Apply KFAC to a matrix (multiple vectors) in PyTorch.
+    def _matmat(self, M: List[Tensor]) -> List[Tensor]:
+        """Apply KFAC to a matrix (multiple vectors) in tensor list format.
 
         This allows for matrix-matrix products with the KFAC approximation in PyTorch
         without converting tensors to numpy arrays, which avoids unnecessary
         device transfers when working with GPUs and flattening/concatenating.
 
         Args:
-            M_torch: Matrix for multiplication. If list of tensors, each entry has the
-                same shape as a parameter with an additional leading dimension of size
-                ``K`` for the columns, i.e. ``[(K,) + p1.shape), (K,) + p2.shape, ...]``.
-                If tensor, has shape ``[D, K]`` with some ``K``.
+            M: Matrix for multiplication in tensor list format. Each entry has the
+                same shape as a parameter with an additional trailing dimension of size
+                ``K`` for the columns, i.e. ``[(*p1.shape, K), (*p2.shape, K), ...]``.
 
         Returns:
-            Matrix-multiplication result ``KFAC @ M``. Return type is the same as the
-            type of the input. If list of tensors, each entry has the same shape as a
-            parameter with an additional leading dimension of size ``K`` for the columns,
-            i.e. ``[(K,) + p1.shape, (K,) + p2.shape, ...]``. If tensor, has shape
-            ``[D, K]`` with some ``K``.
+            Matrix-multiplication result ``KFAC @ M`` in tensor list format. Has the same
+            shapes as the input.
         """
-        return_tensor, M_torch = self._check_input_type_and_preprocess(M_torch)
         if not (self._input_covariances or self._gradient_covariances):
             self.compute_kronecker_factors()
+
+        KM: List[Tensor | None] = [None] * len(M)
 
         for mod_name, param_pos in self._mapping.items():
             # cache the weight shape to ensure correct shapes are returned
             if "weight" in param_pos:
-                weight_shape = M_torch[param_pos["weight"]].shape
+                weight_shape = M[param_pos["weight"]].shape
 
             # get the Kronecker factors for the current module
             aaT = self._input_covariances.get(mod_name)
@@ -538,80 +441,21 @@ class KFACLinearOperator(_LinearOperator):
                 and "bias" in param_pos.keys()
             ):
                 w_pos, b_pos = param_pos["weight"], param_pos["bias"]
-                M_w = rearrange(M_torch[w_pos], "m c_out ... -> m c_out (...)")
-                M_joint = cat([M_w, M_torch[b_pos].unsqueeze(2)], dim=2)
+                # v denotes the free dimension for treating multiple vectors in parallel
+                M_w = rearrange(M[w_pos], "m ... v -> m (...) v")
+                M_joint = cat([M_w, M[b_pos].unsqueeze(-2)], dim=-2)
                 M_joint = self._left_and_right_multiply(M_joint, aaT, ggT)
-                w_cols = M_w.shape[2]
-                M_torch[w_pos], M_torch[b_pos] = M_joint.split([w_cols, 1], dim=2)
+                w_cols = M_w.shape[1]
+                KM[w_pos], KM[b_pos] = M_joint.split([w_cols, 1], dim=-2)
+                KM[b_pos].squeeze_(1)
             else:
-                M_torch = self._separate_left_and_right_multiply(
-                    M_torch, param_pos, aaT, ggT
-                )
+                self._separate_left_and_right_multiply(KM, M, param_pos, aaT, ggT)
 
             # restore original shapes
             if "weight" in param_pos:
-                M_torch[param_pos["weight"]] = M_torch[param_pos["weight"]].view(
-                    weight_shape
-                )
+                KM[param_pos["weight"]] = KM[param_pos["weight"]].view(weight_shape)
 
-        if return_tensor:
-            M_torch = cat([rearrange(M, "k ... -> (...) k") for M in M_torch])
-
-        return M_torch
-
-    def torch_matvec(self, v_torch: ParameterMatrixType) -> ParameterMatrixType:
-        """Apply KFAC to a vector in PyTorch.
-
-        This allows for matrix-vector products with the KFAC approximation in PyTorch
-        without converting tensors to numpy arrays, which avoids unnecessary
-        device transfers when working with GPUs and flattening/concatenating.
-
-        Args:
-            v_torch: Vector for multiplication. If list of tensors, each entry has the
-                same shape as a parameter, i.e. ``[p1.shape, p2.shape, ...]``.
-                If tensor, has shape ``[D]``.
-
-        Returns:
-            Matrix-multiplication result ``KFAC @ v``. Return type is the same as the
-            type of the input. If list of tensors, each entry has the same shape as a
-            parameter, i.e. ``[p1.shape, p2.shape, ...]``. If tensor, has shape ``[D]``.
-
-        Raises:
-            ValueError: If the input tensor has the wrong data type.
-        """
-        if isinstance(v_torch, list):
-            v_torch = [v_torch_i.unsqueeze(0) for v_torch_i in v_torch]
-            result = self.torch_matmat(v_torch)
-            return [res.squeeze(0) for res in result]
-        elif isinstance(v_torch, Tensor):
-            return self.torch_matmat(v_torch.unsqueeze(-1)).squeeze(-1)
-        else:
-            raise ValueError(
-                f"Invalid input type: {type(v_torch)}. Expected list of tensors or tensor."
-            )
-
-    def _matmat(self, M: ndarray) -> ndarray:
-        """Apply KFAC to a matrix (multiple vectors).
-
-        Args:
-            M: Matrix for multiplication. Has shape ``[D, K]`` with some ``K``.
-
-        Returns:
-            Matrix-multiplication result ``KFAC @ M``. Has shape ``[D, K]``.
-        """
-        M_torch = super()._preprocess(M)
-        M_torch = self.torch_matmat(M_torch)
-        return self._postprocess(M_torch)
-
-    def _adjoint(self) -> KFACLinearOperator:
-        """Return the linear operator representing the adjoint.
-
-        The KFAC approximation is real symmetric, and hence self-adjoint.
-
-        Returns:
-            Self.
-        """
-        return self
+        return KM
 
     def compute_kronecker_factors(self):
         """Compute and cache KFAC's Kronecker factors for future ``matmat``s."""
@@ -1275,9 +1119,8 @@ class KFACLinearOperator(_LinearOperator):
             input_covariances_keys = set(self._input_covariances.keys())
             gradient_covariances_keys = set(self._gradient_covariances.keys())
             mapping_keys = set(self._mapping.keys())
-            if (
-                input_covariances_keys != mapping_keys
-                or gradient_covariances_keys != mapping_keys
+            if (input_covariances_keys and input_covariances_keys != mapping_keys) or (
+                gradient_covariances_keys and gradient_covariances_keys != mapping_keys
             ):
                 raise ValueError(
                     "Input or gradient covariance keys in state dict do not match "
@@ -1304,7 +1147,7 @@ class KFACLinearOperator(_LinearOperator):
         params: List[Parameter],
         data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
         check_deterministic: bool = True,
-        batch_size_fn: Optional[Callable[[MutableMapping], int]] = None,
+        batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
     ) -> KFACLinearOperator:
         """Load a KFAC linear operator from a state dictionary.
 
@@ -1321,9 +1164,6 @@ class KFACLinearOperator(_LinearOperator):
 
         Returns:
             Linear operator of KFAC approximation.
-
-        Raises:
-            RuntimeError: If the check for deterministic behavior fails.
         """
         loss_func = {
             "MSELoss": MSELoss,
@@ -1351,13 +1191,6 @@ class KFACLinearOperator(_LinearOperator):
 
         # Potentially call `check_deterministic` after the state dict is loaded
         if check_deterministic:
-            old_device = kfac._device
-            kfac.to_device(device("cpu"))
-            try:
-                kfac._check_deterministic()
-            except RuntimeError as e:
-                raise e
-            finally:
-                kfac.to_device(old_device)
+            kfac._check_deterministic()
 
         return kfac

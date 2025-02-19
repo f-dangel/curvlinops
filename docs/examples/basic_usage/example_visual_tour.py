@@ -89,7 +89,7 @@ Hessian_linop = HessianLinearOperator(
     model, loss_function, params, dataloader
 ).to_scipy()
 GGN_linop = GGNLinearOperator(model, loss_function, params, dataloader).to_scipy()
-EF_linop = EFLinearOperator(model, loss_function, params, dataloader)
+EF_linop = EFLinearOperator(model, loss_function, params, dataloader).to_scipy()
 Hessian_blocked_linop = HessianLinearOperator(
     model,
     loss_function,
@@ -97,10 +97,10 @@ Hessian_blocked_linop = HessianLinearOperator(
     dataloader,
     block_sizes=[s for s in num_tensors_layer if s != 0],
 ).to_scipy()
-F_linop = FisherMCLinearOperator(model, loss_function, params, dataloader)
+F_linop = FisherMCLinearOperator(model, loss_function, params, dataloader).to_scipy()
 KFAC_linop = KFACLinearOperator(
     model, loss_function, params, dataloader, separate_weight_and_bias=False
-)
+).to_scipy()
 
 # %%
 #

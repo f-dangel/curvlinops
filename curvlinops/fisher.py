@@ -1,6 +1,4 @@
-"""Contains LinearOperator implementation of the (approximate) Fisher."""
-
-from __future__ import annotations
+"""Contains LinearOperator implementation of the approximate Fisher."""
 
 from collections.abc import MutableMapping
 from math import sqrt
@@ -8,15 +6,14 @@ from typing import Callable, Iterable, List, Optional, Tuple, Union
 
 from backpack.hessianfree.ggnvp import ggn_vector_product_from_plist
 from einops import einsum, rearrange
-from numpy import ndarray
 from torch import Generator, Tensor, as_tensor, normal, softmax, zeros, zeros_like
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss, Parameter
 from torch.nn.functional import one_hot
 
-from curvlinops._base import _LinearOperator
+from curvlinops._torch_base import CurvatureLinearOperator
 
 
-class FisherMCLinearOperator(_LinearOperator):
+class FisherMCLinearOperator(CurvatureLinearOperator):
     r"""Monte-Carlo approximation of the Fisher as SciPy linear operator.
 
     Consider the empirical risk
@@ -101,13 +98,20 @@ class FisherMCLinearOperator(_LinearOperator):
     The linear operator represents a deterministic sample from this MC Fisher estimator.
     To generate different samples, you have to create instances with varying random
     seed argument.
+
+    Attributes:
+        SELF_ADJOINT: Whether the operator is self-adjoint. ``True`` for the Fisher.
+        supported_losses: Supported loss functions.
+        FIXED_DATA_ORDER: Whether the data order must be fix. ``True`` for MC-Fisher.
     """
 
+    SELF_ADJOINT: bool = True
+    FIXED_DATA_ORDER: bool = True
     supported_losses = (MSELoss, CrossEntropyLoss, BCEWithLogitsLoss)
 
     def __init__(
         self,
-        model_func: Callable[[Tensor], Tensor],
+        model_func: Callable[[Union[Tensor, MutableMapping]], Tensor],
         loss_func: Union[MSELoss, CrossEntropyLoss],
         params: List[Parameter],
         data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
@@ -118,7 +122,7 @@ class FisherMCLinearOperator(_LinearOperator):
         num_data: Optional[int] = None,
         batch_size_fn: Optional[Callable[[MutableMapping], int]] = None,
     ):
-        """Linear operator for the MC approximation of the Fisher.
+        """Linear operator for the Monte-Carlo approximation of the type-I Fisher.
 
         Note:
             f(X; θ) denotes a neural network, parameterized by θ, that maps a mini-batch
@@ -178,16 +182,16 @@ class FisherMCLinearOperator(_LinearOperator):
             batch_size_fn=batch_size_fn,
         )
 
-    def _matmat(self, M: ndarray) -> ndarray:
+    def _matmat(self, M: List[Tensor]) -> List[Tensor]:
         """Multiply the MC-Fisher onto a matrix.
 
         Create and seed the random number generator.
 
         Args:
-            M: Matrix for multiplication.
+            M: Matrix for multiplication in tensor list format.
 
         Returns:
-            Matrix-multiplication result ``mat @ M``.
+            Matrix-multiplication result ``mat @ M`` in tensor list format.
         """
         if self._generator is None or self._generator.device != self._device:
             self._generator = Generator(device=self._device)
@@ -196,21 +200,21 @@ class FisherMCLinearOperator(_LinearOperator):
         return super()._matmat(M)
 
     def _matmat_batch(
-        self, X: Union[Tensor, MutableMapping], y: Tensor, M_list: List[Tensor]
-    ) -> Tuple[Tensor, ...]:
+        self, X: Union[Tensor, MutableMapping], y: Tensor, M: List[Tensor]
+    ) -> List[Tensor]:
         """Apply the mini-batch MC-Fisher to a matrix.
 
         Args:
             X: Input to the DNN.
             y: Ground truth.
-            M_list: Matrix to be multiplied with in list format.
+            M: Matrix to be multiplied with in tensor list format.
                 Tensors have same shape as trainable model parameters, and an
-                additional leading axis for the matrix columns.
+                additional trailing axis for the matrix columns.
 
         Returns:
-            Result of MC-Fisher multiplication in list format. Has the same shape as
-            ``M_list``, i.e. each tensor in the list has the shape of a parameter and a
-            leading dimension of matrix columns.
+            Result of MC-Fisher multiplication in tensor list format. Has the same shape
+            as ``M``, i.e. each tensor in the list has the shape of a parameter and a
+            trailing dimension of matrix columns.
         """
         # compute ∂ℓₙ(yₙₘ)/∂fₙ where fₙ is the prediction for datum n and
         # yₙₘ is the m-th sampled label for datum n
@@ -248,17 +252,17 @@ class FisherMCLinearOperator(_LinearOperator):
         )
 
         # Multiply the MC Fisher onto each vector in the input matrix
-        result_list = [zeros_like(M) for M in M_list]
-        num_vectors = M_list[0].shape[0]
+        FM = [zeros_like(m) for m in M]
+        (num_vectors,) = {m.shape[-1] for m in M}
         for v in range(num_vectors):
-            for idx, ggnvp in enumerate(
+            for idx, Fm in enumerate(
                 ggn_vector_product_from_plist(
-                    loss, output, self._params, [M[v] for M in M_list]
+                    loss, output, self._params, [m[..., v] for m in M]
                 )
             ):
-                result_list[idx][v].add_(ggnvp.detach())
+                FM[idx][..., v].add_(Fm.detach())
 
-        return tuple(result_list)
+        return FM
 
     def sample_grad_output(self, output: Tensor, num_samples: int, y: Tensor) -> Tensor:
         """Draw would-be gradients ``∇_f log p(·|f)``.
@@ -326,13 +330,3 @@ class FisherMCLinearOperator(_LinearOperator):
 
         else:
             raise NotImplementedError(f"Supported losses: {self.supported_losses}")
-
-    def _adjoint(self) -> FisherMCLinearOperator:
-        """Return the linear operator representing the adjoint.
-
-        The Fisher MC-approximation is real symmetric, and hence self-adjoint.
-
-        Returns:
-            Self.
-        """
-        return self

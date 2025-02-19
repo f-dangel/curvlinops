@@ -2,15 +2,6 @@
 
 from collections import UserDict
 from functools import partial
-from test.cases import ModelWithDictInput
-from test.utils import (
-    Conv2dModel,
-    WeightShareModel,
-    binary_classification_targets,
-    classification_targets,
-    get_available_devices,
-    regression_targets,
-)
 
 from torch import rand
 from torch.nn import (
@@ -23,6 +14,15 @@ from torch.nn import (
 )
 
 from curvlinops.kfac import KFACType
+from test.cases import ModelWithDictInput
+from test.utils import (
+    Conv2dModel,
+    WeightShareModel,
+    binary_classification_targets,
+    classification_targets,
+    get_available_devices,
+    regression_targets,
+)
 
 # Add test cases here, devices and loss function with different reductions will be
 # added automatically below

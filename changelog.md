@@ -8,14 +8,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added/New
 
-- Make linear operators purely PyTorch with a SciPy export option
+- **Backward-incompatible:** Refactor class-based trace and diagonal estimators
+  into functions ([PR](https://github.com/f-dangel/curvlinops/pull/168)):
+  - If you used `HutchinsonTraceEstimator`, switch to `hutchinson_trace`
+  - If you used `HutchPPTraceEstimator`, switch to `hutchpp_trace`
+  - If you used `HutchinsonDiagonalEstimator`, switch to `hutchinson_diag`
+  - If you used `HutchinsonSquaredFrobeniusNormEstimator`, switch to
+    `hutchinson_squared_fro`
+
+- Add diagonal estimation with the XDiag algorithm
+  ([paper](https://arxiv.org/pdf/2301.07825),
+   [PR](https://github.com/f-dangel/curvlinops/pull/167))
+
+- Add trace estimation with the XTrace algorithm
+  ([paper](https://arxiv.org/pdf/2301.07825),
+   [PR](https://github.com/f-dangel/curvlinops/pull/166))
+
+- Add a [use case
+  example](https://curvlinops.readthedocs.io/en/latest/basic_usage/example_benchmark.html)
+  that benchmarks the linear operators
+  ([PR](https://github.com/f-dangel/curvlinops/pull/162))
+
+- Add a [use case
+  example](https://curvlinops.readthedocs.io/en/latest/basic_usage/example_trace_diagonal_estimation.html)
+  on trace and diagonal estimation
+  ([PR](https://github.com/f-dangel/curvlinops/pull/165))
+
+- **Backward-incompatible:** Make linear operators purely PyTorch with a SciPy
+  export option
   - `GGNLinearOperator` ([PR](https://github.com/f-dangel/curvlinops/pull/146))
   - `TransposedJacobianLinearOperator` and `JacobianLinearOperator`
     ([PR](https://github.com/f-dangel/curvlinops/pull/147))
+  - `FisherMCLinearOperator`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/148))
+  - `EFLinearOperator`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/149))
+  - `ActivationHessianLinearOperator`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/157))
+  - `KFACLinearOperator` and `KFACInverseLinearOperator`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/149)),
+    deprecating their `.torch_matvec` and `.torch_matmat`,
+    which are now available through `@`
 
 ### Fixed/Removed
 
+- Bug in `KFACInverseLinearOperator` where the damping was repeatedly (for every
+  matrix-vector product) added to the eigenvalues corresponding to the bias
+  parameters when `use_exact_damping=True` and
+  `KFACLinearOperator._separate_weight_and_bias=True`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/156))
+- More test cases for `KFACInverseLinearOperator` and bug fix in
+    `.load_state_dict` ([PR](https://github.com/f-dangel/curvlinops/pull/158))
+- **Backward-incompatible:** Remove `.to_device` function of linear operators,
+  always carry out deterministic checks on the linear operator's device
+  (previously always on CPU)
+  ([PR](https://github.com/f-dangel/curvlinops/pull/160))
+
 ### Internal
+
+- Always run full tests
+  ([PR](https://github.com/f-dangel/curvlinops/pull/161))
+- Migrate linting, formatting, and import sorting from `flake8`, `black`, and
+  `isort` to `ruff` ([PR](https://github.com/f-dangel/curvlinops/pull/164))
+
+- Modify logo
+  ([PR](https://github.com/f-dangel/curvlinops/pull/169))
 
 ## [2.0.1] - 2024-10-25
 

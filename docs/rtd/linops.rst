@@ -21,7 +21,7 @@ Fisher (approximate)
    :members: __init__
 
 .. autoclass:: curvlinops.KFACLinearOperator
-   :members: __init__, to_device, torch_matmat, torch_matvec, trace, det, logdet, frobenius_norm
+   :members: __init__, trace, det, logdet, frobenius_norm
 
 Uncentered gradient covariance (empirical Fisher)
 -------------------------------------------------
@@ -51,7 +51,7 @@ Inverses
    :members: __init__, set_neumann_hyperparameters
 
 .. autoclass:: curvlinops.KFACInverseLinearOperator
-   :members: __init__, torch_matmat, torch_matvec
+   :members: __init__
 
 Sub-matrices
 ------------
@@ -72,23 +72,23 @@ Spectral density approximation
 Trace approximation
 ===================
 
-.. autoclass:: curvlinops.HutchinsonTraceEstimator
-   :members: __init__, sample
+.. autofunction:: curvlinops.hutchinson_trace
 
-.. autoclass:: curvlinops.HutchPPTraceEstimator
-   :members: __init__, sample
+.. autofunction:: curvlinops.hutchpp_trace
+
+.. autofunction:: curvlinops.xtrace
 
 Diagonal approximation
 ======================
 
-.. autoclass:: curvlinops.HutchinsonDiagonalEstimator
-   :members: __init__, sample
+.. autofunction:: curvlinops.hutchinson_diag
+
+.. autofunction:: curvlinops.xdiag
 
 Frobenius norm approximation
 ============================
 
-.. autoclass:: curvlinops.HutchinsonSquaredFrobeniusNormEstimator
-   :members: __init__, sample
+.. autoclass:: curvlinops.hutchinson_squared_fro
 
 Experimental
 ============

@@ -1,28 +1,26 @@
 """Contains tests for ``EKFACLinearOperator`` in ``curvlinops.kfac``."""
 
 import os
-from test.cases import DEVICES, DEVICES_IDS
-from test.utils import (
-    Conv2dModel,
-    UnetModel,
-    WeightShareModel,
-    binary_classification_targets,
-    block_diagonal,
-    classification_targets,
-    compare_state_dicts,
-    regression_targets,
-)
 from typing import Dict, Iterable, List, Tuple, Union
 
-from einops import rearrange
 from einops.layers.torch import Rearrange
 from numpy import allclose as np_allclose
 from numpy import eye
 from numpy.linalg import det, norm, slogdet
-from pytest import mark, raises, skip
-from torch import Tensor, allclose, cat, cuda, device
-from torch import eye as torch_eye
-from torch import isinf, isnan, load, manual_seed, rand, rand_like, randperm, save
+from pytest import mark, raises
+from torch import (
+    Tensor,
+    allclose,
+    device,
+    isinf,
+    isnan,
+    load,
+    manual_seed,
+    rand,
+    rand_like,
+    randperm,
+    save,
+)
 from torch.nn import (
     BCEWithLogitsLoss,
     CrossEntropyLoss,
@@ -38,6 +36,17 @@ from curvlinops import EFLinearOperator, GGNLinearOperator
 from curvlinops.ekfac import EKFACLinearOperator, FisherType, KFACType
 from curvlinops.examples.utils import report_nonclose
 from curvlinops.kfac import KFACLinearOperator
+from test.cases import DEVICES, DEVICES_IDS
+from test.utils import (
+    Conv2dModel,
+    UnetModel,
+    WeightShareModel,
+    binary_classification_targets,
+    block_diagonal,
+    classification_targets,
+    compare_state_dicts,
+    regression_targets,
+)
 
 
 @mark.parametrize(
@@ -95,7 +104,7 @@ def test_ekfac_type2(
         fisher_type=FisherType.TYPE2,
         separate_weight_and_bias=separate_weight_and_bias,
     )
-    ekfac_mat = ekfac @ eye(ekfac.shape[1])
+    ekfac_mat = ekfac.to_scipy() @ eye(ekfac.shape[1])
 
     report_nonclose(ggn, ekfac_mat, atol=1e-6)
 
@@ -177,7 +186,7 @@ def test_ekfac_type2_weight_sharing(
         kfac_approx=setting,  # choose EKFAC approximation consistent with setting
         separate_weight_and_bias=separate_weight_and_bias,
     )
-    ekfac_mat = ekfac @ eye(ekfac.shape[1])
+    ekfac_mat = ekfac.to_scipy() @ eye(ekfac.shape[1])
 
     report_nonclose(ggn, ekfac_mat, rtol=1e-4)
 
@@ -241,7 +250,7 @@ def test_ekfac_mc(
         mc_samples=2_000,
         separate_weight_and_bias=separate_weight_and_bias,
     )
-    ekfac_mat = ekfac @ eye(ekfac.shape[1])
+    ekfac_mat = ekfac.to_scipy() @ eye(ekfac.shape[1])
 
     atol = {"sum": 5e-1, "mean": 5e-3}[loss_func.reduction]
     rtol = {"sum": 2e-2, "mean": 2e-2}[loss_func.reduction]
@@ -321,7 +330,7 @@ def test_ekfac_mc_weight_sharing(
         separate_weight_and_bias=separate_weight_and_bias,
         check_deterministic=False,
     )
-    ekfac_mat = ekfac @ eye(ekfac.shape[1])
+    ekfac_mat = ekfac.to_scipy() @ eye(ekfac.shape[1])
 
     # Scale absolute tolerance by the number of outputs when using sum reduction.
     num_outputs = sum(y.numel() for _, y in data)
@@ -371,7 +380,7 @@ def test_ekfac_one_datum(
         fisher_type=FisherType.TYPE2,
         separate_weight_and_bias=separate_weight_and_bias,
     )
-    ekfac_mat = ekfac @ eye(ekfac.shape[1])
+    ekfac_mat = ekfac.to_scipy() @ eye(ekfac.shape[1])
 
     report_nonclose(ggn, ekfac_mat)
 
@@ -417,7 +426,7 @@ def test_ekfac_mc_one_datum(
         mc_samples=11_000,
         separate_weight_and_bias=separate_weight_and_bias,
     )
-    ekfac_mat = ekfac @ eye(ekfac.shape[1])
+    ekfac_mat = ekfac.to_scipy() @ eye(ekfac.shape[1])
 
     atol = {"sum": 1e-3, "mean": 1e-3}[loss_func.reduction]
     rtol = {"sum": 3e-2, "mean": 3e-2}[loss_func.reduction]
@@ -466,7 +475,7 @@ def test_ekfac_ef_one_datum(
         fisher_type=FisherType.EMPIRICAL,
         separate_weight_and_bias=separate_weight_and_bias,
     )
-    ekfac_mat = ekfac @ eye(ekfac.shape[1])
+    ekfac_mat = ekfac.to_scipy() @ eye(ekfac.shape[1])
 
     report_nonclose(ef, ekfac_mat, atol=1e-7)
 
@@ -492,7 +501,7 @@ def test_ekfac_inplace_activations(dev: device):
     ggn = block_diagonal(GGNLinearOperator, model, loss_func, params, data)
 
     ekfac = EKFACLinearOperator(model, loss_func, params, data, mc_samples=2_000)
-    ekfac_mat = ekfac @ eye(ekfac.shape[1])
+    ekfac_mat = ekfac.to_scipy() @ eye(ekfac.shape[1])
 
     atol = {"sum": 5e-1, "mean": 2e-3}[loss_func.reduction]
     rtol = {"sum": 2e-2, "mean": 2e-2}[loss_func.reduction]
@@ -637,7 +646,7 @@ def test_expand_setting_scaling(
                 eigenvals /= correction
         else:
             eigenvalues /= correction
-    ekfac_simulated_mean_mat = ekfac_sum @ eye(ekfac_sum.shape[1])
+    ekfac_simulated_mean_mat = ekfac_sum.to_scipy() @ eye(ekfac_sum.shape[1])
 
     # EKFAC with mean reduction
     loss_func = loss(reduction="mean").to(dev)
@@ -648,169 +657,9 @@ def test_expand_setting_scaling(
         data,
         fisher_type=fisher_type,
     )
-    ekfac_mean_mat = ekfac_mean @ eye(ekfac_mean.shape[1])
+    ekfac_mean_mat = ekfac_mean.to_scipy() @ eye(ekfac_mean.shape[1])
 
     report_nonclose(ekfac_simulated_mean_mat, ekfac_mean_mat, atol=1e-4)
-
-
-def test_bug_device_change_invalidates_parameter_mapping():
-    """Reproduce #77: Loading EKFAC from GPU to CPU invalidates the internal mapping.
-
-    This leads to some parameter blocks not being updated inside ``.matmat``.
-    """
-    if not cuda.is_available():
-        skip("This test requires a GPU.")
-    gpu, cpu = device("cuda"), device("cpu")
-
-    manual_seed(0)
-
-    model = Sequential(Linear(5, 4), ReLU(), Linear(4, 4)).to(gpu)
-    data = [(rand(2, 5), regression_targets((2, 4)))]
-    loss_func = MSELoss().to(gpu)
-
-    ekfac = EKFACLinearOperator(
-        model,
-        loss_func,
-        list(model.parameters()),
-        data,
-        fisher_type=FisherType.EMPIRICAL,
-        check_deterministic=False,  # turn off to avoid implicit device changes
-        progressbar=True,
-    )
-    x = rand(ekfac.shape[1]).numpy()
-    ekfac_x_gpu = ekfac @ x
-
-    ekfac.to_device(cpu)
-    ekfac_x_cpu = ekfac @ x
-
-    report_nonclose(ekfac_x_gpu, ekfac_x_cpu)
-
-
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-def test_torch_matmat(inv_case, exclude, separate_weight_and_bias):
-    """Test that the torch_matmat method of EKFACLinearOperator works."""
-    model, loss_func, params, data, batch_size_fn = inv_case
-
-    if exclude is not None:
-        names = {p.data_ptr(): name for name, p in model.named_parameters()}
-        params = [p for p in params if exclude not in names[p.data_ptr()]]
-
-    ekfac = EKFACLinearOperator(
-        model,
-        loss_func,
-        params,
-        data,
-        batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
-    )
-    device = ekfac._device
-    # EKFAC.dtype is a numpy data type
-    dtype = next(ekfac._model_func.parameters()).dtype
-
-    num_vectors = 16
-    x = rand(ekfac.shape[1], num_vectors, dtype=dtype, device=device)
-    kfac_x = ekfac.torch_matmat(x)
-    assert x.device == kfac_x.device
-    assert x.dtype == kfac_x.dtype
-    assert kfac_x.shape == (ekfac.shape[0], x.shape[1])
-    kfac_x = kfac_x.cpu().numpy()
-
-    # Test list input format
-    x_list = ekfac._torch_preprocess(x)
-    kfac_x_list = ekfac.torch_matmat(x_list)
-    kfac_x_list = cat([rearrange(M, "k ... -> (...) k") for M in kfac_x_list])
-    report_nonclose(kfac_x, kfac_x_list.cpu().numpy(), rtol=1e-4)
-
-    # Test against multiplication with dense matrix
-    identity = torch_eye(ekfac.shape[1], dtype=dtype, device=device)
-    kfac_mat = ekfac.torch_matmat(identity)
-    kfac_mat_x = kfac_mat @ x
-    report_nonclose(kfac_x, kfac_mat_x.cpu().numpy(), rtol=1e-4, atol=1e-7)
-
-    # Test against _matmat
-    kfac_x_numpy = ekfac @ x.cpu().numpy()
-    report_nonclose(kfac_x, kfac_x_numpy, rtol=1e-4)
-
-
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-def test_torch_matvec(inv_case, exclude, separate_weight_and_bias):
-    """Test that the torch_matvec method of EKFACLinearOperator works."""
-    model, loss_func, params, data, batch_size_fn = inv_case
-
-    if exclude is not None:
-        names = {p.data_ptr(): name for name, p in model.named_parameters()}
-        params = [p for p in params if exclude not in names[p.data_ptr()]]
-
-    ekfac = EKFACLinearOperator(
-        model,
-        loss_func,
-        params,
-        data,
-        batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
-    )
-    device = ekfac._device
-    # EKFAC.dtype is a numpy data type
-    dtype = next(ekfac._model_func.parameters()).dtype
-
-    with raises(ValueError):
-        # Test that torch_matvec does not accept matrix input
-        ekfac.torch_matvec(rand(3, 5, dtype=dtype, device=device))
-
-    x = rand(ekfac.shape[1], dtype=dtype, device=device)
-    kfac_x = ekfac.torch_matvec(x)
-    assert x.device == kfac_x.device
-    assert x.dtype == kfac_x.dtype
-    assert kfac_x.shape == x.shape
-    kfac_x = kfac_x.cpu().numpy()
-
-    # Test list input format
-    # split parameter blocks
-    dims = [p.numel() for p in ekfac._params]
-    split_x = x.split(dims)
-    # unflatten parameter dimension
-    assert len(split_x) == len(ekfac._params)
-    x_list = [res.reshape(p.shape) for res, p in zip(split_x, ekfac._params)]
-    kfac_x_list = ekfac.torch_matvec(x_list)
-    kfac_x_list = cat([rearrange(M, "... -> (...)") for M in kfac_x_list])
-    report_nonclose(kfac_x, kfac_x_list.cpu().numpy())
-
-    # Test against multiplication with dense matrix
-    identity = torch_eye(ekfac.shape[1], dtype=dtype, device=device)
-    kfac_mat = ekfac.torch_matmat(identity)
-    kfac_mat_x = kfac_mat @ x
-    report_nonclose(kfac_x, kfac_mat_x.cpu().numpy())
-
-    # Test against _matmat
-    kfac_x_numpy = ekfac @ x.cpu().numpy()
-    report_nonclose(kfac_x, kfac_x_numpy)
-
-
-def test_torch_matvec_list_output_shapes(cnn_case):
-    """Test output shapes with list input format (issue #124)."""
-    model, loss_func, params, data, batch_size_fn = cnn_case
-    ekfac = EKFACLinearOperator(
-        model,
-        loss_func,
-        params,
-        data,
-        batch_size_fn=batch_size_fn,
-    )
-    vec = [rand_like(p) for p in ekfac._params]
-    out_list = ekfac.torch_matvec(vec)
-    assert len(out_list) == len(ekfac._params)
-    for out_i, p_i in zip(out_list, ekfac._params):
-        assert out_i.shape == p_i.shape
 
 
 @mark.parametrize(
@@ -844,7 +693,7 @@ def test_trace(inv_case, exclude, separate_weight_and_bias, check_deterministic)
 
     # Check for equivalence of trace property and naive trace computation
     trace = ekfac.trace
-    trace_naive = (ekfac @ eye(ekfac.shape[1])).trace()
+    trace_naive = (ekfac.to_scipy() @ eye(ekfac.shape[1])).trace()
     report_nonclose(trace.cpu().numpy(), trace_naive)
 
     # Check that the trace property is properly cached and reset
@@ -886,7 +735,7 @@ def test_frobenius_norm(
 
     # Check for equivalence of frobenius_norm property and the naive computation
     frobenius_norm = ekfac.frobenius_norm
-    frobenius_norm_naive = norm(ekfac @ eye(ekfac.shape[1]))
+    frobenius_norm_naive = norm(ekfac.to_scipy() @ eye(ekfac.shape[1]))
     report_nonclose(frobenius_norm.cpu().numpy(), frobenius_norm_naive)
 
     # Check that the frobenius_norm property is properly cached and reset
@@ -940,8 +789,8 @@ def test_det(inv_case, exclude, separate_weight_and_bias, check_deterministic):
     # Check for equivalence of the det property and naive determinant computation
     determinant = ekfac.det
     # verify that the determinant is not trivial as this would make the test useless
-    assert determinant != 0.0 and determinant != 1.0
-    det_naive = det(ekfac @ eye(ekfac.shape[1]))
+    assert determinant not in {0.0, 1.0}
+    det_naive = det(ekfac.to_scipy() @ eye(ekfac.shape[1]))
     report_nonclose(determinant.cpu().numpy(), det_naive, rtol=1e-4)
 
     # Check that the det property is properly cached and reset
@@ -997,7 +846,7 @@ def test_logdet(inv_case, exclude, separate_weight_and_bias, check_deterministic
     log_det = ekfac.logdet
     # verify that the log determinant is finite and not nan
     assert not isinf(log_det) and not isnan(log_det)
-    sign, logabsdet = slogdet(ekfac @ eye(ekfac.shape[1]))
+    sign, logabsdet = slogdet(ekfac.to_scipy() @ eye(ekfac.shape[1]))
     log_det_naive = sign * logabsdet
     report_nonclose(log_det.cpu().numpy(), log_det_naive, rtol=1e-4)
 
@@ -1190,7 +1039,7 @@ def test_ekfac_closer_to_exact_than_kfac(
         fisher_type=fisher_type,
         mc_samples=1_000 if fisher_type == FisherType.MC else 1,
     )
-    kfac_mat = kfac @ eye(kfac.shape[1])
+    kfac_mat = kfac.to_scipy() @ eye(kfac.shape[1])
     ekfac = EKFACLinearOperator(
         model,
         loss_func,
@@ -1201,7 +1050,7 @@ def test_ekfac_closer_to_exact_than_kfac(
         fisher_type=fisher_type,
         mc_samples=1_000 if fisher_type == FisherType.MC else 1,
     )
-    ekfac_mat = ekfac @ eye(ekfac.shape[1])
+    ekfac_mat = ekfac.to_scipy() @ eye(ekfac.shape[1])
 
     # Compute and compare (relative) distances to the exact quantity.
     exact_norm = norm(exact)
@@ -1269,8 +1118,9 @@ def test_ekfac_closer_to_exact_than_kfac_weight_sharing(
         separate_weight_and_bias=separate_weight_and_bias,
         fisher_type=fisher_type,
         kfac_approx=kfac_approx,
+        mc_samples=10 if fisher_type == FisherType.MC else 1,
     )
-    kfac_mat = kfac @ eye(kfac.shape[1])
+    kfac_mat = kfac.to_scipy() @ eye(kfac.shape[1])
     ekfac = EKFACLinearOperator(
         model,
         loss_func,
@@ -1280,8 +1130,9 @@ def test_ekfac_closer_to_exact_than_kfac_weight_sharing(
         separate_weight_and_bias=separate_weight_and_bias,
         fisher_type=fisher_type,
         kfac_approx=kfac_approx,
+        mc_samples=10 if fisher_type == FisherType.MC else 1,
     )
-    ekfac_mat = ekfac @ eye(ekfac.shape[1])
+    ekfac_mat = ekfac.to_scipy() @ eye(ekfac.shape[1])
 
     # Compute and compare (relative) distances to the exact quantity.
     exact_norm = norm(exact)

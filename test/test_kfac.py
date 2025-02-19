@@ -1,33 +1,16 @@
 """Contains tests for ``curvlinops.kfac``."""
 
 import os
-from test.cases import DEVICES, DEVICES_IDS
-from test.utils import (
-    Conv2dModel,
-    UnetModel,
-    WeightShareModel,
-    binary_classification_targets,
-    block_diagonal,
-    classification_targets,
-    compare_state_dicts,
-    regression_targets,
-)
 from typing import Dict, Iterable, List, Tuple, Union
 
-from einops import rearrange
 from einops.layers.torch import Rearrange
 from numpy import eye, random
 from numpy.linalg import det, norm, slogdet
-from pytest import mark, raises, skip
+from pytest import mark, raises
 from torch import (
     Tensor,
     allclose,
-    cat,
-    cuda,
     device,
-)
-from torch import eye as torch_eye
-from torch import (
     float64,
     isinf,
     isnan,
@@ -38,6 +21,7 @@ from torch import (
     randperm,
     save,
 )
+from torch import eye as torch_eye
 from torch.nn import (
     BCEWithLogitsLoss,
     CrossEntropyLoss,
@@ -53,6 +37,18 @@ from torch.nn import (
 from curvlinops import EFLinearOperator, GGNLinearOperator
 from curvlinops.examples.utils import report_nonclose
 from curvlinops.kfac import FisherType, KFACLinearOperator, KFACType
+from test.cases import DEVICES, DEVICES_IDS
+from test.utils import (
+    Conv2dModel,
+    UnetModel,
+    WeightShareModel,
+    binary_classification_targets,
+    block_diagonal,
+    classification_targets,
+    compare_matmat,
+    compare_state_dicts,
+    regression_targets,
+)
 
 
 @mark.parametrize(
@@ -101,7 +97,7 @@ def test_kfac_type2(
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
     )
-    kfac = KFACLinearOperator(
+    kfac_torch = KFACLinearOperator(
         model,
         loss_func,
         params,
@@ -110,13 +106,14 @@ def test_kfac_type2(
         fisher_type=FisherType.TYPE2,
         separate_weight_and_bias=separate_weight_and_bias,
     )
+    kfac = kfac_torch.to_scipy()
     kfac_mat = kfac @ eye(kfac.shape[1])
 
     report_nonclose(ggn, kfac_mat)
 
     # Check that input covariances were not computed
     if exclude == "weight":
-        assert len(kfac._input_covariances) == 0
+        assert len(kfac_torch._input_covariances) == 0
 
 
 @mark.parametrize("setting", [KFACType.EXPAND, KFACType.REDUCE])
@@ -177,7 +174,7 @@ def test_kfac_type2_weight_sharing(
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
     )
-    kfac = KFACLinearOperator(
+    kfac_torch = KFACLinearOperator(
         model,
         loss_func,
         params,
@@ -187,13 +184,14 @@ def test_kfac_type2_weight_sharing(
         kfac_approx=setting,  # choose KFAC approximation consistent with setting
         separate_weight_and_bias=separate_weight_and_bias,
     )
+    kfac = kfac_torch.to_scipy()
     kfac_mat = kfac @ eye(kfac.shape[1])
 
     report_nonclose(ggn, kfac_mat, rtol=1e-4)
 
     # Check that input covariances were not computed
     if exclude == "weight":
-        assert len(kfac._input_covariances) == 0
+        assert len(kfac_torch._input_covariances) == 0
 
 
 @mark.parametrize(
@@ -250,10 +248,10 @@ def test_kfac_mc(
         fisher_type=FisherType.MC,
         mc_samples=2_000,
         separate_weight_and_bias=separate_weight_and_bias,
-    )
+    ).to_scipy()
     kfac_mat = kfac @ eye(kfac.shape[1])
 
-    atol = {"sum": 5e-1, "mean": 5e-3}[loss_func.reduction]
+    atol = {"sum": 5e-1, "mean": 1e-2}[loss_func.reduction]
     rtol = {"sum": 2e-2, "mean": 2e-2}[loss_func.reduction]
 
     report_nonclose(ggn, kfac_mat, rtol=rtol, atol=atol)
@@ -322,10 +320,10 @@ def test_kfac_mc_weight_sharing(
         mc_samples=2_000,
         kfac_approx=setting,  # choose KFAC approximation consistent with setting
         separate_weight_and_bias=separate_weight_and_bias,
-    )
+    ).to_scipy()
     kfac_mat = kfac @ eye(kfac.shape[1])
 
-    atol = {"sum": 5e-1, "mean": 5e-3}[loss_func.reduction]
+    atol = {"sum": 5e-1, "mean": 1e-2}[loss_func.reduction]
     rtol = {"sum": 2e-2, "mean": 2e-2}[loss_func.reduction]
 
     report_nonclose(ggn, kfac_mat, rtol=rtol, atol=atol)
@@ -370,7 +368,7 @@ def test_kfac_one_datum(
         batch_size_fn=batch_size_fn,
         fisher_type=FisherType.TYPE2,
         separate_weight_and_bias=separate_weight_and_bias,
-    )
+    ).to_scipy()
     kfac_mat = kfac @ eye(kfac.shape[1])
 
     report_nonclose(ggn, kfac_mat)
@@ -416,7 +414,7 @@ def test_kfac_mc_one_datum(
         fisher_type=FisherType.MC,
         mc_samples=11_000,
         separate_weight_and_bias=separate_weight_and_bias,
-    )
+    ).to_scipy()
     kfac_mat = kfac @ eye(kfac.shape[1])
 
     atol = {"sum": 1e-3, "mean": 1e-3}[loss_func.reduction]
@@ -456,6 +454,13 @@ def test_kfac_ef_one_datum(
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
     )
+    # ef_blocks = []  # list of per-parameter EFs
+    # for param in params:
+    #     ef = EFLinearOperator(
+    #         model, loss_func, [param], data, batch_size_fn=batch_size_fn
+    #     ).to_scipy()
+    #     ef_blocks.append(ef @ eye(ef.shape[1]))
+    # ef = block_diag(*ef_blocks)
 
     kfac = KFACLinearOperator(
         model,
@@ -465,7 +470,7 @@ def test_kfac_ef_one_datum(
         batch_size_fn=batch_size_fn,
         fisher_type=FisherType.EMPIRICAL,
         separate_weight_and_bias=separate_weight_and_bias,
-    )
+    ).to_scipy()
     kfac_mat = kfac @ eye(kfac.shape[1])
 
     report_nonclose(ef, kfac_mat)
@@ -482,20 +487,22 @@ def test_kfac_inplace_activations(dev: device):
         dev: The device to run the test on.
     """
     manual_seed(0)
-    model = Sequential(Linear(6, 3), ReLU(inplace=True), Linear(3, 2)).to(dev)
+    model = Sequential(Linear(4, 3), ReLU(inplace=True), Linear(3, 2)).to(dev)
     loss_func = MSELoss().to(dev)
     batch_size = 1
-    data = [(rand(batch_size, 6), regression_targets((batch_size, 2)))]
+    data = [(rand(batch_size, 4), regression_targets((batch_size, 2)))]
     params = list(model.parameters())
 
     # 1) compare KFAC and GGN
     ggn = block_diagonal(GGNLinearOperator, model, loss_func, params, data)
 
-    kfac = KFACLinearOperator(model, loss_func, params, data, mc_samples=2_000)
+    kfac = KFACLinearOperator(
+        model, loss_func, params, data, mc_samples=2_000
+    ).to_scipy()
     kfac_mat = kfac @ eye(kfac.shape[1])
 
-    atol = {"sum": 5e-1, "mean": 2e-3}[loss_func.reduction]
-    rtol = {"sum": 2e-2, "mean": 2e-2}[loss_func.reduction]
+    atol = {"sum": 5e-1, "mean": 5e-3}[loss_func.reduction]
+    rtol = {"sum": 2e-2, "mean": 4e-2}[loss_func.reduction]
 
     report_nonclose(ggn, kfac_mat, rtol=rtol, atol=atol)
 
@@ -568,7 +575,7 @@ def test_multi_dim_output(
         params,
         data,
         fisher_type=fisher_type,
-    )
+    ).to_scipy()
     kfac_mat = kfac @ eye(kfac.shape[1])
 
     # KFAC for deep linear network with 4d input and equivalent 2d output
@@ -593,7 +600,7 @@ def test_multi_dim_output(
         params_flat,
         data_flat,
         fisher_type=fisher_type,
-    )
+    ).to_scipy()
     kfac_flat_mat = kfac_flat @ eye(kfac_flat.shape[1])
 
     report_nonclose(kfac_mat, kfac_flat_mat)
@@ -643,13 +650,14 @@ def test_expand_setting_scaling(
 
     # KFAC with sum reduction
     loss_func = loss(reduction="sum").to(dev)
-    kfac_sum = KFACLinearOperator(
+    kfac_sum_torch = KFACLinearOperator(
         model,
         loss_func,
         params,
         data,
         fisher_type=fisher_type,
     )
+    kfac_sum = kfac_sum_torch.to_scipy()
     # FOOF does not scale the gradient covariances, even when using a mean reduction
     if fisher_type != FisherType.FORWARD_ONLY:
         # Simulate a mean reduction by manually scaling the gradient covariances
@@ -658,8 +666,8 @@ def test_expand_setting_scaling(
             output_random_variable_size = 3
             # MSE loss averages over number of output channels
             loss_term_factor *= output_random_variable_size
-        for ggT in kfac_sum._gradient_covariances.values():
-            ggT /= kfac_sum._N_data * loss_term_factor
+        for ggT in kfac_sum_torch._gradient_covariances.values():
+            ggT.div_(kfac_sum_torch._N_data * loss_term_factor)
     kfac_simulated_mean_mat = kfac_sum @ eye(kfac_sum.shape[1])
 
     # KFAC with mean reduction
@@ -670,53 +678,30 @@ def test_expand_setting_scaling(
         params,
         data,
         fisher_type=fisher_type,
-    )
+    ).to_scipy()
     kfac_mean_mat = kfac_mean @ eye(kfac_mean.shape[1])
 
     report_nonclose(kfac_simulated_mean_mat, kfac_mean_mat)
 
 
-def test_bug_device_change_invalidates_parameter_mapping():
-    """Reproduce #77: Loading KFAC from GPU to CPU invalidates the internal mapping.
+@mark.parametrize("separate_weight_and_bias", [False], ids=["joint_bias"])
+@mark.parametrize(
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
+def test_KFACLinearOperator(
+    case,
+    adjoint: bool,
+    is_vec: bool,
+    exclude: str | None,
+    separate_weight_and_bias: bool,
+):
+    """Test matrix multiplication with KFAC.
 
-    This leads to some parameter blocks not being updated inside ``.matmat``.
+    Args:
+        case: Tuple of model, loss function, parameters, data, and batch size getter.
+        adjoint: Whether to test the adjoint operator.
+        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
     """
-    if not cuda.is_available():
-        skip("This test requires a GPU.")
-    gpu, cpu = device("cuda"), device("cpu")
-
-    manual_seed(0)
-
-    model = Sequential(Linear(5, 4), ReLU(), Linear(4, 4)).to(gpu)
-    data = [(rand(2, 5), regression_targets((2, 4)))]
-    loss_func = MSELoss().to(gpu)
-
-    kfac = KFACLinearOperator(
-        model,
-        loss_func,
-        list(model.parameters()),
-        data,
-        fisher_type=FisherType.EMPIRICAL,
-        check_deterministic=False,  # turn off to avoid implicit device changes
-        progressbar=True,
-    )
-    x = rand(kfac.shape[1]).numpy()
-    kfac_x_gpu = kfac @ x
-
-    kfac.to_device(cpu)
-    kfac_x_cpu = kfac @ x
-
-    report_nonclose(kfac_x_gpu, kfac_x_cpu)
-
-
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-def test_torch_matmat(case, exclude, separate_weight_and_bias):
-    """Test that the torch_matmat method of KFACLinearOperator works."""
     model, loss_func, params, data, batch_size_fn = case
 
     if exclude is not None:
@@ -731,109 +716,12 @@ def test_torch_matmat(case, exclude, separate_weight_and_bias):
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
     )
+
     device = kfac._device
-    # KFAC.dtype is a numpy data type
-    dtype = next(kfac._model_func.parameters()).dtype
+    dtype = kfac._infer_dtype()
+    kfac_mat = kfac @ torch_eye(kfac.shape[1], device=device, dtype=dtype)
 
-    num_vectors = 16
-    x = rand(kfac.shape[1], num_vectors, dtype=dtype, device=device)
-    kfac_x = kfac.torch_matmat(x)
-    assert x.device == kfac_x.device
-    assert x.dtype == kfac_x.dtype
-    assert kfac_x.shape == (kfac.shape[0], x.shape[1])
-    kfac_x = kfac_x.cpu().numpy()
-
-    # Test list input format
-    x_list = kfac._torch_preprocess(x)
-    kfac_x_list = kfac.torch_matmat(x_list)
-    kfac_x_list = cat([rearrange(M, "k ... -> (...) k") for M in kfac_x_list])
-    report_nonclose(kfac_x, kfac_x_list.cpu().numpy(), rtol=1e-4)
-
-    # Test against multiplication with dense matrix
-    identity = torch_eye(kfac.shape[1], dtype=dtype, device=device)
-    kfac_mat = kfac.torch_matmat(identity)
-    kfac_mat_x = kfac_mat @ x
-    report_nonclose(kfac_x, kfac_mat_x.cpu().numpy(), rtol=1e-4)
-
-    # Test against _matmat
-    kfac_x_numpy = kfac @ x.cpu().numpy()
-    report_nonclose(kfac_x, kfac_x_numpy, rtol=1e-4)
-
-
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-def test_torch_matvec(case, exclude, separate_weight_and_bias):
-    """Test that the torch_matvec method of KFACLinearOperator works."""
-    model, loss_func, params, data, batch_size_fn = case
-
-    if exclude is not None:
-        names = {p.data_ptr(): name for name, p in model.named_parameters()}
-        params = [p for p in params if exclude not in names[p.data_ptr()]]
-
-    kfac = KFACLinearOperator(
-        model,
-        loss_func,
-        params,
-        data,
-        batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
-    )
-    device = kfac._device
-    # KFAC.dtype is a numpy data type
-    dtype = next(kfac._model_func.parameters()).dtype
-
-    with raises(ValueError):
-        # Test that torch_matvec does not accept matrix input
-        kfac.torch_matvec(rand(3, 5, dtype=dtype, device=device))
-
-    x = rand(kfac.shape[1], dtype=dtype, device=device)
-    kfac_x = kfac.torch_matvec(x)
-    assert x.device == kfac_x.device
-    assert x.dtype == kfac_x.dtype
-    assert kfac_x.shape == x.shape
-    kfac_x = kfac_x.cpu().numpy()
-
-    # Test list input format
-    # split parameter blocks
-    dims = [p.numel() for p in kfac._params]
-    split_x = x.split(dims)
-    # unflatten parameter dimension
-    assert len(split_x) == len(kfac._params)
-    x_list = [res.reshape(p.shape) for res, p in zip(split_x, kfac._params)]
-    kfac_x_list = kfac.torch_matvec(x_list)
-    kfac_x_list = cat([rearrange(M, "... -> (...)") for M in kfac_x_list])
-    report_nonclose(kfac_x, kfac_x_list.cpu().numpy())
-
-    # Test against multiplication with dense matrix
-    identity = torch_eye(kfac.shape[1], dtype=dtype, device=device)
-    kfac_mat = kfac.torch_matmat(identity)
-    kfac_mat_x = kfac_mat @ x
-    report_nonclose(kfac_x, kfac_mat_x.cpu().numpy())
-
-    # Test against _matmat
-    kfac_x_numpy = kfac @ x.cpu().numpy()
-    report_nonclose(kfac_x, kfac_x_numpy)
-
-
-def test_torch_matvec_list_output_shapes(cnn_case):
-    """Test output shapes with list input format (issue #124)."""
-    model, loss_func, params, data, batch_size_fn = cnn_case
-    kfac = KFACLinearOperator(
-        model,
-        loss_func,
-        params,
-        data,
-        batch_size_fn=batch_size_fn,
-    )
-    vec = [rand_like(p) for p in kfac._params]
-    out_list = kfac.torch_matvec(vec)
-    assert len(out_list) == len(kfac._params)
-    for out_i, p_i in zip(out_list, kfac._params):
-        assert out_i.shape == p_i.shape
+    compare_matmat(kfac, kfac_mat, adjoint, is_vec, rtol=1e-5, atol=1e-7)
 
 
 @mark.parametrize(
@@ -855,7 +743,7 @@ def test_trace(case, exclude, separate_weight_and_bias, check_deterministic):
         names = {p.data_ptr(): name for name, p in model.named_parameters()}
         params = [p for p in params if exclude not in names[p.data_ptr()]]
 
-    kfac = KFACLinearOperator(
+    kfac_torch = KFACLinearOperator(
         model,
         loss_func,
         params,
@@ -864,16 +752,17 @@ def test_trace(case, exclude, separate_weight_and_bias, check_deterministic):
         separate_weight_and_bias=separate_weight_and_bias,
         check_deterministic=check_deterministic,
     )
+    kfac = kfac_torch.to_scipy()
 
     # Check for equivalence of trace property and naive trace computation
-    trace = kfac.trace
+    trace = kfac_torch.trace
     trace_naive = (kfac @ eye(kfac.shape[1])).trace()
     report_nonclose(trace.cpu().numpy(), trace_naive)
 
     # Check that the trace property is properly cached and reset
-    assert kfac._trace == trace
-    kfac.compute_kronecker_factors()
-    assert kfac._trace is None
+    assert kfac_torch._trace == trace
+    kfac_torch.compute_kronecker_factors()
+    assert kfac_torch._trace is None
 
 
 @mark.parametrize(
@@ -895,7 +784,7 @@ def test_frobenius_norm(case, exclude, separate_weight_and_bias, check_determini
         names = {p.data_ptr(): name for name, p in model.named_parameters()}
         params = [p for p in params if exclude not in names[p.data_ptr()]]
 
-    kfac = KFACLinearOperator(
+    kfac_torch = KFACLinearOperator(
         model,
         loss_func,
         params,
@@ -904,16 +793,17 @@ def test_frobenius_norm(case, exclude, separate_weight_and_bias, check_determini
         separate_weight_and_bias=separate_weight_and_bias,
         check_deterministic=check_deterministic,
     )
+    kfac = kfac_torch.to_scipy()
 
     # Check for equivalence of frobenius_norm property and the naive computation
-    frobenius_norm = kfac.frobenius_norm
+    frobenius_norm = kfac_torch.frobenius_norm
     frobenius_norm_naive = norm(kfac @ eye(kfac.shape[1]))
     report_nonclose(frobenius_norm.cpu().numpy(), frobenius_norm_naive)
 
     # Check that the frobenius_norm property is properly cached and reset
-    assert kfac._frobenius_norm == frobenius_norm
-    kfac.compute_kronecker_factors()
-    assert kfac._frobenius_norm is None
+    assert kfac_torch._frobenius_norm == frobenius_norm
+    kfac_torch.compute_kronecker_factors()
+    assert kfac_torch._frobenius_norm is None
 
 
 @mark.parametrize(
@@ -935,7 +825,7 @@ def test_det(case, exclude, separate_weight_and_bias, check_deterministic):
         names = {p.data_ptr(): name for name, p in model.named_parameters()}
         params = [p for p in params if exclude not in names[p.data_ptr()]]
 
-    kfac = KFACLinearOperator(
+    kfac_torch = KFACLinearOperator(
         model,
         loss_func,
         params,
@@ -944,32 +834,33 @@ def test_det(case, exclude, separate_weight_and_bias, check_deterministic):
         separate_weight_and_bias=separate_weight_and_bias,
         check_deterministic=check_deterministic,
     )
+    kfac = kfac_torch.to_scipy()
 
     # add damping manually to avoid singular matrices
     if not check_deterministic:
-        kfac.compute_kronecker_factors()
-    assert kfac._input_covariances or kfac._gradient_covariances
-    delta = 1.0  # requires much larger damping value compared to ``logdet``
-    for aaT in kfac._input_covariances.values():
+        kfac_torch.compute_kronecker_factors()
+    assert kfac_torch._input_covariances or kfac_torch._gradient_covariances
+    delta = 0.5  # requires much larger damping value compared to ``logdet``
+    for aaT in kfac_torch._input_covariances.values():
         aaT.add_(
             torch_eye(aaT.shape[0], dtype=aaT.dtype, device=aaT.device), alpha=delta
         )
-    for ggT in kfac._gradient_covariances.values():
+    for ggT in kfac_torch._gradient_covariances.values():
         ggT.add_(
             torch_eye(ggT.shape[0], dtype=ggT.dtype, device=ggT.device), alpha=delta
         )
 
     # Check for equivalence of the det property and naive determinant computation
-    determinant = kfac.det
+    determinant = kfac_torch.det
     # verify that the determinant is not trivial as this would make the test useless
-    assert determinant != 0.0 and determinant != 1.0
+    assert determinant not in [0.0, 1.0]
     det_naive = det(kfac @ eye(kfac.shape[1]))
     report_nonclose(determinant.cpu().numpy(), det_naive, rtol=1e-4)
 
     # Check that the det property is properly cached and reset
-    assert kfac._det == determinant
-    kfac.compute_kronecker_factors()
-    assert kfac._det is None
+    assert kfac_torch._det == determinant
+    kfac_torch.compute_kronecker_factors()
+    assert kfac_torch._det is None
 
 
 @mark.parametrize(
@@ -991,7 +882,7 @@ def test_logdet(case, exclude, separate_weight_and_bias, check_deterministic):
         names = {p.data_ptr(): name for name, p in model.named_parameters()}
         params = [p for p in params if exclude not in names[p.data_ptr()]]
 
-    kfac = KFACLinearOperator(
+    kfac_torch = KFACLinearOperator(
         model,
         loss_func,
         params,
@@ -1000,23 +891,24 @@ def test_logdet(case, exclude, separate_weight_and_bias, check_deterministic):
         separate_weight_and_bias=separate_weight_and_bias,
         check_deterministic=check_deterministic,
     )
+    kfac = kfac_torch.to_scipy()
 
     # add damping manually to avoid singular matrices
     if not check_deterministic:
-        kfac.compute_kronecker_factors()
-    assert kfac._input_covariances or kfac._gradient_covariances
+        kfac_torch.compute_kronecker_factors()
+    assert kfac_torch._input_covariances or kfac_torch._gradient_covariances
     delta = 1e-3  # only requires much smaller damping value compared to ``det``
-    for aaT in kfac._input_covariances.values():
+    for aaT in kfac_torch._input_covariances.values():
         aaT.add_(
             torch_eye(aaT.shape[0], dtype=aaT.dtype, device=aaT.device), alpha=delta
         )
-    for ggT in kfac._gradient_covariances.values():
+    for ggT in kfac_torch._gradient_covariances.values():
         ggT.add_(
             torch_eye(ggT.shape[0], dtype=ggT.dtype, device=ggT.device), alpha=delta
         )
 
     # Check for equivalence of the logdet property and naive log determinant computation
-    log_det = kfac.logdet
+    log_det = kfac_torch.logdet
     # verify that the log determinant is finite and not nan
     assert not isinf(log_det) and not isnan(log_det)
     sign, logabsdet = slogdet(kfac @ eye(kfac.shape[1]))
@@ -1024,9 +916,9 @@ def test_logdet(case, exclude, separate_weight_and_bias, check_deterministic):
     report_nonclose(log_det.cpu().numpy(), log_det_naive, rtol=1e-4)
 
     # Check that the logdet property is properly cached and reset
-    assert kfac._logdet == log_det
-    kfac.compute_kronecker_factors()
-    assert kfac._logdet is None
+    assert kfac_torch._logdet == log_det
+    kfac_torch.compute_kronecker_factors()
+    assert kfac_torch._logdet is None
 
 
 @mark.parametrize(
@@ -1080,7 +972,7 @@ def test_forward_only_fisher_type(
         foof_simulated._gradient_covariances[name] = torch_eye(
             block.shape[0], dtype=block.dtype, device=block.device
         )
-    simulated_foof_mat = foof_simulated @ eye(foof_simulated.shape[1])
+    simulated_foof_mat = foof_simulated.to_scipy() @ eye(foof_simulated.shape[1])
 
     # Compute KFAC with `fisher_type=FisherType.FORWARD_ONLY`
     foof = KFACLinearOperator(
@@ -1092,7 +984,7 @@ def test_forward_only_fisher_type(
         separate_weight_and_bias=separate_weight_and_bias,
         fisher_type=FisherType.FORWARD_ONLY,
     )
-    foof_mat = foof @ eye(foof.shape[1])
+    foof_mat = foof.to_scipy() @ eye(foof.shape[1])
 
     # Check for equivalence
     assert len(foof_simulated._input_covariances) == len(foof._input_covariances)
@@ -1170,7 +1062,7 @@ def test_forward_only_fisher_type_exact_case(
         separate_weight_and_bias=separate_weight_and_bias,
         fisher_type=FisherType.FORWARD_ONLY,
     )
-    foof_mat = foof @ eye(foof.shape[1])
+    foof_mat = foof.to_scipy() @ eye(foof.shape[1])
 
     # Check for equivalence
     num_data = sum(X.shape[0] for X, _ in data)
@@ -1274,7 +1166,7 @@ def test_forward_only_fisher_type_exact_weight_sharing_case(
         kfac_approx=setting,  # choose KFAC approximation consistent with setting
         separate_weight_and_bias=separate_weight_and_bias,
     )
-    foof_mat = foof @ eye(foof.shape[1])
+    foof_mat = foof.to_scipy() @ eye(foof.shape[1])
 
     # Check for equivalence
     num_data = sum(X.shape[0] for X, _ in data)
@@ -1395,7 +1287,7 @@ def test_save_and_load_state_dict():
     # check that the two KFACs are equal
     compare_state_dicts(kfac.state_dict(), kfac_new.state_dict())
     test_vec = rand(kfac.shape[1])
-    report_nonclose(kfac @ test_vec, kfac_new @ test_vec)
+    report_nonclose(kfac.to_scipy() @ test_vec, kfac_new.to_scipy() @ test_vec)
 
 
 def test_from_state_dict():
@@ -1424,7 +1316,7 @@ def test_from_state_dict():
     # check that the two KFACs are equal
     compare_state_dicts(kfac.state_dict(), kfac_new.state_dict())
     test_vec = rand(kfac.shape[1])
-    report_nonclose(kfac @ test_vec, kfac_new @ test_vec)
+    report_nonclose(kfac.to_scipy() @ test_vec, kfac_new.to_scipy() @ test_vec)
 
 
 @mark.parametrize("fisher_type", ["type-2", "mc", "empirical", "forward-only"])

@@ -2,19 +2,28 @@ from __future__ import annotations
 
 import contextlib
 from types import TracebackType
-from typing import Callable, Iterable, List, Optional, Set, Tuple, Type, Union
+from typing import (
+    Callable,
+    Iterable,
+    List,
+    MutableMapping,
+    Optional,
+    Set,
+    Tuple,
+    Type,
+    Union,
+)
 
 from backpack.hessianfree.hvp import hessian_vector_product
-from numpy import ndarray
-from torch import Tensor, from_numpy, zeros_like
+from torch import Tensor, zeros_like
 from torch.autograd import grad
 from torch.nn import Module
 from torch.utils.hooks import RemovableHandle
 
-from curvlinops._base import _LinearOperator
+from curvlinops._torch_base import CurvatureLinearOperator
 
 
-class ActivationHessianLinearOperator(_LinearOperator):
+class ActivationHessianLinearOperator(CurvatureLinearOperator):
     r"""Hessian of the loss w.r.t. hidden features in a neural network.
 
     Consider the empirical risk on a single mini-batch
@@ -38,17 +47,22 @@ class ActivationHessianLinearOperator(_LinearOperator):
         \ell(f_{\mathbf{\theta}}(\mathbf{X}), \mathbf{y})
 
     and has dimension :math:`\mathrm{dim}(\mathbf{Z}) = N \mathrm{dim}(\mathbf{z})`.
+
+    Attributes:
+        SELF_ADJOINT: Whether the linear operator is self-adjoint. ``True`` for the
+            activation Hessian.
     """
+
+    SELF_ADJOINT: bool = True
 
     def __init__(
         self,
         model_func: Module,
-        loss_func: Callable[[Tensor, Tensor], Tensor],
+        loss_func: Callable[[Union[MutableMapping, Tensor], Tensor], Tensor],
         activation: Tuple[str, str, int],
-        data: Iterable[Tuple[Tensor, Tensor]],
+        data: Iterable[Tuple[Union[MutableMapping, Tensor], Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
-        shape: Optional[Tuple[int, int]] = None,
     ):
         """Linear operator for the loss Hessian w.r.t. intermediate features.
 
@@ -73,15 +87,12 @@ class ActivationHessianLinearOperator(_LinearOperator):
                 model's forward pass could depend on the order in which mini-batches
                 are presented (BatchNorm, Dropout). Default: ``True``. This is a
                 safeguard, only turn it off if you know what you are doing.
-            shape: Shape of the represented matrix. If ``None``, this dimension will be
-                inferred at the cost of one forward pass through the model.
 
         Raises:
             ValueError: If ``data`` contains more than one batch.
 
         Example:
-            >>> from numpy import eye, allclose
-            >>> from torch import manual_seed, rand
+            >>> from torch import manual_seed, rand, eye, allclose
             >>> from torch.nn import Linear, MSELoss, Sequential, ReLU
             >>>
             >>> loss_func = MSELoss()
@@ -106,17 +117,9 @@ class ActivationHessianLinearOperator(_LinearOperator):
         """
         self._activation = activation
 
-        # Compute shape of activation and ensure there is only one batch
+        # Ensure there is only one batch
         data_iter = iter(data)
-        X, _ = next(data_iter)
-        (dev,) = {p.device for p in model_func.parameters()}
-        X = X.to(dev)
-        activation_storage = []
-        with store_activation(model_func, *activation, activation_storage):
-            model_func(X)
-        act = activation_storage.pop()
-        shape = (act.numel(), act.numel())
-        self._activation_shape = tuple(act.shape)
+        next(data_iter)
 
         with contextlib.suppress(StopIteration):
             next(data_iter)
@@ -129,25 +132,52 @@ class ActivationHessianLinearOperator(_LinearOperator):
             data,
             progressbar=progressbar,
             check_deterministic=check_deterministic,
-            shape=shape,
         )
 
-    def _matmat_batch(
-        self, X: Tensor, y: Tensor, M_list: List[Tensor]
-    ) -> Tuple[Tensor, ...]:
-        """Apply the activation Hessian to a matrix.
+    def _get_out_shape(self) -> List[Tuple[int, ...]]:
+        """Return the output shape of the activation Hessian.
+
+        Returns:
+            The dimensions of the activation Hessian's output space.
+        """
+        if not hasattr(self, "_activation_shape"):
+            X, _ = next(iter(self._data))
+            dev = self._infer_device()
+            if isinstance(X, Tensor):
+                X = X.to(dev)
+            activation_storage = []
+            with store_activation(
+                self._model_func, *self._activation, activation_storage
+            ):
+                self._model_func(X)
+            act = activation_storage.pop()
+
+            self._activation_shape = tuple(act.shape)
+
+        return [self._activation_shape]
+
+    def _get_in_shape(self) -> List[Tuple[int, ...]]:
+        """Return the input shape of the activation Hessian.
+
+        Returns:
+            The dimensions of the activation Hessian's input space.
+        """
+        return self._get_out_shape()
+
+    def _matmat_batch(self, X: Tensor, y: Tensor, M: List[Tensor]) -> List[Tensor]:
+        """Apply the activation Hessian to a matrix in tensor list format.
 
         Args:
             X: Input to the DNN.
             y: Ground truth.
-            M_list: Matrix to be multiplied with in list format.
+            M: Matrix to be multiplied with in tensor list format.
                 Tensors have same shape as trainable model parameters, and an
-                additional leading axis for the matrix columns.
+                additional trailing axis for the matrix columns.
 
         Returns:
             Result of activation Hessian multiplication in list format. Has the same
-            shape as ``M_list``, i.e. each tensor in the list has the shape of a
-            parameter and a leading dimension of matrix columns.
+            shape as ``M``, i.e. each tensor in the list has the shape of a
+            parameter and a trailing dimension of matrix columns.
         """
         activation_storage = []
         with store_activation(self._model_func, *self._activation, activation_storage):
@@ -159,34 +189,16 @@ class ActivationHessianLinearOperator(_LinearOperator):
         grad_activation = grad(loss, activation, create_graph=True)
 
         # collect
-        result_list = [zeros_like(M) for M in M_list]
-
-        num_vectors = M_list[0].shape[0]
+        HM = [zeros_like(m) for m in M]
+        (num_vectors,) = {m.shape[-1] for m in M}
         for n in range(num_vectors):
-            out_n_list = hessian_vector_product(
-                loss, [activation], [M[n] for M in M_list], grad_params=grad_activation
+            HM_col = hessian_vector_product(
+                loss, [activation], [m[..., n] for m in M], grad_params=grad_activation
             )
-            for result, out_n in zip(result_list, out_n_list):
-                result[n].add_(out_n)
+            for HM_p, HM_col_p in zip(HM, HM_col):
+                HM_p[..., n].add_(HM_col_p)
 
-        return tuple(result_list)
-
-    def _preprocess(self, M: ndarray) -> List[Tensor]:
-        """Reshape the incoming matrix into the activation shape and convert to PyTorch.
-
-        Args:
-            M: Matrix in NumPy format onto which the linear operator is applied.
-
-        Returns:
-            Matrix in PyTorch format. Has same shape as the activation with an
-            additional leading axis for the matrix columns.
-        """
-        num_vectors = M.shape[1]
-        return [
-            from_numpy(M.T)
-            .to(self._device)
-            .reshape(num_vectors, *self._activation_shape)
-        ]
+        return HM
 
 
 class store_activation:

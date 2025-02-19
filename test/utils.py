@@ -1,6 +1,7 @@
 """Utility functions to test ``curvlinops``."""
 
 from collections.abc import MutableMapping
+from contextlib import redirect_stdout, suppress
 from itertools import product
 from typing import Callable, Iterable, List, Optional, Tuple, Union
 
@@ -19,7 +20,9 @@ from torch import (
     from_numpy,
     rand,
     randint,
+    zeros_like,
 )
+from torch import eye as torch_eye
 from torch.nn import (
     AdaptiveAvgPool2d,
     BCEWithLogitsLoss,
@@ -34,7 +37,7 @@ from torch.nn import (
     Upsample,
 )
 
-from curvlinops._base import _LinearOperator
+from curvlinops import FisherMCLinearOperator
 from curvlinops._torch_base import PyTorchLinearOperator
 from curvlinops.utils import allclose_report
 
@@ -91,7 +94,7 @@ def regression_targets(size: Tuple[int]) -> Tensor:
 
 
 def block_diagonal(
-    linear_operator: _LinearOperator,
+    linear_operator: PyTorchLinearOperator,
     model: Module,
     loss_func: Module,
     params: List[Parameter],
@@ -422,9 +425,11 @@ def compare_state_dicts(state_dict: dict, state_dict_new: dict):
         elif isinstance(value, tuple):
             assert len(value) == len(value_new)
             assert all(isinstance(v, type(v2)) for v, v2 in zip(value, value_new))
-            assert all(
-                allclose(as_tensor(v), as_tensor(v2)) for v, v2 in zip(value, value_new)
-            )
+            for v, v2 in zip(value, value_new):
+                if v is None:
+                    assert v2 is None
+                else:
+                    assert allclose(as_tensor(v), as_tensor(v2))
         else:
             assert value == value_new
 
@@ -519,3 +524,131 @@ def compare_matmat(
     assert len(op_x) == len(mat_x)
     for o_x, m_x in zip(op_x, mat_x):
         assert allclose_report(o_x, m_x, **tol)
+
+
+def compare_matmat_expectation(
+    op: FisherMCLinearOperator,
+    mat: Tensor,
+    adjoint: bool,
+    is_vec: bool,
+    max_repeats: int,
+    check_every: int,
+    num_vecs: int = 2,
+    rtol: float = 1e-5,
+    atol: float = 1e-8,
+):
+    """Test the matrix-vector product of a PyTorch linear operator in expectation.
+
+    Args:
+        op: The operator to test.
+        mat: The matrix representation of the linear operator.
+        adjoint: Whether to test the adjoint operator.
+        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
+        max_repeats: Maximum number of matrix-vector product within which the
+            expectation must converge.
+        check_every: Check the expectation every ``check_every`` iterations for
+            convergence.
+        num_vecs: Number of vectors to test (ignored if ``is_vec`` is ``True``).
+            Default: ``2``.
+        rtol: Relative tolerance for the comparison. Default: ``1e-5``.
+        atol: Absolute tolerance for the comparison. Will be multiplied by the maximum
+            absolute value of the ground truth. Default: ``1e-8``.
+    """
+    if adjoint:
+        op, mat = op.adjoint(), mat.conj().T
+
+    num_vecs = 1 if is_vec else num_vecs
+    dt = op._infer_dtype()
+    dev = op._infer_device()
+    _, x, _ = rand_accepted_formats(
+        [tuple(s) for s in op._in_shape], is_vec, dt, dev, num_vecs=num_vecs
+    )
+
+    op_x = zeros_like(x)
+    mat_x = mat @ x
+
+    atol *= mat_x.flatten().abs().max().item()
+    tol = {"atol": atol, "rtol": rtol}
+
+    for m in range(max_repeats):
+        op_x += op @ x
+        op._seed += 1
+
+        total_samples = (m + 1) * op._mc_samples
+        if total_samples % check_every == 0:
+            with redirect_stdout(None), suppress(ValueError), suppress(AssertionError):
+                assert allclose_report(op_x / (m + 1), mat_x, **tol)
+                return
+
+    assert allclose_report(op_x / max_repeats, mat_x, **tol)
+
+
+def eye_like(A: Tensor) -> Tensor:
+    """Create an identity matrix of same size as ``A``.
+
+    Args:
+        A: The tensor whose size determines the identity matrix.
+
+    Returns:
+        The identity matrix of ``A``'s size.
+    """
+    dim1, dim_2 = A.shape
+    (dim,) = {dim1, dim_2}
+    return torch_eye(dim, device=A.device, dtype=A.dtype)
+
+
+def check_estimator_convergence(
+    estimator: Callable[[], ndarray],
+    num_matvecs: int,
+    truth: float,
+    max_total_matvecs: int = 100_000,
+    check_every: int = 100,
+    target_rel_error: float = 1e-3,
+):
+    """Test whether an estimator converges to the true value.
+
+    Args:
+        estimator: The estimator as function that accepts the number of matrix-vector
+            products.
+        num_matvecs: Number of matrix-vector products used per estimate.
+        truth: True property of the linear operator.
+        max_total_matvecs: Maximum number of matrix-vector products to perform.
+            Default: ``100_000``. If convergence has not been reached by then, the test
+            will fail.
+        check_every: Check for convergence every ``check_every`` estimates.
+            Default: ``100``.
+        target_rel_error: Relative error for considering the estimator converged.
+            Default: ``1e-3``.
+    """
+    used_matvecs, converged = 0, False
+
+    def relative_l_inf_error(a_true: ndarray, a: ndarray) -> float:
+        """Compute the relative infinity norm error.
+
+        For scalars, this is simply | a - a_true | / | a_true |, the metric used by
+        most trace estimation papers.
+
+        For vector-/tensor-valued objects, this is the maximum relative error
+        max(| a - a_true |) / max(| a_true |) where | . | denotes the element-wise
+        absolute value. This metric is used by the XDiag paper to assess the
+        quality of a diagonal estimator.
+
+        Args:
+            a_true: The true value.
+            a: The estimated value.
+        """
+        assert a.shape == a_true.shape
+        return abs(a - a_true).max() / abs(a_true).max()
+
+    estimates = []
+    while used_matvecs < max_total_matvecs and not converged:
+        estimates.append(estimator())
+        used_matvecs += num_matvecs
+
+        num_estimates = len(estimates)
+        if num_estimates % check_every == 0:
+            rel_error = relative_l_inf_error(truth, sum(estimates) / num_estimates)
+            print(f"Relative error after {used_matvecs} matvecs: {rel_error:.5f}.")
+            converged = rel_error < target_rel_error
+
+    assert converged

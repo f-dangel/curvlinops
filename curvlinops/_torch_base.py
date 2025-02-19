@@ -28,7 +28,7 @@ from torch import (
     zeros_like,
 )
 from torch.autograd import grad
-from torch.nn import Module, Parameter
+from torch.nn import Parameter
 from tqdm import tqdm
 
 from curvlinops.utils import allclose_report
@@ -371,14 +371,13 @@ class PyTorchLinearOperator:
             Returns:
                 The output matrix in NumPy format.
             """
-            X_dtype = X.dtype
             X_torch = as_tensor(X, dtype=dtype, device=device)
             AX_torch = f(X_torch)
             # calling .numpy() on a BF-16 tensor is not supported, see
             # (https://github.com/pytorch/pytorch/issues/90574)
             if AX_torch.dtype == bfloat16:
                 AX_torch = AX_torch.float()
-            return AX_torch.detach().cpu().numpy().astype(X_dtype)
+            return AX_torch.detach().cpu().numpy().astype(X.dtype)
 
         return f_scipy
 
@@ -410,8 +409,6 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
         data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
-        in_shape: Optional[List[Tuple[int, ...]]] = None,
-        out_shape: Optional[List[Tuple[int, ...]]] = None,
         num_data: Optional[int] = None,
         block_sizes: Optional[List[int]] = None,
         batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
@@ -443,10 +440,6 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
                 model's forward pass could depend on the order in which mini-batches
                 are presented (BatchNorm, Dropout). Default: ``True``. This is a
                 safeguard, only turn it off if you know what you are doing.
-            in_shape: Shapes of the linear operator's input tensor product space.
-                If ``None``, will use the shapes of ``params``.
-            out_shape: Shapes of the linear operator's output tensor product space.
-                If ``None``, will use the shapes of ``params``.
             num_data: Number of data points. If ``None``, it is inferred from the data
                 at the cost of one traversal through the data loader.
             block_sizes: This argument will be ignored if the linear operator does not
@@ -460,7 +453,6 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
                 entry of the iterates from ``data`` and return their batch size.
 
         Raises:
-            RuntimeError: If the check for deterministic behavior fails.
             ValueError: If ``block_sizes`` is specified but the linear operator does not
                 support blocks.
             ValueError: If the sum of blocks does not equal the number of parameters.
@@ -505,14 +497,7 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
         super().__init__(self._get_in_shape(), self._get_out_shape())
 
         if check_deterministic:
-            old_device = self._device
-            self.to_device(device("cpu"))
-            try:
-                self._check_deterministic()
-            except RuntimeError as e:
-                raise e
-            finally:
-                self.to_device(old_device)
+            self._check_deterministic()
 
     def _get_in_shape(self) -> List[Tuple[int, ...]]:
         """Return linear operator's input space dimensions.
@@ -682,21 +667,6 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
 
         return total_grad, total_loss
 
-    def to_device(self, device: device):
-        """Load linear operator to a device (inplace).
-
-        Args:
-            device: Target device.
-        """
-        self._device = device
-
-        if isinstance(self._model_func, Module):
-            self._model_func = self._model_func.to(self._device)
-        self._params = [p.to(device) for p in self._params]
-
-        if isinstance(self._loss_func, Module):
-            self._loss_func = self._loss_func.to(self._device)
-
     def _check_deterministic(self):
         """Check that the linear operator is deterministic.
 
@@ -706,16 +676,6 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
           results
         - Two independent total loss/gradient computations yield different results
         - If ``FIXED_DATA_ORDER`` is ``True`` and any mini-batch quantity differs.
-
-        Note:
-            Deterministic checks should be performed on CPU. We noticed that even when
-            it passes on CPU, it can fail on GPU; probably due to non-deterministic
-            operations.
-
-        # TODO This can be impractical if the CPU is less powerful than the GPU.
-        # Also, it would be desirable to confirm deterministic behavior on the compute
-        # device that will be used for matvecs. Try refactoring by using device-agnostic
-        # tolerances. Then remove the ``to_device`` method.
 
         Raises:
             RuntimeError: If non-deterministic behavior is detected.
@@ -833,7 +793,7 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
             atol: Absolute tolerance for comparison. Defaults to ``1e-8``.
 
         Raises:
-            RuntimeError: If the matrix-vector product is not deterministic.
+            RuntimeError: If the two matrix-vector products yield different results.
         """
         v = rand(self.shape[1], device=self._device, dtype=self._infer_dtype())
         Av1 = self @ v

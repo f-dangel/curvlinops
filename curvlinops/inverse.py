@@ -1,7 +1,7 @@
 """Implements linear operator inverses."""
 
 from math import sqrt
-from typing import Any, Callable, Dict, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar, Union
 from warnings import warn
 
 from einops import rearrange
@@ -10,11 +10,12 @@ from scipy.sparse.linalg import LinearOperator, cg, lsmr
 from torch import Tensor, cat, cholesky_inverse, eye, float64, outer
 from torch.linalg import cholesky, eigh
 
+from curvlinops._torch_base import PyTorchLinearOperator
 from curvlinops.ekfac import EKFACLinearOperator
-from curvlinops.kfac import (
-    FactorType,
-    KFACLinearOperator,
-    ParameterMatrixType,
+from curvlinops.kfac import FactorType, KFACLinearOperator
+
+KFACInvType = TypeVar(
+    "KFACInvType", Optional[Tensor], Tuple[Optional[Tensor], Optional[Tensor]]
 )
 
 
@@ -293,8 +294,14 @@ class NeumannInverseLinearOperator(_InverseLinearOperator):
         return self._scale * result
 
 
-class KFACInverseLinearOperator(_InverseLinearOperator):
-    """Class to invert instances of the ``KFACLinearOperator``."""
+class KFACInverseLinearOperator(PyTorchLinearOperator):
+    """Class to invert instances of the ``KFACLinearOperator``.
+
+    Attributes:
+        SELF_ADJOINT: Whether the operator is self-adjoint. ``True`` for KFAC-inverse.
+    """
+
+    SELF_ADJOINT: bool = True
 
     def __init__(
         self,
@@ -348,8 +355,12 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
             raise ValueError(
                 "The input `A` must be an instance of `KFACLinearOperator`."
             )
-        super().__init__(A.dtype, A.shape)
+        super().__init__(
+            [tuple(s) for s in A._in_shape], [tuple(s) for s in A._out_shape]
+        )
         self._A = A
+        self._infer_device = A._infer_device
+        self._infer_dtype = A._infer_dtype
         if use_heuristic_damping and use_exact_damping:
             raise ValueError("Either use heuristic damping or exact damping, not both.")
         if (use_heuristic_damping or use_exact_damping) and isinstance(damping, tuple):
@@ -494,7 +505,8 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
                     warn(
                         f"Failed to compute Cholesky decomposition in {factor.dtype} "
                         f"precision with error {error}. "
-                        "Retrying in double precision..."
+                        "Retrying in double precision...",
+                        stacklevel=2,
                     )
                     # Retry in double precision
                     original_type = factor.dtype
@@ -569,33 +581,24 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
             inv_damped_eigenvalues,
         )
 
-    def torch_matmat(self, M_torch: ParameterMatrixType) -> ParameterMatrixType:
-        """Apply the inverse of KFAC to a matrix (multiple vectors) in PyTorch.
-
-        This allows for matrix-matrix products with the inverse KFAC approximation in
-        PyTorch without converting tensors to numpy arrays, which avoids unnecessary
-        device transfers when working with GPUs and flattening/concatenating.
+    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+        """Matrix-matrix multiplication with the KFAC inverse.
 
         Args:
-            M_torch: Matrix for multiplication. If list of tensors, each entry has the
-                same shape as a parameter with an additional leading dimension of size
-                ``K`` for the columns, i.e. ``[(K,) + p1.shape), (K,) + p2.shape, ...]``.
-                If tensor, has shape ``[D, K]`` with some ``K``.
+            X: Matrix for multiplication. Is a list of tensors where each entry has the
+                same shape as a parameter with an additional trailing dimension of size
+                ``K`` for the columns, i.e. ``[(*p1.shape, K), (*p2.shape, K), ...]``.
 
         Returns:
-            Matrix-multiplication result ``KFAC⁻¹ @ M``. Return type is the same as the
-            type of the input. If list of tensors, each entry has the same shape as a
-            parameter with an additional leading dimension of size ``K`` for the columns,
-            i.e. ``[(K,) + p1.shape, (K,) + p2.shape, ...]``. If tensor, has shape
-            ``[D, K]`` with some ``K``.
+            Matrix-multiplication result ``KFAC⁻¹ @ X``. Has same shape as ``X``.
         """
-        return_tensor, M_torch = self._A._check_input_type_and_preprocess(M_torch)
-
         # Maybe compute (E)KFAC if not already done.
         if isinstance(self._A, EKFACLinearOperator):
             self._A._maybe_compute_ekfac()
         elif not (self._A._input_covariances or self._A._gradient_covariances):
             self._A.compute_kronecker_factors()
+
+        KX: List[Tensor | None] = [None] * len(X)
 
         for mod_name, param_pos in self._A._mapping.items():
             # retrieve the inverses of the Kronecker factors from cache or invert them.
@@ -605,7 +608,7 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
             )
             # cache the weight shape to ensure correct shapes are returned
             if "weight" in param_pos:
-                weight_shape = M_torch[param_pos["weight"]].shape
+                weight_shape = X[param_pos["weight"]].shape
 
             # bias and weights are treated jointly
             if (
@@ -614,72 +617,24 @@ class KFACInverseLinearOperator(_InverseLinearOperator):
                 and "bias" in param_pos.keys()
             ):
                 w_pos, b_pos = param_pos["weight"], param_pos["bias"]
-                M_w = rearrange(M_torch[w_pos], "m c_out ... -> m c_out (...)")
-                M_joint = cat([M_w, M_torch[b_pos].unsqueeze(2)], dim=2)
-                M_joint = self._A._left_and_right_multiply(
-                    M_joint, aaT_inv, ggT_inv, inv_damped_eigenvalues
+                X_w = rearrange(X[w_pos], "c_out ... m -> c_out (...) m")
+                X_joint = cat([X_w, X[b_pos].unsqueeze(1)], dim=1)
+                X_joint = self._A._left_and_right_multiply(
+                    X_joint, aaT_inv, ggT_inv, inv_damped_eigenvalues
                 )
-                w_cols = M_w.shape[2]
-                M_torch[w_pos], M_torch[b_pos] = M_joint.split([w_cols, 1], dim=2)
+                w_cols = X_w.shape[1]
+                KX[w_pos], KX[b_pos] = X_joint.split([w_cols, 1], dim=1)
+                KX[b_pos] = KX[b_pos].squeeze(1)
             else:
-                M_torch = self._A._separate_left_and_right_multiply(
-                    M_torch, param_pos, aaT_inv, ggT_inv, inv_damped_eigenvalues
+                self._A._separate_left_and_right_multiply(
+                    KX, X, param_pos, aaT_inv, ggT_inv, inv_damped_eigenvalues
                 )
 
             # restore original shapes
             if "weight" in param_pos:
-                M_torch[param_pos["weight"]] = M_torch[param_pos["weight"]].view(
-                    weight_shape
-                )
+                KX[param_pos["weight"]] = KX[param_pos["weight"]].view(weight_shape)
 
-        if return_tensor:
-            M_torch = cat([rearrange(M, "k ... -> (...) k") for M in M_torch])
-
-        return M_torch
-
-    def torch_matvec(self, v_torch: ParameterMatrixType) -> ParameterMatrixType:
-        """Apply the inverse of KFAC to a vector in PyTorch.
-
-        This allows for matrix-vector products with the inverse KFAC approximation in
-        PyTorch without converting tensors to numpy arrays, which avoids unnecessary
-        device transfers when working with GPUs and flattening/concatenating.
-
-        Args:
-            v_torch: Vector for multiplication. If list of tensors, each entry has the
-                same shape as a parameter, i.e. ``[p1.shape, p2.shape, ...]``.
-                If tensor, has shape ``[D]``.
-
-        Returns:
-            Matrix-multiplication result ``KFAC⁻¹ @ v``. Return type is the same as the
-            type of the input. If list of tensors, each entry has the same shape as a
-            parameter, i.e. ``[p1.shape, p2.shape, ...]``. If tensor, has shape ``[D]``.
-
-        Raises:
-            ValueError: If the input tensor has the wrong data type.
-        """
-        if isinstance(v_torch, list):
-            v_torch = [v_torch_i.unsqueeze(0) for v_torch_i in v_torch]
-            result = self.torch_matmat(v_torch)
-            return [res.squeeze(0) for res in result]
-        elif isinstance(v_torch, Tensor):
-            return self.torch_matmat(v_torch.unsqueeze(-1)).squeeze(-1)
-        else:
-            raise ValueError(
-                f"Invalid input type: {type(v_torch)}. Expected list of tensors or tensor."
-            )
-
-    def _matmat(self, M: ndarray) -> ndarray:
-        """Apply the inverse of KFAC to a matrix (multiple vectors).
-
-        Args:
-            M: Matrix for multiplication. Has shape ``[D, K]`` with some ``K``.
-
-        Returns:
-            Matrix-multiplication result ``KFAC⁻¹ @ M``. Has shape ``[D, K]``.
-        """
-        M_torch = self._A._preprocess(M)
-        M_torch = self.torch_matmat(M_torch)
-        return self._A._postprocess(M_torch)
+        return KX
 
     def state_dict(self) -> Dict[str, Any]:
         """Return the state of the inverse KFAC linear operator.

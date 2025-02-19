@@ -1,26 +1,15 @@
 """Contains tests for ``curvlinops.activation_hessian``."""
 
-from test.cases import DEVICES, DEVICES_IDS
-from test.utils import classification_targets
-
-from numpy import eye as numpy_eye
 from pytest import mark, raises
-from torch import (
-    allclose,
-    block_diag,
-    device,
-    einsum,
-    eye,
-    from_numpy,
-    manual_seed,
-    rand,
-)
+from torch import allclose, block_diag, device, einsum, eye, manual_seed, rand
 from torch.nn import CrossEntropyLoss, Linear, ReLU, Sequential, Sigmoid
 
 from curvlinops.experimental.activation_hessian import (
     ActivationHessianLinearOperator,
     store_activation,
 )
+from test.cases import DEVICES, DEVICES_IDS
+from test.utils import classification_targets, eye_like
 
 
 @mark.parametrize("dev", DEVICES, ids=DEVICES_IDS)
@@ -88,17 +77,17 @@ def test_ActivationHessianLinearOperator(dev: device):
     # model does nothing to the input but needs parameters so the linear
     # operator can infer the device
     model = Linear(num_classes, num_classes, bias=False).to(dev)
-    model.weight.data = eye(num_classes)
+    model.weight.data = eye_like(model.weight.data)
 
-    loss_func = CrossEntropyLoss(reduction="sum")
+    loss_func = CrossEntropyLoss(reduction="sum").to(dev)
     X = rand(batch_size, num_classes, requires_grad=True, device=dev)
     y = classification_targets((batch_size,), num_classes).to(dev)
     data = [(X, y)]
     activation = ("", "input", 0)
 
     # compute the Hessian matrix representation
-    H_linop = ActivationHessianLinearOperator(model, loss_func, activation, data)
-    H_mat = from_numpy(H_linop @ numpy_eye(H_linop.shape[1])).to(dev, X.dtype)
+    H = ActivationHessianLinearOperator(model, loss_func, activation, data)
+    H_mat = H @ eye(H.shape[1], dtype=X.dtype, device=dev)
 
     # we know that the Hessian of softmax CE loss is ``diag(p(x)) - p(x) p(x)ᵀ``
     # where ``p(x)`` is the softmax probability on a single datum ``x``. On a batch,

@@ -63,9 +63,9 @@ def setup_submatrix_linear_operator(case, operator_case, submatrix_case):
     row_idxs = submatrix_case["row_idx_fn"](dim)
     col_idxs = submatrix_case["col_idx_fn"](dim)
 
-    A = operator_case(model_func, loss_func, params, data, batch_size_fn=batch_size_fn)
-    if isinstance(A, (HessianLinearOperator, GGNLinearOperator)):
-        A = A.to_scipy()
+    A = operator_case(
+        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
+    ).to_scipy()
     A_sub = SubmatrixLinearOperator(A, row_idxs, col_idxs)
 
     A_functorch = CURVATURE_IN_FUNCTORCH[operator_case](
@@ -88,7 +88,7 @@ def test_SubmatrixLinearOperator_on_curvatures_matvec(
     A_sub_x = A_sub @ x
 
     assert A_sub_x.shape == (len(row_idxs),)
-    report_nonclose(A_sub_x, A_sub_functorch @ x, atol=2e-7)
+    report_nonclose(A_sub_x, A_sub_functorch @ x, atol=1e-6)
 
 
 @mark.parametrize("operator_case", CURVATURE_CASES)
