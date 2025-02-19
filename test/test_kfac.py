@@ -454,13 +454,6 @@ def test_kfac_ef_one_datum(
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
     )
-    # ef_blocks = []  # list of per-parameter EFs
-    # for param in params:
-    #     ef = EFLinearOperator(
-    #         model, loss_func, [param], data, batch_size_fn=batch_size_fn
-    #     ).to_scipy()
-    #     ef_blocks.append(ef @ eye(ef.shape[1]))
-    # ef = block_diag(*ef_blocks)
 
     kfac = KFACLinearOperator(
         model,
@@ -692,7 +685,7 @@ def test_KFACLinearOperator(
     case,
     adjoint: bool,
     is_vec: bool,
-    exclude: str | None,
+    exclude: str,
     separate_weight_and_bias: bool,
 ):
     """Test matrix multiplication with KFAC.
