@@ -1118,7 +1118,7 @@ def test_ekfac_closer_to_exact_than_kfac_weight_sharing(
         separate_weight_and_bias=separate_weight_and_bias,
         fisher_type=fisher_type,
         kfac_approx=kfac_approx,
-        mc_samples=10 if fisher_type == FisherType.MC else 1,
+        mc_samples=100 if fisher_type == FisherType.MC else 1,
     )
     kfac_mat = kfac.to_scipy() @ eye(kfac.shape[1])
     ekfac = EKFACLinearOperator(
@@ -1130,7 +1130,7 @@ def test_ekfac_closer_to_exact_than_kfac_weight_sharing(
         separate_weight_and_bias=separate_weight_and_bias,
         fisher_type=fisher_type,
         kfac_approx=kfac_approx,
-        mc_samples=10 if fisher_type == FisherType.MC else 1,
+        mc_samples=100 if fisher_type == FisherType.MC else 1,
     )
     ekfac_mat = ekfac.to_scipy() @ eye(ekfac.shape[1])
 
