@@ -370,7 +370,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
         """Multiply matrix with Kronecker factors for separated weight and bias.
 
         Args:
-            Mh: Matrix for multiplication.
+            KM: List to write the matrix-multiplication result to.
+            M: Matrix for multiplication.
             param_pos: Dictionary with positions of the weight and bias parameters.
             aaT: Input covariance Kronecker factor or its eigenvectors. ``None`` for
                 biases.
@@ -378,9 +379,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
             eigenvalues: Eigenvalues of the (E)KFAC approximation when multiplying with
                 the eigendecomposition of the KFAC approximation. ``None`` for the
                 non-decomposed KFAC approximation. Defaults to ``None``.
-
-        Returns:
-            Matrix-multiplication result ``KFAC @ M``.
         """
         for p_name, pos in param_pos.items():
             # for weights we need to multiply from the right with aaT
