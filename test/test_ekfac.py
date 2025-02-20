@@ -1063,7 +1063,8 @@ def test_ekfac_closer_to_exact_than_kfac(
         assert exact_kfac_dist > exact_ekfac_dist
 
 
-@mark.parametrize("fisher_type", EKFACLinearOperator._SUPPORTED_FISHER_TYPE)
+# TODO: FisherType.MC is too expensive, but could be added as optional test?
+@mark.parametrize("fisher_type", [FisherType.TYPE2, FisherType.EMPIRICAL])
 @mark.parametrize("kfac_approx", EKFACLinearOperator._SUPPORTED_KFAC_APPROX)
 @mark.parametrize(
     "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
@@ -1118,7 +1119,6 @@ def test_ekfac_closer_to_exact_than_kfac_weight_sharing(
         separate_weight_and_bias=separate_weight_and_bias,
         fisher_type=fisher_type,
         kfac_approx=kfac_approx,
-        mc_samples=1_000 if fisher_type == FisherType.MC else 1,
     )
     kfac_mat = kfac.to_scipy() @ eye(kfac.shape[1])
     ekfac = EKFACLinearOperator(
@@ -1130,7 +1130,6 @@ def test_ekfac_closer_to_exact_than_kfac_weight_sharing(
         separate_weight_and_bias=separate_weight_and_bias,
         fisher_type=fisher_type,
         kfac_approx=kfac_approx,
-        mc_samples=1_000 if fisher_type == FisherType.MC else 1,
     )
     ekfac_mat = ekfac.to_scipy() @ eye(ekfac.shape[1])
 
