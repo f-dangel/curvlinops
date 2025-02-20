@@ -21,7 +21,10 @@ Fisher (approximate)
    :members: __init__
 
 .. autoclass:: curvlinops.KFACLinearOperator
-   :members: __init__, trace, det, logdet, frobenius_norm
+   :members: __init__, trace, det, logdet, frobenius_norm, state_dict, load_state_dict, from_state_dict
+
+.. autoclass:: curvlinops.EKFACLinearOperator
+   :members: __init__, trace, det, logdet, frobenius_norm, state_dict, load_state_dict, from_state_dict
 
 Uncentered gradient covariance (empirical Fisher)
 -------------------------------------------------
