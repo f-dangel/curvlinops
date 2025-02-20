@@ -81,9 +81,7 @@ class EKFACLinearOperator(KFACLinearOperator):
         Warning:
             This is an early proto-type with limitations:
                 - Only Linear and Conv2d modules are supported.
-                - If ``deterministic_checks`` is turned on (as is by default), this
-                  will compute the EKFAC matrices on CPU, even if all passed arguments
-                  live on the GPU.
+                - Only models with 2d output are supported.
 
         Args:
             model_func: The neural network. Must consist of modules.
