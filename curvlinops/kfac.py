@@ -141,7 +141,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
         data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
-        shape: Union[Tuple[int, int], None] = None,
         seed: int = 2147483647,
         fisher_type: str = FisherType.MC,
         mc_samples: int = 1,
@@ -177,8 +176,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
                 factors. Defaults to ``False``.
             check_deterministic: Whether to check that the linear operator is
                 deterministic. Defaults to ``True``.
-            shape: The shape of the linear operator. If ``None``, it will be inferred
-                from the parameters. Defaults to ``None``.
             seed: The seed for the random number generator used to draw labels
                 from the model's predictive distribution. Defaults to ``2147483647``.
             fisher_type: The type of Fisher/GGN to approximate.
