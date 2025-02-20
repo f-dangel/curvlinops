@@ -1052,7 +1052,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
             "loss_reduction": self._loss_func.reduction,
             # Attributes
             "progressbar": self._progressbar,
-            "shape": self.shape,
             "seed": self._seed,
             "fisher_type": self._fisher_type,
             "mc_samples": self._mc_samples,
@@ -1099,7 +1098,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
         # Set attributes
         self._progressbar = state_dict["progressbar"]
-        self.shape = state_dict["shape"]
         self._seed = state_dict["seed"]
         self._fisher_type = state_dict["fisher_type"]
         self._mc_samples = state_dict["mc_samples"]
@@ -1173,7 +1171,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
             batch_size_fn=batch_size_fn,
             check_deterministic=False,
             progressbar=state_dict["progressbar"],
-            shape=state_dict["shape"],
             seed=state_dict["seed"],
             fisher_type=state_dict["fisher_type"],
             mc_samples=state_dict["mc_samples"],
