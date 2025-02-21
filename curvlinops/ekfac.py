@@ -159,9 +159,7 @@ class EKFACLinearOperator(KFACLinearOperator):
             self._check_deterministic()
 
     def _rearrange_for_larger_than_2d_output(
-        self,
-        output: Tensor,
-        y: Tensor,
+        self, output: Tensor, y: Tensor
     ) -> Tuple[Tensor, Tensor]:
         r"""Rearrange the output and target if output is >2d.
 
@@ -233,7 +231,7 @@ class EKFACLinearOperator(KFACLinearOperator):
             ):
                 w_pos, b_pos = param_pos["weight"], param_pos["bias"]
                 # v denotes the free dimension for treating multiple vectors in parallel
-                M_w = rearrange(M[w_pos], "m ... v -> m (...) v")
+                M_w = rearrange(M[w_pos], "c_out ... v -> c_out (...) v")
                 M_joint = cat([M_w, M[b_pos].unsqueeze(-2)], dim=-2)
                 M_joint = self._left_and_right_multiply(
                     M_joint, aaT_eigenvectors, ggT_eigenvectors, corrected_eigenvalues

@@ -314,7 +314,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
     @staticmethod
     def _left_and_right_multiply(
-        M_joint: Tensor,
+        M: Tensor,
         aaT: FactorType,
         ggT: FactorType,
         eigenvalues: Optional[Tensor] = None,
@@ -322,7 +322,9 @@ class KFACLinearOperator(CurvatureLinearOperator):
         """Left and right multiply matrix with Kronecker factors.
 
         Args:
-            M_joint: Matrix for multiplication.
+            M: (Batched) Matrix for multiplication. Shape will be
+                (ggT.shape[0], aaT.shape[0], K), where K is the number of vectors/the
+                batch dimension of the batched matrix product.
             aaT: Input covariance Kronecker factor or its eigenvectors. ``None`` for
                 biases.
             ggT: Gradient covariance Kronecker factor or its eigenvectors.
@@ -331,41 +333,37 @@ class KFACLinearOperator(CurvatureLinearOperator):
                 non-decomposed KFAC approximation. Defaults to ``None``.
 
         Returns:
-            Matrix-multiplication result ``KFAC @ M_joint``.
+            Matrix-multiplication result.
         """
         if eigenvalues is None:
-            M_joint = einsum(ggT, M_joint, aaT, "i j, j k v, k l -> i l v")
+            M = einsum(ggT, M, aaT, "i j, j k v, k l -> i l v")
         else:
             # Perform preconditioning in KFE, e.g. see equation (21) in
             # https://arxiv.org/abs/2308.03296.
             aaT_eigvecs = aaT
             ggT_eigvecs = ggT
             # Transform in eigenbasis.
-            M_joint = einsum(
-                ggT_eigvecs, M_joint, aaT_eigvecs, "i j, i k v, k l -> j l v"
-            )
+            M = einsum(ggT_eigvecs, M, aaT_eigvecs, "i j, i k v, k l -> j l v")
             # Multiply (broadcasted) by eigenvalues.
-            M_joint.mul_(eigenvalues.unsqueeze(-1))
+            M.mul_(eigenvalues.unsqueeze(-1))
             # Transform back to standard basis.
-            M_joint = einsum(
-                ggT_eigvecs, M_joint, aaT_eigvecs, "i j, j k v, l k -> i l v"
-            )
-        return M_joint
+            M = einsum(ggT_eigvecs, M, aaT_eigvecs, "i j, j k v, l k -> i l v")
+        return M
 
     @staticmethod
     def _separate_left_and_right_multiply(
         KM: List[Tensor],
-        M: Tensor,
+        M: List[Tensor],
         param_pos: Dict[str, int],
         aaT: FactorType,
         ggT: FactorType,
-        eigenvalues: Optional[Tensor] = None,
+        eigenvalues: Optional[List[Tensor]] = None,
     ) -> Tensor:
         """Multiply matrix with Kronecker factors for separated weight and bias.
 
         Args:
             KM: List to write the matrix-multiplication result to.
-            M: Matrix for multiplication.
+            M: List of matrices for multiplication.
             param_pos: Dictionary with positions of the weight and bias parameters.
             aaT: Input covariance Kronecker factor or its eigenvectors. ``None`` for
                 biases.
@@ -378,7 +376,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
             # for weights we need to multiply from the right with aaT
             # for weights and biases we need to multiply from the left with ggT
             if p_name == "weight":
-                M_w = rearrange(M[pos], "m ... v -> m (...) v")
+                M_w = rearrange(M[pos], "c_out ... v -> c_out (...) v")
                 # If `eigenvalues` is not `None`, we transform to eigenbasis here
                 KM[pos] = einsum(M_w, aaT, "c_out j v, j k -> c_out k v")
             else:
@@ -434,7 +432,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
             ):
                 w_pos, b_pos = param_pos["weight"], param_pos["bias"]
                 # v denotes the free dimension for treating multiple vectors in parallel
-                M_w = rearrange(M[w_pos], "m ... v -> m (...) v")
+                M_w = rearrange(M[w_pos], "c_out ... v -> c_out (...) v")
                 M_joint = cat([M_w, M[b_pos].unsqueeze(-2)], dim=-2)
                 M_joint = self._left_and_right_multiply(M_joint, aaT, ggT)
                 w_cols = M_w.shape[1]
@@ -494,9 +492,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
             handle.remove()
 
     def _rearrange_for_larger_than_2d_output(
-        self,
-        output: Tensor,
-        y: Tensor,
+        self, output: Tensor, y: Tensor
     ) -> Tuple[Tensor, Tensor]:
         r"""Rearrange the output and target if output is >2d.
 
