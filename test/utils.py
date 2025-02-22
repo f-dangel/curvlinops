@@ -20,6 +20,7 @@ from torch import (
     from_numpy,
     rand,
     randint,
+    randperm,
     zeros_like,
 )
 from torch import eye as torch_eye
@@ -91,6 +92,30 @@ def regression_targets(size: Tuple[int]) -> Tensor:
         Random targets.
     """
     return rand(*size)
+
+
+def maybe_exclude_or_shuffle_parameters(
+    params: List[Parameter], model: Module, exclude: str, shuffle: bool
+):
+    """Maybe exclude or shuffle parameters.
+
+    Args:
+        params: List of parameters.
+        model: The neural network.
+        exclude: Parameter to exclude.
+        shuffle: Whether to shuffle the parameters.
+
+    Returns:
+        List of parameters.
+    """
+    assert exclude in {None, "weight", "bias"}
+    if exclude is not None:
+        names = {p.data_ptr(): name for name, p in model.named_parameters()}
+        params = [p for p in params if exclude not in names[p.data_ptr()]]
+    if shuffle:
+        permutation = randperm(len(params))
+        params = [params[i] for i in permutation]
+    return params
 
 
 def block_diagonal(

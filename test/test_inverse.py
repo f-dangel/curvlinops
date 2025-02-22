@@ -23,7 +23,13 @@ from curvlinops import (
 )
 from curvlinops.examples.functorch import functorch_ggn
 from curvlinops.examples.utils import report_nonclose
-from test.utils import cast_input, compare_matmat, compare_state_dicts, eye_like
+from test.utils import (
+    cast_input,
+    compare_matmat,
+    compare_state_dicts,
+    eye_like,
+    maybe_exclude_or_shuffle_parameters,
+)
 
 KFAC_MIN_DAMPING = 1e-8
 
@@ -213,6 +219,7 @@ def test_NeumannInverseLinearOperator_toy():
 @mark.parametrize(
     "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
 )
+@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_KFAC_inverse_damped_matmat(
     case: Tuple[
         Module,
@@ -226,6 +233,7 @@ def test_KFAC_inverse_damped_matmat(
     separate_weight_and_bias: bool,
     adjoint: bool,
     is_vec: bool,
+    shuffle: bool,
     delta: float = 1e-2,
 ):
     """Test matrix-matrix multiplication by an inverse damped KFAC approximation.
@@ -235,6 +243,7 @@ def test_KFAC_inverse_damped_matmat(
         is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
     """
     model_func, loss_func, params, data, batch_size_fn = case
+    params = maybe_exclude_or_shuffle_parameters(params, model_func, exclude, shuffle)
     dtype = torch.float64  # use double precision for better numerical stability
     model_func = model_func.to(dtype=dtype)
     loss_func = loss_func.to(dtype=dtype)
@@ -248,10 +257,6 @@ def test_KFAC_inverse_damped_matmat(
         )
         for x, y in data
     ]
-
-    if exclude is not None:
-        names = {p.data_ptr(): name for name, p in model_func.named_parameters()}
-        params = [p for p in params if exclude not in names[p.data_ptr()]]
 
     KFAC = KFACLinearOperator(
         model_func,
@@ -307,6 +312,7 @@ def test_KFAC_inverse_damped_matmat(
 @mark.parametrize(
     "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
 )
+@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901, PLR0912, PLR0915
     case: Tuple[
         Module,
@@ -319,6 +325,7 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901, PLR0912, PLR09
     separate_weight_and_bias: bool,
     adjoint: bool,
     is_vec: bool,
+    shuffle: bool,
     delta: float = 1e-2,
 ):
     """Test matrix-matrix multiplication by an inverse (heuristically) damped KFAC
@@ -329,6 +336,7 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901, PLR0912, PLR09
         is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
     """
     model_func, loss_func, params, data, batch_size_fn = case
+    params = maybe_exclude_or_shuffle_parameters(params, model_func, exclude, shuffle)
     dtype = torch.float64  # use double precision for better numerical stability
     model_func = model_func.to(dtype=dtype)
     loss_func = loss_func.to(dtype=dtype)
@@ -342,10 +350,6 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901, PLR0912, PLR09
         )
         for x, y in data
     ]
-
-    if exclude is not None:
-        names = {p.data_ptr(): name for name, p in model_func.named_parameters()}
-        params = [p for p in params if exclude not in names[p.data_ptr()]]
 
     KFAC = KFACLinearOperator(
         model_func,
@@ -443,6 +447,7 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901, PLR0912, PLR09
 @mark.parametrize(
     "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
 )
+@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_KFAC_inverse_exactly_damped_matmat(
     case: Tuple[
         Module,
@@ -455,6 +460,7 @@ def test_KFAC_inverse_exactly_damped_matmat(
     separate_weight_and_bias: bool,
     adjoint: bool,
     is_vec: bool,
+    shuffle: bool,
     delta: float = 1e-2,
 ):
     """Test matrix-matrix multiplication by an inverse (exactly) damped KFAC approximation.
@@ -464,6 +470,7 @@ def test_KFAC_inverse_exactly_damped_matmat(
         is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
     """
     model_func, loss_func, params, data, batch_size_fn = case
+    params = maybe_exclude_or_shuffle_parameters(params, model_func, exclude, shuffle)
     dtype = torch.float64  # use double precision for better numerical stability
     model_func = model_func.to(dtype=dtype)
     loss_func = loss_func.to(dtype=dtype)
@@ -477,10 +484,6 @@ def test_KFAC_inverse_exactly_damped_matmat(
         )
         for x, y in data
     ]
-
-    if exclude is not None:
-        names = {p.data_ptr(): name for name, p in model_func.named_parameters()}
-        params = [p for p in params if exclude not in names[p.data_ptr()]]
 
     KFAC = KFACLinearOperator(
         model_func,
@@ -541,12 +544,14 @@ def test_KFAC_inverse_exactly_damped_matmat(
 @mark.parametrize(
     "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
 )
+@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_KFAC_inverse_save_and_load_state_dict(
     use_exact_damping: bool,
     use_heuristic_damping: bool,
     cache: bool,
     exclude: str,
     separate_weight_and_bias: bool,
+    shuffle: bool,
 ):
     """Test that KFACInverseLinearOperator can be saved and loaded from state dict."""
     torch.manual_seed(0)
@@ -562,9 +567,7 @@ def test_KFAC_inverse_save_and_load_state_dict(
     )
 
     params = list(model.parameters())
-    if exclude is not None:
-        names = {p.data_ptr(): name for name, p in model.named_parameters()}
-        params = [p for p in params if exclude not in names[p.data_ptr()]]
+    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     # create and compute KFAC
     kfac = KFACLinearOperator(
@@ -590,23 +593,20 @@ def test_KFAC_inverse_save_and_load_state_dict(
 
     # save state dict
     state_dict = inv_kfac.state_dict()
-    torch.save(state_dict, "inv_kfac_state_dict.pt")
+    INV_KFAC_PATH = "inv_kfac_state_dict.pt"
+    torch.save(state_dict, INV_KFAC_PATH)
 
     # create new inverse KFAC with different linop input and try to load state dict
     wrong_kfac = KFACLinearOperator(model, CrossEntropyLoss(), params, [(X, y)])
     inv_kfac_wrong = KFACInverseLinearOperator(wrong_kfac)
     with raises(ValueError, match="mismatch"):
-        inv_kfac_wrong.load_state_dict(
-            torch.load("inv_kfac_state_dict.pt", weights_only=False)
-        )
+        inv_kfac_wrong.load_state_dict(torch.load(INV_KFAC_PATH, weights_only=False))
 
     # create new inverse KFAC and load state dict
     inv_kfac_new = KFACInverseLinearOperator(kfac)
-    inv_kfac_new.load_state_dict(
-        torch.load("inv_kfac_state_dict.pt", weights_only=False)
-    )
+    inv_kfac_new.load_state_dict(torch.load(INV_KFAC_PATH, weights_only=False))
     # clean up
-    os.remove("inv_kfac_state_dict.pt")
+    os.remove(INV_KFAC_PATH)
 
     # check that the two inverse KFACs are equal
     compare_state_dicts(inv_kfac.state_dict(), inv_kfac_new.state_dict())
@@ -622,12 +622,14 @@ def test_KFAC_inverse_save_and_load_state_dict(
 @mark.parametrize(
     "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
 )
+@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_KFAC_inverse_from_state_dict(
     use_exact_damping: bool,
     use_heuristic_damping: bool,
     cache: bool,
     exclude: str,
     separate_weight_and_bias: bool,
+    shuffle: bool,
 ):
     """Test that KFACInverseLinearOperator can be created from state dict."""
     torch.manual_seed(0)
@@ -643,9 +645,7 @@ def test_KFAC_inverse_from_state_dict(
     )
 
     params = list(model.parameters())
-    if exclude is not None:
-        names = {p.data_ptr(): name for name, p in model.named_parameters()}
-        params = [p for p in params if exclude not in names[p.data_ptr()]]
+    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     # create and compute KFAC
     kfac = KFACLinearOperator(
@@ -689,6 +689,7 @@ def test_KFAC_inverse_from_state_dict(
 @mark.parametrize(
     "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
 )
+@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_EKFAC_inverse_exactly_damped_matmat(
     inv_case: Tuple[
         Module,
@@ -699,10 +700,12 @@ def test_EKFAC_inverse_exactly_damped_matmat(
     cache: bool,
     exclude: str,
     separate_weight_and_bias: bool,
+    shuffle: bool,
     delta: float = 1e-2,
 ):
     """Test matrix-matrix multiplication by an inverse (exactly) damped EKFAC approximation."""
     model_func, loss_func, params, data, batch_size_fn = inv_case
+    params = maybe_exclude_or_shuffle_parameters(params, model_func, exclude)
     dtype = torch.float64  # use double precision for better numerical stability
     model_func = model_func.to(dtype=dtype)
     loss_func = loss_func.to(dtype=dtype)
@@ -715,10 +718,6 @@ def test_EKFAC_inverse_exactly_damped_matmat(
         )
         for x, y in data
     ]
-
-    if exclude is not None:
-        names = {p.data_ptr(): name for name, p in model_func.named_parameters()}
-        params = [p for p in params if exclude not in names[p.data_ptr()]]
 
     EKFAC = EKFACLinearOperator(
         model_func,
@@ -799,15 +798,11 @@ def test_EKFAC_inverse_save_and_load_state_dict():
         wrong_ekfac, damping=1e-2, use_exact_damping=True
     )
     with raises(ValueError, match="mismatch"):
-        inv_ekfac_wrong.load_state_dict(
-            torch.load(INV_EKFAC_PATH, weights_only=False)
-        )
+        inv_ekfac_wrong.load_state_dict(torch.load(INV_EKFAC_PATH, weights_only=False))
 
     # create new inverse KFAC and load state dict
     inv_ekfac_new = KFACInverseLinearOperator(ekfac, use_exact_damping=True)
-    inv_ekfac_new.load_state_dict(
-        torch.load(INV_EKFAC_PATH, weights_only=False)
-    )
+    inv_ekfac_new.load_state_dict(torch.load(INV_EKFAC_PATH, weights_only=False))
     # clean up
     os.remove(INV_EKFAC_PATH)
 

@@ -18,7 +18,6 @@ from torch import (
     manual_seed,
     rand,
     rand_like,
-    randperm,
     save,
 )
 from torch.nn import (
@@ -45,6 +44,7 @@ from test.utils import (
     block_diagonal,
     classification_targets,
     compare_state_dicts,
+    maybe_exclude_or_shuffle_parameters,
     regression_targets,
 )
 
@@ -75,16 +75,8 @@ def test_ekfac_type2(
         separate_weight_and_bias: Whether to treat weight and bias as separate blocks in
             the EKFAC matrix.
     """
-    assert exclude in [None, "weight", "bias"]
     model, loss_func, params, data, batch_size_fn = kfac_exact_case
-
-    if exclude is not None:
-        names = {p.data_ptr(): name for name, p in model.named_parameters()}
-        params = [p for p in params if exclude not in names[p.data_ptr()]]
-
-    if shuffle:
-        permutation = randperm(len(params))
-        params = [params[i] for i in permutation]
+    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     ggn = block_diagonal(
         GGNLinearOperator,
@@ -146,7 +138,6 @@ def test_ekfac_type2_weight_sharing(
         separate_weight_and_bias: Whether to treat weight and bias as separate blocks in
             the EKFAC matrix.
     """
-    assert exclude in [None, "weight", "bias"]
     model, loss_func, params, data, batch_size_fn = kfac_weight_sharing_exact_case
     # The model outputs have to be flattened assuming only the first dimension is the
     # batch dimension since EKFAC only supports 2d outputs.
@@ -154,18 +145,11 @@ def test_ekfac_type2_weight_sharing(
     if isinstance(model, Conv2dModel):
         # parameters are only initialized after the setting property is set
         params = [p for p in model.parameters() if p.requires_grad]
+    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
     data = data[setting]
     # Flatten targets assuming only the first dimension is the batch dimension
     # since EKFAC only supports 2d targets.
     data = [(X, y.flatten(start_dim=1)) for X, y in data]
-
-    if exclude is not None:
-        names = {p.data_ptr(): name for name, p in model.named_parameters()}
-        params = [p for p in params if exclude not in names[p.data_ptr()]]
-
-    if shuffle:
-        permutation = randperm(len(params))
-        params = [params[i] for i in permutation]
 
     ggn = block_diagonal(
         GGNLinearOperator,
@@ -222,14 +206,7 @@ def test_ekfac_mc(
             the EKFAC matrix.
     """
     model, loss_func, params, data, batch_size_fn = kfac_exact_case
-
-    if exclude is not None:
-        names = {p.data_ptr(): name for name, p in model.named_parameters()}
-        params = [p for p in params if exclude not in names[p.data_ptr()]]
-
-    if shuffle:
-        permutation = randperm(len(params))
-        params = [params[i] for i in permutation]
+    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     ggn = block_diagonal(
         GGNLinearOperator,
@@ -296,18 +273,11 @@ def test_ekfac_mc_weight_sharing(
     if isinstance(model, Conv2dModel):
         # parameters are only initialized after the setting property is set
         params = [p for p in model.parameters() if p.requires_grad]
+    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
     data = data[setting]
     # Flatten targets assuming only the first dimension is the batch dimension
     # since EKFAC only supports 2d targets.
     data = [(X, y.flatten(start_dim=1)) for X, y in data]
-
-    if exclude is not None:
-        names = {p.data_ptr(): name for name, p in model.named_parameters()}
-        params = [p for p in params if exclude not in names[p.data_ptr()]]
-
-    if shuffle:
-        permutation = randperm(len(params))
-        params = [params[i] for i in permutation]
 
     ggn = block_diagonal(
         GGNLinearOperator,
@@ -346,6 +316,7 @@ def test_ekfac_mc_weight_sharing(
 @mark.parametrize(
     "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
 )
+@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_ekfac_one_datum(
     kfac_exact_one_datum_case: Tuple[
         Module,
@@ -355,12 +326,10 @@ def test_ekfac_one_datum(
     ],
     separate_weight_and_bias: bool,
     exclude: str,
+    shuffle: bool,
 ):
     model, loss_func, params, data, batch_size_fn = kfac_exact_one_datum_case
-
-    if exclude is not None:
-        names = {p.data_ptr(): name for name, p in model.named_parameters()}
-        params = [p for p in params if exclude not in names[p.data_ptr()]]
+    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     ggn = block_diagonal(
         GGNLinearOperator,
@@ -391,6 +360,7 @@ def test_ekfac_one_datum(
 @mark.parametrize(
     "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
 )
+@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_ekfac_mc_one_datum(
     kfac_exact_one_datum_case: Tuple[
         Module,
@@ -400,12 +370,10 @@ def test_ekfac_mc_one_datum(
     ],
     separate_weight_and_bias: bool,
     exclude: str,
+    shuffle: bool,
 ):
     model, loss_func, params, data, batch_size_fn = kfac_exact_one_datum_case
-
-    if exclude is not None:
-        names = {p.data_ptr(): name for name, p in model.named_parameters()}
-        params = [p for p in params if exclude not in names[p.data_ptr()]]
+    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     ggn = block_diagonal(
         GGNLinearOperator,
@@ -440,6 +408,7 @@ def test_ekfac_mc_one_datum(
 @mark.parametrize(
     "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
 )
+@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_ekfac_ef_one_datum(
     kfac_exact_one_datum_case: Tuple[
         Module,
@@ -449,12 +418,10 @@ def test_ekfac_ef_one_datum(
     ],
     separate_weight_and_bias: bool,
     exclude: str,
+    shuffle: bool,
 ):
     model, loss_func, params, data, batch_size_fn = kfac_exact_one_datum_case
-
-    if exclude is not None:
-        names = {p.data_ptr(): name for name, p in model.named_parameters()}
-        params = [p for p in params if exclude not in names[p.data_ptr()]]
+    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     ef = block_diagonal(
         EFLinearOperator,
@@ -673,13 +640,13 @@ def test_expand_setting_scaling(
 @mark.parametrize(
     "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
 )
-def test_trace(inv_case, exclude, separate_weight_and_bias, check_deterministic):
+@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
+def test_trace(
+    inv_case, exclude, separate_weight_and_bias, check_deterministic, shuffle
+):
     """Test that the trace property of EKFACLinearOperator works."""
     model, loss_func, params, data, batch_size_fn = inv_case
-
-    if exclude is not None:
-        names = {p.data_ptr(): name for name, p in model.named_parameters()}
-        params = [p for p in params if exclude not in names[p.data_ptr()]]
+    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     ekfac = EKFACLinearOperator(
         model,
@@ -713,15 +680,13 @@ def test_trace(inv_case, exclude, separate_weight_and_bias, check_deterministic)
 @mark.parametrize(
     "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
 )
+@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_frobenius_norm(
-    inv_case, exclude, separate_weight_and_bias, check_deterministic
+    inv_case, exclude, separate_weight_and_bias, check_deterministic, shuffle
 ):
     """Test that the Frobenius norm property of EKFACLinearOperator works."""
     model, loss_func, params, data, batch_size_fn = inv_case
-
-    if exclude is not None:
-        names = {p.data_ptr(): name for name, p in model.named_parameters()}
-        params = [p for p in params if exclude not in names[p.data_ptr()]]
+    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     ekfac = EKFACLinearOperator(
         model,
@@ -755,13 +720,11 @@ def test_frobenius_norm(
 @mark.parametrize(
     "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
 )
-def test_det(inv_case, exclude, separate_weight_and_bias, check_deterministic):
+@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
+def test_det(inv_case, exclude, separate_weight_and_bias, check_deterministic, shuffle):
     """Test that the determinant property of EKFACLinearOperator works."""
     model, loss_func, params, data, batch_size_fn = inv_case
-
-    if exclude is not None:
-        names = {p.data_ptr(): name for name, p in model.named_parameters()}
-        params = [p for p in params if exclude not in names[p.data_ptr()]]
+    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     ekfac = EKFACLinearOperator(
         model,
@@ -811,13 +774,13 @@ def test_det(inv_case, exclude, separate_weight_and_bias, check_deterministic):
 @mark.parametrize(
     "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
 )
-def test_logdet(inv_case, exclude, separate_weight_and_bias, check_deterministic):
+@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
+def test_logdet(
+    inv_case, exclude, separate_weight_and_bias, check_deterministic, shuffle
+):
     """Test that the log determinant property of EKFACLinearOperator works."""
     model, loss_func, params, data, batch_size_fn = inv_case
-
-    if exclude is not None:
-        names = {p.data_ptr(): name for name, p in model.named_parameters()}
-        params = [p for p in params if exclude not in names[p.data_ptr()]]
+    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     ekfac = EKFACLinearOperator(
         model,
@@ -907,7 +870,8 @@ def test_save_and_load_state_dict():
 
     # save state dict
     state_dict = ekfac.state_dict()
-    save(state_dict, "ekfac_state_dict.pt")
+    EKFAC_PATH = "ekfac_state_dict.pt"
+    save(state_dict, EKFAC_PATH)
 
     # create new EKFAC with different loss function and try to load state dict
     ekfac_new = EKFACLinearOperator(
@@ -917,7 +881,7 @@ def test_save_and_load_state_dict():
         [(X, y)],
     )
     with raises(ValueError, match="loss"):
-        ekfac_new.load_state_dict(load("ekfac_state_dict.pt", weights_only=False))
+        ekfac_new.load_state_dict(load(EKFAC_PATH, weights_only=False))
 
     # create new EKFAC with different loss reduction and try to load state dict
     ekfac_new = EKFACLinearOperator(
@@ -927,7 +891,7 @@ def test_save_and_load_state_dict():
         [(X, y)],
     )
     with raises(ValueError, match="reduction"):
-        ekfac_new.load_state_dict(load("ekfac_state_dict.pt", weights_only=False))
+        ekfac_new.load_state_dict(load(EKFAC_PATH, weights_only=False))
 
     # create new EKFAC with different model and try to load state dict
     wrong_model = Sequential(Linear(D_in, 10), ReLU(), Linear(10, D_out))
@@ -939,7 +903,7 @@ def test_save_and_load_state_dict():
         [(X, y)],
     )
     with raises(RuntimeError, match="loading state_dict"):
-        ekfac_new.load_state_dict(load("ekfac_state_dict.pt", weights_only=False))
+        ekfac_new.load_state_dict(load(EKFAC_PATH, weights_only=False))
 
     # create new EKFAC and load state dict
     ekfac_new = EKFACLinearOperator(
@@ -949,9 +913,9 @@ def test_save_and_load_state_dict():
         [(X, y)],
         check_deterministic=False,  # turn off to avoid computing EKFAC again
     )
-    ekfac_new.load_state_dict(load("ekfac_state_dict.pt", weights_only=False))
+    ekfac_new.load_state_dict(load(EKFAC_PATH, weights_only=False))
     # clean up
-    os.remove("ekfac_state_dict.pt")
+    os.remove(EKFAC_PATH)
 
     # check that the two EKFACs are equal
     compare_state_dicts(ekfac.state_dict(), ekfac_new.state_dict())
@@ -1005,14 +969,7 @@ def test_ekfac_closer_to_exact_than_kfac(
 ):
     """Test that EKFAC is closer in Frobenius norm to the exact quantity than KFAC."""
     model, loss_func, params, data, batch_size_fn = inv_case
-
-    if exclude is not None:
-        names = {p.data_ptr(): name for name, p in model.named_parameters()}
-        params = [p for p in params if exclude not in names[p.data_ptr()]]
-
-    if shuffle:
-        permutation = randperm(len(params))
-        params = [params[i] for i in permutation]
+    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     # Compute exact block-wise ground truth quantity.
     linop = (
@@ -1086,14 +1043,7 @@ def test_ekfac_closer_to_exact_than_kfac_weight_sharing(
     For models with weight sharing.
     """
     model, loss_func, params, data, batch_size_fn = cnn_case
-
-    if exclude is not None:
-        names = {p.data_ptr(): name for name, p in model.named_parameters()}
-        params = [p for p in params if exclude not in names[p.data_ptr()]]
-
-    if shuffle:
-        permutation = randperm(len(params))
-        params = [params[i] for i in permutation]
+    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     # Compute exact block-wise ground truth quantity.
     linop = (
