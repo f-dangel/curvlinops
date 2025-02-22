@@ -537,9 +537,9 @@ class KFACInverseLinearOperator(PyTorchLinearOperator):
             ggT_eigenvectors = self._A._gradient_covariances_eigenvectors.get(name)
             eigenvalues = self._A._corrected_eigenvalues[name]
             if isinstance(eigenvalues, dict):
-                inv_damped_eigenvalues: Dict[str, Tensor] = {}
-                for key, val in eigenvalues.items():
-                    inv_damped_eigenvalues[key] = val.add(self._damping).pow_(-1)
+                inv_damped_eigenvalues = {
+                    k: v.add(self._damping).pow_(-1) for k, v in eigenvalues.items()
+                }
             elif isinstance(eigenvalues, Tensor):
                 inv_damped_eigenvalues = eigenvalues.add(self._damping).pow_(-1)
             return aaT_eigenvectors, ggT_eigenvectors, inv_damped_eigenvalues
@@ -624,7 +624,7 @@ class KFACInverseLinearOperator(PyTorchLinearOperator):
                 )
                 w_cols = X_w.shape[1]
                 KX[w_pos], KX[b_pos] = X_joint.split([w_cols, 1], dim=1)
-                KX[b_pos] = KX[b_pos].squeeze(1)
+                KX[b_pos].squeeze_()
             else:
                 self._A._separate_left_and_right_multiply(
                     KX, X, param_pos, aaT_inv, ggT_inv, inv_damped_eigenvalues
