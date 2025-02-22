@@ -46,7 +46,7 @@ class EKFACLinearOperator(KFACLinearOperator):
         _SUPPORTED_FISHER_TYPE: Tuple with supported Fisher types.
     """
 
-    _SUPPORTED_FISHER_TYPE: FisherType = (
+    _SUPPORTED_FISHER_TYPE: Tuple[FisherType] = (
         FisherType.TYPE2,
         FisherType.MC,
         FisherType.EMPIRICAL,
@@ -219,8 +219,10 @@ class EKFACLinearOperator(KFACLinearOperator):
                 weight_shape = M[param_pos["weight"]].shape
 
             # Get the EKFAC approximation components for the current module
+            # aaT_eigenvectors does not exist if the weight matrix is excluded
             aaT_eigenvectors = self._input_covariances_eigenvectors.get(mod_name)
-            ggT_eigenvectors = self._gradient_covariances_eigenvectors.get(mod_name)
+            # ggT_eigenvectors and corrected_eigenvalues always exists
+            ggT_eigenvectors = self._gradient_covariances_eigenvectors[mod_name]
             corrected_eigenvalues = self._corrected_eigenvalues[mod_name]
 
             # bias and weights are treated jointly
@@ -261,19 +263,16 @@ class EKFACLinearOperator(KFACLinearOperator):
             self.compute_kronecker_factors()
 
         for mod_name in self._mapping.keys():
-            # Free up memory by deleting the Kronecker factors
-            aaT = self._input_covariances.pop(mod_name, None)
-            ggT = self._gradient_covariances.pop(mod_name, None)
-
-            # Compute eigendecomposition of the Kronecker factors and cache eigenvectors
-            if aaT is not None:
-                _, aaT_eigvecs = eigh(aaT)
-                self._input_covariances_eigenvectors[mod_name] = aaT_eigvecs
-                del aaT
-            if ggT is not None:
-                _, ggT_eigvecs = eigh(ggT)
-                self._gradient_covariances_eigenvectors[mod_name] = ggT_eigvecs
-                del ggT
+            for source, destination in zip(
+                (self._input_covariances, self._gradient_covariances),
+                (
+                    self._input_covariances_eigenvectors,
+                    self._gradient_covariances_eigenvectors,
+                ),
+            ):
+                factor = source.pop(mod_name, None)
+                if factor is not None:
+                    destination[mod_name] = eigh(factor).eigenvectors
 
     def compute_eigenvalue_correction(self):
         """Compute and cache the corrected eigenvalues for EKFAC."""
@@ -412,8 +411,10 @@ class EKFACLinearOperator(KFACLinearOperator):
 
         # Compute the corrected eigenvalues for the EKFAC approximation
         param_pos = self._mapping[module_name]
+        # aaT_eigenvectors does not exist if the weight matrix of the module is excluded
         aaT_eigenvectors = self._input_covariances_eigenvectors.get(module_name)
-        ggT_eigenvectors = self._gradient_covariances_eigenvectors.get(module_name)
+        # ggT_eigenvectors always exists
+        ggT_eigenvectors = self._gradient_covariances_eigenvectors[module_name]
 
         # Rearrange the activations for computing per-example gradients
         activations = self._cached_activations.get(module_name)
@@ -627,7 +628,12 @@ class EKFACLinearOperator(KFACLinearOperator):
         super().load_state_dict(state_dict)
 
         # Set EKFAC-specific quantities
-        # TODO: should we check if the keys match the mapping keys?
+        self._check_if_keys_match_mapping_keys(
+            state_dict["input_covariances_eigenvectors"]
+        )
+        self._check_if_keys_match_mapping_keys(
+            state_dict["gradient_covariances_eigenvectors"]
+        )
         self._input_covariances_eigenvectors = state_dict[
             "input_covariances_eigenvectors"
         ]

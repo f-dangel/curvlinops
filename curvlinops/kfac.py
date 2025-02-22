@@ -421,8 +421,10 @@ class KFACLinearOperator(CurvatureLinearOperator):
                 weight_shape = M[param_pos["weight"]].shape
 
             # get the Kronecker factors for the current module
+            # aaT does not exist when weight matrix is excluded
             aaT = self._input_covariances.get(mod_name)
-            ggT = self._gradient_covariances.get(mod_name)
+            # ggT always exists
+            ggT = self._gradient_covariances[mod_name]
 
             # bias and weights are treated jointly
             if (
@@ -1062,6 +1064,23 @@ class KFACLinearOperator(CurvatureLinearOperator):
             "frobenius_norm": self._frobenius_norm,
         }
 
+    def _check_if_keys_match_mapping_keys(self, dictionary: dict):
+        """Check if the keys of a dictionary match the mapping keys of the linear operator.
+
+        Args:
+            dictionary: Dictionary to check.
+
+        Raises:
+            ValueError: If the keys do not match the mapping keys.
+        """
+        dictionary_keys = set(dictionary.keys())
+        mapping_keys = set(self._mapping.keys())
+        if dictionary_keys and dictionary_keys != mapping_keys:
+            raise ValueError(
+                "Keys in dictionary do not match mapping keys of linear operator. "
+                f"Difference: {dictionary_keys - mapping_keys}."
+            )
+
     def load_state_dict(self, state_dict: Dict[str, Any]):
         """Load the state of the KFAC linear operator.
 
@@ -1100,22 +1119,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
         self._N_data = state_dict["num_data"]
 
         # Set Kronecker factors (if computed)
-        if self._input_covariances or self._gradient_covariances:
-            # If computed, check if the keys match the mapping keys
-            input_covariances_keys = set(self._input_covariances.keys())
-            gradient_covariances_keys = set(self._gradient_covariances.keys())
-            mapping_keys = set(self._mapping.keys())
-            if (input_covariances_keys and input_covariances_keys != mapping_keys) or (
-                gradient_covariances_keys and gradient_covariances_keys != mapping_keys
-            ):
-                raise ValueError(
-                    "Input or gradient covariance keys in state dict do not match "
-                    "mapping keys of linear operator. "
-                    "Difference between input covariance and mapping keys: "
-                    f"{input_covariances_keys - mapping_keys}. "
-                    "Difference between gradient covariance and mapping keys: "
-                    f"{gradient_covariances_keys - mapping_keys}."
-                )
+        self._check_if_keys_match_mapping_keys(state_dict["input_covariances"])
+        self._check_if_keys_match_mapping_keys(state_dict["gradient_covariances"])
         self._input_covariances = state_dict["input_covariances"]
         self._gradient_covariances = state_dict["gradient_covariances"]
 
