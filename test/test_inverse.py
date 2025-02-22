@@ -705,7 +705,7 @@ def test_EKFAC_inverse_exactly_damped_matmat(
 ):
     """Test matrix-matrix multiplication by an inverse (exactly) damped EKFAC approximation."""
     model_func, loss_func, params, data, batch_size_fn = inv_case
-    params = maybe_exclude_or_shuffle_parameters(params, model_func, exclude)
+    params = maybe_exclude_or_shuffle_parameters(params, model_func, exclude, shuffle)
     dtype = torch.float64  # use double precision for better numerical stability
     model_func = model_func.to(dtype=dtype)
     loss_func = loss_func.to(dtype=dtype)
