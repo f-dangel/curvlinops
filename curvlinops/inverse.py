@@ -624,7 +624,7 @@ class KFACInverseLinearOperator(PyTorchLinearOperator):
                 )
                 w_cols = X_w.shape[1]
                 KX[w_pos], KX[b_pos] = X_joint.split([w_cols, 1], dim=1)
-                KX[b_pos].squeeze_()
+                KX[b_pos].squeeze_(1)
             else:
                 self._A._separate_left_and_right_multiply(
                     KX, X, param_pos, aaT_inv, ggT_inv, inv_damped_eigenvalues

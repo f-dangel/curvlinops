@@ -752,9 +752,11 @@ def test_EKFAC_inverse_exactly_damped_matmat(
     )
 
     num_vectors = 2
-    X = random.rand(EKFAC.shape[1], num_vectors)
+    X = torch.rand(EKFAC.shape[1], num_vectors, dtype=dtype, device=EKFAC._device)
+    inv_EKFAC_X = inv_EKFAC @ X
+    inv_EKFAC_naive_X = inv_EKFAC_naive @ X.cpu().numpy()
     # test for equivalence
-    report_nonclose(inv_EKFAC.to_scipy() @ X, inv_EKFAC_naive @ X)
+    report_nonclose(inv_EKFAC_X.cpu().numpy(), inv_EKFAC_naive_X)
 
     assert inv_EKFAC._cache == cache
     # test that the cache is empty
@@ -774,6 +776,7 @@ def test_EKFAC_inverse_save_and_load_state_dict():
     # create and compute EKFAC
     ekfac = EKFACLinearOperator(
         model,
+        # use non-default loss reduction to verify if it is correctly saved and loaded
         MSELoss(reduction="sum"),
         params,
         [(X, y)],
@@ -783,11 +786,12 @@ def test_EKFAC_inverse_save_and_load_state_dict():
     inv_ekfac = KFACInverseLinearOperator(
         ekfac, damping=1e-2, use_exact_damping=True, retry_double_precision=False
     )
-    _ = inv_ekfac.to_scipy() @ eye(ekfac.shape[1])  # to trigger inverse computation
+    _ = inv_ekfac @ torch.eye(ekfac.shape[1])  # to trigger inverse computation
 
     # save state dict
     state_dict = inv_ekfac.state_dict()
-    torch.save(state_dict, "inv_ekfac_state_dict.pt")
+    INV_EKFAC_PATH = "inv_ekfac_state_dict.pt"
+    torch.save(state_dict, INV_EKFAC_PATH)
 
     # create new inverse EKFAC with different linop input and try to load state dict
     wrong_ekfac = EKFACLinearOperator(model, CrossEntropyLoss(), params, [(X, y)])
@@ -796,16 +800,16 @@ def test_EKFAC_inverse_save_and_load_state_dict():
     )
     with raises(ValueError, match="mismatch"):
         inv_ekfac_wrong.load_state_dict(
-            torch.load("inv_ekfac_state_dict.pt", weights_only=False)
+            torch.load(INV_EKFAC_PATH, weights_only=False)
         )
 
     # create new inverse KFAC and load state dict
     inv_ekfac_new = KFACInverseLinearOperator(ekfac, use_exact_damping=True)
     inv_ekfac_new.load_state_dict(
-        torch.load("inv_ekfac_state_dict.pt", weights_only=False)
+        torch.load(INV_EKFAC_PATH, weights_only=False)
     )
     # clean up
-    os.remove("inv_ekfac_state_dict.pt")
+    os.remove(INV_EKFAC_PATH)
 
     # check that the two inverse KFACs are equal
     compare_state_dicts(inv_ekfac.state_dict(), inv_ekfac_new.state_dict())
