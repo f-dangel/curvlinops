@@ -24,7 +24,7 @@ from torch.nn import (
     Sequential,
 )
 
-from curvlinops import EFLinearOperator, GGNLinearOperator
+from curvlinops import EFLinearOperator, FisherMCLinearOperator, GGNLinearOperator
 from curvlinops.ekfac import EKFACLinearOperator, FisherType, KFACType
 from curvlinops.kfac import KFACLinearOperator
 from curvlinops.utils import allclose_report
@@ -867,7 +867,6 @@ def test_ekfac_closer_to_exact_than_kfac(
         assert exact_kfac_dist > exact_ekfac_dist
 
 
-# TODO: FisherType.MC is too expensive, but could be added as optional test?
 @mark.parametrize("fisher_type", [FisherType.TYPE2, FisherType.EMPIRICAL])
 @mark.parametrize("kfac_approx", EKFACLinearOperator._SUPPORTED_KFAC_APPROX)
 @mark.parametrize(
@@ -893,11 +892,14 @@ def test_ekfac_closer_to_exact_than_kfac_weight_sharing(
     params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     # Compute exact block-wise ground truth quantity.
-    linop = (
-        EFLinearOperator if fisher_type == FisherType.EMPIRICAL else GGNLinearOperator
-    )
+    linop_cls = {
+        FisherType.TYPE2: GGNLinearOperator,
+        FisherType.MC: FisherMCLinearOperator,
+        FisherType.EMPIRICAL: EFLinearOperator,
+    }[fisher_type]
+    optional_linop_args = {"seed": 0} if fisher_type == FisherType.MC else {}
     exact = block_diagonal(
-        linop,
+        linop_cls,
         model,
         loss_func,
         params,
@@ -905,6 +907,7 @@ def test_ekfac_closer_to_exact_than_kfac_weight_sharing(
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
         return_numpy=False,
+        optional_linop_args=optional_linop_args,
     )
 
     # Compute KFAC and EKFAC.
@@ -917,6 +920,7 @@ def test_ekfac_closer_to_exact_than_kfac_weight_sharing(
         separate_weight_and_bias=separate_weight_and_bias,
         fisher_type=fisher_type,
         kfac_approx=kfac_approx,
+        seed=0,
     )
     kfac_mat = kfac @ eye(kfac.shape[1])
     ekfac = EKFACLinearOperator(
@@ -928,6 +932,7 @@ def test_ekfac_closer_to_exact_than_kfac_weight_sharing(
         separate_weight_and_bias=separate_weight_and_bias,
         fisher_type=fisher_type,
         kfac_approx=kfac_approx,
+        seed=0,
     )
     ekfac_mat = ekfac @ eye(ekfac.shape[1])
 

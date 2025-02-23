@@ -4,7 +4,7 @@ import os
 from collections.abc import MutableMapping
 from contextlib import redirect_stdout, suppress
 from itertools import product
-from typing import Callable, Iterable, List, Optional, Tuple, Type, Union
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Type, Union
 
 from einops import rearrange, reduce
 from einops.layers.torch import Rearrange
@@ -142,6 +142,7 @@ def block_diagonal(
     batch_size_fn: Optional[Callable[[MutableMapping], int]] = None,
     separate_weight_and_bias: bool = True,
     return_numpy: bool = True,
+    optional_linop_args: Optional[Dict[str, Any]] = None,
 ) -> ndarray:
     """Compute the block-diagonal of the matrix induced by a linear operator.
 
@@ -161,7 +162,14 @@ def block_diagonal(
         The block-diagonal matrix.
     """
     # compute the full matrix then zero out the off-diagonal blocks
-    linop = linear_operator(model, loss_func, params, data, batch_size_fn=batch_size_fn)
+    linop = linear_operator(
+        model,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        **(optional_linop_args or {}),
+    )
     linop_mat = linop @ eye(
         linop.shape[1], dtype=linop._infer_dtype(), device=linop._infer_device()
     )
@@ -811,6 +819,7 @@ def _test_property(  # noqa: C901
 def _test_save_and_load_state_dict(
     lino_cls: Type[Union[KFACLinearOperator, EKFACLinearOperator]],
 ):
+    """Test saving and loading state dict of (E)KFAC."""
     manual_seed(0)
     batch_size, D_in, D_out = 4, 3, 2
     X = rand(batch_size, D_in)
