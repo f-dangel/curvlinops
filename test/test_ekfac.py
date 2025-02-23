@@ -6,7 +6,7 @@ from typing import Dict, Iterable, List, Tuple, Union
 from einops.layers.torch import Rearrange
 from numpy import allclose as np_allclose
 from numpy import eye
-from numpy.linalg import det, norm, slogdet
+from numpy.linalg import norm
 from pytest import mark, raises
 from torch import (
     Tensor,
@@ -20,6 +20,8 @@ from torch import (
     rand_like,
     save,
 )
+from torch import eye as torch_eye
+from torch.linalg import matrix_norm
 from torch.nn import (
     BCEWithLogitsLoss,
     CrossEntropyLoss,
@@ -35,6 +37,7 @@ from curvlinops import EFLinearOperator, GGNLinearOperator
 from curvlinops.ekfac import EKFACLinearOperator, FisherType, KFACType
 from curvlinops.examples.utils import report_nonclose
 from curvlinops.kfac import KFACLinearOperator
+from curvlinops.utils import allclose_report
 from test.cases import DEVICES, DEVICES_IDS
 from test.utils import (
     Conv2dModel,
@@ -613,7 +616,7 @@ def test_expand_setting_scaling(
                 eigenvals /= correction
         else:
             eigenvalues /= correction
-    ekfac_simulated_mean_mat = ekfac_sum.to_scipy() @ eye(ekfac_sum.shape[1])
+    ekfac_simulated_mean_mat = ekfac_sum @ torch_eye(ekfac_sum.shape[1], device=dev)
 
     # EKFAC with mean reduction
     loss_func = loss(reduction="mean").to(dev)
@@ -624,9 +627,9 @@ def test_expand_setting_scaling(
         data,
         fisher_type=fisher_type,
     )
-    ekfac_mean_mat = ekfac_mean.to_scipy() @ eye(ekfac_mean.shape[1])
+    ekfac_mean_mat = ekfac_mean @ torch_eye(ekfac_mean.shape[1], device=dev)
 
-    report_nonclose(ekfac_simulated_mean_mat, ekfac_mean_mat, atol=1e-4)
+    assert allclose_report(ekfac_simulated_mean_mat, ekfac_mean_mat, atol=1e-4)
 
 
 @mark.parametrize(
@@ -660,8 +663,8 @@ def test_trace(
 
     # Check for equivalence of trace property and naive trace computation
     trace = ekfac.trace
-    trace_naive = (ekfac.to_scipy() @ eye(ekfac.shape[1])).trace()
-    report_nonclose(trace.cpu().numpy(), trace_naive)
+    trace_naive = trace(ekfac @ torch_eye(ekfac.shape[1])).trace()
+    assert allclose_report(trace, trace_naive)
 
     # Check that the trace property is properly cached and reset
     assert ekfac._trace == trace
@@ -700,8 +703,8 @@ def test_frobenius_norm(
 
     # Check for equivalence of frobenius_norm property and the naive computation
     frobenius_norm = ekfac.frobenius_norm
-    frobenius_norm_naive = norm(ekfac.to_scipy() @ eye(ekfac.shape[1]))
-    report_nonclose(frobenius_norm.cpu().numpy(), frobenius_norm_naive)
+    frobenius_norm_naive = matrix_norm(ekfac @ torch_eye(ekfac.shape[1]))
+    assert allclose_report(frobenius_norm, frobenius_norm_naive)
 
     # Check that the frobenius_norm property is properly cached and reset
     assert ekfac._frobenius_norm == frobenius_norm
@@ -753,8 +756,8 @@ def test_det(inv_case, exclude, separate_weight_and_bias, check_deterministic, s
     determinant = ekfac.det
     # verify that the determinant is not trivial as this would make the test useless
     assert determinant not in {0.0, 1.0}
-    det_naive = det(ekfac.to_scipy() @ eye(ekfac.shape[1]))
-    report_nonclose(determinant.cpu().numpy(), det_naive, rtol=1e-4)
+    det_naive = (ekfac @ torch_eye(ekfac.shape[1])).det()
+    assert allclose_report(determinant, det_naive, rtol=1e-4)
 
     # Check that the det property is properly cached and reset
     assert ekfac._det == determinant
@@ -809,9 +812,8 @@ def test_logdet(
     log_det = ekfac.logdet
     # verify that the log determinant is finite and not nan
     assert not isinf(log_det) and not isnan(log_det)
-    sign, logabsdet = slogdet(ekfac.to_scipy() @ eye(ekfac.shape[1]))
-    log_det_naive = sign * logabsdet
-    report_nonclose(log_det.cpu().numpy(), log_det_naive, rtol=1e-4)
+    log_det_naive = (ekfac @ torch_eye(ekfac.shape[1])).logdet()
+    assert allclose_report(log_det, log_det_naive, rtol=1e-4)
 
     # Check that the logdet property is properly cached and reset
     assert ekfac._logdet == log_det

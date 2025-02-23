@@ -1222,7 +1222,7 @@ def test_save_and_load_state_dict():
     # check that the two KFACs are equal
     compare_state_dicts(kfac.state_dict(), kfac_new.state_dict())
     test_vec = rand(kfac.shape[1])
-    report_nonclose(kfac.to_scipy() @ test_vec, kfac_new.to_scipy() @ test_vec)
+    report_nonclose(kfac @ test_vec, kfac_new @ test_vec)
 
 
 def test_from_state_dict():
@@ -1251,7 +1251,7 @@ def test_from_state_dict():
     # check that the two KFACs are equal
     compare_state_dicts(kfac.state_dict(), kfac_new.state_dict())
     test_vec = rand(kfac.shape[1])
-    report_nonclose(kfac.to_scipy() @ test_vec, kfac_new.to_scipy() @ test_vec)
+    report_nonclose(kfac @ test_vec, kfac_new @ test_vec)
 
 
 @mark.parametrize("fisher_type", ["type-2", "mc", "empirical", "forward-only"])

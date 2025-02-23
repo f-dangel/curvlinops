@@ -23,6 +23,7 @@ from curvlinops import (
 )
 from curvlinops.examples.functorch import functorch_ggn
 from curvlinops.examples.utils import report_nonclose
+from curvlinops.utils import allclose_report
 from test.utils import (
     cast_input,
     compare_matmat,
@@ -730,13 +731,9 @@ def test_EKFAC_inverse_exactly_damped_matmat(
     )
 
     # manual exactly damped inverse
-    inv_EKFAC_naive = (
-        torch.inverse(
-            EKFAC @ torch.eye(EKFAC.shape[0], dtype=dtype, device=EKFAC._device)
-            + delta * torch.eye(EKFAC.shape[0], dtype=dtype, device=EKFAC._device)
-        )
-        .cpu()
-        .numpy()
+    inv_EKFAC_naive = torch.inverse(
+        EKFAC @ torch.eye(EKFAC.shape[0], dtype=dtype, device=EKFAC._device)
+        + delta * torch.eye(EKFAC.shape[0], dtype=dtype, device=EKFAC._device)
     )
 
     # check that passing a tuple for exact damping will fail
@@ -753,9 +750,9 @@ def test_EKFAC_inverse_exactly_damped_matmat(
     num_vectors = 2
     X = torch.rand(EKFAC.shape[1], num_vectors, dtype=dtype, device=EKFAC._device)
     inv_EKFAC_X = inv_EKFAC @ X
-    inv_EKFAC_naive_X = inv_EKFAC_naive @ X.cpu().numpy()
+    inv_EKFAC_naive_X = inv_EKFAC_naive @ X
     # test for equivalence
-    report_nonclose(inv_EKFAC_X.cpu().numpy(), inv_EKFAC_naive_X)
+    assert allclose_report(inv_EKFAC_X, inv_EKFAC_naive_X)
 
     assert inv_EKFAC._cache == cache
     # test that the cache is empty
