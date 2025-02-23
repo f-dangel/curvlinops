@@ -506,6 +506,44 @@ def compare_matmat(
     for o_x, m_x in zip(op_x, mat_x):
         assert allclose_report(o_x, m_x, **tol)
 
+def compare_consecutive_matmats(
+    op: PyTorchLinearOperator,
+    adjoint: bool,
+    is_vec: bool,
+    num_vecs: int = 2,
+    rtol: float = 1e-5,
+    atol: float = 1e-8,
+):
+    """Compare applying the linear operator to two identical vectors in sequence.
+
+    Args:
+        op: The operator to test.
+        adjoint: Whether to test the adjoint operator.
+        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
+        num_vecs: Number of vectors to test (ignored if ``is_vec`` is ``True``).
+            Default: ``2``.
+        rtol: Relative tolerance for the comparison. Default: ``1e-5``.
+        atol: Absolute tolerance for the comparison. Default: ``1e-8``.
+    """
+    if adjoint:
+        op = op.adjoint()
+
+    tol = {"atol": atol, "rtol": rtol}
+
+    # Generate the vector using rand_accepted_formats
+    dt = op._infer_dtype()
+    dev = op._infer_device()
+    _, X, _ = rand_accepted_formats(
+        [tuple(s) for s in op._in_shape], is_vec=is_vec, dtype=dt, device=dev, num_vecs=num_vecs
+    )
+
+    # Apply the operator twice to the same vector
+    result_first = op @ X
+    result_second = op @ X
+
+    # Ensure the results are the same
+    assert allclose_report(result_first, result_second, **tol)
+
 
 def compare_matmat_expectation(
     op: FisherMCLinearOperator,

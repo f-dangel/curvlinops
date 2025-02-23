@@ -2,7 +2,7 @@
 
 from curvlinops import GGNLinearOperator
 from curvlinops.examples.functorch import functorch_ggn
-from test.utils import compare_matmat
+from test.utils import compare_consecutive_matmats, compare_matmat
 
 
 def test_GGNLinearOperator_matvec(case, adjoint: bool, is_vec: bool):
@@ -20,4 +20,5 @@ def test_GGNLinearOperator_matvec(case, adjoint: bool, is_vec: bool):
     )
     G_mat = functorch_ggn(model_func, loss_func, params, data, input_key="x")
 
+    compare_consecutive_matmats(G, adjoint, is_vec)
     compare_matmat(G, G_mat, adjoint, is_vec, atol=1e-7)
