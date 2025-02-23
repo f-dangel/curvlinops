@@ -763,7 +763,23 @@ def _test_property(  # noqa: C901
     rtol: float = 1e-5,
     atol: float = 1e-8,
 ):
-    """Test a property of (E)KFAC."""
+    """Test a property of (E)KFAC.
+
+    Args:
+        linop_cls: The linear operator class to test.
+        property_name: The property to test.
+        model: The neural network.
+        loss_func: The loss function.
+        params: The parameters w.r.t. which the property will be computed.
+        data: A data loader.
+        batch_size_fn: A function that returns the batch size given a dict-like ``X``.
+        separate_weight_and_bias: Whether to treat weight and bias of a layer as
+            separate blocks in the block-diagonal.
+        check_deterministic: Whether to check the property for a deterministic linear
+            operator.
+        rtol: Relative tolerance for the comparison. Default: ``1e-5``.
+        atol: Absolute tolerance for the comparison. Default: ``1e-8``.
+    """
     # Create instance of linear operator
     linop = linop_cls(
         model,
@@ -821,7 +837,11 @@ def _test_property(  # noqa: C901
 def _test_save_and_load_state_dict(
     lino_cls: Type[Union[KFACLinearOperator, EKFACLinearOperator]],
 ):
-    """Test saving and loading state dict of (E)KFAC."""
+    """Test saving and loading state dict of (E)KFAC.
+
+    Args:
+        lino_cls: The linear operator class to test.
+    """
     manual_seed(0)
     batch_size, D_in, D_out = 4, 3, 2
     X = rand(batch_size, D_in)
