@@ -16,18 +16,17 @@ First, the imports.
 from time import time
 from typing import List
 
-import numpy
-import torch
-from torch import nn
+from torch import Tensor, cuda, device, eye, manual_seed, rand
+from torch.nn import Linear, MSELoss, ReLU, Sequential, Sigmoid
 
 from curvlinops import HessianLinearOperator
 from curvlinops.examples.functorch import functorch_hessian
 from curvlinops.examples.utils import report_nonclose
 from curvlinops.submatrix import SubmatrixLinearOperator
+from curvlinops.utils import allclose_report
 
 # make deterministic
-torch.manual_seed(0)
-numpy.random.seed(0)
+manual_seed(0)
 
 # %%
 #
@@ -41,31 +40,29 @@ D_in = 7
 D_hidden = 5
 D_out = 3
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+DEVICE = device("cuda" if cuda.is_available() else "cpu")
 
-X1, y1 = torch.rand(N, D_in).to(DEVICE), torch.rand(N, D_out).to(DEVICE)
-X2, y2 = torch.rand(N, D_in).to(DEVICE), torch.rand(N, D_out).to(DEVICE)
+X1, y1 = rand(N, D_in, device=DEVICE), rand(N, D_out, device=DEVICE)
+X2, y2 = rand(N, D_in, device=DEVICE), rand(N, D_out, device=DEVICE)
 data = [(X1, y1), (X2, y2)]
 
-model = nn.Sequential(
-    nn.Linear(D_in, D_hidden),
-    nn.ReLU(),
-    nn.Linear(D_hidden, D_hidden),
-    nn.Sigmoid(),
-    nn.Linear(D_hidden, D_out),
+model = Sequential(
+    Linear(D_in, D_hidden),
+    ReLU(),
+    Linear(D_hidden, D_hidden),
+    Sigmoid(),
+    Linear(D_hidden, D_out),
 ).to(DEVICE)
 params = [p for p in model.parameters() if p.requires_grad]
 
-loss_function = nn.MSELoss(reduction="mean").to(DEVICE)
+loss_function = MSELoss(reduction="mean").to(DEVICE)
 
 # %%
 #
 # We will investigate the Hessian. To make sure our results are correct, let's keep
 # a Hessian matrix computed via :mod:`functorch` around.
 
-H_functorch = (
-    functorch_hessian(model, loss_function, params, data).detach().cpu().numpy()
-)
+H_functorch = functorch_hessian(model, loss_function, params, data)
 
 # %%
 #
@@ -73,9 +70,11 @@ H_functorch = (
 # its matrix representation through multiplication with the identity matrix,
 # followed by comparison to the Hessian matrix computed via :mod:`functorch`.
 
-H = HessianLinearOperator(model, loss_function, params, data).to_scipy()
+H = HessianLinearOperator(model, loss_function, params, data)
 
-report_nonclose(H_functorch, H @ numpy.eye(H.shape[1]))
+num_params = sum(p.numel() for p in params)
+identity = eye(num_params, device=DEVICE)
+assert allclose_report(H_functorch, H @ identity)
 
 # %%
 #
@@ -88,9 +87,7 @@ report_nonclose(H_functorch, H @ numpy.eye(H.shape[1]))
 # Let's define a function to extract these blocks from the Hessian:
 
 
-def extract_block(
-    mat: numpy.ndarray, params: List[torch.Tensor], i: int, j: int
-) -> numpy.ndarray:
+def extract_block(mat: Tensor, params: List[Tensor], i: int, j: int) -> Tensor:
     """Extract the Hessian block from parameters ``i`` and ``j``.
 
     Args:
@@ -122,7 +119,7 @@ H_param0_functorch = extract_block(H_functorch, params, i, j)
 # We can build a linear operator for this sub-Hessian by only providing the
 # first layer's weight as parameter:
 
-H_param0 = HessianLinearOperator(model, loss_function, [params[i]], data).to_scipy()
+H_param0 = HessianLinearOperator(model, loss_function, [params[i]], data)
 
 # %%
 #
@@ -132,7 +129,9 @@ H_param0 = HessianLinearOperator(model, loss_function, [params[i]], data).to_sci
 # onto the identity matrix and comparing the result to the block we extracted
 # from our ground truth:
 
-report_nonclose(H_param0_functorch, H_param0 @ numpy.eye(params[i].numel()))
+assert allclose_report(
+    H_param0_functorch, H_param0 @ eye(params[i].numel(), device=DEVICE)
+)
 
 # %%
 #
@@ -172,7 +171,7 @@ H_param0_param1_functorch = extract_block(H_functorch, params, i, j)
 
 report_nonclose(
     H_param0_param1_functorch,
-    H_param0_param1_functorch @ numpy.eye(param_dims[j]),
+    H_param0_param1_functorch @ eye(param_dims[j], device=DEVICE),
 )
 
 # %%
@@ -197,7 +196,7 @@ H_sub_functorch = H_functorch[row_idxs, :][:, col_idxs]
 #
 # Quick check to see if it worked:
 
-report_nonclose(H_sub_functorch, H_sub @ numpy.eye(len(col_idxs)))
+assert allclose_report(H_sub_functorch, H_sub @ eye(len(col_idxs), device=DEVICE))
 
 # %%
 #
@@ -218,7 +217,9 @@ col_idxs = list(range(col_start, col_end))
 
 H_param0_alternative = SubmatrixLinearOperator(H, row_idxs, col_idxs)
 
-report_nonclose(H_param0_functorch, H_param0_alternative @ numpy.eye(param_dims[0]))
+assert allclose_report(
+    H_param0_functorch, H_param0_alternative @ eye(param_dims[0], device=DEVICE)
+)
 
 # %%
 #
@@ -231,17 +232,17 @@ report_nonclose(H_param0_functorch, H_param0_alternative @ numpy.eye(param_dims[
 # In our example, the matrix-vector product of :code:`H_param0` should
 # therefore be faster than that of :code:`H_param0_alternative`:
 
-x = numpy.random.rand(param_dims[0])
+x = rand(param_dims[0], device=DEVICE)
 
 # less computations
 start = time()
-H_param0 @ x
+_ = H_param0 @ x
 end = time()
 print(f"H_param0.matvec: {end - start:.2e} s")
 
 # more computations
 start = time()
-H_param0_alternative @ x
+_ = H_param0_alternative @ x
 end = time()
 print(f"H_param0_alternative.matvec: {end - start:.2e} s")
 

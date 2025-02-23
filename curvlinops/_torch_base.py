@@ -55,9 +55,12 @@ class PyTorchLinearOperator:
     Attributes:
         SELF_ADJOINT: Whether the linear operator is self-adjoint. If ``True``,
             ``_adjoint`` does not need to be implemented. Default: ``False``.
+        SUPPORTS_LIST_FORMAT: Whether the linear operator supports multiplication with
+            a list of tensors. Default: ``True``.
     """
 
     SELF_ADJOINT: bool = False
+    SUPPORTS_LIST_FORMAT: bool = True
 
     def __init__(
         self, in_shape: List[Tuple[int, ...]], out_shape: List[Tuple[int, ...]]
@@ -161,6 +164,8 @@ class PyTorchLinearOperator:
 
         Raises:
             ValueError: If the input format is invalid.
+            ValueError: If the operator does not support list format, but a tensor was
+                passed as list.
         """
         if isinstance(X, Tensor):
             list_format = False
@@ -168,6 +173,8 @@ class PyTorchLinearOperator:
 
         elif isinstance(X, list) and all(isinstance(x, Tensor) for x in X):
             list_format = True
+            if not self.SUPPORTS_LIST_FORMAT:
+                raise ValueError("Operator does not support list format tensors.")
             X_tensor_list, is_vec, num_vecs = self.__check_tensor_list_and_preprocess(X)
 
         else:
