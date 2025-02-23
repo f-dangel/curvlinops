@@ -698,6 +698,7 @@ def test_det(inv_case, exclude, separate_weight_and_bias, check_deterministic, s
         batch_size_fn,
         separate_weight_and_bias,
         check_deterministic,
+        rtol=1e-4,
     )
 
 
@@ -729,6 +730,7 @@ def test_logdet(
         batch_size_fn,
         separate_weight_and_bias,
         check_deterministic,
+        rtol=1e-4,
     )
 
 

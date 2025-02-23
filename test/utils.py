@@ -760,6 +760,8 @@ def _test_property(  # noqa: C901
     batch_size_fn: Optional[Callable[[MutableMapping], int]],
     separate_weight_and_bias: bool,
     check_deterministic: bool,
+    rtol: float = 1e-5,
+    atol: float = 1e-8,
 ):
     """Test a property of (E)KFAC."""
     # Create instance of linear operator
@@ -808,7 +810,7 @@ def _test_property(  # noqa: C901
     quantity = getattr(linop, property_name)
     linop_mat = linop @ eye(linop.shape[1])
     quantity_naive = torch_fn_map[property_name](linop_mat)
-    assert allclose_report(quantity, quantity_naive)
+    assert allclose_report(quantity, quantity_naive, rtol=rtol, atol=atol)
 
     # Check that the property is properly cached and reset
     assert getattr(linop, "_" + property_name) == quantity
