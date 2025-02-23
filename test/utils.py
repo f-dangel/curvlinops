@@ -3,7 +3,7 @@
 from collections.abc import MutableMapping
 from contextlib import redirect_stdout, suppress
 from itertools import product
-from typing import Callable, Iterable, List, Optional, Tuple, Union
+from typing import Callable, Iterable, List, Optional, Tuple, Type, Union
 
 from einops import rearrange, reduce
 from einops.layers.torch import Rearrange
@@ -39,7 +39,7 @@ from torch.nn import (
 )
 
 from curvlinops import FisherMCLinearOperator
-from curvlinops._torch_base import PyTorchLinearOperator
+from curvlinops._torch_base import CurvatureLinearOperator, PyTorchLinearOperator
 from curvlinops.utils import allclose_report
 
 
@@ -119,13 +119,14 @@ def maybe_exclude_or_shuffle_parameters(
 
 
 def block_diagonal(
-    linear_operator: PyTorchLinearOperator,
+    linear_operator: Type[CurvatureLinearOperator],
     model: Module,
     loss_func: Module,
     params: List[Parameter],
     data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
     batch_size_fn: Optional[Callable[[MutableMapping], int]] = None,
     separate_weight_and_bias: bool = True,
+    return_numpy: bool = True,
 ) -> ndarray:
     """Compute the block-diagonal of the matrix induced by a linear operator.
 
@@ -138,17 +139,21 @@ def block_diagonal(
         batch_size_fn: A function that returns the batch size given a dict-like ``X``.
         separate_weight_and_bias: Whether to treat weight and bias of a layer as
             separate blocks in the block-diagonal. Default: ``True``.
+        return_numpy: Whether to return the block-diagonal as a numpy array.
+            Default: ``True``.
 
     Returns:
         The block-diagonal matrix.
     """
     # compute the full matrix then zero out the off-diagonal blocks
     linop = linear_operator(model, loss_func, params, data, batch_size_fn=batch_size_fn)
-    linop = as_tensor(linop @ eye(linop.shape[1]))
+    linop_mat = linop @ eye(
+        linop.shape[1], dtype=linop._infer_dtype(), device=linop._infer_device()
+    )
     sizes = [p.numel() for p in params]
     # matrix_blocks[i, j] corresponds to the block of (params[i], params[j])
     matrix_blocks = [
-        list(block.split(sizes, dim=1)) for block in linop.split(sizes, dim=0)
+        list(block.split(sizes, dim=1)) for block in linop_mat.split(sizes, dim=0)
     ]
 
     # find out which blocks to keep
@@ -180,7 +185,8 @@ def block_diagonal(
             matrix_blocks[i][j].zero_()
 
     # concatenate all blocks
-    return cat([cat(row_blocks, dim=1) for row_blocks in matrix_blocks], dim=0).numpy()
+    block_diag = cat([cat(row_blocks, dim=1) for row_blocks in matrix_blocks], dim=0)
+    return block_diag.cpu().numpy() if return_numpy else block_diag
 
 
 class WeightShareModel(Sequential):
@@ -281,8 +287,8 @@ class WeightShareModel(Sequential):
         # (although second and third dimension would have to be transposed for
         # classification)
         if self.setting == "expand-flatten":
-            # Example: Per-sequence loss for transformer with outputs:
-            # (batch, sequence_length, c)
+            # Example: Pixel-wise MSE loss for diffusion model:
+            # (batch, hight, width, c) -> (batch, hight * width * c)
             x = rearrange(x, "batch ... c -> batch (... c)")
         elif x.ndim > 2 and self.loss == "CE":
             x = rearrange(x, "batch ... c -> batch c ...")
@@ -369,13 +375,12 @@ class UnetModel(Module):
             )
         super().__init__()
         if issubclass(loss, (MSELoss, BCEWithLogitsLoss)):
-            rearrange_layer = Rearrange("batch c h w -> batch h w c")
-            if flatten:
-                rearrange_layer = Sequential(rearrange_layer, Flatten(start_dim=1))
+            out_str = "batch (h w c)" if flatten else "batch h w c"
+            rearrange_layer = Rearrange(f"batch c h w -> {out_str}")
         else:
-            rearrange_layer = Identity()
-            if flatten:
-                rearrange_layer = Rearrange("batch c h w -> (batch h w) c")
+            rearrange_layer = (
+                Rearrange("batch c h w -> (batch h w) c") if flatten else Identity()
+            )
         self._model = Sequential(
             Conv2d(3, 2, 3, padding=1, stride=2),
             Conv2d(2, 2, 3, padding=3 // 2),
