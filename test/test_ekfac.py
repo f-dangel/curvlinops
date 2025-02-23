@@ -10,8 +10,6 @@ from torch import (
     allclose,
     device,
     eye,
-    isinf,
-    isnan,
     linalg,
     load,
     manual_seed,
@@ -39,6 +37,8 @@ from test.utils import (
     Conv2dModel,
     UnetModel,
     WeightShareModel,
+    _test_inplace_activations,
+    _test_property,
     binary_classification_targets,
     block_diagonal,
     classification_targets,
@@ -465,35 +465,7 @@ def test_ekfac_inplace_activations(dev: device):
     Args:
         dev: The device to run the test on.
     """
-    manual_seed(0)
-    model = Sequential(Linear(6, 3), ReLU(inplace=True), Linear(3, 2)).to(dev)
-    loss_func = MSELoss().to(dev)
-    batch_size = 1
-    data = [(rand(batch_size, 6), regression_targets((batch_size, 2)))]
-    params = list(model.parameters())
-
-    # 1) compare EKFAC and GGN
-    ggn = block_diagonal(
-        GGNLinearOperator, model, loss_func, params, data, return_numpy=False
-    )
-
-    ekfac = EKFACLinearOperator(model, loss_func, params, data, mc_samples=2_000)
-    ekfac_mat = ekfac @ eye(ekfac.shape[1])
-
-    atol = {"sum": 5e-1, "mean": 2e-3}[loss_func.reduction]
-    rtol = {"sum": 2e-2, "mean": 2e-2}[loss_func.reduction]
-
-    assert allclose_report(ggn, ekfac_mat, rtol=rtol, atol=atol)
-
-    # 2) Compare GGN (inplace=True) and GGN (inplace=False)
-    for mod in model.modules():
-        if hasattr(mod, "inplace"):
-            mod.inplace = False
-    ggn_no_inplace = block_diagonal(
-        GGNLinearOperator, model, loss_func, params, data, return_numpy=False
-    )
-
-    assert allclose_report(ggn, ggn_no_inplace)
+    _test_inplace_activations(EKFACLinearOperator, dev)
 
 
 @mark.parametrize("fisher_type", EKFACLinearOperator._SUPPORTED_FISHER_TYPE)
@@ -659,26 +631,17 @@ def test_trace(
     """Test that the trace property of EKFACLinearOperator works."""
     model, loss_func, params, data, batch_size_fn = inv_case
     params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
-
-    ekfac = EKFACLinearOperator(
+    _test_property(
+        EKFACLinearOperator,
+        "trace",
         model,
         loss_func,
         params,
         data,
-        batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
-        check_deterministic=check_deterministic,
+        batch_size_fn,
+        separate_weight_and_bias,
+        check_deterministic,
     )
-
-    # Check for equivalence of trace property and naive trace computation
-    trace = ekfac.trace
-    trace_naive = (ekfac @ eye(ekfac.shape[1])).trace()
-    assert allclose_report(trace, trace_naive)
-
-    # Check that the trace property is properly cached and reset
-    assert ekfac._trace == trace
-    ekfac.compute_kronecker_factors()
-    assert ekfac._trace is None
 
 
 @mark.parametrize(
@@ -699,26 +662,17 @@ def test_frobenius_norm(
     """Test that the Frobenius norm property of EKFACLinearOperator works."""
     model, loss_func, params, data, batch_size_fn = inv_case
     params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
-
-    ekfac = EKFACLinearOperator(
+    _test_property(
+        EKFACLinearOperator,
+        "frobenius_norm",
         model,
         loss_func,
         params,
         data,
-        batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
-        check_deterministic=check_deterministic,
+        batch_size_fn,
+        separate_weight_and_bias,
+        check_deterministic,
     )
-
-    # Check for equivalence of frobenius_norm property and the naive computation
-    frobenius_norm = ekfac.frobenius_norm
-    frobenius_norm_naive = linalg.matrix_norm(ekfac @ eye(ekfac.shape[1]))
-    assert allclose_report(frobenius_norm, frobenius_norm_naive)
-
-    # Check that the frobenius_norm property is properly cached and reset
-    assert ekfac._frobenius_norm == frobenius_norm
-    ekfac.compute_kronecker_factors()
-    assert ekfac._frobenius_norm is None
 
 
 @mark.parametrize(
@@ -737,42 +691,17 @@ def test_det(inv_case, exclude, separate_weight_and_bias, check_deterministic, s
     """Test that the determinant property of EKFACLinearOperator works."""
     model, loss_func, params, data, batch_size_fn = inv_case
     params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
-
-    ekfac = EKFACLinearOperator(
+    _test_property(
+        EKFACLinearOperator,
+        "det",
         model,
         loss_func,
         params,
         data,
-        batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
-        check_deterministic=check_deterministic,
+        batch_size_fn,
+        separate_weight_and_bias,
+        check_deterministic,
     )
-
-    # add damping manually to avoid singular matrices
-    if not check_deterministic:
-        ekfac.compute_kronecker_factors()
-        ekfac.compute_eigenvalue_correction()
-    assert ekfac._corrected_eigenvalues
-    delta = 1.0  # requires much larger damping value compared to ``logdet``
-    for eigenvalues in ekfac._corrected_eigenvalues.values():
-        if isinstance(eigenvalues, dict):
-            for eigenvals in eigenvalues.values():
-                eigenvals.add_(delta)
-        else:
-            eigenvalues.add_(delta)
-
-    # Check for equivalence of the det property and naive determinant computation
-    determinant = ekfac.det
-    # verify that the determinant is not trivial as this would make the test useless
-    assert determinant not in {0.0, 1.0}
-    det_naive = (ekfac @ eye(ekfac.shape[1])).det()
-    assert allclose_report(determinant, det_naive, rtol=1e-4)
-
-    # Check that the det property is properly cached and reset
-    assert ekfac._det == determinant
-    ekfac.compute_kronecker_factors()
-    ekfac.compute_eigenvalue_correction()
-    assert ekfac._det is None
 
 
 @mark.parametrize(
@@ -793,41 +722,17 @@ def test_logdet(
     """Test that the log determinant property of EKFACLinearOperator works."""
     model, loss_func, params, data, batch_size_fn = inv_case
     params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
-
-    ekfac = EKFACLinearOperator(
+    _test_property(
+        EKFACLinearOperator,
+        "logdet",
         model,
         loss_func,
         params,
         data,
-        batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
-        check_deterministic=check_deterministic,
+        batch_size_fn,
+        separate_weight_and_bias,
+        check_deterministic,
     )
-
-    # add damping manually to avoid singular matrices
-    if not check_deterministic:
-        ekfac.compute_kronecker_factors()
-        ekfac.compute_eigenvalue_correction()
-    assert ekfac._corrected_eigenvalues
-    delta = 1e-3  # only requires much smaller damping value compared to ``det``
-    for eigenvalues in ekfac._corrected_eigenvalues.values():
-        if isinstance(eigenvalues, dict):
-            for eigenvals in eigenvalues.values():
-                eigenvals.add_(delta)
-        else:
-            eigenvalues.add_(delta)
-
-    # Check for equivalence of the logdet property and naive log determinant computation
-    log_det = ekfac.logdet
-    # verify that the log determinant is finite and not nan
-    assert not isinf(log_det) and not isnan(log_det)
-    log_det_naive = (ekfac @ eye(ekfac.shape[1])).logdet()
-    assert allclose_report(log_det, log_det_naive, rtol=1e-4)
-
-    # Check that the logdet property is properly cached and reset
-    assert ekfac._logdet == log_det
-    ekfac.compute_kronecker_factors()
-    assert ekfac._logdet is None
 
 
 def test_ekfac_does_not_affect_grad():

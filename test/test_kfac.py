@@ -5,15 +5,12 @@ from typing import Dict, Iterable, List, Tuple, Union
 
 from einops.layers.torch import Rearrange
 from numpy import eye, random
-from numpy.linalg import det, norm, slogdet
 from pytest import mark, raises
 from torch import (
     Tensor,
     allclose,
     device,
     float64,
-    isinf,
-    isnan,
     load,
     manual_seed,
     rand,
@@ -41,6 +38,8 @@ from test.utils import (
     Conv2dModel,
     UnetModel,
     WeightShareModel,
+    _test_inplace_activations,
+    _test_property,
     binary_classification_targets,
     block_diagonal,
     classification_targets,
@@ -446,33 +445,7 @@ def test_kfac_inplace_activations(dev: device):
     Args:
         dev: The device to run the test on.
     """
-    manual_seed(0)
-    model = Sequential(Linear(4, 3), ReLU(inplace=True), Linear(3, 2)).to(dev)
-    loss_func = MSELoss().to(dev)
-    batch_size = 1
-    data = [(rand(batch_size, 4), regression_targets((batch_size, 2)))]
-    params = list(model.parameters())
-
-    # 1) compare KFAC and GGN
-    ggn = block_diagonal(GGNLinearOperator, model, loss_func, params, data)
-
-    kfac = KFACLinearOperator(
-        model, loss_func, params, data, mc_samples=2_000
-    ).to_scipy()
-    kfac_mat = kfac @ eye(kfac.shape[1])
-
-    atol = {"sum": 5e-1, "mean": 5e-3}[loss_func.reduction]
-    rtol = {"sum": 2e-2, "mean": 4e-2}[loss_func.reduction]
-
-    report_nonclose(ggn, kfac_mat, rtol=rtol, atol=atol)
-
-    # 2) Compare GGN (inplace=True) and GGN (inplace=False)
-    for mod in model.modules():
-        if hasattr(mod, "inplace"):
-            mod.inplace = False
-    ggn_no_inplace = block_diagonal(GGNLinearOperator, model, loss_func, params, data)
-
-    report_nonclose(ggn, ggn_no_inplace)
+    _test_inplace_activations(KFACLinearOperator, dev)
 
 
 @mark.parametrize("fisher_type", KFACLinearOperator._SUPPORTED_FISHER_TYPE)
@@ -704,27 +677,17 @@ def test_trace(case, exclude, separate_weight_and_bias, check_deterministic, shu
     """Test that the trace property of KFACLinearOperator works."""
     model, loss_func, params, data, batch_size_fn = case
     params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
-
-    kfac_torch = KFACLinearOperator(
+    _test_property(
+        KFACLinearOperator,
+        "trace",
         model,
         loss_func,
         params,
         data,
-        batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
-        check_deterministic=check_deterministic,
+        batch_size_fn,
+        separate_weight_and_bias,
+        check_deterministic,
     )
-    kfac = kfac_torch.to_scipy()
-
-    # Check for equivalence of trace property and naive trace computation
-    trace = kfac_torch.trace
-    trace_naive = (kfac @ eye(kfac.shape[1])).trace()
-    report_nonclose(trace.cpu().numpy(), trace_naive)
-
-    # Check that the trace property is properly cached and reset
-    assert kfac_torch._trace == trace
-    kfac_torch.compute_kronecker_factors()
-    assert kfac_torch._trace is None
 
 
 @mark.parametrize(
@@ -745,27 +708,17 @@ def test_frobenius_norm(
     """Test that the Frobenius norm property of KFACLinearOperator works."""
     model, loss_func, params, data, batch_size_fn = case
     params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
-
-    kfac_torch = KFACLinearOperator(
+    _test_property(
+        KFACLinearOperator,
+        "frobenius_norm",
         model,
         loss_func,
         params,
         data,
-        batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
-        check_deterministic=check_deterministic,
+        batch_size_fn,
+        separate_weight_and_bias,
+        check_deterministic,
     )
-    kfac = kfac_torch.to_scipy()
-
-    # Check for equivalence of frobenius_norm property and the naive computation
-    frobenius_norm = kfac_torch.frobenius_norm
-    frobenius_norm_naive = norm(kfac @ eye(kfac.shape[1]))
-    report_nonclose(frobenius_norm.cpu().numpy(), frobenius_norm_naive)
-
-    # Check that the frobenius_norm property is properly cached and reset
-    assert kfac_torch._frobenius_norm == frobenius_norm
-    kfac_torch.compute_kronecker_factors()
-    assert kfac_torch._frobenius_norm is None
 
 
 @mark.parametrize(
@@ -784,43 +737,17 @@ def test_det(case, exclude, separate_weight_and_bias, check_deterministic, shuff
     """Test that the determinant property of KFACLinearOperator works."""
     model, loss_func, params, data, batch_size_fn = case
     params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
-
-    kfac_torch = KFACLinearOperator(
+    _test_property(
+        KFACLinearOperator,
+        "det",
         model,
         loss_func,
         params,
         data,
-        batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
-        check_deterministic=check_deterministic,
+        batch_size_fn,
+        separate_weight_and_bias,
+        check_deterministic,
     )
-    kfac = kfac_torch.to_scipy()
-
-    # add damping manually to avoid singular matrices
-    if not check_deterministic:
-        kfac_torch.compute_kronecker_factors()
-    assert kfac_torch._input_covariances or kfac_torch._gradient_covariances
-    delta = 0.5  # requires much larger damping value compared to ``logdet``
-    for aaT in kfac_torch._input_covariances.values():
-        aaT.add_(
-            torch_eye(aaT.shape[0], dtype=aaT.dtype, device=aaT.device), alpha=delta
-        )
-    for ggT in kfac_torch._gradient_covariances.values():
-        ggT.add_(
-            torch_eye(ggT.shape[0], dtype=ggT.dtype, device=ggT.device), alpha=delta
-        )
-
-    # Check for equivalence of the det property and naive determinant computation
-    determinant = kfac_torch.det
-    # verify that the determinant is not trivial as this would make the test useless
-    assert determinant not in [0.0, 1.0]
-    det_naive = det(kfac @ eye(kfac.shape[1]))
-    report_nonclose(determinant.cpu().numpy(), det_naive, rtol=1e-4)
-
-    # Check that the det property is properly cached and reset
-    assert kfac_torch._det == determinant
-    kfac_torch.compute_kronecker_factors()
-    assert kfac_torch._det is None
 
 
 @mark.parametrize(
@@ -839,44 +766,17 @@ def test_logdet(case, exclude, separate_weight_and_bias, check_deterministic, sh
     """Test that the log determinant property of KFACLinearOperator works."""
     model, loss_func, params, data, batch_size_fn = case
     params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
-
-    kfac_torch = KFACLinearOperator(
+    _test_property(
+        KFACLinearOperator,
+        "logdet",
         model,
         loss_func,
         params,
         data,
-        batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
-        check_deterministic=check_deterministic,
+        batch_size_fn,
+        separate_weight_and_bias,
+        check_deterministic,
     )
-    kfac = kfac_torch.to_scipy()
-
-    # add damping manually to avoid singular matrices
-    if not check_deterministic:
-        kfac_torch.compute_kronecker_factors()
-    assert kfac_torch._input_covariances or kfac_torch._gradient_covariances
-    delta = 1e-3  # only requires much smaller damping value compared to ``det``
-    for aaT in kfac_torch._input_covariances.values():
-        aaT.add_(
-            torch_eye(aaT.shape[0], dtype=aaT.dtype, device=aaT.device), alpha=delta
-        )
-    for ggT in kfac_torch._gradient_covariances.values():
-        ggT.add_(
-            torch_eye(ggT.shape[0], dtype=ggT.dtype, device=ggT.device), alpha=delta
-        )
-
-    # Check for equivalence of the logdet property and naive log determinant computation
-    log_det = kfac_torch.logdet
-    # verify that the log determinant is finite and not nan
-    assert not isinf(log_det) and not isnan(log_det)
-    sign, logabsdet = slogdet(kfac @ eye(kfac.shape[1]))
-    log_det_naive = sign * logabsdet
-    report_nonclose(log_det.cpu().numpy(), log_det_naive, rtol=1e-4)
-
-    # Check that the logdet property is properly cached and reset
-    assert kfac_torch._logdet == log_det
-    kfac_torch.compute_kronecker_factors()
-    assert kfac_torch._logdet is None
 
 
 @mark.parametrize(

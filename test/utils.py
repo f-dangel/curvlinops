@@ -18,9 +18,13 @@ from torch import (
     dtype,
     eye,
     from_numpy,
+    linalg,
+    logdet,
+    manual_seed,
     rand,
     randint,
     randperm,
+    trace,
     zeros_like,
 )
 from torch import eye as torch_eye
@@ -31,14 +35,21 @@ from torch.nn import (
     CrossEntropyLoss,
     Flatten,
     Identity,
+    Linear,
     Module,
     MSELoss,
     Parameter,
+    ReLU,
     Sequential,
     Upsample,
 )
 
-from curvlinops import FisherMCLinearOperator
+from curvlinops import (
+    EKFACLinearOperator,
+    FisherMCLinearOperator,
+    GGNLinearOperator,
+    KFACLinearOperator,
+)
 from curvlinops._torch_base import CurvatureLinearOperator, PyTorchLinearOperator
 from curvlinops.utils import allclose_report
 
@@ -682,3 +693,112 @@ def check_estimator_convergence(
             converged = rel_error < target_rel_error
 
     assert converged
+
+
+def _test_inplace_activations(
+    linop_cls: Type[KFACLinearOperator | EKFACLinearOperator], dev: device
+):
+    """Test that (E)KFAC works if the network has in-place activations.
+
+    We use a test case with a single datum as (E)KFAC becomes exact as the number of
+    MC samples increases.
+
+    Args:
+        linop_cls: The linear operator class to test.
+        dev: The device to run the test on.
+    """
+    manual_seed(0)
+    model = Sequential(Linear(6, 3), ReLU(inplace=True), Linear(3, 2)).to(dev)
+    loss_func = MSELoss().to(dev)
+    batch_size = 1
+    data = [(rand(batch_size, 6), regression_targets((batch_size, 2)))]
+    params = list(model.parameters())
+
+    # 1) compare (E)KFAC and GGN
+    ggn = block_diagonal(
+        GGNLinearOperator, model, loss_func, params, data, return_numpy=False
+    )
+
+    linop = linop_cls(model, loss_func, params, data, mc_samples=2_000)
+    linop_mat = linop @ eye(linop.shape[1])
+
+    atol = {"sum": 5e-1, "mean": 2e-3}[loss_func.reduction]
+    rtol = {"sum": 2e-2, "mean": 2e-2}[loss_func.reduction]
+
+    assert allclose_report(ggn, linop_mat, rtol=rtol, atol=atol)
+
+    # 2) Compare GGN (inplace=True) and GGN (inplace=False)
+    for mod in model.modules():
+        if hasattr(mod, "inplace"):
+            mod.inplace = False
+    ggn_no_inplace = block_diagonal(
+        GGNLinearOperator, model, loss_func, params, data, return_numpy=False
+    )
+
+    assert allclose_report(ggn, ggn_no_inplace)
+
+
+def _test_property(  # noqa: C901
+    linop_type: Type[KFACLinearOperator | EKFACLinearOperator],
+    property_name: str,
+    model: Module,
+    loss_func: Module,
+    params: List[Parameter],
+    data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
+    batch_size_fn: Optional[Callable[[MutableMapping], int]],
+    separate_weight_and_bias: bool,
+    check_deterministic: bool,
+):
+    """Test a property of (E)KFAC."""
+    # Create instance of linear operator
+    linop = linop_type(
+        model,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        separate_weight_and_bias=separate_weight_and_bias,
+        check_deterministic=check_deterministic,
+    )
+    # Mapping from the property name to the corresponding torch function
+    torch_fn_map = {
+        "trace": trace,
+        "frobenius_norm": linalg.matrix_norm,
+        "det": linalg.det,
+        "logdet": logdet,
+    }
+    assert property_name in torch_fn_map
+
+    # Add damping manually to avoid singular matrices for logdet
+    if property_name == "logdet":
+        DELTA = 1e-3
+        if type(linop) is KFACLinearOperator:
+            if not check_deterministic:
+                linop.compute_kronecker_factors()
+            assert linop._input_covariances or linop._gradient_covariances
+            for aaT in linop._input_covariances.values():
+                aaT.add_(eye_like(aaT), alpha=DELTA)
+            for ggT in linop._gradient_covariances.values():
+                ggT.add_(eye_like(ggT), alpha=DELTA)
+        elif type(linop) is EKFACLinearOperator:
+            if not check_deterministic:
+                linop.compute_kronecker_factors()
+                linop.compute_eigenvalue_correction()
+            assert linop._corrected_eigenvalues
+            for eigenvalues in linop._corrected_eigenvalues.values():
+                if isinstance(eigenvalues, dict):
+                    for eigenvals in eigenvalues.values():
+                        eigenvals.add_(DELTA)
+                else:
+                    eigenvalues.add_(DELTA)
+
+    # Check for equivalence of property and naive computation
+    quantity = getattr(linop, property_name)
+    linop_mat = linop @ eye(linop.shape[1])
+    quantity_naive = torch_fn_map[property_name](linop_mat)
+    assert allclose_report(quantity, quantity_naive)
+
+    # Check that the property is properly cached and reset
+    assert getattr(linop, "_" + property_name) == quantity
+    linop.compute_kronecker_factors()
+    assert getattr(linop, "_" + property_name) is None
