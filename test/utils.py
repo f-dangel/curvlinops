@@ -696,7 +696,7 @@ def check_estimator_convergence(
 
 
 def _test_inplace_activations(
-    linop_cls: Type[KFACLinearOperator | EKFACLinearOperator], dev: device
+    linop_cls: Type[KFACLinearOperator] | Type[EKFACLinearOperator], dev: device
 ):
     """Test that (E)KFAC works if the network has in-place activations.
 
@@ -739,7 +739,7 @@ def _test_inplace_activations(
 
 
 def _test_property(  # noqa: C901
-    linop_type: Type[KFACLinearOperator | EKFACLinearOperator],
+    linop_cls: Type[KFACLinearOperator] | Type[EKFACLinearOperator],
     property_name: str,
     model: Module,
     loss_func: Module,
@@ -751,7 +751,7 @@ def _test_property(  # noqa: C901
 ):
     """Test a property of (E)KFAC."""
     # Create instance of linear operator
-    linop = linop_type(
+    linop = linop_cls(
         model,
         loss_func,
         params,
