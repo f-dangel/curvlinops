@@ -506,6 +506,7 @@ def compare_matmat(
     for o_x, m_x in zip(op_x, mat_x):
         assert allclose_report(o_x, m_x, **tol)
 
+
 def compare_consecutive_matmats(
     op: PyTorchLinearOperator,
     adjoint: bool,
@@ -534,7 +535,11 @@ def compare_consecutive_matmats(
     dt = op._infer_dtype()
     dev = op._infer_device()
     _, X, _ = rand_accepted_formats(
-        [tuple(s) for s in op._in_shape], is_vec=is_vec, dtype=dt, device=dev, num_vecs=num_vecs
+        [tuple(s) for s in op._in_shape],
+        is_vec=is_vec,
+        dtype=dt,
+        device=dev,
+        num_vecs=num_vecs,
     )
 
     # Apply the operator twice to the same vector
