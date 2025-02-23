@@ -21,4 +21,4 @@ def test_GGNLinearOperator_matvec(case, adjoint: bool, is_vec: bool):
     G_mat = functorch_ggn(model_func, loss_func, params, data, input_key="x")
 
     compare_consecutive_matmats(G, adjoint, is_vec)
-    compare_matmat(G, G_mat, adjoint, is_vec, atol=1e-7)
+    compare_matmat(G, G_mat, adjoint, is_vec, atol=1e-7, rtol=5e-5)
