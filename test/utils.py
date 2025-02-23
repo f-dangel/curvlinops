@@ -1,5 +1,6 @@
 """Utility functions to test ``curvlinops``."""
 
+import os
 from collections.abc import MutableMapping
 from contextlib import redirect_stdout, suppress
 from itertools import product
@@ -8,6 +9,7 @@ from typing import Callable, Iterable, List, Optional, Tuple, Type, Union
 from einops import rearrange, reduce
 from einops.layers.torch import Rearrange
 from numpy import ndarray
+from pytest import raises
 from torch import (
     Tensor,
     allclose,
@@ -19,11 +21,13 @@ from torch import (
     eye,
     from_numpy,
     linalg,
+    load,
     logdet,
     manual_seed,
     rand,
     randint,
     randperm,
+    save,
     trace,
     zeros_like,
 )
@@ -802,3 +806,76 @@ def _test_property(  # noqa: C901
     assert getattr(linop, "_" + property_name) == quantity
     linop.compute_kronecker_factors()
     assert getattr(linop, "_" + property_name) is None
+
+
+def _test_save_and_load_state_dict(
+    lino_cls: Type[Union[KFACLinearOperator, EKFACLinearOperator]],
+):
+    manual_seed(0)
+    batch_size, D_in, D_out = 4, 3, 2
+    X = rand(batch_size, D_in)
+    y = rand(batch_size, D_out)
+    model = Linear(D_in, D_out)
+
+    params = list(model.parameters())
+    # create and compute linop
+    linop = lino_cls(
+        model,
+        MSELoss(reduction="sum"),
+        params,
+        [(X, y)],
+    )
+
+    # save state dict
+    state_dict = linop.state_dict()
+    PATH = "linop_state_dict.pt"
+    save(state_dict, PATH)
+
+    # create new linop with different loss function and try to load state dict
+    linop_new = lino_cls(
+        model,
+        CrossEntropyLoss(),
+        params,
+        [(X, y)],
+    )
+    with raises(ValueError, match="loss"):
+        linop_new.load_state_dict(load(PATH, weights_only=False))
+
+    # create new linop with different loss reduction and try to load state dict
+    linop_new = lino_cls(
+        model,
+        MSELoss(),
+        params,
+        [(X, y)],
+    )
+    with raises(ValueError, match="reduction"):
+        linop_new.load_state_dict(load(PATH, weights_only=False))
+
+    # create new linop with different model and try to load state dict
+    wrong_model = Sequential(Linear(D_in, 10), ReLU(), Linear(10, D_out))
+    wrong_params = list(wrong_model.parameters())
+    linop_new = lino_cls(
+        wrong_model,
+        MSELoss(reduction="sum"),
+        wrong_params,
+        [(X, y)],
+    )
+    with raises(RuntimeError, match="loading state_dict"):
+        linop_new.load_state_dict(load(PATH, weights_only=False))
+
+    # create new linop and load state dict
+    linop_new = lino_cls(
+        model,
+        MSELoss(reduction="sum"),
+        params,
+        [(X, y)],
+        check_deterministic=False,  # turn off to avoid computing linop again
+    )
+    linop_new.load_state_dict(load(PATH, weights_only=False))
+    # clean up
+    os.remove(PATH)
+
+    # check that the two linops are equal
+    compare_state_dicts(linop.state_dict(), linop_new.state_dict())
+    test_vec = rand(linop.shape[1])
+    assert allclose_report(linop @ test_vec, linop_new @ test_vec)

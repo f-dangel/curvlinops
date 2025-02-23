@@ -1,6 +1,5 @@
 """Contains tests for ``EKFACLinearOperator`` in ``curvlinops.kfac``."""
 
-import os
 from typing import Dict, Iterable, List, Tuple, Union
 
 from einops.layers.torch import Rearrange
@@ -11,11 +10,9 @@ from torch import (
     device,
     eye,
     linalg,
-    load,
     manual_seed,
     rand,
     rand_like,
-    save,
 )
 from torch.nn import (
     BCEWithLogitsLoss,
@@ -24,7 +21,6 @@ from torch.nn import (
     Module,
     MSELoss,
     Parameter,
-    ReLU,
     Sequential,
 )
 
@@ -39,6 +35,7 @@ from test.utils import (
     WeightShareModel,
     _test_inplace_activations,
     _test_property,
+    _test_save_and_load_state_dict,
     binary_classification_targets,
     block_diagonal,
     classification_targets,
@@ -769,74 +766,7 @@ def test_ekfac_does_not_affect_grad():
 
 def test_save_and_load_state_dict():
     """Test that EKFACLinearOperator can be saved and loaded from state dict."""
-    manual_seed(0)
-    batch_size, D_in, D_out = 4, 3, 2
-    X = rand(batch_size, D_in)
-    y = rand(batch_size, D_out)
-    model = Linear(D_in, D_out)
-
-    params = list(model.parameters())
-    # create and compute EKFAC
-    ekfac = EKFACLinearOperator(
-        model,
-        MSELoss(reduction="sum"),
-        params,
-        [(X, y)],
-    )
-
-    # save state dict
-    state_dict = ekfac.state_dict()
-    EKFAC_PATH = "ekfac_state_dict.pt"
-    save(state_dict, EKFAC_PATH)
-
-    # create new EKFAC with different loss function and try to load state dict
-    ekfac_new = EKFACLinearOperator(
-        model,
-        CrossEntropyLoss(),
-        params,
-        [(X, y)],
-    )
-    with raises(ValueError, match="loss"):
-        ekfac_new.load_state_dict(load(EKFAC_PATH, weights_only=False))
-
-    # create new EKFAC with different loss reduction and try to load state dict
-    ekfac_new = EKFACLinearOperator(
-        model,
-        MSELoss(),
-        params,
-        [(X, y)],
-    )
-    with raises(ValueError, match="reduction"):
-        ekfac_new.load_state_dict(load(EKFAC_PATH, weights_only=False))
-
-    # create new EKFAC with different model and try to load state dict
-    wrong_model = Sequential(Linear(D_in, 10), ReLU(), Linear(10, D_out))
-    wrong_params = list(wrong_model.parameters())
-    ekfac_new = EKFACLinearOperator(
-        wrong_model,
-        MSELoss(reduction="sum"),
-        wrong_params,
-        [(X, y)],
-    )
-    with raises(RuntimeError, match="loading state_dict"):
-        ekfac_new.load_state_dict(load(EKFAC_PATH, weights_only=False))
-
-    # create new EKFAC and load state dict
-    ekfac_new = EKFACLinearOperator(
-        model,
-        MSELoss(reduction="sum"),
-        params,
-        [(X, y)],
-        check_deterministic=False,  # turn off to avoid computing EKFAC again
-    )
-    ekfac_new.load_state_dict(load(EKFAC_PATH, weights_only=False))
-    # clean up
-    os.remove(EKFAC_PATH)
-
-    # check that the two EKFACs are equal
-    compare_state_dicts(ekfac.state_dict(), ekfac_new.state_dict())
-    test_vec = rand(ekfac.shape[1])
-    assert allclose_report(ekfac @ test_vec, ekfac_new @ test_vec)
+    _test_save_and_load_state_dict(EKFACLinearOperator)
 
 
 def test_from_state_dict():

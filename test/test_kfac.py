@@ -1,21 +1,18 @@
 """Contains tests for ``curvlinops.kfac``."""
 
-import os
 from typing import Dict, Iterable, List, Tuple, Union
 
 from einops.layers.torch import Rearrange
 from numpy import eye, random
-from pytest import mark, raises
+from pytest import mark
 from torch import (
     Tensor,
     allclose,
     device,
     float64,
-    load,
     manual_seed,
     rand,
     rand_like,
-    save,
 )
 from torch import eye as torch_eye
 from torch.nn import (
@@ -26,7 +23,6 @@ from torch.nn import (
     Module,
     MSELoss,
     Parameter,
-    ReLU,
     Sequential,
 )
 
@@ -40,6 +36,7 @@ from test.utils import (
     WeightShareModel,
     _test_inplace_activations,
     _test_property,
+    _test_save_and_load_state_dict,
     binary_classification_targets,
     block_diagonal,
     classification_targets,
@@ -1055,74 +1052,7 @@ def test_kfac_does_not_affect_grad():
 
 def test_save_and_load_state_dict():
     """Test that KFACLinearOperator can be saved and loaded from state dict."""
-    manual_seed(0)
-    batch_size, D_in, D_out = 4, 3, 2
-    X = rand(batch_size, D_in)
-    y = rand(batch_size, D_out)
-    model = Linear(D_in, D_out)
-
-    params = list(model.parameters())
-    # create and compute KFAC
-    kfac = KFACLinearOperator(
-        model,
-        MSELoss(reduction="sum"),
-        params,
-        [(X, y)],
-    )
-
-    # save state dict
-    state_dict = kfac.state_dict()
-    KFAC_PATH = "kfac_state_dict.pt"
-    save(state_dict, KFAC_PATH)
-
-    # create new KFAC with different loss function and try to load state dict
-    kfac_new = KFACLinearOperator(
-        model,
-        CrossEntropyLoss(),
-        params,
-        [(X, y)],
-    )
-    with raises(ValueError, match="loss"):
-        kfac_new.load_state_dict(load(KFAC_PATH, weights_only=False))
-
-    # create new KFAC with different loss reduction and try to load state dict
-    kfac_new = KFACLinearOperator(
-        model,
-        MSELoss(),
-        params,
-        [(X, y)],
-    )
-    with raises(ValueError, match="reduction"):
-        kfac_new.load_state_dict(load(KFAC_PATH, weights_only=False))
-
-    # create new KFAC with different model and try to load state dict
-    wrong_model = Sequential(Linear(D_in, 10), ReLU(), Linear(10, D_out))
-    wrong_params = list(wrong_model.parameters())
-    kfac_new = KFACLinearOperator(
-        wrong_model,
-        MSELoss(reduction="sum"),
-        wrong_params,
-        [(X, y)],
-    )
-    with raises(RuntimeError, match="loading state_dict"):
-        kfac_new.load_state_dict(load(KFAC_PATH, weights_only=False))
-
-    # create new KFAC and load state dict
-    kfac_new = KFACLinearOperator(
-        model,
-        MSELoss(reduction="sum"),
-        params,
-        [(X, y)],
-        check_deterministic=False,  # turn off to avoid computing KFAC again
-    )
-    kfac_new.load_state_dict(load(KFAC_PATH, weights_only=False))
-    # clean up
-    os.remove(KFAC_PATH)
-
-    # check that the two KFACs are equal
-    compare_state_dicts(kfac.state_dict(), kfac_new.state_dict())
-    test_vec = rand(kfac.shape[1])
-    report_nonclose(kfac @ test_vec, kfac_new @ test_vec)
+    _test_save_and_load_state_dict(KFACLinearOperator)
 
 
 def test_from_state_dict():
