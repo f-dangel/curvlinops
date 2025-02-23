@@ -1122,7 +1122,7 @@ def test_forward_only_fisher_type_exact_weight_sharing_case(
         assert len(foof._input_covariances) == 0
 
 
-def test_kfac_does_affect_grad():
+def test_kfac_does_not_affect_grad():
     """Make sure KFAC computation does not write to `.grad`."""
     manual_seed(0)
     batch_size, D_in, D_out = 4, 3, 2

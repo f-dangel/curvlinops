@@ -830,7 +830,7 @@ def test_logdet(
     assert ekfac._logdet is None
 
 
-def test_ekfac_does_affect_grad():
+def test_ekfac_does_not_affect_grad():
     """Make sure EKFAC computation does not write to `.grad`."""
     manual_seed(0)
     batch_size, D_in, D_out = 4, 3, 2
