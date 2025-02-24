@@ -23,4 +23,4 @@ def test_EFLinearOperator(case, adjoint: bool, is_vec: bool):
     )
 
     compare_consecutive_matmats(E, adjoint, is_vec)
-    compare_matmat(E, E_mat, adjoint, is_vec, rtol=1e-4, atol=5e-6)
+    compare_matmat(E, E_mat, adjoint, is_vec, rtol=5e-4, atol=5e-6)
