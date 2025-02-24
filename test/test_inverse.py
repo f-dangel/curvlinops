@@ -22,7 +22,13 @@ from curvlinops import (
 )
 from curvlinops.examples.functorch import functorch_ggn
 from curvlinops.examples.utils import report_nonclose
-from test.utils import cast_input, compare_matmat, compare_state_dicts, eye_like
+from test.utils import (
+    cast_input,
+    compare_consecutive_matmats,
+    compare_matmat,
+    compare_state_dicts,
+    eye_like,
+)
 
 KFAC_MIN_DAMPING = 1e-8
 
@@ -282,7 +288,9 @@ def test_KFAC_inverse_damped_matmat(
         KFAC, damping=(delta, delta), cache=cache
     )
 
+    compare_consecutive_matmats(inv_KFAC, adjoint, is_vec)
     compare_matmat(inv_KFAC, inv_KFAC_naive, adjoint, is_vec)
+    compare_consecutive_matmats(inv_KFAC_tuple, adjoint, is_vec)
     compare_matmat(inv_KFAC_tuple, inv_KFAC_naive, adjoint, is_vec)
 
     assert inv_KFAC._cache == cache
@@ -419,6 +427,7 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901, PLR0912, PLR09
         min_damping=KFAC_MIN_DAMPING,
     )
 
+    compare_consecutive_matmats(inv_KFAC, adjoint, is_vec)
     compare_matmat(inv_KFAC, inv_KFAC_naive, adjoint, is_vec)
 
     assert inv_KFAC._cache == cache
@@ -515,6 +524,7 @@ def test_KFAC_inverse_exactly_damped_matmat(
         KFAC, damping=delta, cache=cache, use_exact_damping=True
     )
 
+    compare_consecutive_matmats(inv_KFAC, adjoint, is_vec)
     compare_matmat(inv_KFAC, inv_KFAC_naive, adjoint, is_vec)
 
     assert inv_KFAC._cache == cache
