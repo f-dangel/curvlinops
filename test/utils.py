@@ -48,6 +48,7 @@ from torch.nn import (
 )
 
 from curvlinops import (
+    EFLinearOperator,
     EKFACLinearOperator,
     FisherMCLinearOperator,
     FisherType,
@@ -906,3 +907,84 @@ def _test_save_and_load_state_dict(
     compare_state_dicts(linop.state_dict(), linop_new.state_dict())
     test_vec = rand(linop.shape[1])
     assert allclose_report(linop @ test_vec, linop_new @ test_vec)
+
+
+def _test_ekfac_closer_to_exact_than_kfac(
+    model: Module,
+    loss_func: Module,
+    params: List[Parameter],
+    data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
+    batch_size_fn: Optional[Callable[[MutableMapping], int]],
+    exclude: str,
+    separate_weight_and_bias: bool,
+    fisher_type: FisherType,
+    kfac_approx: bool,
+):
+    """Test that EKFAC is closer in Frobenius norm to the exact quantity than KFAC.
+
+    Args:
+        model: The neural network.
+        loss_func: The loss function.
+        params: The parameters w.r.t. which the property will be computed.
+        data: A data loader.
+        batch_size_fn: A function that returns the batch size given a dict-like ``X``.
+        separate_weight_and_bias: Whether to treat weight and bias of a layer as
+            separate blocks in the block-diagonal.
+        exclude: Parameter to exclude.
+        fisher_type: The type of Fisher approximation.
+        kfac_approx: THe type of KFAC approximation.
+    """
+    # Compute exact block-wise ground truth quantity.
+    linop_cls = {
+        FisherType.TYPE2: GGNLinearOperator,
+        FisherType.MC: FisherMCLinearOperator,
+        FisherType.EMPIRICAL: EFLinearOperator,
+    }[fisher_type]
+    optional_linop_args = {"seed": 0} if fisher_type == FisherType.MC else {}
+    exact = block_diagonal(
+        linop_cls,
+        model,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        separate_weight_and_bias=separate_weight_and_bias,
+        return_numpy=False,
+        optional_linop_args=optional_linop_args,
+    )
+
+    # Compute KFAC and EKFAC.
+    kfac = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        separate_weight_and_bias=separate_weight_and_bias,
+        fisher_type=fisher_type,
+        kfac_approx=kfac_approx,
+        **optional_linop_args,
+    )
+    kfac_mat = kfac @ eye_like(kfac)
+    ekfac = EKFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        separate_weight_and_bias=separate_weight_and_bias,
+        fisher_type=fisher_type,
+        kfac_approx=kfac_approx,
+        **optional_linop_args,
+    )
+    ekfac_mat = ekfac @ eye_like(ekfac)
+
+    # Compute and compare (relative) distances to the exact quantity.
+    exact_norm = linalg.matrix_norm(exact)
+    exact_kfac_dist = linalg.matrix_norm(exact - kfac_mat) / exact_norm
+    exact_ekfac_dist = linalg.matrix_norm(exact - ekfac_mat) / exact_norm
+    assert exact_kfac_dist > exact_ekfac_dist or (
+        allclose_report(exact_kfac_dist, exact_ekfac_dist, atol=1e-6)
+        if exclude == "weight"
+        else False
+    )  # For no_weights the numerical error might dominate.
