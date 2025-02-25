@@ -62,7 +62,20 @@ class MetaEnum(EnumMeta):
 
 
 class FisherType(str, Enum, metaclass=MetaEnum):
-    """Enum for the Fisher type."""
+    """Enum for the Fisher type.
+
+    Attributes:
+        TYPE2: Type-2 Fisher, i.e. the exact Hessian of the loss w.r.t. the model
+            outputs is used. This requires as many backward passes as the output
+            dimension, i.e. the number of classes for classification.
+        MC: Monte-Carlo approximation of the expectation by sampling `mc_samples`
+            labels from the model's predictive distribution.
+        EMPIRICAL: Empirical gradients are used which corresponds to the uncentered
+            gradient covariance, or the empirical Fisher.
+        FORWARD_ONLY: The gradient covariances will be identity matrices, see the FOOF
+            method in `Benzing, 2022 <https://arxiv.org/abs/2201.12250>`_ or ISAAC in
+            `Petersen et al., 2023 <https://arxiv.org/abs/2305.00604>`_.
+    """
 
     TYPE2 = "type-2"
     MC = "mc"
@@ -71,7 +84,15 @@ class FisherType(str, Enum, metaclass=MetaEnum):
 
 
 class KFACType(str, Enum, metaclass=MetaEnum):
-    """Enum for the KFAC approximation type."""
+    """Enum for the KFAC approximation type.
+
+    KFAC-expand and KFAC-reduce are defined in
+    `Eschenhagen et al., 2023 <https://arxiv.org/abs/2311.00636>`_.
+
+    Attributes:
+        EXPAND: KFAC-expand approximation.
+        REDUCE: KFAC-reduce approximation.
+    """
 
     EXPAND = "expand"
     REDUCE = "reduce"
