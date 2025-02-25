@@ -8,7 +8,6 @@ from torch import (
     Tensor,
     allclose,
     device,
-    linalg,
     manual_seed,
     rand,
     rand_like,
@@ -23,9 +22,8 @@ from torch.nn import (
     Sequential,
 )
 
-from curvlinops import EFLinearOperator, FisherMCLinearOperator, GGNLinearOperator
+from curvlinops import EFLinearOperator, GGNLinearOperator
 from curvlinops.ekfac import EKFACLinearOperator, FisherType, KFACType
-from curvlinops.kfac import KFACLinearOperator
 from curvlinops.utils import allclose_report
 from test.cases import DEVICES, DEVICES_IDS
 from test.utils import (
