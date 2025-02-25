@@ -51,6 +51,7 @@ from torch.nn import (
 from curvlinops import (
     EKFACLinearOperator,
     FisherMCLinearOperator,
+    FisherType,
     GGNLinearOperator,
     KFACLinearOperator,
 )
@@ -734,14 +735,9 @@ def _test_inplace_activations(
     ggn = block_diagonal(
         GGNLinearOperator, model, loss_func, params, data, return_numpy=False
     )
-
-    linop = linop_cls(model, loss_func, params, data, mc_samples=2_000)
+    linop = linop_cls(model, loss_func, params, data, fisher_type=FisherType.TYPE2)
     linop_mat = linop @ eye(linop.shape[1])
-
-    atol = {"sum": 5e-1, "mean": 2e-3}[loss_func.reduction]
-    rtol = {"sum": 2e-2, "mean": 2e-2}[loss_func.reduction]
-
-    assert allclose_report(ggn, linop_mat, rtol=rtol, atol=atol)
+    assert allclose_report(ggn, linop_mat)
 
     # 2) Compare GGN (inplace=True) and GGN (inplace=False)
     for mod in model.modules():
@@ -750,7 +746,6 @@ def _test_inplace_activations(
     ggn_no_inplace = block_diagonal(
         GGNLinearOperator, model, loss_func, params, data, return_numpy=False
     )
-
     assert allclose_report(ggn, ggn_no_inplace)
 
 
