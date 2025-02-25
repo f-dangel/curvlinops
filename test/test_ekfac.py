@@ -8,7 +8,6 @@ from torch import (
     Tensor,
     allclose,
     device,
-    eye,
     linalg,
     manual_seed,
     rand,
@@ -40,6 +39,7 @@ from test.utils import (
     block_diagonal,
     classification_targets,
     compare_state_dicts,
+    eye_like,
     maybe_exclude_or_shuffle_parameters,
     regression_targets,
 )
@@ -93,7 +93,7 @@ def test_ekfac_type2(
         fisher_type=FisherType.TYPE2,
         separate_weight_and_bias=separate_weight_and_bias,
     )
-    ekfac_mat = ekfac @ eye(ekfac.shape[1])
+    ekfac_mat = ekfac @ eye_like(ekfac)
 
     assert allclose_report(ggn, ekfac_mat, atol=1e-6)
 
@@ -169,7 +169,7 @@ def test_ekfac_type2_weight_sharing(
         kfac_approx=setting,  # choose EKFAC approximation consistent with setting
         separate_weight_and_bias=separate_weight_and_bias,
     )
-    ekfac_mat = ekfac @ eye(ekfac.shape[1])
+    ekfac_mat = ekfac @ eye_like(ekfac)
 
     assert allclose_report(ggn, ekfac_mat, rtol=1e-4)
 
@@ -227,7 +227,7 @@ def test_ekfac_mc(
         mc_samples=2_000,
         separate_weight_and_bias=separate_weight_and_bias,
     )
-    ekfac_mat = ekfac @ eye(ekfac.shape[1])
+    ekfac_mat = ekfac @ eye_like(ekfac)
 
     atol = {"sum": 5e-1, "mean": 5e-3}[loss_func.reduction]
     rtol = {"sum": 2e-2, "mean": 2e-2}[loss_func.reduction]
@@ -302,7 +302,7 @@ def test_ekfac_mc_weight_sharing(
         separate_weight_and_bias=separate_weight_and_bias,
         check_deterministic=False,
     )
-    ekfac_mat = ekfac @ eye(ekfac.shape[1])
+    ekfac_mat = ekfac @ eye_like(ekfac)
 
     # Scale absolute tolerance by the number of outputs when using sum reduction.
     num_outputs = sum(y.numel() for _, y in data)
@@ -352,7 +352,7 @@ def test_ekfac_one_datum(
         fisher_type=FisherType.TYPE2,
         separate_weight_and_bias=separate_weight_and_bias,
     )
-    ekfac_mat = ekfac @ eye(ekfac.shape[1])
+    ekfac_mat = ekfac @ eye_like(ekfac)
 
     assert allclose_report(ggn, ekfac_mat)
 
@@ -398,7 +398,7 @@ def test_ekfac_mc_one_datum(
         mc_samples=11_000,
         separate_weight_and_bias=separate_weight_and_bias,
     )
-    ekfac_mat = ekfac @ eye(ekfac.shape[1])
+    ekfac_mat = ekfac @ eye_like(ekfac)
 
     atol = {"sum": 1e-3, "mean": 1e-3}[loss_func.reduction]
     rtol = {"sum": 3e-2, "mean": 3e-2}[loss_func.reduction]
@@ -447,7 +447,7 @@ def test_ekfac_ef_one_datum(
         fisher_type=FisherType.EMPIRICAL,
         separate_weight_and_bias=separate_weight_and_bias,
     )
-    ekfac_mat = ekfac @ eye(ekfac.shape[1])
+    ekfac_mat = ekfac @ eye_like(ekfac)
 
     assert allclose_report(ef, ekfac_mat, atol=1e-7)
 
@@ -594,7 +594,7 @@ def test_expand_setting_scaling(
                 eigenvals /= correction
         else:
             eigenvalues /= correction
-    ekfac_simulated_mean_mat = ekfac_sum @ eye(ekfac_sum.shape[1], device=dev)
+    ekfac_simulated_mean_mat = ekfac_sum @ eye_like(ekfac_sum)
 
     # EKFAC with mean reduction
     loss_func = loss(reduction="mean").to(dev)
@@ -605,7 +605,7 @@ def test_expand_setting_scaling(
         data,
         fisher_type=fisher_type,
     )
-    ekfac_mean_mat = ekfac_mean @ eye(ekfac_mean.shape[1], device=dev)
+    ekfac_mean_mat = ekfac_mean @ eye_like(ekfac_mean)
 
     assert allclose_report(ekfac_simulated_mean_mat, ekfac_mean_mat, atol=1e-4)
 
@@ -820,11 +820,11 @@ def test_ekfac_closer_to_exact_than_kfac(
     params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     # Compute exact block-wise ground truth quantity.
-    linop = (
+    linop_cls = (
         EFLinearOperator if fisher_type == FisherType.EMPIRICAL else GGNLinearOperator
     )
     exact = block_diagonal(
-        linop,
+        linop_cls,
         model,
         loss_func,
         params,
@@ -845,7 +845,7 @@ def test_ekfac_closer_to_exact_than_kfac(
         fisher_type=fisher_type,
         mc_samples=1_000 if fisher_type == FisherType.MC else 1,
     )
-    kfac_mat = kfac @ eye(kfac.shape[1])
+    kfac_mat = kfac @ eye_like(kfac)
     ekfac = EKFACLinearOperator(
         model,
         loss_func,
@@ -856,7 +856,7 @@ def test_ekfac_closer_to_exact_than_kfac(
         fisher_type=fisher_type,
         mc_samples=1_000 if fisher_type == FisherType.MC else 1,
     )
-    ekfac_mat = ekfac @ eye(ekfac.shape[1])
+    ekfac_mat = ekfac @ eye_like(ekfac)
 
     # Compute and compare (relative) distances to the exact quantity.
     exact_norm = linalg.matrix_norm(exact)
@@ -869,7 +869,7 @@ def test_ekfac_closer_to_exact_than_kfac(
         assert exact_kfac_dist > exact_ekfac_dist
 
 
-@mark.parametrize("fisher_type", [FisherType.TYPE2, FisherType.EMPIRICAL])
+@mark.parametrize("fisher_type", EKFACLinearOperator._SUPPORTED_FISHER_TYPE)
 @mark.parametrize("kfac_approx", EKFACLinearOperator._SUPPORTED_KFAC_APPROX)
 @mark.parametrize(
     "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
@@ -922,9 +922,9 @@ def test_ekfac_closer_to_exact_than_kfac_weight_sharing(
         separate_weight_and_bias=separate_weight_and_bias,
         fisher_type=fisher_type,
         kfac_approx=kfac_approx,
-        seed=0,
+        **optional_linop_args,
     )
-    kfac_mat = kfac @ eye(kfac.shape[1])
+    kfac_mat = kfac @ eye_like(kfac)
     ekfac = EKFACLinearOperator(
         model,
         loss_func,
@@ -934,9 +934,9 @@ def test_ekfac_closer_to_exact_than_kfac_weight_sharing(
         separate_weight_and_bias=separate_weight_and_bias,
         fisher_type=fisher_type,
         kfac_approx=kfac_approx,
-        seed=0,
+        **optional_linop_args,
     )
-    ekfac_mat = ekfac @ eye(ekfac.shape[1])
+    ekfac_mat = ekfac @ eye_like(ekfac)
 
     # Compute and compare (relative) distances to the exact quantity.
     exact_norm = linalg.matrix_norm(exact)

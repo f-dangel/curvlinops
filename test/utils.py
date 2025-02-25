@@ -636,7 +636,7 @@ def compare_matmat_expectation(
     assert allclose_report(op_x / max_repeats, mat_x, **tol)
 
 
-def eye_like(A: Tensor) -> Tensor:
+def eye_like(A: Union[Tensor, PyTorchLinearOperator]) -> Tensor:
     """Create an identity matrix of same size as ``A``.
 
     Args:
@@ -647,7 +647,11 @@ def eye_like(A: Tensor) -> Tensor:
     """
     dim1, dim_2 = A.shape
     (dim,) = {dim1, dim_2}
-    return torch_eye(dim, device=A.device, dtype=A.dtype)
+    return torch_eye(
+        dim,
+        dtype=A._infer_dtype() if isinstance(A, PyTorchLinearOperator) else A.dtype,
+        device=A._infer_device() if isinstance(A, PyTorchLinearOperator) else A.device,
+    )
 
 
 def check_estimator_convergence(
