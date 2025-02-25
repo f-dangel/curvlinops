@@ -20,6 +20,12 @@ Fisher (approximate)
 .. autoclass:: curvlinops.FisherMCLinearOperator
    :members: __init__
 
+.. autoclass:: curvlinops.FisherType
+   :members: TYPE2, MC, EMPIRICAL, FORWARD_ONLY
+
+.. autoclass:: curvlinops.KFACType
+   :members: EXPAND, REDUCE
+
 .. autoclass:: curvlinops.KFACLinearOperator
    :members: __init__, trace, det, logdet, frobenius_norm, state_dict, load_state_dict, from_state_dict
 
