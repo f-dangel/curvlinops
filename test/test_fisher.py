@@ -4,7 +4,7 @@ from pytest import mark
 
 from curvlinops import FisherMCLinearOperator
 from curvlinops.examples.functorch import functorch_ggn
-from test.utils import compare_matmat_expectation
+from test.utils import compare_consecutive_matmats, compare_matmat_expectation
 
 MAX_REPEATS_MC_SAMPLES = [(10_000, 1), (100, 100)]
 MAX_REPEATS_MC_SAMPLES_IDS = [
@@ -39,6 +39,7 @@ def test_FisherMCLinearOperator_expectation(
     )
     G_mat = functorch_ggn(model_func, loss_func, params, data, input_key="x")
 
+    compare_consecutive_matmats(F, adjoint, is_vec)
     compare_matmat_expectation(
         F, G_mat, adjoint, is_vec, max_repeats, CHECK_EVERY, rtol=2e-1, atol=5e-3
     )

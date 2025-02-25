@@ -496,15 +496,59 @@ def compare_matmat(
     assert type(op_x) is ndarray
     assert allclose_report(from_numpy(op_x).to(dev), mat_x, **tol)
 
-    # input in tensor list format
-    mat_x = [
-        m_x.reshape(s if is_vec else (*s, num_vecs))
-        for m_x, s in zip(mat_x.split(op._out_shape_flat), op._out_shape)
-    ]
-    op_x = op @ x_list
-    assert len(op_x) == len(mat_x)
-    for o_x, m_x in zip(op_x, mat_x):
-        assert allclose_report(o_x, m_x, **tol)
+    if op.SUPPORTS_LIST_FORMAT:
+        # input in tensor list format
+        mat_x = [
+            m_x.reshape(s if is_vec else (*s, num_vecs))
+            for m_x, s in zip(mat_x.split(op._out_shape_flat), op._out_shape)
+        ]
+        op_x = op @ x_list
+        assert len(op_x) == len(mat_x)
+        for o_x, m_x in zip(op_x, mat_x):
+            assert allclose_report(o_x, m_x, **tol)
+
+
+def compare_consecutive_matmats(
+    op: PyTorchLinearOperator,
+    adjoint: bool,
+    is_vec: bool,
+    num_vecs: int = 2,
+    rtol: float = 1e-5,
+    atol: float = 1e-8,
+):
+    """Compare applying the linear operator to two identical vectors in sequence.
+
+    Args:
+        op: The operator to test.
+        adjoint: Whether to test the adjoint operator.
+        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
+        num_vecs: Number of vectors to test (ignored if ``is_vec`` is ``True``).
+            Default: ``2``.
+        rtol: Relative tolerance for the comparison. Default: ``1e-5``.
+        atol: Absolute tolerance for the comparison. Default: ``1e-8``.
+    """
+    if adjoint:
+        op = op.adjoint()
+
+    tol = {"atol": atol, "rtol": rtol}
+
+    # Generate the vector using rand_accepted_formats
+    dt = op._infer_dtype()
+    dev = op._infer_device()
+    _, X, _ = rand_accepted_formats(
+        [tuple(s) for s in op._in_shape],
+        is_vec=is_vec,
+        dtype=dt,
+        device=dev,
+        num_vecs=num_vecs,
+    )
+
+    # Apply the operator twice to the same vector
+    result_first = op @ X
+    result_second = op @ X
+
+    # Ensure the results are the same
+    assert allclose_report(result_first, result_second, **tol)
 
 
 def compare_matmat_expectation(

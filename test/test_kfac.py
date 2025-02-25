@@ -45,6 +45,7 @@ from test.utils import (
     WeightShareModel,
     binary_classification_targets,
     classification_targets,
+    compare_consecutive_matmats,
     compare_matmat,
     compare_state_dicts,
     ggn_block_diagonal,
@@ -601,6 +602,7 @@ def test_KFACLinearOperator(case, adjoint: bool, is_vec: bool):
     dtype = kfac._infer_dtype()
     kfac_mat = kfac @ torch_eye(kfac.shape[1], device=device, dtype=dtype)
 
+    compare_consecutive_matmats(kfac, adjoint, is_vec)
     compare_matmat(kfac, kfac_mat, adjoint, is_vec, rtol=1e-5, atol=1e-7)
 
 

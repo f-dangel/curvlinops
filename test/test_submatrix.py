@@ -1,108 +1,103 @@
-"""Contains tests for ``curvlinops/submatrix`` with random matrices."""
+"""Contains tests for ``curvlinops/submatrix`` on curvature linear operators."""
 
-from typing import List, Tuple
+from typing import List
 
-from numpy import eye, ndarray, random
-from pytest import fixture, mark, raises
-from scipy.sparse.linalg import aslinearoperator
+from pytest import mark, raises
 
-from curvlinops.examples.utils import report_nonclose
+from curvlinops import EFLinearOperator, GGNLinearOperator, HessianLinearOperator
+from curvlinops.examples.functorch import (
+    functorch_empirical_fisher,
+    functorch_ggn,
+    functorch_hessian,
+)
 from curvlinops.submatrix import SubmatrixLinearOperator
+from test.utils import compare_consecutive_matmats, compare_matmat
+
+CURVATURE_CASES = [HessianLinearOperator, GGNLinearOperator, EFLinearOperator]
+CURVATURE_IN_FUNCTORCH = {
+    HessianLinearOperator: functorch_hessian,
+    GGNLinearOperator: functorch_ggn,
+    EFLinearOperator: functorch_empirical_fisher,
+}
+
+
+def even_idxs(dim: int) -> List[int]:
+    return list(range(0, dim, 2))
+
+
+def odd_idxs(dim: int) -> List[int]:
+    return list(range(1, dim, 2))
+
+
+def every_third_idxs(dim: int):
+    return list(range(0, dim, 3))
+
 
 SUBMATRIX_CASES = [
-    # same indices
+    # same indices for rows and columns (square matrix)
     {
-        "A_fn": lambda: random.rand(300, 300),
-        "row_idxs_fn": lambda: [0, 13, 42, 299],
-        "col_idxs_fn": lambda: [0, 13, 42, 299],
-        "seed": 0,
+        "row_idx_fn": even_idxs,
+        "col_idx_fn": even_idxs,
     },
-    # different indices
+    # different indices for rows and columns (square matrix if dim is even)
     {
-        "A_fn": lambda: random.rand(200, 250),
-        "row_idxs_fn": lambda: [5, 67, 128],
-        "col_idxs_fn": lambda: [83, 21],
-        "seed": 0,
+        "row_idx_fn": even_idxs,
+        "col_idx_fn": odd_idxs,
     },
+    # different indices for rows and columns (rectangular matrix if dim>5)
+    {
+        "row_idx_fn": odd_idxs,
+        "col_idx_fn": every_third_idxs,
+    },
+]
+SUBMATRIX_IDS = [
+    f"({case['row_idx_fn'].__name__},{case['col_idx_fn'].__name__})"
+    for case in SUBMATRIX_CASES
 ]
 
 
-@fixture(params=SUBMATRIX_CASES)
-def submatrix_case(request) -> Tuple[ndarray, List[int], List[int]]:
-    case = request.param
-    random.seed(case["seed"])
-    return case["A_fn"](), case["row_idxs_fn"](), case["col_idxs_fn"]()
+def setup_submatrix_linear_operator(case, operator_case, submatrix_case):
+    model_func, loss_func, params, data, batch_size_fn = case
+    dim = sum(p.numel() for p in params)
+    row_idxs = submatrix_case["row_idx_fn"](dim)
+    col_idxs = submatrix_case["col_idx_fn"](dim)
 
+    A = operator_case(model_func, loss_func, params, data, batch_size_fn=batch_size_fn)
+    A_sub = SubmatrixLinearOperator(A, row_idxs, col_idxs)
 
-@mark.parametrize("adjoint", [False, True], ids=["", "adjoint"])
-def test_SubmatrixLinearOperator__matvec(
-    submatrix_case: Tuple[ndarray, List[int], List[int]], adjoint: bool
-):
-    """Test the matrix-vector multiplication of a submatrix linear operator.
-
-    Args:
-        submatrix_case: A tuple with a random matrix and two index lists.
-        adjoint: Whether to take the operator's adjoint before multiplying.
-    """
-    A, row_idxs, col_idxs = submatrix_case
-
-    A_sub = A[row_idxs, :][:, col_idxs]
-    A_sub_linop = SubmatrixLinearOperator(aslinearoperator(A), row_idxs, col_idxs)
-
-    if adjoint:
-        A_sub = A_sub.conj().T
-        A_sub_linop = A_sub_linop.adjoint()
-
-    x = random.rand(A_sub.shape[1])
-    A_sub_linop_x = A_sub_linop @ x
-
-    assert A_sub_linop_x.shape == ((len(col_idxs),) if adjoint else (len(row_idxs),))
-    report_nonclose(A_sub @ x, A_sub_linop_x)
-
-
-@mark.parametrize("adjoint", [False, True], ids=["", "adjoint"])
-def test_SubmatrixLinearOperator__matmat(
-    submatrix_case: Tuple[ndarray, List[int], List[int]],
-    adjoint: bool,
-    num_vecs: int = 3,
-):
-    """Test the matrix-matrix multiplication of a submatrix linear operator.
-
-    Args:
-        submatrix_case: A tuple with a random matrix and two index lists.
-        adjoint: Whether to take the operator's adjoint before multiplying.
-        num_vecs: The number of vectors to multiply. Default: ``3``.
-    """
-    A, row_idxs, col_idxs = submatrix_case
-
-    A_sub = A[row_idxs, :][:, col_idxs]
-    A_sub_linop = SubmatrixLinearOperator(aslinearoperator(A), row_idxs, col_idxs)
-
-    if adjoint:
-        A_sub = A_sub.conj().T
-        A_sub_linop = A_sub_linop.adjoint()
-
-    X = random.rand(A_sub.shape[1], num_vecs)
-    A_sub_linop_X = A_sub_linop @ X
-
-    assert A_sub_linop_X.shape == (
-        (len(col_idxs), num_vecs) if adjoint else (len(row_idxs), num_vecs)
+    A_functorch = CURVATURE_IN_FUNCTORCH[operator_case](
+        model_func, loss_func, params, data, "x"
     )
-    report_nonclose(A_sub @ X, A_sub_linop_X)
+    A_sub_functorch = A_functorch[row_idxs, :][:, col_idxs]
+
+    return A_sub, A_sub_functorch, row_idxs, col_idxs
 
 
-def test_SubmatrixLinearOperator_set_submatrix():
-    A = aslinearoperator(eye(10))
+@mark.parametrize("operator_case", CURVATURE_CASES)
+@mark.parametrize("submatrix_case", SUBMATRIX_CASES)
+def test_SubmatrixLinearOperator_on_curvatures(
+    case,
+    operator_case,
+    submatrix_case,
+    adjoint: bool,
+    is_vec: bool,
+):
+    A_sub, A_sub_functorch, row_idxs, col_idxs = setup_submatrix_linear_operator(
+        case, operator_case, submatrix_case
+    )
+    assert A_sub.shape == (len(row_idxs), len(col_idxs))
+    compare_consecutive_matmats(A_sub, adjoint, is_vec)
+    compare_matmat(A_sub, A_sub_functorch, adjoint, is_vec, atol=1e-6)
 
+    # try specifying the sub-matrix using invalid indices
     invalid_idxs = [
         [[0.0], [0]],  # wrong type in row_idxs
         [[0], [0.0]],  # wrong type in col_idxs
         [[2, 1, 2], [3]],  # duplicate entries in row_idxs
         [[3], [2, 1, 2]],  # duplicate entries in col_idxs
-        [[10, 5], [2]],  # out-of-bounds in row_idxs
+        [[1_000_000_000_000, 5], [2]],  # out-of-bounds in row_idxs
         [[6, 5], [-1]],  # out-of-bounds in col_idxs
     ]
-
     for row_idxs, col_idxs in invalid_idxs:
         with raises(ValueError):
-            SubmatrixLinearOperator(A, row_idxs, col_idxs)
+            A_sub.set_submatrix(row_idxs, col_idxs)
