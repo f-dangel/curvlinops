@@ -96,6 +96,10 @@ class EKFACLinearOperator(KFACLinearOperator):
             seed: The seed for the random number generator used to draw labels
                 from the model's predictive distribution. Defaults to ``2147483647``.
             fisher_type: The type of Fisher/GGN to approximate.
+                If ``FisherType.TYPE2``, the exact Hessian of the loss w.r.t. the model
+                outputs is used. This requires as many backward passes as the output
+                dimension, i.e. the number of classes for classification. This is
+                sometimes also called type-2 Fisher.
                 If ``FisherType.MC``, the expectation is approximated by sampling
                 ``mc_samples`` labels from the model's predictive distribution.
                 If ``FisherType.EMPIRICAL``, the empirical gradients are used which
