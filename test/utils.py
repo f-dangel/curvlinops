@@ -31,7 +31,6 @@ from torch import (
     trace,
     zeros_like,
 )
-from torch import eye as torch_eye
 from torch.nn import (
     AdaptiveAvgPool2d,
     BCEWithLogitsLoss,
@@ -171,9 +170,7 @@ def block_diagonal(
         batch_size_fn=batch_size_fn,
         **(optional_linop_args or {}),
     )
-    linop_mat = linop @ eye(
-        linop.shape[1], dtype=linop._infer_dtype(), device=linop._infer_device()
-    )
+    linop_mat = linop @ eye_like(linop)
     sizes = [p.numel() for p in params]
     # matrix_blocks[i, j] corresponds to the block of (params[i], params[j])
     matrix_blocks = [
@@ -648,7 +645,7 @@ def eye_like(A: Union[Tensor, PyTorchLinearOperator]) -> Tensor:
     """
     dim1, dim_2 = A.shape
     (dim,) = {dim1, dim_2}
-    return torch_eye(
+    return eye(
         dim,
         dtype=A._infer_dtype() if isinstance(A, PyTorchLinearOperator) else A.dtype,
         device=A._infer_device() if isinstance(A, PyTorchLinearOperator) else A.device,
@@ -736,7 +733,7 @@ def _test_inplace_activations(
         GGNLinearOperator, model, loss_func, params, data, return_numpy=False
     )
     linop = linop_cls(model, loss_func, params, data, fisher_type=FisherType.TYPE2)
-    linop_mat = linop @ eye(linop.shape[1])
+    linop_mat = linop @ eye_like(linop)
     assert allclose_report(ggn, linop_mat)
 
     # 2) Compare GGN (inplace=True) and GGN (inplace=False)
@@ -789,14 +786,6 @@ def _test_property(  # noqa: C901
         separate_weight_and_bias=separate_weight_and_bias,
         check_deterministic=check_deterministic,
     )
-    # Mapping from the property name to the corresponding torch function
-    torch_fn_map = {
-        "trace": trace,
-        "frobenius_norm": linalg.matrix_norm,
-        "det": linalg.det,
-        "logdet": logdet,
-    }
-    assert property_name in torch_fn_map
 
     # Add damping manually to avoid singular matrices for logdet
     if property_name == "logdet":
@@ -821,10 +810,18 @@ def _test_property(  # noqa: C901
                 else:
                     eigenvalues.add_(DELTA)
 
+    # Mapping from the property name to the corresponding torch function
+    torch_fn = {
+        "trace": trace,
+        "frobenius_norm": linalg.matrix_norm,
+        "det": linalg.det,
+        "logdet": logdet,
+    }[property_name]
+
     # Check for equivalence of property and naive computation
     quantity = getattr(linop, property_name)
-    linop_mat = linop @ eye(linop.shape[1])
-    quantity_naive = torch_fn_map[property_name](linop_mat)
+    linop_mat = linop @ eye_like(linop)
+    quantity_naive = torch_fn(linop_mat)
     assert allclose_report(quantity, quantity_naive, rtol=rtol, atol=atol)
 
     # Check that the property is properly cached and reset
@@ -834,12 +831,12 @@ def _test_property(  # noqa: C901
 
 
 def _test_save_and_load_state_dict(
-    lino_cls: Type[Union[KFACLinearOperator, EKFACLinearOperator]],
+    linop_cls: Type[Union[KFACLinearOperator, EKFACLinearOperator]],
 ):
     """Test saving and loading state dict of (E)KFAC.
 
     Args:
-        lino_cls: The linear operator class to test.
+        linop_cls: The linear operator class to test.
     """
     manual_seed(0)
     batch_size, D_in, D_out = 4, 3, 2
@@ -849,7 +846,7 @@ def _test_save_and_load_state_dict(
 
     params = list(model.parameters())
     # create and compute linop
-    linop = lino_cls(
+    linop = linop_cls(
         model,
         MSELoss(reduction="sum"),
         params,
@@ -862,7 +859,7 @@ def _test_save_and_load_state_dict(
     save(state_dict, PATH)
 
     # create new linop with different loss function and try to load state dict
-    linop_new = lino_cls(
+    linop_new = linop_cls(
         model,
         CrossEntropyLoss(),
         params,
@@ -872,7 +869,7 @@ def _test_save_and_load_state_dict(
         linop_new.load_state_dict(load(PATH, weights_only=False))
 
     # create new linop with different loss reduction and try to load state dict
-    linop_new = lino_cls(
+    linop_new = linop_cls(
         model,
         MSELoss(),
         params,
@@ -884,7 +881,7 @@ def _test_save_and_load_state_dict(
     # create new linop with different model and try to load state dict
     wrong_model = Sequential(Linear(D_in, 10), ReLU(), Linear(10, D_out))
     wrong_params = list(wrong_model.parameters())
-    linop_new = lino_cls(
+    linop_new = linop_cls(
         wrong_model,
         MSELoss(reduction="sum"),
         wrong_params,
@@ -894,7 +891,7 @@ def _test_save_and_load_state_dict(
         linop_new.load_state_dict(load(PATH, weights_only=False))
 
     # create new linop and load state dict
-    linop_new = lino_cls(
+    linop_new = linop_cls(
         model,
         MSELoss(reduction="sum"),
         params,
