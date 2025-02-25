@@ -909,6 +909,37 @@ def _test_save_and_load_state_dict(
     assert allclose_report(linop @ test_vec, linop_new @ test_vec)
 
 
+def _test_from_state_dict(
+    linop_cls: Type[Union[KFACLinearOperator, EKFACLinearOperator]],
+):
+    """Test that (E)KFACLinearOperator can be created from state dict."""
+    manual_seed(0)
+    batch_size, D_in, D_out = 4, 3, 2
+    X = rand(batch_size, D_in)
+    y = rand(batch_size, D_out)
+    model = Linear(D_in, D_out)
+
+    params = list(model.parameters())
+    # create and compute (E)KFAC
+    linop = linop_cls(
+        model,
+        MSELoss(reduction="sum"),
+        params,
+        [(X, y)],
+    )
+
+    # save state dict
+    state_dict = linop.state_dict()
+
+    # create new linop from state dict
+    linop_new = linop_cls.from_state_dict(state_dict, model, params, [(X, y)])
+
+    # check that the two linops are equal
+    compare_state_dicts(linop.state_dict(), linop_new.state_dict())
+    test_vec = rand(linop.shape[1])
+    assert allclose_report(linop @ test_vec, linop_new @ test_vec)
+
+
 def _test_ekfac_closer_to_exact_than_kfac(
     model: Module,
     loss_func: Module,

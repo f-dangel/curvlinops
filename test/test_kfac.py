@@ -34,6 +34,7 @@ from test.utils import (
     Conv2dModel,
     UnetModel,
     WeightShareModel,
+    _test_from_state_dict,
     _test_inplace_activations,
     _test_property,
     _test_save_and_load_state_dict,
@@ -41,7 +42,6 @@ from test.utils import (
     block_diagonal,
     classification_targets,
     compare_matmat,
-    compare_state_dicts,
     maybe_exclude_or_shuffle_parameters,
     regression_targets,
 )
@@ -1059,31 +1059,7 @@ def test_save_and_load_state_dict():
 
 def test_from_state_dict():
     """Test that KFACLinearOperator can be created from state dict."""
-    manual_seed(0)
-    batch_size, D_in, D_out = 4, 3, 2
-    X = rand(batch_size, D_in)
-    y = rand(batch_size, D_out)
-    model = Linear(D_in, D_out)
-
-    params = list(model.parameters())
-    # create and compute KFAC
-    kfac = KFACLinearOperator(
-        model,
-        MSELoss(reduction="sum"),
-        params,
-        [(X, y)],
-    )
-
-    # save state dict
-    state_dict = kfac.state_dict()
-
-    # create new KFAC from state dict
-    kfac_new = KFACLinearOperator.from_state_dict(state_dict, model, params, [(X, y)])
-
-    # check that the two KFACs are equal
-    compare_state_dicts(kfac.state_dict(), kfac_new.state_dict())
-    test_vec = rand(kfac.shape[1])
-    report_nonclose(kfac @ test_vec, kfac_new @ test_vec)
+    _test_from_state_dict(KFACLinearOperator)
 
 
 @mark.parametrize("fisher_type", ["type-2", "mc", "empirical", "forward-only"])

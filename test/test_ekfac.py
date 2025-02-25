@@ -31,13 +31,13 @@ from test.utils import (
     UnetModel,
     WeightShareModel,
     _test_ekfac_closer_to_exact_than_kfac,
+    _test_from_state_dict,
     _test_inplace_activations,
     _test_property,
     _test_save_and_load_state_dict,
     binary_classification_targets,
     block_diagonal,
     classification_targets,
-    compare_state_dicts,
     eye_like,
     maybe_exclude_or_shuffle_parameters,
     regression_targets,
@@ -772,31 +772,7 @@ def test_save_and_load_state_dict():
 
 def test_from_state_dict():
     """Test that EKFACLinearOperator can be created from state dict."""
-    manual_seed(0)
-    batch_size, D_in, D_out = 4, 3, 2
-    X = rand(batch_size, D_in)
-    y = rand(batch_size, D_out)
-    model = Linear(D_in, D_out)
-
-    params = list(model.parameters())
-    # create and compute EKFAC
-    ekfac = EKFACLinearOperator(
-        model,
-        MSELoss(reduction="sum"),
-        params,
-        [(X, y)],
-    )
-
-    # save state dict
-    state_dict = ekfac.state_dict()
-
-    # create new EKFAC from state dict
-    kfac_new = EKFACLinearOperator.from_state_dict(state_dict, model, params, [(X, y)])
-
-    # check that the two EKFACs are equal
-    compare_state_dicts(ekfac.state_dict(), kfac_new.state_dict())
-    test_vec = rand(ekfac.shape[1])
-    assert allclose_report(ekfac @ test_vec, kfac_new @ test_vec)
+    _test_from_state_dict(EKFACLinearOperator)
 
 
 @mark.parametrize("fisher_type", EKFACLinearOperator._SUPPORTED_FISHER_TYPE)
