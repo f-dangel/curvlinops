@@ -50,6 +50,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     deprecating their `.torch_matvec` and `.torch_matmat`,
     which are now available through `@`
 
+- Add `EKFACLinearOperator` which implements EKFAC
+  ([paper](https://arxiv.org/abs/1806.03884),
+   [PR](https://github.com/f-dangel/curvlinops/pull/173))
+
 ### Fixed/Removed
 
 - Bug in `KFACInverseLinearOperator` where the damping was repeatedly (for every
