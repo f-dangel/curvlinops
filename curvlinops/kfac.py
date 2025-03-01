@@ -166,6 +166,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
         fisher_type: str = FisherType.MC,
         mc_samples: int = 1,
         kfac_approx: str = KFACType.EXPAND,
+        use_eva: bool = False,
         num_per_example_loss_terms: Optional[int] = None,
         separate_weight_and_bias: bool = True,
         num_data: Optional[int] = None,
@@ -221,6 +222,11 @@ class KFACLinearOperator(CurvatureLinearOperator):
                 See `Eschenhagen et al., 2023 <https://arxiv.org/abs/2311.00636>`_
                 for an explanation of the two approximations.
                 Defaults to ``KFACType.EXPAND``.
+            use_eva: Whether to use Eva, originally proposed in
+                `Zhang et al., 2023 <https://arxiv.org/abs/2308.02123>`_
+                for the KFAC approximation. We modify the scaling such that this
+                corresponds to applying KFAC-reduce to the batch dimension.
+                Defaults to ``False``.
             num_per_example_loss_terms: Number of per-example loss terms, e.g., the
                 number of tokens in a sequence. The model outputs will have
                 ``num_data * num_per_example_loss_terms * C`` entries, where ``C`` is
@@ -270,6 +276,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
         self._fisher_type = fisher_type
         self._mc_samples = mc_samples
         self._kfac_approx = kfac_approx
+        self._use_eva = use_eva
         self._input_covariances: Dict[str, Tensor] = {}
         self._gradient_covariances: Dict[str, Tensor] = {}
         self._mapping = self.compute_parameter_mapping(params, model_func)
@@ -754,6 +761,11 @@ class KFACLinearOperator(CurvatureLinearOperator):
             / (self._N_data * self._mc_samples * self._num_per_example_loss_terms),
         }[self._loss_func.reduction]
 
+        if self._use_eva:
+            # Sum over the batch dimension. In the Eva approximation we average over
+            # the batch dimension, but we choose to sum here such that it corresponds to
+            # applying KFAC-reduce to the batch dimension.
+            g = g.sum(dim=0, keepdim=True)
         covariance = einsum(g, g, "b i,b j->i j").mul_(correction)
         self._gradient_covariances = self._set_or_add_(
             self._gradient_covariances, module_name, covariance
@@ -809,6 +821,9 @@ class KFACLinearOperator(CurvatureLinearOperator):
         ):
             x = cat([x, x.new_ones(x.shape[0], 1)], dim=1)
 
+        if self._use_eva:
+            # Average over the batch dimension.
+            x = x.mean(dim=0, keepdim=True)
         covariance = einsum(x, x, "b i,b j -> i j").div_(self._N_data * scale)
         self._input_covariances = self._set_or_add_(
             self._input_covariances, module_name, covariance
