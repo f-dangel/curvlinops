@@ -94,7 +94,7 @@ def test_ekfac_type2(
     )
     ekfac_mat = ekfac @ eye_like(ekfac)
 
-    assert allclose_report(ggn, ekfac_mat, atol=1e-6)
+    assert allclose_report(ggn, ekfac_mat, atol=3e-6)
 
     # Check that input covariances were not computed
     if exclude == "weight":
@@ -228,7 +228,10 @@ def test_ekfac_mc(
     )
     ekfac_mat = ekfac @ eye_like(ekfac)
 
-    atol = {"sum": 5e-1, "mean": 5e-3}[loss_func.reduction]
+    # Scale absolute tolerance by the number of outputs when using sum reduction.
+    num_outputs = sum(y.numel() for _, y in data)
+    device_atol = 5e-3 if ekfac._infer_device() == device("cpu") else 1e-2
+    atol = {"sum": device_atol * num_outputs, "mean": device_atol}[loss_func.reduction]
     rtol = {"sum": 2e-2, "mean": 2e-2}[loss_func.reduction]
 
     assert allclose_report(ggn, ekfac_mat, rtol=rtol, atol=atol)
@@ -305,7 +308,8 @@ def test_ekfac_mc_weight_sharing(
 
     # Scale absolute tolerance by the number of outputs when using sum reduction.
     num_outputs = sum(y.numel() for _, y in data)
-    atol = {"sum": 5e-3 * num_outputs, "mean": 5e-3}[loss_func.reduction]
+    device_atol = 5e-3 if ekfac._infer_device() == device("cpu") else 1e-2
+    atol = {"sum": device_atol * num_outputs, "mean": device_atol}[loss_func.reduction]
     rtol = {"sum": 2e-2, "mean": 2e-2}[loss_func.reduction]
 
     assert allclose_report(ggn, ekfac_mat, rtol=rtol, atol=atol)

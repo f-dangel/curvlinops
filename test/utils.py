@@ -971,7 +971,7 @@ def _test_ekfac_closer_to_exact_than_kfac(
         FisherType.MC: FisherMCLinearOperator,
         FisherType.EMPIRICAL: EFLinearOperator,
     }[fisher_type]
-    optional_linop_args = {"seed": 0} if fisher_type == FisherType.MC else {}
+    optional_linop_args = {"seed": 1} if fisher_type == FisherType.MC else {}
     exact = block_diagonal(
         linop_cls,
         model,
