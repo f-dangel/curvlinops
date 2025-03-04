@@ -126,11 +126,11 @@ INV_CASES_NO_DEVICE = [
     ###############################################################################
     # Cross entropy
     {
-        "model_func": lambda: ModelWithDictInput(num_classes=2),
+        "model_func": lambda: ModelWithDictInput(num_classes=3),
         "loss_func": lambda: CrossEntropyLoss(reduction="mean"),
         "data": lambda: [
-            (UserDict({"x": rand(3, 10)}), classification_targets((3,), 2)),
-            ({"x": rand(4, 10)}, classification_targets((4,), 2)),
+            (UserDict({"x": rand(3, 10)}), classification_targets((3,), 3)),
+            ({"x": rand(4, 10)}, classification_targets((4,), 3)),
         ],
         "seed": 0,
     },
