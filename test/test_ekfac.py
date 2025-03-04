@@ -779,7 +779,8 @@ def test_from_state_dict():
     _test_from_state_dict(EKFACLinearOperator)
 
 
-@mark.parametrize("fisher_type", EKFACLinearOperator._SUPPORTED_FISHER_TYPE)
+# TODO: Add test for FisherType.MC once tests are in float64.
+@mark.parametrize("fisher_type", [FisherType.TYPE2, FisherType.EMPIRICAL])
 @mark.parametrize("kfac_approx", EKFACLinearOperator._SUPPORTED_KFAC_APPROX)
 @mark.parametrize(
     "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
