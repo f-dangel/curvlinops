@@ -25,7 +25,7 @@ from math import sqrt
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, TypeVar, Union
 
 from einops import einsum, rearrange, reduce
-from torch import Generator, Tensor, cat, eye, randn, stack
+from torch import Generator, Tensor, cat, eye, randn, stack, dtype
 from torch.autograd import grad
 from torch.nn import (
     BCEWithLogitsLoss,
@@ -170,6 +170,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
         separate_weight_and_bias: bool = True,
         num_data: Optional[int] = None,
         batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
+        matrix_dtype: Optional[dtype] = None,
     ):
         """Kronecker-factored approximate curvature (KFAC) proxy of the Fisher/GGN.
 
@@ -238,6 +239,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
             batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
                 needs to be specified. The intended behavior is to consume the first
                 entry of the iterates from ``data`` and return their batch size.
+            matrix_dtype: The dtype of the Kronecker factors. Defaults to the dtype of
+                the models activations.
 
         Raises:
             ValueError: If the loss function is not supported.
@@ -272,6 +275,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
         self._kfac_approx = kfac_approx
         self._input_covariances: Dict[str, Tensor] = {}
         self._gradient_covariances: Dict[str, Tensor] = {}
+        self._matrix_dtype = matrix_dtype
         self._mapping = self.compute_parameter_mapping(params, model_func)
 
         # Properties of the full matrix KFAC approximation are initialized to `None`
@@ -811,7 +815,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
         covariance = einsum(x, x, "b i,b j -> i j").div_(self._N_data * scale)
         self._input_covariances = self._set_or_add_(
-            self._input_covariances, module_name, covariance
+            self._input_covariances, module_name, covariance.to(self._matrix_dtype)
         )
 
     @staticmethod
