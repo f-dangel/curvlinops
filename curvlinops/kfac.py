@@ -760,7 +760,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
         covariance = einsum(g, g, "b i,b j->i j").mul_(correction)
         self._gradient_covariances = self._set_or_add_(
-            self._gradient_covariances, module_name, covariance
+            self._gradient_covariances, module_name, covariance.to(self._matrix_dtype)
         )
 
     def _hook_accumulate_input_covariance(
