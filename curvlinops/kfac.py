@@ -749,7 +749,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
             # KFAC-reduce approximation
             g = reduce(g, "batch ... d_out -> batch d_out", "sum")
 
-        g = g.to(self._matrix_dtype)
+        if self._matrix_dtype is not None:
+            g = g.to(self._matrix_dtype)
 
         # Compute correction for the loss scaling depending on the loss reduction used
         num_loss_terms = batch_size * self._num_per_example_loss_terms
@@ -815,7 +816,9 @@ class KFACLinearOperator(CurvatureLinearOperator):
         ):
             x = cat([x, x.new_ones(x.shape[0], 1)], dim=1)
 
-        x = x.to(self._matrix_dtype)
+        if self._matrix_dtype is not None:
+            x = x.to(self._matrix_dtype)
+
         covariance = einsum(x, x, "b i,b j -> i j").div_(self._N_data * scale)
         self._input_covariances = self._set_or_add_(
             self._input_covariances, module_name, covariance
