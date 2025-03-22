@@ -25,7 +25,7 @@ from math import sqrt
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, TypeVar, Union
 
 from einops import einsum, rearrange, reduce
-from torch import Generator, Tensor, cat, eye, randn, stack, dtype, autocast
+from torch import Generator, Tensor, cat, eye, randn, stack, dtype
 from torch.autograd import grad
 from torch.nn import (
     BCEWithLogitsLoss,
@@ -760,11 +760,10 @@ class KFACLinearOperator(CurvatureLinearOperator):
             / (self._N_data * self._mc_samples * self._num_per_example_loss_terms),
         }[self._loss_func.reduction]
 
-        with autocast(enabled=False):
-            covariance = einsum(g, g, "b i,b j->i j").mul_(correction)
-            self._gradient_covariances = self._set_or_add_(
-                self._gradient_covariances, module_name, covariance
-            )
+        covariance = einsum(g, g, "b i,b j->i j").mul_(correction)
+        self._gradient_covariances = self._set_or_add_(
+            self._gradient_covariances, module_name, covariance
+        )
 
     def _hook_accumulate_input_covariance(
         self, module: Module, inputs: Tuple[Tensor], module_name: str
@@ -816,12 +815,11 @@ class KFACLinearOperator(CurvatureLinearOperator):
         ):
             x = cat([x, x.new_ones(x.shape[0], 1)], dim=1)
 
-        with autocast(enabled=False):
-            x = x.to(self._matrix_dtype)
-            covariance = einsum(x, x, "b i,b j -> i j").div_(self._N_data * scale)
-            self._input_covariances = self._set_or_add_(
-                self._input_covariances, module_name, covariance
-            )
+        x = x.to(self._matrix_dtype)
+        covariance = einsum(x, x, "b i,b j -> i j").div_(self._N_data * scale)
+        self._input_covariances = self._set_or_add_(
+            self._input_covariances, module_name, covariance
+        )
 
     @staticmethod
     def _set_or_add_(
