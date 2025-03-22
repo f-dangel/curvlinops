@@ -25,7 +25,7 @@ from math import sqrt
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, TypeVar, Union
 
 from einops import einsum, rearrange, reduce
-from torch import Generator, Tensor, cat, eye, randn, stack, dtype
+from torch import Generator, Tensor, cat, eye, randn, stack, dtype, autocast
 from torch.autograd import grad
 from torch.nn import (
     BCEWithLogitsLoss,
@@ -749,6 +749,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
             # KFAC-reduce approximation
             g = reduce(g, "batch ... d_out -> batch d_out", "sum")
 
+        g = g.to(self._matrix_dtype)
+
         # Compute correction for the loss scaling depending on the loss reduction used
         num_loss_terms = batch_size * self._num_per_example_loss_terms
         # self._mc_samples will be 1 if fisher_type != FisherType.MC
@@ -758,10 +760,11 @@ class KFACLinearOperator(CurvatureLinearOperator):
             / (self._N_data * self._mc_samples * self._num_per_example_loss_terms),
         }[self._loss_func.reduction]
 
-        covariance = einsum(g, g, "b i,b j->i j").mul_(correction)
-        self._gradient_covariances = self._set_or_add_(
-            self._gradient_covariances, module_name, covariance.to(self._matrix_dtype)
-        )
+        with autocast(enabled=False):
+            covariance = einsum(g, g, "b i,b j->i j").mul_(correction)
+            self._gradient_covariances = self._set_or_add_(
+                self._gradient_covariances, module_name, covariance
+            )
 
     def _hook_accumulate_input_covariance(
         self, module: Module, inputs: Tuple[Tensor], module_name: str
@@ -813,10 +816,12 @@ class KFACLinearOperator(CurvatureLinearOperator):
         ):
             x = cat([x, x.new_ones(x.shape[0], 1)], dim=1)
 
-        covariance = einsum(x, x, "b i,b j -> i j").div_(self._N_data * scale)
-        self._input_covariances = self._set_or_add_(
-            self._input_covariances, module_name, covariance.to(self._matrix_dtype)
-        )
+        with autocast(enabled=False):
+            x = x.to(self._matrix_dtype)
+            covariance = einsum(x, x, "b i,b j -> i j").div_(self._N_data * scale)
+            self._input_covariances = self._set_or_add_(
+                self._input_covariances, module_name, covariance
+            )
 
     @staticmethod
     def _set_or_add_(
