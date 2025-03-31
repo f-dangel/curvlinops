@@ -7,7 +7,7 @@ from functools import partial
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
 from einops import einsum, rearrange
-from torch import Generator, Tensor, cat
+from torch import Generator, Tensor, cat, dtype
 from torch.linalg import eigh
 from torch.nn import (
     BCEWithLogitsLoss,
@@ -68,6 +68,7 @@ class EKFACLinearOperator(KFACLinearOperator):
         separate_weight_and_bias: bool = True,
         num_data: Optional[int] = None,
         batch_size_fn: Optional[Callable[[MutableMapping], int]] = None,
+        matrix_dtype: Optional[dtype] = None,
     ):
         """Eigenvalue-corrected KFAC (EKFAC) proxy of the Fisher/GGN.
 
@@ -133,6 +134,8 @@ class EKFACLinearOperator(KFACLinearOperator):
             batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
                 needs to be specified. The intended behavior is to consume the first
                 entry of the iterates from ``data`` and return their batch size.
+            matrix_dtype: The dtype of the matrices in the EKFAC approximation.
+                Defaults to the dtype of the parameters.
         """
         super().__init__(
             model_func=model_func,
@@ -149,6 +152,7 @@ class EKFACLinearOperator(KFACLinearOperator):
             separate_weight_and_bias=separate_weight_and_bias,
             num_data=num_data,
             batch_size_fn=batch_size_fn,
+            matrix_dtype=matrix_dtype,
         )
 
         # Initialize the eigenvectors of the Kronecker factors
@@ -347,7 +351,7 @@ class EKFACLinearOperator(KFACLinearOperator):
         """
         if len(inputs) != 1:
             raise ValueError("Modules with multiple inputs are not supported.")
-        self._cached_activations[module_name] = inputs[0].data.detach()
+        self._cached_activations[module_name] = inputs[0].data.detach().to(self._matrix_dtype)
 
     def _register_tensor_hook_on_output_to_accumulate_corrected_eigenvalues(
         self, module: Module, inputs: Tuple[Tensor], output: Tensor, module_name: str
