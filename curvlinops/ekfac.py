@@ -402,7 +402,7 @@ class EKFACLinearOperator(KFACLinearOperator):
             module: The layer for which corrected eigenvalues will be accumulated.
             module_name: The name of the layer in the neural network.
         """
-        g = grad_output.data.detach()
+        g = grad_output.data.detach().to(self._matrix_dtype)
         batch_size = g.shape[0]
         if isinstance(module, Conv2d):
             g = rearrange(g, "batch c o1 o2 -> batch o1 o2 c")
