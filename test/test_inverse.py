@@ -90,7 +90,7 @@ def test_LSMR_inverse_damped_GGN_matvec(inv_case, delta: float = 2e-2):
 
     inv_GGN = LSMRInverseLinearOperator(GGN + damping)
     # set hyperparameters such that LSMR is accurate enough
-    inv_GGN.set_lsmr_hyperparameters(atol=0, btol=0, conlim=0, maxiter=2 * GGN.shape[0])
+    inv_GGN.set_lsmr_hyperparameters(atol=0, btol=0, maxiter=2 * GGN.shape[0])
     inv_GGN_functorch = inv(
         functorch_ggn(model_func, loss_func, params, data, input_key="x")
         .detach()
@@ -116,7 +116,7 @@ def test_LSMR_inverse_damped_GGN_matmat(
 
     inv_GGN = LSMRInverseLinearOperator(GGN + damping)
     # set hyperparameters such that LSMR is accurate enough
-    inv_GGN.set_lsmr_hyperparameters(atol=0, btol=0, conlim=0, maxiter=2 * GGN.shape[0])
+    inv_GGN.set_lsmr_hyperparameters(atol=0, btol=0, maxiter=2 * GGN.shape[0])
     inv_GGN_functorch = inv(
         functorch_ggn(model_func, loss_func, params, data, input_key="x")
         .detach()

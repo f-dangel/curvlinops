@@ -113,7 +113,7 @@ class LSMRInverseLinearOperator(_InverseLinearOperator):
         damp: float = 0.0,
         atol: Optional[float] = 1e-6,
         btol: Optional[float] = 1e-6,
-        conlim: Optional[float] = 1e-8,
+        conlim: Optional[float] = 1e8,
         maxiter: Optional[int] = None,
         show: Optional[bool] = False,
         x0: Optional[ndarray] = None,
