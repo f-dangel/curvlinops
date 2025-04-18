@@ -10,11 +10,9 @@ from einops import einsum, rearrange
 from torch import Generator, Tensor, cat, dtype
 from torch.linalg import eigh
 from torch.nn import (
-    BCEWithLogitsLoss,
     Conv2d,
     CrossEntropyLoss,
     Module,
-    MSELoss,
     Parameter,
 )
 from torch.utils.hooks import RemovableHandle
@@ -55,7 +53,7 @@ class EKFACLinearOperator(KFACLinearOperator):
     def __init__(
         self,
         model_func: Module,
-        loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
+        loss_func: Union[CrossEntropyLoss],
         params: List[Parameter],
         data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
         progressbar: bool = False,
@@ -323,6 +321,13 @@ class EKFACLinearOperator(KFACLinearOperator):
 
         # loop over data set, computing the corrected eigenvalues
         for X, y in self._loop_over_data(desc="Eigenvalue correction"):
+            if isinstance(X, dict) and "batch_act_mask" in X:
+                self._batch_act_mask = X["batch_act_mask"]
+                del X["batch_act_mask"]
+            else:
+                self._batch_act_mask = None
+
+            self._loss_mask = self._compute_loss_mask(y)
             output = self._model_func(X)
             output, y = self._rearrange_for_larger_than_2d_output(output, y)
             self._compute_loss_and_backward(output, y)
@@ -383,6 +388,36 @@ class EKFACLinearOperator(KFACLinearOperator):
         )
         output.register_hook(tensor_hook)
 
+
+    def _flatten_with_mask(self, activation_like_tensor: Tensor, mask: Optional[BoolTensor] = None) -> Tensor:
+        """Flatten the tensor and apply the mask.
+        
+        Args:
+            activation_like_tensor: A tensor of shape `(batch, ..., d_act)`.
+            mask: A boolean mask of shape `(batch, ...)`.
+
+        Returns:
+            A tensor of shape `(batch, (...), d_act)` where the `batch` dimension is flattened.
+        """
+        batch_size = activation_like_tensor.shape[0]
+
+        if mask is None:
+            # If no mask, simply flatten all dimensions except the last one
+            return rearrange(activation_like_tensor, "batch ... d_act -> batch (...) d_act")
+        
+        # Get the feature dimension size
+        d_act = activation_like_tensor.shape[-1]
+        
+        # Reshape tensors to make masking easier
+        flat_shape = (-1, d_act)
+        flat_activations = activation_like_tensor.reshape(flat_shape)
+        flat_mask = mask.reshape(-1)
+        
+        # Apply the mask
+        masked_activations = flat_activations[flat_mask]
+
+        return rearrange(masked_activations, "(batch ...) d_act -> batch (...) d_act", batch=batch_size)
+
     def _accumulate_corrected_eigenvalues(
         self, grad_output: Tensor, module: Module, module_name: str
     ):
@@ -403,13 +438,18 @@ class EKFACLinearOperator(KFACLinearOperator):
             module_name: The name of the layer in the neural network.
         """
         g = grad_output.data.detach().to(self._matrix_dtype)
-        batch_size = g.shape[0]
+
         if isinstance(module, Conv2d):
             g = rearrange(g, "batch c o1 o2 -> batch o1 o2 c")
+
         g = rearrange(g, "batch ... d_out -> batch (...) d_out")
 
+        batch_act_mask = self._batch_act_mask.to(dtype=g.dtype)
+        batch_act_mask = rearrange(batch_act_mask, "batch ... -> batch (...) 1")
+
         # Compute correction for the loss scaling depending on the loss reduction used
-        num_loss_terms = batch_size * self._num_per_example_loss_terms
+        num_loss_terms = self._batch_loss_mask.sum()
+
         # self._mc_samples will be 1 if fisher_type != FisherType.MC
         correction = {
             "sum": 1.0 / self._mc_samples,
@@ -436,6 +476,8 @@ class EKFACLinearOperator(KFACLinearOperator):
                     module.dilation,
                     module.groups,
                 )
+                assert self._batch_act_mask is None, "Batch act mask is not supported for Conv2d layers"
+
             activations = rearrange(activations, "batch ... d_in -> batch (...) d_in")
 
         if (
@@ -447,9 +489,9 @@ class EKFACLinearOperator(KFACLinearOperator):
                 [activations, activations.new_ones(*activations.shape[:-1], 1)], dim=-1
             )
             # Compute per-example gradient using the cached activations
-            per_example_gradient = einsum(
-                g,
-                activations,
+            per_example_gradient = einsum( # TODO: Lev this is probobly quite hot code so if there is a nice way to optimize this do it!
+                g * batch_act_mask,
+                activations * batch_act_mask,
                 "batch shared d_out, batch shared d_in -> batch d_out d_in",
             )
             # Transform the per-example gradient to the eigenbasis and square it
@@ -471,14 +513,14 @@ class EKFACLinearOperator(KFACLinearOperator):
                 self._corrected_eigenvalues[module_name] = {}
             for p_name, pos in param_pos.items():
                 # Compute per-example gradient using the cached activations
-                per_example_gradient = (
-                    einsum(
-                        g,
-                        activations,
+                per_example_gradient = ( # TODO: Same here
+                    einsum( 
+                        g * batch_act_mask,
+                        activations * batch_act_mask,
                         "batch shared d_out, batch shared d_in -> batch d_out d_in",
                     )
                     if p_name == "weight"
-                    else einsum(g, "batch shared d_out -> batch d_out")
+                    else einsum(g * batch_act_mask, "batch shared d_out -> batch d_out")
                 )
                 # Transform the per-example gradient to the eigenbasis and square it
                 if p_name == "weight":

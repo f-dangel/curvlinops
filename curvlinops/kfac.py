@@ -25,7 +25,7 @@ from math import sqrt
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, TypeVar, Union
 
 from einops import einsum, rearrange, reduce
-from torch import Generator, Tensor, cat, eye, randn, stack, dtype
+from torch import Generator, Tensor, cat, eye, randn, dtype, BoolTensor, where
 from torch.autograd import grad
 from torch.nn import (
     BCEWithLogitsLoss,
@@ -42,7 +42,6 @@ from curvlinops._torch_base import CurvatureLinearOperator
 from curvlinops.kfac_utils import (
     extract_averaged_patches,
     extract_patches,
-    loss_hessian_matrix_sqrt,
 )
 
 FactorType = TypeVar(
@@ -148,7 +147,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
         SELF_ADJOINT: Whether the operator is self-adjoint. ``True`` for KFAC.
     """
 
-    _SUPPORTED_LOSSES = (MSELoss, CrossEntropyLoss, BCEWithLogitsLoss)
+    _SUPPORTED_LOSSES = (CrossEntropyLoss,)
     _SUPPORTED_MODULES = (Linear, Conv2d)
     _SUPPORTED_FISHER_TYPE: FisherType = FisherType
     _SUPPORTED_KFAC_APPROX: KFACType = KFACType
@@ -157,7 +156,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
     def __init__(
         self,
         model_func: Module,
-        loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
+        loss_func: Union[CrossEntropyLoss],
         params: List[Parameter],
         data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
         progressbar: bool = False,
@@ -166,7 +165,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
         fisher_type: str = FisherType.MC,
         mc_samples: int = 1,
         kfac_approx: str = KFACType.EXPAND,
-        num_per_example_loss_terms: Optional[int] = None,
         separate_weight_and_bias: bool = True,
         num_data: Optional[int] = None,
         batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
@@ -292,43 +290,9 @@ class KFACLinearOperator(CurvatureLinearOperator):
             batch_size_fn=batch_size_fn,
         )
 
-        self._set_num_per_example_loss_terms(num_per_example_loss_terms)
-
         if check_deterministic:
             self._check_deterministic()
 
-    def _set_num_per_example_loss_terms(
-        self, num_per_example_loss_terms: Optional[int]
-    ):
-        """Set the number of per-example loss terms.
-
-        Args:
-            num_per_example_loss_terms: Number of per-example loss terms. If ``None``,
-                it is inferred from the data at the cost of one traversal through the
-                data loader.
-
-        Raises:
-            ValueError: If the number of loss terms is not divisible by the number of
-                data points.
-        """
-        if num_per_example_loss_terms is None:
-            # Determine the number of per-example loss terms
-            num_loss_terms = sum(
-                (
-                    y.numel()
-                    if isinstance(self._loss_func, CrossEntropyLoss)
-                    else y.shape[:-1].numel()
-                )
-                for (_, y) in self._loop_over_data(desc="_num_per_example_loss_terms")
-            )
-            if num_loss_terms % self._N_data != 0:
-                raise ValueError(
-                    "The number of loss terms must be divisible by the number of data "
-                    f"points; num_loss_terms={num_loss_terms}, N_data={self._N_data}."
-                )
-            self._num_per_example_loss_terms = num_loss_terms // self._N_data
-        else:
-            self._num_per_example_loss_terms = num_per_example_loss_terms
 
     def _reset_matrix_properties(self):
         """Reset matrix properties."""
@@ -510,6 +474,14 @@ class KFACLinearOperator(CurvatureLinearOperator):
         self._generator.manual_seed(self._seed)
 
         for X, y in self._loop_over_data(desc="KFAC matrices"):
+            if isinstance(X, dict) and "batch_act_mask" in X:
+                batch_act_mask = X["batch_act_mask"]
+                del X["batch_act_mask"]
+                self._batch_act_mask = batch_act_mask
+            else:
+                self._batch_act_mask = None
+
+            self._loss_mask = self._compute_loss_mask(y)
             output = self._model_func(X)
             output, y = self._rearrange_for_larger_than_2d_output(output, y)
             self._compute_loss_and_backward(output, y)
@@ -541,29 +513,13 @@ class KFACLinearOperator(CurvatureLinearOperator):
             y = rearrange(y, "batch ... c -> (batch ...) c")
         return output, y
 
-    def _maybe_adjust_loss_scale(self, loss: Tensor, output: Tensor) -> Tensor:
-        """Adjust the scale of the loss tensor if necessary.
 
-        The ``BCEWithLogitsLoss`` and ``MSELoss`` also average over the output dimension
-        in addition to the batch dimension. We adjust the scale of the loss to correct
-        for this.
-
-        Args:
-            loss: The loss tensor to adjust.
-            output: The model's output.
-
-        Returns:
-            The scaled loss tensor.
-        """
-        if (
-            isinstance(self._loss_func, (BCEWithLogitsLoss, MSELoss))
-            and self._loss_func.reduction == "mean"
-        ):
-            # ``BCEWithLogitsLoss`` and ``MSELoss`` also average over non-batch
-            # dimensions. We have to scale the loss to incorporate this scaling.
-            _, C = output.shape
-            loss *= sqrt(C)
-        return loss
+    def _compute_loss_mask(self, y: Tensor) -> BoolTensor:
+        """Compute the loss mask for the loss function."""
+        if isinstance(self._loss_func, CrossEntropyLoss):
+            return y != -100
+        else:
+            raise NotImplementedError(f"Loss function {self._loss_func} not implemented.")
 
     def _compute_loss_and_backward(self, output: Tensor, y: Tensor):
         r"""Compute the loss and the backward pass(es) required for KFAC.
@@ -572,7 +528,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
             output: The model's prediction
                 :math:`\{f_\mathbf{\theta}(\mathbf{x}_n)\}_{n=1}^N`.
             y: The labels :math:`\{\mathbf{y}_n\}_{n=1}^N`.
-
+    
         Raises:
             ValueError: If the output is not 2d and y is not 1d/2d.
             ValueError: If ``fisher_type`` is not ``FisherType.TYPE2``,
@@ -588,42 +544,16 @@ class KFACLinearOperator(CurvatureLinearOperator):
         if self._fisher_type == FisherType.TYPE2:
             # Compute per-sample Hessian square root, then concatenate over samples.
             # Result has shape `(batch_size, num_classes, num_classes)`
-            hessian_sqrts = stack(
-                [
-                    loss_hessian_matrix_sqrt(out.detach(), target, self._loss_func)
-                    for out, target in zip(output.split(1), y.split(1))
-                ]
-            )
-
-            # Fix scaling caused by the batch dimension
-            num_loss_terms = output.shape[0]
-            reduction = self._loss_func.reduction
-            scale = {"sum": 1.0, "mean": 1.0 / num_loss_terms}[reduction]
-            hessian_sqrts.mul_(scale)
-
-            # For each column `c` of the matrix square root we need to backpropagate,
-            # but we can do this for all samples in parallel
-            num_cols = hessian_sqrts.shape[-1]
-            for c in range(num_cols):
-                batched_column = hessian_sqrts[:, :, c]
-                grad(
-                    (output * batched_column).sum(),
-                    self._params,
-                    retain_graph=c < num_cols - 1,
-                )
-
+            raise NotImplementedError("TYPE2 not yet implemented with loss masking.")
         elif self._fisher_type == FisherType.MC:
+            loss_mask = self._compute_loss_mask(y)
             for mc in range(self._mc_samples):
-                y_sampled = self.draw_label(output)
+                y_sampled = where(loss_mask, self.draw_label(output), -100)
                 loss = self._loss_func(output, y_sampled)
-                loss = self._maybe_adjust_loss_scale(loss, output)
                 grad(loss, self._params, retain_graph=mc != self._mc_samples - 1)
-
         elif self._fisher_type == FisherType.EMPIRICAL:
             loss = self._loss_func(output, y)
-            loss = self._maybe_adjust_loss_scale(loss, output)
             grad(loss, self._params)
-
         elif self._fisher_type == FisherType.FORWARD_ONLY:
             # Since FOOF sets the gradient covariance Kronecker factors to the identity,
             # we don't need to do a backward pass. See https://arxiv.org/abs/2201.12250.
@@ -640,7 +570,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
                 self._gradient_covariances[mod_name] = eye(
                     param.shape[0], dtype=param.dtype, device=self._device
                 )
-
         else:
             raise ValueError(
                 f"Invalid fisher_type: {self._fisher_type}. "
@@ -725,6 +654,74 @@ class KFACLinearOperator(CurvatureLinearOperator):
         )
         output.register_hook(tensor_hook)
 
+    def _reduce_with_mask(self, activation_like_tensor: Tensor, mask: Optional[BoolTensor] = None, reduction: str = "mean") -> Tensor:
+        """Average over the unmasked elements of the tensor.
+        
+        Args:
+            activation_like_tensor: A tensor of shape `(batch, ..., d_act)`.
+            mask: A boolean mask of shape `(batch, ...)`.
+            reduction: The reduction to apply over the unmasked elements.
+        Returns:
+            The average of the unmasked elements of the tensor.
+        """
+        if mask is None:
+            return reduce(activation_like_tensor, "batch ... d_act -> batch d_act", reduction)
+
+        # Expand mask to match activation tensor dimensions
+        expanded_mask = mask.unsqueeze(-1).expand_as(activation_like_tensor)
+        
+        # Sum over all dimensions except the feature dimension
+        masked_sum = einsum(
+            activation_like_tensor, expanded_mask, 
+            "batch ... d_act, batch ... d_act -> d_act"
+        )
+        
+        if reduction == "sum":
+            return masked_sum
+        elif reduction == "mean":
+            # Count the number of unmasked elements per feature dimension
+            num_unmasked = einsum(
+                expanded_mask, 
+                "batch ... d_act -> d_act"
+            )
+            
+            # Avoid division by zero by setting zero counts to one
+            num_unmasked = num_unmasked.clamp(min=1)
+            
+            # Compute the average
+            return masked_sum / num_unmasked
+        else:
+            raise ValueError(f"Invalid reduction: {reduction}. Supported: 'sum', 'mean'.")
+
+
+    def _flatten_with_mask(self, activation_like_tensor: Tensor, mask: Optional[BoolTensor] = None) -> Tensor:
+        """Flatten the tensor and apply the mask.
+        
+        Args:
+            activation_like_tensor: A tensor of shape `(batch, ..., d_act)`.
+            mask: A boolean mask of shape `(batch, ...)`.
+
+        Returns:
+            A tensor of shape `(flatdim, d_act)` where the `batch` dimension is flattened.
+        """        
+        if mask is None:
+            # If no mask, simply flatten all dimensions except the last one
+            return rearrange(activation_like_tensor, "batch ... d_act -> (batch ...) d_act")
+        
+        # Get the feature dimension size
+        d_act = activation_like_tensor.shape[-1]
+        
+        # Reshape tensors to make masking easier
+        flat_shape = (-1, d_act)
+        flat_activations = activation_like_tensor.reshape(flat_shape)
+        flat_mask = mask.reshape(-1)
+        
+        # Apply the mask
+        masked_activations = flat_activations[flat_mask]
+        
+        return masked_activations
+
+
     def _accumulate_gradient_covariance(
         self, grad_output: Tensor, module: Module, module_name: str
     ):
@@ -744,21 +741,25 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
         if self._kfac_approx == KFACType.EXPAND:
             # KFAC-expand approximation
-            g = rearrange(g, "batch ... d_out -> (batch ...) d_out")
+            g = self._flatten_with_mask(g, mask=self._batch_act_mask)
         else:
             # KFAC-reduce approximation
-            g = reduce(g, "batch ... d_out -> batch d_out", "sum")
+            g = self._reduce_with_mask(g, mask=self._batch_act_mask, reduction="sum")
 
         if self._matrix_dtype is not None:
             g = g.to(self._matrix_dtype)
 
+
+        num_per_example_loss_terms = self._batch_loss_mask.sum()
+
         # Compute correction for the loss scaling depending on the loss reduction used
-        num_loss_terms = batch_size * self._num_per_example_loss_terms
+        num_loss_terms = batch_size * num_per_example_loss_terms
+
         # self._mc_samples will be 1 if fisher_type != FisherType.MC
         correction = {
             "sum": 1.0 / self._mc_samples,
             "mean": num_loss_terms**2
-            / (self._N_data * self._mc_samples * self._num_per_example_loss_terms),
+            / (self._N_data * self._mc_samples * num_per_example_loss_terms),
         }[self._loss_func.reduction]
 
         covariance = einsum(g, g, "b i,b j->i j").mul_(correction)
@@ -801,12 +802,12 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
         if self._kfac_approx == KFACType.EXPAND:
             # KFAC-expand approximation
-            scale = x.shape[1:-1].numel()  # weight-sharing dimensions size
-            x = rearrange(x, "batch ... d_in -> (batch ...) d_in")
+            scale = self._batch_act_mask.sum().item()
+            x = self._flatten_with_mask(x, mask=self._batch_act_mask)
         else:
             # KFAC-reduce approximation
             scale = 1.0  # since we use a mean reduction
-            x = reduce(x, "batch ... d_in -> batch d_in", "mean")
+            x = self._reduce_with_mask(x, mask=self._batch_act_mask, reduction="mean")
 
         params = self._mapping[module_name]
         if (
