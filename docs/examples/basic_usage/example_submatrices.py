@@ -21,7 +21,6 @@ from torch.nn import Linear, MSELoss, ReLU, Sequential, Sigmoid
 
 from curvlinops import HessianLinearOperator
 from curvlinops.examples.functorch import functorch_hessian
-from curvlinops.examples.utils import report_nonclose
 from curvlinops.submatrix import SubmatrixLinearOperator
 from curvlinops.utils import allclose_report
 
@@ -169,7 +168,7 @@ H_param0_param1 = SubmatrixLinearOperator(H, row_idxs, col_idxs)
 
 H_param0_param1_functorch = extract_block(H_functorch, params, i, j)
 
-report_nonclose(
+assert allclose_report(
     H_param0_param1_functorch,
     H_param0_param1_functorch @ eye(param_dims[j], device=DEVICE),
 )
