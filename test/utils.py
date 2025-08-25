@@ -543,11 +543,11 @@ def compare_consecutive_matmats(
     )
 
     # Apply the operator twice to the same vector
-    result_first = op @ X
-    result_second = op @ X
+    result1 = op @ X
+    result2 = op @ X
 
     # Ensure the results are the same
-    assert allclose_report(result_first, result_second, **tol)
+    assert allclose_report(result1, result2, **tol)
 
 
 def compare_matmat_expectation(
