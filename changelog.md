@@ -50,6 +50,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     deprecating their `.torch_matvec` and `.torch_matmat`,
     which are now available through `@`
 
+- Add `EKFACLinearOperator` which implements EKFAC
+  ([paper](https://arxiv.org/abs/1806.03884),
+   [PR](https://github.com/f-dangel/curvlinops/pull/173))
+
 ### Fixed/Removed
 
 - Bug in `KFACInverseLinearOperator` where the damping was repeatedly (for every
@@ -63,6 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   always carry out deterministic checks on the linear operator's device
   (previously always on CPU)
   ([PR](https://github.com/f-dangel/curvlinops/pull/160))
+- Fixed the default value for `conlim` in `LSMRInverseLinearOperator` from `1e-8` to `1e8` ([PR](https://github.com/f-dangel/curvlinops/pull/180))
 
 ### Internal
 

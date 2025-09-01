@@ -1,13 +1,15 @@
 """Utility functions to test ``curvlinops``."""
 
+import os
 from collections.abc import MutableMapping
 from contextlib import redirect_stdout, suppress
 from itertools import product
-from typing import Callable, Iterable, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Type, Union
 
 from einops import rearrange, reduce
 from einops.layers.torch import Rearrange
-from numpy import eye, ndarray
+from numpy import ndarray
+from pytest import raises
 from torch import (
     Tensor,
     allclose,
@@ -16,12 +18,19 @@ from torch import (
     cuda,
     device,
     dtype,
+    eye,
     from_numpy,
+    linalg,
+    load,
+    logdet,
+    manual_seed,
     rand,
     randint,
+    randperm,
+    save,
+    trace,
     zeros_like,
 )
-from torch import eye as torch_eye
 from torch.nn import (
     AdaptiveAvgPool2d,
     BCEWithLogitsLoss,
@@ -29,15 +38,24 @@ from torch.nn import (
     CrossEntropyLoss,
     Flatten,
     Identity,
+    Linear,
     Module,
     MSELoss,
     Parameter,
+    ReLU,
     Sequential,
     Upsample,
 )
 
-from curvlinops import FisherMCLinearOperator, GGNLinearOperator
-from curvlinops._torch_base import PyTorchLinearOperator
+from curvlinops import (
+    EFLinearOperator,
+    EKFACLinearOperator,
+    FisherMCLinearOperator,
+    FisherType,
+    GGNLinearOperator,
+    KFACLinearOperator,
+)
+from curvlinops._torch_base import CurvatureLinearOperator, PyTorchLinearOperator
 from curvlinops.utils import allclose_report
 
 
@@ -92,36 +110,73 @@ def regression_targets(size: Tuple[int]) -> Tensor:
     return rand(*size)
 
 
-def ggn_block_diagonal(
+def maybe_exclude_or_shuffle_parameters(
+    params: List[Parameter], model: Module, exclude: str, shuffle: bool
+):
+    """Maybe exclude or shuffle parameters.
+
+    Args:
+        params: List of parameters.
+        model: The neural network.
+        exclude: Parameter to exclude.
+        shuffle: Whether to shuffle the parameters.
+
+    Returns:
+        List of parameters.
+    """
+    assert exclude in {None, "weight", "bias"}
+    if exclude is not None:
+        names = {p.data_ptr(): name for name, p in model.named_parameters()}
+        params = [p for p in params if exclude not in names[p.data_ptr()]]
+    if shuffle:
+        permutation = randperm(len(params))
+        params = [params[i] for i in permutation]
+    return params
+
+
+def block_diagonal(
+    linear_operator: Type[CurvatureLinearOperator],
     model: Module,
     loss_func: Module,
     params: List[Parameter],
     data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
     batch_size_fn: Optional[Callable[[MutableMapping], int]] = None,
     separate_weight_and_bias: bool = True,
+    return_numpy: bool = True,
+    optional_linop_args: Optional[Dict[str, Any]] = None,
 ) -> ndarray:
-    """Compute the block-diagonal GGN.
+    """Compute the block-diagonal of the matrix induced by a linear operator.
 
     Args:
+        linear_operator: The linear operator.
         model: The neural network.
         loss_func: The loss function.
-        params: The parameters w.r.t. which the GGN block-diagonals will be computed.
+        params: The parameters w.r.t. which the block-diagonal will be computed for.
         data: A data loader.
         batch_size_fn: A function that returns the batch size given a dict-like ``X``.
         separate_weight_and_bias: Whether to treat weight and bias of a layer as
-            separate blocks in the block-diagonal GGN. Default: ``True``.
+            separate blocks in the block-diagonal. Default: ``True``.
+        return_numpy: Whether to return the block-diagonal as a numpy array.
+            Default: ``True``.
 
     Returns:
-        The block-diagonal GGN.
+        The block-diagonal matrix.
     """
-    # compute the full GGN then zero out the off-diagonal blocks
-    ggn = GGNLinearOperator(
-        model, loss_func, params, data, batch_size_fn=batch_size_fn
-    ).to_scipy()
-    ggn = from_numpy(ggn @ eye(ggn.shape[1]))
+    # compute the full matrix then zero out the off-diagonal blocks
+    linop = linear_operator(
+        model,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        **(optional_linop_args or {}),
+    )
+    linop_mat = linop @ eye_like(linop)
     sizes = [p.numel() for p in params]
-    # ggn_blocks[i, j] corresponds to the block of (params[i], params[j])
-    ggn_blocks = [list(block.split(sizes, dim=1)) for block in ggn.split(sizes, dim=0)]
+    # matrix_blocks[i, j] corresponds to the block of (params[i], params[j])
+    matrix_blocks = [
+        list(block.split(sizes, dim=1)) for block in linop_mat.split(sizes, dim=0)
+    ]
 
     # find out which blocks to keep
     num_params = len(params)
@@ -149,10 +204,11 @@ def ggn_block_diagonal(
 
     for i, j in product(range(num_params), range(num_params)):
         if (i, j) not in keep:
-            ggn_blocks[i][j].zero_()
+            matrix_blocks[i][j].zero_()
 
     # concatenate all blocks
-    return cat([cat(row_blocks, dim=1) for row_blocks in ggn_blocks], dim=0).numpy()
+    block_diag = cat([cat(row_blocks, dim=1) for row_blocks in matrix_blocks], dim=0)
+    return block_diag.cpu().numpy() if return_numpy else block_diag
 
 
 class WeightShareModel(Sequential):
@@ -196,11 +252,13 @@ class WeightShareModel(Sequential):
             setting: The weight-sharing setting of the model.
 
         Raises:
-            ValueError: If ``setting`` is neither ``'expand'`` nor ``'reduce'``.
+            ValueError: If ``setting`` is neither ``'expand'``,``'expand-flatten'``, nor
+                ``'reduce'``.
         """
-        if setting not in {"expand", "reduce"}:
+        if setting not in {"expand", "expand-flatten", "reduce"}:
             raise ValueError(
-                f"Expected 'setting' to be 'expand' or 'reduce', got {setting}."
+                "Expected 'setting' to be 'expand', 'expand-flatten', or 'reduce', got "
+                f"{setting}."
             )
         self._setting = setting
 
@@ -250,7 +308,11 @@ class WeightShareModel(Sequential):
         # Example: Transformer for translation: (batch, sequence_length, c)
         # (although second and third dimension would have to be transposed for
         # classification)
-        if x.ndim > 2 and self.loss == "CE":
+        if self.setting == "expand-flatten":
+            # Example: Pixel-wise MSE loss for diffusion model:
+            # (batch, hight, width, c) -> (batch, hight * width * c)
+            x = rearrange(x, "batch ... c -> batch (... c)")
+        elif x.ndim > 2 and self.loss == "CE":
             x = rearrange(x, "batch ... c -> batch c ...")
         return x
 
@@ -266,6 +328,10 @@ class Conv2dModel(Module):
             "expand": Sequential(
                 Conv2d(3, 2, 4, padding=4 // 2),
                 Rearrange("batch c h w -> batch h w c"),
+            ),
+            "expand-flatten": Sequential(
+                Conv2d(3, 2, 4, padding=4 // 2),
+                Rearrange("batch c h w -> batch (h w c)"),
             ),
             "reduce": Sequential(
                 Conv2d(3, 2, 4, padding=4 // 2),
@@ -296,11 +362,13 @@ class Conv2dModel(Module):
             setting: The weight-sharing setting of the model.
 
         Raises:
-            ValueError: If ``setting`` is neither ``'expand'`` nor ``'reduce'``.
+            ValueError: If ``setting`` is neither ``'expand'``, ``'expand-flatten'``,
+                nor ``'reduce'``.
         """
-        if setting not in {"expand", "reduce"}:
+        if setting not in {"expand", "expand-flatten", "reduce"}:
             raise ValueError(
-                f"Expected 'setting' to be 'expand' or 'reduce', got {setting}."
+                "Expected 'setting' to be 'expand', 'expand-flatten', or 'reduce', got "
+                f"{setting}."
             )
         self._setting = setting
         self._model = self._models[setting]
@@ -320,7 +388,7 @@ class Conv2dModel(Module):
 class UnetModel(Module):
     """Simple Unet-like model where the number of spatial locations varies."""
 
-    def __init__(self, loss: Module):
+    def __init__(self, loss: Module, flatten: bool = False):
         """Initialize the model."""
         if loss not in {MSELoss, CrossEntropyLoss, BCEWithLogitsLoss}:
             raise ValueError(
@@ -328,16 +396,19 @@ class UnetModel(Module):
                 f"Got {loss}."
             )
         super().__init__()
+        if issubclass(loss, (MSELoss, BCEWithLogitsLoss)):
+            out_str = "batch (h w c)" if flatten else "batch h w c"
+            rearrange_layer = Rearrange(f"batch c h w -> {out_str}")
+        else:
+            rearrange_layer = (
+                Rearrange("batch c h w -> (batch h w) c") if flatten else Identity()
+            )
         self._model = Sequential(
             Conv2d(3, 2, 3, padding=1, stride=2),
             Conv2d(2, 2, 3, padding=3 // 2),
             Upsample(scale_factor=2, mode="nearest"),
             Conv2d(2, 3, 3, padding=1),
-            (
-                Rearrange("batch c h w -> batch h w c")
-                if issubclass(loss, (MSELoss, BCEWithLogitsLoss))
-                else Identity()
-            ),
+            rearrange_layer,
         )
 
     def forward(self, x: Tensor) -> Tensor:
@@ -607,7 +678,7 @@ def compare_matmat_expectation(
     assert allclose_report(op_x / max_repeats, mat_x, **tol)
 
 
-def eye_like(A: Tensor) -> Tensor:
+def eye_like(A: Union[Tensor, PyTorchLinearOperator]) -> Tensor:
     """Create an identity matrix of same size as ``A``.
 
     Args:
@@ -618,7 +689,11 @@ def eye_like(A: Tensor) -> Tensor:
     """
     dim1, dim_2 = A.shape
     (dim,) = {dim1, dim_2}
-    return torch_eye(dim, device=A.device, dtype=A.dtype)
+    return eye(
+        dim,
+        dtype=A._infer_dtype() if isinstance(A, PyTorchLinearOperator) else A.dtype,
+        device=A._infer_device() if isinstance(A, PyTorchLinearOperator) else A.device,
+    )
 
 
 def check_estimator_convergence(
@@ -676,3 +751,314 @@ def check_estimator_convergence(
             converged = rel_error < target_rel_error
 
     assert converged
+
+
+def _test_inplace_activations(
+    linop_cls: Type[Union[KFACLinearOperator, EKFACLinearOperator]], dev: device
+):
+    """Test that (E)KFAC works if the network has in-place activations.
+
+    We use a test case with a single datum as (E)KFAC becomes exact as the number of
+    MC samples increases.
+
+    Args:
+        linop_cls: The linear operator class to test.
+        dev: The device to run the test on.
+    """
+    manual_seed(0)
+    model = Sequential(Linear(6, 3), ReLU(inplace=True), Linear(3, 2)).to(dev)
+    loss_func = MSELoss().to(dev)
+    batch_size = 1
+    data = [(rand(batch_size, 6), regression_targets((batch_size, 2)))]
+    params = list(model.parameters())
+
+    # 1) compare (E)KFAC and GGN
+    ggn = block_diagonal(
+        GGNLinearOperator, model, loss_func, params, data, return_numpy=False
+    )
+    linop = linop_cls(model, loss_func, params, data, fisher_type=FisherType.TYPE2)
+    linop_mat = linop @ eye_like(linop)
+    assert allclose_report(ggn, linop_mat)
+
+    # 2) Compare GGN (inplace=True) and GGN (inplace=False)
+    for mod in model.modules():
+        if hasattr(mod, "inplace"):
+            mod.inplace = False
+    ggn_no_inplace = block_diagonal(
+        GGNLinearOperator, model, loss_func, params, data, return_numpy=False
+    )
+    assert allclose_report(ggn, ggn_no_inplace)
+
+
+def _test_property(  # noqa: C901
+    linop_cls: Type[Union[KFACLinearOperator, EKFACLinearOperator]],
+    property_name: str,
+    model: Module,
+    loss_func: Module,
+    params: List[Parameter],
+    data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
+    batch_size_fn: Optional[Callable[[MutableMapping], int]],
+    separate_weight_and_bias: bool,
+    check_deterministic: bool,
+    rtol: float = 1e-5,
+    atol: float = 1e-8,
+):
+    """Test a property of (E)KFAC.
+
+    Args:
+        linop_cls: The linear operator class to test.
+        property_name: The property to test.
+        model: The neural network.
+        loss_func: The loss function.
+        params: The parameters w.r.t. which the property will be computed.
+        data: A data loader.
+        batch_size_fn: A function that returns the batch size given a dict-like ``X``.
+        separate_weight_and_bias: Whether to treat weight and bias of a layer as
+            separate blocks in the block-diagonal.
+        check_deterministic: Whether to check the property for a deterministic linear
+            operator.
+        rtol: Relative tolerance for the comparison. Default: ``1e-5``.
+        atol: Absolute tolerance for the comparison. Default: ``1e-8``.
+    """
+    # Create instance of linear operator
+    linop = linop_cls(
+        model,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        separate_weight_and_bias=separate_weight_and_bias,
+        check_deterministic=check_deterministic,
+    )
+
+    # Add damping manually to avoid singular matrices for logdet
+    if property_name == "logdet":
+        DELTA = 1e-3
+        if type(linop) is KFACLinearOperator:
+            if not check_deterministic:
+                linop.compute_kronecker_factors()
+            assert linop._input_covariances or linop._gradient_covariances
+            for aaT in linop._input_covariances.values():
+                aaT.add_(eye_like(aaT), alpha=DELTA)
+            for ggT in linop._gradient_covariances.values():
+                ggT.add_(eye_like(ggT), alpha=DELTA)
+        elif type(linop) is EKFACLinearOperator:
+            if not check_deterministic:
+                linop.compute_kronecker_factors()
+                linop.compute_eigenvalue_correction()
+            assert linop._corrected_eigenvalues
+            for eigenvalues in linop._corrected_eigenvalues.values():
+                if isinstance(eigenvalues, dict):
+                    for eigenvals in eigenvalues.values():
+                        eigenvals.add_(DELTA)
+                else:
+                    eigenvalues.add_(DELTA)
+
+    # Mapping from the property name to the corresponding torch function
+    torch_fn = {
+        "trace": trace,
+        "frobenius_norm": linalg.matrix_norm,
+        "det": linalg.det,
+        "logdet": logdet,
+    }[property_name]
+
+    # Check for equivalence of property and naive computation
+    quantity = getattr(linop, property_name)
+    linop_mat = linop @ eye_like(linop)
+    quantity_naive = torch_fn(linop_mat)
+    assert allclose_report(quantity, quantity_naive, rtol=rtol, atol=atol)
+
+    # Check that the property is properly cached and reset
+    assert getattr(linop, "_" + property_name) == quantity
+    linop.compute_kronecker_factors()
+    assert getattr(linop, "_" + property_name) is None
+
+
+def _test_save_and_load_state_dict(
+    linop_cls: Type[Union[KFACLinearOperator, EKFACLinearOperator]],
+):
+    """Test saving and loading state dict of (E)KFAC.
+
+    Args:
+        linop_cls: The linear operator class to test.
+    """
+    manual_seed(0)
+    batch_size, D_in, D_out = 4, 3, 2
+    X = rand(batch_size, D_in)
+    y = rand(batch_size, D_out)
+    model = Linear(D_in, D_out)
+
+    params = list(model.parameters())
+    # create and compute linop
+    linop = linop_cls(
+        model,
+        MSELoss(reduction="sum"),
+        params,
+        [(X, y)],
+    )
+
+    # save state dict
+    state_dict = linop.state_dict()
+    PATH = "linop_state_dict.pt"
+    save(state_dict, PATH)
+
+    # create new linop with different loss function and try to load state dict
+    linop_new = linop_cls(
+        model,
+        CrossEntropyLoss(),
+        params,
+        [(X, y)],
+    )
+    with raises(ValueError, match="loss"):
+        linop_new.load_state_dict(load(PATH, weights_only=False))
+
+    # create new linop with different loss reduction and try to load state dict
+    linop_new = linop_cls(
+        model,
+        MSELoss(),
+        params,
+        [(X, y)],
+    )
+    with raises(ValueError, match="reduction"):
+        linop_new.load_state_dict(load(PATH, weights_only=False))
+
+    # create new linop with different model and try to load state dict
+    wrong_model = Sequential(Linear(D_in, 10), ReLU(), Linear(10, D_out))
+    wrong_params = list(wrong_model.parameters())
+    linop_new = linop_cls(
+        wrong_model,
+        MSELoss(reduction="sum"),
+        wrong_params,
+        [(X, y)],
+    )
+    with raises(RuntimeError, match="loading state_dict"):
+        linop_new.load_state_dict(load(PATH, weights_only=False))
+
+    # create new linop and load state dict
+    linop_new = linop_cls(
+        model,
+        MSELoss(reduction="sum"),
+        params,
+        [(X, y)],
+        check_deterministic=False,  # turn off to avoid computing linop again
+    )
+    linop_new.load_state_dict(load(PATH, weights_only=False))
+    # clean up
+    os.remove(PATH)
+
+    # check that the two linops are equal
+    compare_state_dicts(linop.state_dict(), linop_new.state_dict())
+    test_vec = rand(linop.shape[1])
+    assert allclose_report(linop @ test_vec, linop_new @ test_vec)
+
+
+def _test_from_state_dict(
+    linop_cls: Type[Union[KFACLinearOperator, EKFACLinearOperator]],
+):
+    """Test that (E)KFACLinearOperator can be created from state dict."""
+    manual_seed(0)
+    batch_size, D_in, D_out = 4, 3, 2
+    X = rand(batch_size, D_in)
+    y = rand(batch_size, D_out)
+    model = Linear(D_in, D_out)
+
+    params = list(model.parameters())
+    # create and compute (E)KFAC
+    linop = linop_cls(
+        model,
+        MSELoss(reduction="sum"),
+        params,
+        [(X, y)],
+    )
+
+    # save state dict
+    state_dict = linop.state_dict()
+
+    # create new linop from state dict
+    linop_new = linop_cls.from_state_dict(state_dict, model, params, [(X, y)])
+
+    # check that the two linops are equal
+    compare_state_dicts(linop.state_dict(), linop_new.state_dict())
+    test_vec = rand(linop.shape[1])
+    assert allclose_report(linop @ test_vec, linop_new @ test_vec)
+
+
+def _test_ekfac_closer_to_exact_than_kfac(
+    model: Module,
+    loss_func: Module,
+    params: List[Parameter],
+    data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
+    batch_size_fn: Optional[Callable[[MutableMapping], int]],
+    exclude: str,
+    separate_weight_and_bias: bool,
+    fisher_type: FisherType,
+    kfac_approx: bool,
+):
+    """Test that EKFAC is closer in Frobenius norm to the exact quantity than KFAC.
+
+    Args:
+        model: The neural network.
+        loss_func: The loss function.
+        params: The parameters w.r.t. which the property will be computed.
+        data: A data loader.
+        batch_size_fn: A function that returns the batch size given a dict-like ``X``.
+        separate_weight_and_bias: Whether to treat weight and bias of a layer as
+            separate blocks in the block-diagonal.
+        exclude: Parameter to exclude.
+        fisher_type: The type of Fisher approximation.
+        kfac_approx: THe type of KFAC approximation.
+    """
+    # Compute exact block-wise ground truth quantity.
+    linop_cls = {
+        FisherType.TYPE2: GGNLinearOperator,
+        FisherType.MC: FisherMCLinearOperator,
+        FisherType.EMPIRICAL: EFLinearOperator,
+    }[fisher_type]
+    optional_linop_args = {"seed": 1} if fisher_type == FisherType.MC else {}
+    exact = block_diagonal(
+        linop_cls,
+        model,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        separate_weight_and_bias=separate_weight_and_bias,
+        return_numpy=False,
+        optional_linop_args=optional_linop_args,
+    )
+
+    # Compute KFAC and EKFAC.
+    kfac = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        separate_weight_and_bias=separate_weight_and_bias,
+        fisher_type=fisher_type,
+        kfac_approx=kfac_approx,
+        **optional_linop_args,
+    )
+    kfac_mat = kfac @ eye_like(kfac)
+    ekfac = EKFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        separate_weight_and_bias=separate_weight_and_bias,
+        fisher_type=fisher_type,
+        kfac_approx=kfac_approx,
+        **optional_linop_args,
+    )
+    ekfac_mat = ekfac @ eye_like(ekfac)
+
+    # Compute and compare (relative) distances to the exact quantity.
+    exact_norm = linalg.matrix_norm(exact)
+    exact_kfac_dist = linalg.matrix_norm(exact - kfac_mat) / exact_norm
+    exact_ekfac_dist = linalg.matrix_norm(exact - ekfac_mat) / exact_norm
+    assert exact_kfac_dist > exact_ekfac_dist or (
+        allclose_report(exact_kfac_dist, exact_ekfac_dist, atol=1e-6)
+        if exclude == "weight"
+        else False
+    )  # For no_weights the numerical error might dominate.

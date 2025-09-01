@@ -2,6 +2,7 @@
 
 from curvlinops.diagonal.epperly2024xtrace import xdiag
 from curvlinops.diagonal.hutchinson import hutchinson_diag
+from curvlinops.ekfac import EKFACLinearOperator
 from curvlinops.fisher import FisherMCLinearOperator
 from curvlinops.ggn import GGNLinearOperator
 from curvlinops.gradient_moments import EFLinearOperator
@@ -33,6 +34,7 @@ __all__ = [
     "EFLinearOperator",
     "FisherMCLinearOperator",
     "KFACLinearOperator",
+    "EKFACLinearOperator",
     "JacobianLinearOperator",
     "TransposedJacobianLinearOperator",
     # Enums
