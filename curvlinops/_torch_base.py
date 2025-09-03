@@ -75,7 +75,9 @@ class PyTorchLinearOperator:
         self._out_shape_flat = [s.numel() for s in self._out_shape]
         self.shape = (sum(self._out_shape_flat), sum(self._in_shape_flat))
 
-    def __matmul__(self, X: Union[List[Tensor], Tensor]) -> Union[List[Tensor], Tensor]:
+    def __matmul__(
+        self, X: Union[List[Tensor], Tensor | PyTorchLinearOperator]
+    ) -> Union[List[Tensor], Tensor | _ChainPyTorchLinearOperator]:
         """Multiply onto a vector or matrix given as PyTorch tensor or tensor list.
 
         Args:
@@ -99,6 +101,9 @@ class PyTorchLinearOperator:
             The result of the matrix-vector or matrix-matrix multiplication in the same
             format as ``X``.
         """
+        if isinstance(X, PyTorchLinearOperator):
+            return _ChainPyTorchLinearOperator(self, X)
+
         # convert to tensor list format
         X, list_format, is_vec, num_vecs = self._check_input_and_preprocess(X)
 
@@ -293,6 +298,31 @@ class PyTorchLinearOperator:
 
         return AX_processed
 
+    ###########################################################################
+    #                           OPERATOR COMPOSITION                          #
+    ###########################################################################
+    def __add__(self, other: PyTorchLinearOperator) -> _SumPyTorchLinearOperator:
+        """Add two linear operators.
+
+        Args:
+            other: Another PyTorchLinearOperator to add.
+
+        Returns:
+            A new linear operator representing the sum.
+        """
+        return _SumPyTorchLinearOperator(self, other)
+
+    def __sub__(self, other: PyTorchLinearOperator) -> _SumPyTorchLinearOperator:
+        return _SumPyTorchLinearOperator(self, -1.0 * other)
+
+    def __mul__(self, scalar: Union[int, float]) -> _ScalePyTorchLinearOperator:
+        """Multiply linear operator by scalar (A * scalar)."""
+        return _ScalePyTorchLinearOperator(self, scalar)
+
+    def __rmul__(self, scalar: Union[int, float]) -> _ScalePyTorchLinearOperator:
+        """Right multiplication by scalar (scalar * A)."""
+        return self.__mul__(scalar)
+
     ###############################################################################
     #                                 SCIPY EXPORT                                #
     ###############################################################################
@@ -380,6 +410,136 @@ class PyTorchLinearOperator:
             return AX_torch.detach().cpu().numpy().astype(X.dtype)
 
         return f_scipy
+
+
+class _SumPyTorchLinearOperator(PyTorchLinearOperator):
+    """Linear operator representing the sum of two linear operators A + B."""
+
+    def __init__(self, A: PyTorchLinearOperator, B: PyTorchLinearOperator):
+        """Initialize sum of two linear operators.
+
+        Args:
+            A: First linear operator.
+            B: Second linear operator.
+
+        Raises:
+            ValueError: If the shapes, devices, or dtypes of the two linear
+                operators do not match.
+        """
+        if A._in_shape != B._in_shape:
+            raise ValueError(
+                "Input shapes of linear operators must match:"
+                + f"Got {A._in_shape} vs. {B._in_shape}."
+            )
+        if A._out_shape != B._out_shape:
+            raise ValueError(
+                "Output shapes of linear operators must match:"
+                + f"Got {A._out_shape} vs. {B._out_shape}."
+            )
+        if A._infer_device() != B._infer_device():
+            raise ValueError(
+                "Devices of linear operators must match:"
+                + f"Got {A._infer_device()} vs. {B._infer_device()}."
+            )
+        if A._infer_dtype() != B._infer_dtype():
+            raise ValueError(
+                "Dtypes of linear operators must match:"
+                + f"Got {A._infer_dtype()} vs. {B._infer_dtype()}."
+            )
+        super().__init__(A._in_shape, A._out_shape)
+        self._A, self._B = A, B
+
+        # Sum is self-adjoint only if both operands are self-adjoint
+        self.SELF_ADJOINT = A.SELF_ADJOINT and B.SELF_ADJOINT
+
+    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+        """Matrix-matrix multiplication for sum: (A + B) @ X = A @ X + B @ X."""
+        return [ax + bx for ax, bx in zip(self._A._matmat(X), self._B._matmat(X))]
+
+    def _adjoint(self) -> _SumPyTorchLinearOperator:
+        """Adjoint of sum: (A + B)* = A* + B*."""
+        return _SumPyTorchLinearOperator(self._A.adjoint(), self._B.adjoint())
+
+    def _infer_device(self) -> device:
+        return self._A._infer_device()
+
+    def _infer_dtype(self) -> dtype:
+        return self._A._infer_dtype()
+
+
+class _ScalePyTorchLinearOperator(PyTorchLinearOperator):
+    """Linear operator representing the scaled version of a linear operator."""
+
+    def __init__(self, A: PyTorchLinearOperator, scalar: Union[float, int]):
+        """Store the linear operator.
+
+        Args:
+            A: The linear operator.
+            scalar: The scaling factor.
+        """
+        super().__init__(A._in_shape, A._out_shape)
+        self._A = A
+        self._scalar = scalar
+        self.SELF_ADJOINT = A.SELF_ADJOINT
+
+    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+        """Matrix-matrix multiplication for sum: (A + B) @ X = A @ X + B @ X."""
+        return [self._scalar * AX for AX in self._A._matmat(X)]
+
+    def _adjoint(self) -> _ScalePyTorchLinearOperator:
+        """Adjoint of the scaled linear operator: (cA)* = cA*."""
+        return _ScalePyTorchLinearOperator(self._A.adjoint(), self._scalar)
+
+    def _infer_device(self) -> device:
+        return self._A._infer_device()
+
+    def _infer_dtype(self) -> dtype:
+        return self._A._infer_dtype()
+
+
+class _ChainPyTorchLinearOperator(PyTorchLinearOperator):
+    """Linear operator representing the product of two linear operators."""
+
+    def __init__(self, A: PyTorchLinearOperator, B: PyTorchLinearOperator):
+        """Initialize product of two linear operators.
+
+        Args:
+            A: First linear operator.
+            B: Second linear operator.
+
+        Raises:
+            ValueError: If the shapes, devices, or dtypes of the two linear
+                operators are incompatible.
+        """
+        if A._in_shape != B._out_shape:
+            raise ValueError(f"{A._in_shape=} does not match {B._out_shape}.")
+        if A._infer_device() != B._infer_device():
+            raise ValueError(
+                "Devices of linear operators must match:"
+                + f"Got {A._infer_device()} vs. {B._infer_device()}."
+            )
+        if A._infer_dtype() != B._infer_dtype():
+            raise ValueError(
+                "Dtypes of linear operators must match:"
+                + f"Got {A._infer_dtype()} vs. {B._infer_dtype()}."
+            )
+        self._A, self._B = A, B
+
+        # Inherit shapes from the operands
+        super().__init__(B._in_shape, A._out_shape)
+
+    def _infer_dtype(self) -> dtype:
+        return self._A._infer_dtype()
+
+    def _infer_device(self) -> device:
+        return self._A._infer_device()
+
+    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+        return self._A._matmat(self._B._matmat(X))
+
+    def _adjoint(self) -> _ChainPyTorchLinearOperator:
+        """Adjoint of product: (AB)* = B*A*."""
+        return _ChainPyTorchLinearOperator(self._B.adjoint(), self._A.adjoint())
 
 
 class CurvatureLinearOperator(PyTorchLinearOperator):
