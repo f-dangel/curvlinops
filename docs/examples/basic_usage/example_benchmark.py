@@ -385,9 +385,9 @@ def run_time_benchmark(  # noqa: C901
 
     def f_precompute():
         if isinstance(linop, KFACLinearOperator):
-            linop._compute_kfac()
+            linop.compute_kronecker_factors()
         if isinstance(linop, KFACInverseLinearOperator):
-            linop._A._compute_kfac()
+            linop._A.compute_kronecker_factors()
             # damp and invert the Kronecker matrices
             for mod_name in linop._A._mapping:
                 linop._compute_or_get_cached_inverse(mod_name)

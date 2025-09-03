@@ -22,7 +22,7 @@ from collections.abc import MutableMapping
 from enum import Enum, EnumMeta
 from functools import partial
 from math import sqrt
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, TypeVar, Union
 
 from einops import einsum, rearrange, reduce
 from torch import Generator, Tensor, cat, eye, randn, stack
@@ -45,6 +45,10 @@ from curvlinops.kfac_utils import (
     loss_hessian_matrix_sqrt,
 )
 
+FactorType = TypeVar(
+    "FactorType", Optional[Tensor], Tuple[Optional[Tensor], Optional[Tensor]]
+)
+
 
 class MetaEnum(EnumMeta):
     """Metaclass for the Enum class for desired behavior of the `in` operator."""
@@ -58,7 +62,20 @@ class MetaEnum(EnumMeta):
 
 
 class FisherType(str, Enum, metaclass=MetaEnum):
-    """Enum for the Fisher type."""
+    """Enum for the Fisher type.
+
+    Attributes:
+        TYPE2: Type-2 Fisher, i.e. the exact Hessian of the loss w.r.t. the model
+            outputs is used. This requires as many backward passes as the output
+            dimension, i.e. the number of classes for classification.
+        MC: Monte-Carlo approximation of the expectation by sampling `mc_samples`
+            labels from the model's predictive distribution.
+        EMPIRICAL: Empirical gradients are used which corresponds to the uncentered
+            gradient covariance, or the empirical Fisher.
+        FORWARD_ONLY: The gradient covariances will be identity matrices, see the FOOF
+            method in `Benzing, 2022 <https://arxiv.org/abs/2201.12250>`_ or ISAAC in
+            `Petersen et al., 2023 <https://arxiv.org/abs/2305.00604>`_.
+    """
 
     TYPE2 = "type-2"
     MC = "mc"
@@ -67,7 +84,15 @@ class FisherType(str, Enum, metaclass=MetaEnum):
 
 
 class KFACType(str, Enum, metaclass=MetaEnum):
-    """Enum for the KFAC approximation type."""
+    """Enum for the KFAC approximation type.
+
+    KFAC-expand and KFAC-reduce are defined in
+    `Eschenhagen et al., 2023 <https://arxiv.org/abs/2311.00636>`_.
+
+    Attributes:
+        EXPAND: KFAC-expand approximation.
+        REDUCE: KFAC-reduce approximation.
+    """
 
     EXPAND = "expand"
     REDUCE = "reduce"
@@ -118,6 +143,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
     Attributes:
         _SUPPORTED_LOSSES: Tuple of supported loss functions.
         _SUPPORTED_MODULES: Tuple of supported layers.
+        _SUPPORTED_FISHER_TYPE: Enum of supported Fisher types.
+        _SUPPORTED_KFAC_APPROX: Enum of supported KFAC approximation types.
         SELF_ADJOINT: Whether the operator is self-adjoint. ``True`` for KFAC.
     """
 
@@ -135,7 +162,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
         data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
-        shape: Union[Tuple[int, int], None] = None,
         seed: int = 2147483647,
         fisher_type: str = FisherType.MC,
         mc_samples: int = 1,
@@ -157,9 +183,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
         Warning:
             This is an early proto-type with limitations:
                 - Only Linear and Conv2d modules are supported.
-                - If ``deterministic_checks`` is turned on (as is by default), this
-                  will compute the KFAC matrices on CPU, even if all passed arguments
-                  live on the GPU.
 
         Args:
             model_func: The neural network. Must consist of modules.
@@ -171,8 +194,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
                 factors. Defaults to ``False``.
             check_deterministic: Whether to check that the linear operator is
                 deterministic. Defaults to ``True``.
-            shape: The shape of the linear operator. If ``None``, it will be inferred
-                from the parameters. Defaults to ``None``.
             seed: The seed for the random number generator used to draw labels
                 from the model's predictive distribution. Defaults to ``2147483647``.
             fisher_type: The type of Fisher/GGN to approximate.
@@ -312,6 +333,88 @@ class KFACLinearOperator(CurvatureLinearOperator):
         self._logdet = None
         self._frobenius_norm = None
 
+    @staticmethod
+    def _left_and_right_multiply(
+        M: Tensor,
+        aaT: FactorType,
+        ggT: FactorType,
+        eigenvalues: Optional[Tensor] = None,
+    ) -> Tensor:
+        """Left and right multiply matrix with Kronecker factors.
+
+        Args:
+            M: (Batched) Matrix for multiplication. Shape will be
+                (ggT.shape[0], aaT.shape[0], K), where K is the number of vectors/the
+                batch dimension of the batched matrix product.
+            aaT: Input covariance Kronecker factor or its eigenvectors. ``None`` for
+                biases.
+            ggT: Gradient covariance Kronecker factor or its eigenvectors.
+            eigenvalues: Eigenvalues of the (E)KFAC approximation when multiplying with
+                the eigendecomposition of the KFAC approximation. ``None`` for the
+                non-decomposed KFAC approximation. Defaults to ``None``.
+
+        Returns:
+            Matrix-multiplication result.
+        """
+        if eigenvalues is None:
+            M = einsum(ggT, M, aaT, "i j, j k v, k l -> i l v")
+        else:
+            # Perform preconditioning in KFE, e.g. see equation (21) in
+            # https://arxiv.org/abs/2308.03296.
+            aaT_eigvecs = aaT
+            ggT_eigvecs = ggT
+            # Transform in eigenbasis.
+            M = einsum(ggT_eigvecs, M, aaT_eigvecs, "i j, i k v, k l -> j l v")
+            # Multiply (broadcasted) by eigenvalues.
+            M.mul_(eigenvalues.unsqueeze(-1))
+            # Transform back to standard basis.
+            M = einsum(ggT_eigvecs, M, aaT_eigvecs, "i j, j k v, l k -> i l v")
+        return M
+
+    @staticmethod
+    def _separate_left_and_right_multiply(
+        KM: List[Tensor],
+        M: List[Tensor],
+        param_pos: Dict[str, int],
+        aaT: FactorType,
+        ggT: FactorType,
+        eigenvalues: Optional[List[Tensor]] = None,
+    ) -> Tensor:
+        """Multiply matrix with Kronecker factors for separated weight and bias.
+
+        Args:
+            KM: List to write the matrix-multiplication result to.
+            M: List of matrices for multiplication.
+            param_pos: Dictionary with positions of the weight and bias parameters.
+            aaT: Input covariance Kronecker factor or its eigenvectors. ``None`` for
+                biases.
+            ggT: Gradient covariance Kronecker factor or its eigenvectors.
+            eigenvalues: Eigenvalues of the (E)KFAC approximation when multiplying with
+                the eigendecomposition of the KFAC approximation. ``None`` for the
+                non-decomposed KFAC approximation. Defaults to ``None``.
+        """
+        for p_name, pos in param_pos.items():
+            # for weights we need to multiply from the right with aaT
+            # for weights and biases we need to multiply from the left with ggT
+            if p_name == "weight":
+                M_w = rearrange(M[pos], "c_out ... v -> c_out (...) v")
+                # If `eigenvalues` is not `None`, we transform to eigenbasis here
+                KM[pos] = einsum(M_w, aaT, "c_out j v, j k -> c_out k v")
+            else:
+                KM[pos] = M[pos]
+
+            # If `eigenvalues` is not `None`, we convert to eigenbasis here
+            KM[pos] = einsum(
+                ggT.T if eigenvalues else ggT, KM[pos], "j k, k ... v -> j ... v"
+            )
+
+            if eigenvalues is not None:
+                # Multiply (broadcasted) by eigenvalues, convert back to original basis
+                KM[pos].mul_(eigenvalues[pos].unsqueeze(-1))
+                if p_name == "weight":
+                    KM[pos] = einsum(KM[pos], aaT, "c_out j v, k j -> c_out k v")
+                KM[pos] = einsum(ggT, KM[pos], "j k, k ... v -> j ... v")
+
     def _matmat(self, M: List[Tensor]) -> List[Tensor]:
         """Apply KFAC to a matrix (multiple vectors) in tensor list format.
 
@@ -328,15 +431,21 @@ class KFACLinearOperator(CurvatureLinearOperator):
             Matrix-multiplication result ``KFAC @ M`` in tensor list format. Has the same
             shapes as the input.
         """
-        if not self._input_covariances and not self._gradient_covariances:
-            self._compute_kfac()
+        if not (self._input_covariances or self._gradient_covariances):
+            self.compute_kronecker_factors()
 
-        KM = [None] * len(M)
+        KM: List[Tensor | None] = [None] * len(M)
 
         for mod_name, param_pos in self._mapping.items():
             # cache the weight shape to ensure correct shapes are returned
             if "weight" in param_pos:
                 weight_shape = M[param_pos["weight"]].shape
+
+            # get the Kronecker factors for the current module
+            # aaT does not exist when weight matrix is excluded
+            aaT = self._input_covariances.get(mod_name)
+            # ggT always exists
+            ggT = self._gradient_covariances[mod_name]
 
             # bias and weights are treated jointly
             if (
@@ -348,27 +457,12 @@ class KFACLinearOperator(CurvatureLinearOperator):
                 # v denotes the free dimension for treating multiple vectors in parallel
                 M_w = rearrange(M[w_pos], "c_out ... v -> c_out (...) v")
                 M_joint = cat([M_w, M[b_pos].unsqueeze(-2)], dim=-2)
-                aaT = self._input_covariances[mod_name]
-                ggT = self._gradient_covariances[mod_name]
-                M_joint = einsum(ggT, M_joint, aaT, "i j, j k v, k l -> i l v")
-
+                M_joint = self._left_and_right_multiply(M_joint, aaT, ggT)
                 w_cols = M_w.shape[1]
                 KM[w_pos], KM[b_pos] = M_joint.split([w_cols, 1], dim=-2)
                 KM[b_pos].squeeze_(1)
-
-            # for weights we need to multiply from the right with aaT
-            # for weights and biases we need to multiply from the left with ggT
             else:
-                for p_name, pos in param_pos.items():
-                    if p_name == "weight":
-                        M_w = rearrange(M[pos], "c_out ... v -> c_out (...) v")
-                        aaT = self._input_covariances[mod_name]
-                        KM[pos] = einsum(M_w, aaT, "c_out j v, j k -> c_out k v")
-                    else:
-                        KM[pos] = M[pos]
-
-                    ggT = self._gradient_covariances[mod_name]
-                    KM[pos] = einsum(ggT, KM[pos], "j k, k ... v -> j ... v")
+                self._separate_left_and_right_multiply(KM, M, param_pos, aaT, ggT)
 
             # restore original shapes
             if "weight" in param_pos:
@@ -376,7 +470,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
         return KM
 
-    def _compute_kfac(self):
+    def compute_kronecker_factors(self):
         """Compute and cache KFAC's Kronecker factors for future ``matmat``s."""
         self._reset_matrix_properties()
 
@@ -413,11 +507,35 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
         for X, y in self._loop_over_data(desc="KFAC matrices"):
             output = self._model_func(X)
+            output, y = self._rearrange_for_larger_than_2d_output(output, y)
             self._compute_loss_and_backward(output, y)
 
         # clean up
         for handle in hook_handles:
             handle.remove()
+
+    def _rearrange_for_larger_than_2d_output(
+        self, output: Tensor, y: Tensor
+    ) -> Tuple[Tensor, Tensor]:
+        r"""Rearrange the output and target if output is >2d.
+
+        This will determine what kind of Fisher/GGN is approximated.
+
+        Args:
+            output: The model's prediction
+                :math:`\{f_\mathbf{\theta}(\mathbf{x}_n)\}_{n=1}^N`.
+            y: The labels :math:`\{\mathbf{y}_n\}_{n=1}^N`.
+
+        Returns:
+            The rearranged output and target.
+        """
+        if isinstance(self._loss_func, CrossEntropyLoss):
+            output = rearrange(output, "batch c ... -> (batch ...) c")
+            y = rearrange(y, "batch ... -> (batch ...)")
+        else:
+            output = rearrange(output, "batch ... c -> (batch ...) c")
+            y = rearrange(y, "batch ... c -> (batch ...) c")
+        return output, y
 
     def _maybe_adjust_loss_scale(self, loss: Tensor, output: Tensor) -> Tensor:
         """Adjust the scale of the loss tensor if necessary.
@@ -452,17 +570,16 @@ class KFACLinearOperator(CurvatureLinearOperator):
             y: The labels :math:`\{\mathbf{y}_n\}_{n=1}^N`.
 
         Raises:
+            ValueError: If the output is not 2d and y is not 1d/2d.
             ValueError: If ``fisher_type`` is not ``FisherType.TYPE2``,
                 ``FisherType.MC``, ``FisherType.EMPIRICAL``, or
                 ``FisherType.FORWARD_ONLY``.
         """
-        # if >2d output we convert to an equivalent 2d output
-        if isinstance(self._loss_func, CrossEntropyLoss):
-            output = rearrange(output, "batch c ... -> (batch ...) c")
-            y = rearrange(y, "batch ... -> (batch ...)")
-        else:
-            output = rearrange(output, "batch ... c -> (batch ...) c")
-            y = rearrange(y, "batch ... c -> (batch ...) c")
+        if output.ndim != 2 or y.ndim not in {1, 2}:
+            raise ValueError(
+                "Only 2d output and 1d/2d target are supported. "
+                f"Got {output.ndim=} and {y.ndim=}."
+            )
 
         if self._fisher_type == FisherType.TYPE2:
             # Compute per-sample Hessian square root, then concatenate over samples.
@@ -638,11 +755,9 @@ class KFACLinearOperator(CurvatureLinearOperator):
         }[self._loss_func.reduction]
 
         covariance = einsum(g, g, "b i,b j->i j").mul_(correction)
-
-        if module_name not in self._gradient_covariances:
-            self._gradient_covariances[module_name] = covariance
-        else:
-            self._gradient_covariances[module_name].add_(covariance)
+        self._gradient_covariances = self._set_or_add_(
+            self._gradient_covariances, module_name, covariance
+        )
 
     def _hook_accumulate_input_covariance(
         self, module: Module, inputs: Tuple[Tensor], module_name: str
@@ -679,7 +794,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
         if self._kfac_approx == KFACType.EXPAND:
             # KFAC-expand approximation
-            scale = x.shape[1:-1].numel()  # sequence length
+            scale = x.shape[1:-1].numel()  # weight-sharing dimensions size
             x = rearrange(x, "batch ... d_in -> (batch ...) d_in")
         else:
             # KFAC-reduce approximation
@@ -695,11 +810,38 @@ class KFACLinearOperator(CurvatureLinearOperator):
             x = cat([x, x.new_ones(x.shape[0], 1)], dim=1)
 
         covariance = einsum(x, x, "b i,b j -> i j").div_(self._N_data * scale)
+        self._input_covariances = self._set_or_add_(
+            self._input_covariances, module_name, covariance
+        )
 
-        if module_name not in self._input_covariances:
-            self._input_covariances[module_name] = covariance
+    @staticmethod
+    def _set_or_add_(
+        dictionary: Dict[str, Tensor], key: str, value: Tensor
+    ) -> Dict[str, Tensor]:
+        """Set or add a value to a dictionary entry.
+
+        Args:
+            dictionary: The dictionary to update.
+            key: The key to update.
+            value: The value to add.
+
+        Returns:
+            The updated dictionary.
+
+        Raises:
+            ValueError: If the types of the value and the dictionary entry are
+                incompatible.
+        """
+        if key not in dictionary:
+            dictionary[key] = value
+        elif isinstance(dictionary[key], Tensor) and isinstance(value, Tensor):
+            dictionary[key].add_(value)
         else:
-            self._input_covariances[module_name].add_(covariance)
+            raise ValueError(
+                "Incompatible types for addition: dictionary value of type "
+                f"{type(dictionary[key])} and value to be added of type {type(value)}."
+            )
+        return dictionary
 
     @classmethod
     def compute_parameter_mapping(
@@ -746,9 +888,9 @@ class KFACLinearOperator(CurvatureLinearOperator):
     def trace(self) -> Tensor:
         r"""Trace of the KFAC approximation.
 
-        Will call ``_compute_kfac`` if it has not been called before and will cache the
-        trace until ``_compute_kfac`` is called again. Uses the property of the
-        Kronecker product that
+        Will call ``compute_kronecker_factors`` if it has not been called before and
+        will cache the trace until ``compute_kronecker_factors`` is called again.
+        Uses the property of the Kronecker product that
         :math:`\text{tr}(A \otimes B) = \text{tr}(A) \text{tr}(B)`.
 
         Returns:
@@ -757,8 +899,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
         if self._trace is not None:
             return self._trace
 
-        if not self._input_covariances and not self._gradient_covariances:
-            self._compute_kfac()
+        if not (self._input_covariances or self._gradient_covariances):
+            self.compute_kronecker_factors()
 
         self._trace = 0.0
         for mod_name, param_pos in self._mapping.items():
@@ -782,9 +924,10 @@ class KFACLinearOperator(CurvatureLinearOperator):
     def det(self) -> Tensor:
         r"""Determinant of the KFAC approximation.
 
-        Will call ``_compute_kfac`` if it has not been called before and will cache the
-        determinant until ``_compute_kfac`` is called again. Uses the property of the
-        Kronecker product that :math:`\det(A \otimes B) = \det(A)^{m} \det(B)^{n}`,
+        Will call ``compute_kronecker_factors`` if it has not been called before and
+        will cache the determinant until ``compute_kronecker_factors`` is called again.
+        Uses the property of the Kronecker product that
+        :math:`\det(A \otimes B) = \det(A)^{m} \det(B)^{n}`,
         where
         :math:`A \in \mathbb{R}^{n \times n}` and :math:`B \in \mathbb{R}^{m \times m}`.
 
@@ -794,8 +937,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
         if self._det is not None:
             return self._det
 
-        if not self._input_covariances and not self._gradient_covariances:
-            self._compute_kfac()
+        if not (self._input_covariances or self._gradient_covariances):
+            self.compute_kronecker_factors()
 
         self._det = 1.0
         for mod_name, param_pos in self._mapping.items():
@@ -828,9 +971,9 @@ class KFACLinearOperator(CurvatureLinearOperator):
         r"""Log determinant of the KFAC approximation.
 
         More numerically stable than the ``det`` property.
-        Will call ``_compute_kfac`` if it has not been called before and will cache the
-        log determinant until ``_compute_kfac`` is called again. Uses the property of
-        the Kronecker product that
+        Will call ``compute_kronecker_factors`` if it has not been called before and
+        will cache the log determinant until ``compute_kronecker_factors`` is called
+        again. Uses the property of the Kronecker product that
         :math:`\log \det(A \otimes B) = m \log \det(A) + n \log \det(B)`, where
         :math:`A \in \mathbb{R}^{n \times n}` and :math:`B \in \mathbb{R}^{m \times m}`.
 
@@ -840,8 +983,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
         if self._logdet is not None:
             return self._logdet
 
-        if not self._input_covariances and not self._gradient_covariances:
-            self._compute_kfac()
+        if not (self._input_covariances or self._gradient_covariances):
+            self.compute_kronecker_factors()
 
         self._logdet = 0.0
         for mod_name, param_pos in self._mapping.items():
@@ -873,9 +1016,10 @@ class KFACLinearOperator(CurvatureLinearOperator):
     def frobenius_norm(self) -> Tensor:
         r"""Frobenius norm of the KFAC approximation.
 
-        Will call ``_compute_kfac`` if it has not been called before and will cache the
-        Frobenius norm until ``_compute_kfac`` is called again. Uses the property of the
-        Kronecker product that :math:`\|A \otimes B\|_F = \|A\|_F \|B\|_F`.
+        Will call ``compute_kronecker_factors`` if it has not been called before and
+        will cache the Frobenius norm until ``compute_kronecker_factors`` is called again.
+        Uses the property of the Kronecker product that
+        :math:`\|A \otimes B\|_F = \|A\|_F \|B\|_F`.
 
         Returns:
             Frobenius norm of the KFAC approximation.
@@ -883,8 +1027,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
         if self._frobenius_norm is not None:
             return self._frobenius_norm
 
-        if not self._input_covariances and not self._gradient_covariances:
-            self._compute_kfac()
+        if not (self._input_covariances or self._gradient_covariances):
+            self.compute_kronecker_factors()
 
         self._frobenius_norm = 0.0
         for mod_name, param_pos in self._mapping.items():
@@ -924,7 +1068,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
             "loss_reduction": self._loss_func.reduction,
             # Attributes
             "progressbar": self._progressbar,
-            "shape": self.shape,
             "seed": self._seed,
             "fisher_type": self._fisher_type,
             "mc_samples": self._mc_samples,
@@ -941,6 +1084,23 @@ class KFACLinearOperator(CurvatureLinearOperator):
             "logdet": self._logdet,
             "frobenius_norm": self._frobenius_norm,
         }
+
+    def _check_if_keys_match_mapping_keys(self, dictionary: dict):
+        """Check if the keys of a dictionary match the mapping keys of the linear operator.
+
+        Args:
+            dictionary: Dictionary to check.
+
+        Raises:
+            ValueError: If the keys do not match the mapping keys.
+        """
+        dictionary_keys = set(dictionary.keys())
+        mapping_keys = set(self._mapping.keys())
+        if dictionary_keys and dictionary_keys != mapping_keys:
+            raise ValueError(
+                "Keys in dictionary do not match mapping keys of linear operator. "
+                f"Difference: {dictionary_keys - mapping_keys}."
+            )
 
     def load_state_dict(self, state_dict: Dict[str, Any]):
         """Load the state of the KFAC linear operator.
@@ -971,7 +1131,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
         # Set attributes
         self._progressbar = state_dict["progressbar"]
-        self.shape = state_dict["shape"]
         self._seed = state_dict["seed"]
         self._fisher_type = state_dict["fisher_type"]
         self._mc_samples = state_dict["mc_samples"]
@@ -981,22 +1140,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
         self._N_data = state_dict["num_data"]
 
         # Set Kronecker factors (if computed)
-        if self._input_covariances or self._gradient_covariances:
-            # If computed, check if the keys match the mapping keys
-            input_covariances_keys = set(self._input_covariances.keys())
-            gradient_covariances_keys = set(self._gradient_covariances.keys())
-            mapping_keys = set(self._mapping.keys())
-            if (input_covariances_keys and input_covariances_keys != mapping_keys) or (
-                gradient_covariances_keys and gradient_covariances_keys != mapping_keys
-            ):
-                raise ValueError(
-                    "Input or gradient covariance keys in state dict do not match "
-                    "mapping keys of linear operator. "
-                    "Difference between input covariance and mapping keys: "
-                    f"{input_covariances_keys - mapping_keys}. "
-                    "Difference between gradient covariance and mapping keys: "
-                    f"{gradient_covariances_keys - mapping_keys}."
-                )
+        self._check_if_keys_match_mapping_keys(state_dict["input_covariances"])
+        self._check_if_keys_match_mapping_keys(state_dict["gradient_covariances"])
         self._input_covariances = state_dict["input_covariances"]
         self._gradient_covariances = state_dict["gradient_covariances"]
 
@@ -1045,7 +1190,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
             batch_size_fn=batch_size_fn,
             check_deterministic=False,
             progressbar=state_dict["progressbar"],
-            shape=state_dict["shape"],
             seed=state_dict["seed"],
             fisher_type=state_dict["fisher_type"],
             mc_samples=state_dict["mc_samples"],
