@@ -13,12 +13,12 @@ from curvlinops.examples.functorch import (
 from curvlinops.submatrix import SubmatrixLinearOperator
 from test.utils import compare_consecutive_matmats, compare_matmat
 
-CURVATURE_CASES = [HessianLinearOperator, GGNLinearOperator, EFLinearOperator]
 CURVATURE_IN_FUNCTORCH = {
     HessianLinearOperator: functorch_hessian,
     GGNLinearOperator: functorch_ggn,
     EFLinearOperator: functorch_empirical_fisher,
 }
+CURVATURE_CASES = CURVATURE_IN_FUNCTORCH.keys()
 
 
 def even_idxs(dim: int) -> List[int]:
