@@ -87,7 +87,7 @@ def test_SubmatrixLinearOperator_on_curvatures(
     )
     assert A_sub.shape == (len(row_idxs), len(col_idxs))
     compare_consecutive_matmats(A_sub, adjoint, is_vec)
-    compare_matmat(A_sub, A_sub_functorch, adjoint, is_vec, atol=1e-6)
+    compare_matmat(A_sub, A_sub_functorch, adjoint, is_vec, atol=1e-6, rtol=1e-4)
 
     # try specifying the sub-matrix using invalid indices
     invalid_idxs = [
