@@ -569,16 +569,15 @@ def compare_matmat(
     assert type(op_x) is ndarray
     assert allclose_report(from_numpy(op_x).to(dev), mat_x, **tol)
 
-    if op.SUPPORTS_LIST_FORMAT:
-        # input in tensor list format
-        mat_x = [
-            m_x.reshape(s if is_vec else (*s, num_vecs))
-            for m_x, s in zip(mat_x.split(op._out_shape_flat), op._out_shape)
-        ]
-        op_x = op @ x_list
-        assert len(op_x) == len(mat_x)
-        for o_x, m_x in zip(op_x, mat_x):
-            assert allclose_report(o_x, m_x, **tol)
+    # input in tensor list format
+    mat_x = [
+        m_x.reshape(s if is_vec else (*s, num_vecs))
+        for m_x, s in zip(mat_x.split(op._out_shape_flat), op._out_shape)
+    ]
+    op_x = op @ x_list
+    assert len(op_x) == len(mat_x)
+    for o_x, m_x in zip(op_x, mat_x):
+        assert allclose_report(o_x, m_x, **tol)
 
 
 def compare_consecutive_matmats(

@@ -10,15 +10,7 @@ from curvlinops._torch_base import PyTorchLinearOperator
 
 
 class SubmatrixLinearOperator(PyTorchLinearOperator):
-    """Class for sub-matrices of linear operators.
-
-    Attributes:
-        SUPPORTS_LIST_FORMAT: Whether the linear operator supports list format
-            for matrix-matrix multiplication. Is ``False`` because a sub-matrix
-            does not operate on a list of tensors.
-    """
-
-    SUPPORTS_LIST_FORMAT: bool = False
+    """Class for sub-matrices of linear operators."""
 
     def __init__(
         self, A: PyTorchLinearOperator, row_idxs: List[int], col_idxs: List[int]
