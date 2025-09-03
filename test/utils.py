@@ -500,14 +500,16 @@ def rand_accepted_formats(
         is_vec: Whether to generate representations of a vector or a matrix.
         dtype: Data type of the generated tensors.
         device: Device of the generated tensors.
-        num_vecs: Number of vectors to generate. Ignored if ``is_vec`` is ``False``.
-            Default: ``1``.
+        num_vecs: Number of vectors to generate. Will be overwritten to 1 if
+            ``is_vec == True``. Default: ``1``.
 
     Returns:
         M_tensor_list: Random vector/matrix in tensor list format.
         M_tensor: Random vector/matrix in tensor format.
         M_ndarray: Random vector/matrix in numpy format.
     """
+    num_vecs = 1 if is_vec else num_vecs
+
     M_tensor_list = [
         rand(*shape, num_vecs, dtype=dtype, device=device) for shape in shapes
     ]
