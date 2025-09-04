@@ -78,11 +78,11 @@ class PyTorchLinearOperator:
     def __matmul__(
         self, X: Union[List[Tensor], Tensor, PyTorchLinearOperator]
     ) -> Union[List[Tensor], Tensor, _ChainPyTorchLinearOperator]:
-        """Multiply onto a vector or matrix given as PyTorch tensor or tensor list.
+        """Multiply onto a vector/matrix given as tensor/tensor list, or an operator.
 
         Args:
             X: A vector or matrix to multiply onto, represented as a single tensor or a
-                tensor list.
+                tensor list, or another PyTorch linear operator.
 
                 Assume the linear operator has total shape ``[M, N]``:
                 If ``X`` is a single tensor, it can be of shape ``[N, K]`` (matrix), or
@@ -99,7 +99,8 @@ class PyTorchLinearOperator:
 
         Returns:
             The result of the matrix-vector or matrix-matrix multiplication in the same
-            format as ``X``.
+            format as ``X``, or a new linear operator representing the product of this
+            and the passed linear operator.
         """
         if isinstance(X, PyTorchLinearOperator):
             return _ChainPyTorchLinearOperator(self, X)
@@ -471,7 +472,7 @@ class _SumPyTorchLinearOperator(PyTorchLinearOperator):
         super().__init__(A._in_shape, A._out_shape)
         self._A, self._B = A, B
 
-        # Sum is self-adjoint only if both operands are self-adjoint
+        # Sum is self-adjoint if both operands are self-adjoint
         self.SELF_ADJOINT = A.SELF_ADJOINT and B.SELF_ADJOINT
 
     def _matmat(self, X: List[Tensor]) -> List[Tensor]:
@@ -511,7 +512,7 @@ class _SumPyTorchLinearOperator(PyTorchLinearOperator):
 
 
 class _ScalePyTorchLinearOperator(PyTorchLinearOperator):
-    """Linear operator representing the scaled version of a linear operator."""
+    """Linear operator representing the scaled version of a linear operator s * A."""
 
     def __init__(self, A: PyTorchLinearOperator, scalar: Union[float, int]):
         """Store the linear operator.
@@ -562,7 +563,7 @@ class _ScalePyTorchLinearOperator(PyTorchLinearOperator):
 
 
 class _ChainPyTorchLinearOperator(PyTorchLinearOperator):
-    """Linear operator representing the product of two linear operators."""
+    """Linear operator representing the product of two linear operators A @ B."""
 
     def __init__(self, A: PyTorchLinearOperator, B: PyTorchLinearOperator):
         """Initialize product of two linear operators.
