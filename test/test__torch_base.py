@@ -7,14 +7,14 @@ from typing import Iterable, Iterator, List, MutableMapping, Tuple, Union
 from pytest import raises
 from torch import (
     Tensor,
+    device,
+    dtype,
+    linspace,
     manual_seed,
+    rand,
     rand_like,
     randperm,
     zeros,
-    linspace,
-    device,
-    dtype,
-    rand,
 )
 
 from curvlinops._torch_base import CurvatureLinearOperator, PyTorchLinearOperator

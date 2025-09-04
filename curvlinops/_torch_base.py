@@ -302,25 +302,47 @@ class PyTorchLinearOperator:
     #                           OPERATOR COMPOSITION                          #
     ###########################################################################
     def __add__(self, other: PyTorchLinearOperator) -> _SumPyTorchLinearOperator:
-        """Add two linear operators.
+        """Add another linear operator to the linear operator: A + B.
 
         Args:
             other: Another PyTorchLinearOperator to add.
 
         Returns:
-            A new linear operator representing the sum.
+            A new linear operator representing the sum A + B.
         """
         return _SumPyTorchLinearOperator(self, other)
 
     def __sub__(self, other: PyTorchLinearOperator) -> _SumPyTorchLinearOperator:
+        """Subtract another linear operator from the linear operator: A - B.
+
+        Args:
+            other: Another PyTorchLinearOperator to subtract.
+
+        Returns:
+            A new linear operator representing the difference A - B.
+        """
         return _SumPyTorchLinearOperator(self, -1.0 * other)
 
     def __mul__(self, scalar: Union[int, float]) -> _ScalePyTorchLinearOperator:
-        """Multiply linear operator by scalar (A * scalar)."""
+        """Multiply the linear operator by a scalar (A * scalar).
+
+        Args:
+            scalar: A scalar to multiply the linear operator with.
+
+        Returns:
+            A new linear operator representing the scaled linear operator.
+        """
         return _ScalePyTorchLinearOperator(self, scalar)
 
     def __rmul__(self, scalar: Union[int, float]) -> _ScalePyTorchLinearOperator:
-        """Right multiplication by scalar (scalar * A)."""
+        """Right multiply the linear operator by a scalar (scalar * A).
+
+        Args:
+            scalar: A scalar to multiply the linear operator with.
+
+        Returns:
+            A new linear operator representing the scaled linear operator.
+        """
         return self.__mul__(scalar)
 
     ###############################################################################
@@ -453,17 +475,38 @@ class _SumPyTorchLinearOperator(PyTorchLinearOperator):
         self.SELF_ADJOINT = A.SELF_ADJOINT and B.SELF_ADJOINT
 
     def _matmat(self, X: List[Tensor]) -> List[Tensor]:
-        """Matrix-matrix multiplication for sum: (A + B) @ X = A @ X + B @ X."""
+        """Multiply the linear operator onto a matrix in list format.
+
+        Args:
+            X: The matrix to multiply onto in list format.
+
+        Returns:
+            The result of the multiplication in list format.
+        """
         return [ax + bx for ax, bx in zip(self._A._matmat(X), self._B._matmat(X))]
 
     def _adjoint(self) -> _SumPyTorchLinearOperator:
-        """Adjoint of sum: (A + B)* = A* + B*."""
+        """Return the linear operator's adjoint: (A + B)* = A* + B*.
+
+        Returns:
+            A linear operator representing the adjoint.
+        """
         return _SumPyTorchLinearOperator(self._A.adjoint(), self._B.adjoint())
 
     def _infer_device(self) -> device:
+        """Determine the device the linear operators is defined on.
+
+        Returns:
+            The linear operator's device.
+        """
         return self._A._infer_device()
 
     def _infer_dtype(self) -> dtype:
+        """Determine the linear operator's data type.
+
+        Returns:
+            The linear operator's dtype.
+        """
         return self._A._infer_dtype()
 
 
@@ -483,17 +526,38 @@ class _ScalePyTorchLinearOperator(PyTorchLinearOperator):
         self.SELF_ADJOINT = A.SELF_ADJOINT
 
     def _matmat(self, X: List[Tensor]) -> List[Tensor]:
-        """Matrix-matrix multiplication for sum: (A + B) @ X = A @ X + B @ X."""
+        """Multiply the linear operator onto a matrix in list format.
+
+        Args:
+            X: Matrix to multiply onto in list format.
+
+        Returns:
+            The result of the multiplication in list format.
+        """
         return [self._scalar * AX for AX in self._A._matmat(X)]
 
     def _adjoint(self) -> _ScalePyTorchLinearOperator:
-        """Adjoint of the scaled linear operator: (cA)* = cA*."""
+        """Return a linear operator representing the adjoint: (cA)* = cA*.
+
+        Returns:
+            The linear operator's adjoint.
+        """
         return _ScalePyTorchLinearOperator(self._A.adjoint(), self._scalar)
 
     def _infer_device(self) -> device:
+        """Determine the device the linear operators is defined on.
+
+        Returns:
+            The linear operator's device.
+        """
         return self._A._infer_device()
 
     def _infer_dtype(self) -> dtype:
+        """Determine the linear operator's data type.
+
+        Returns:
+            The linear operator's dtype.
+        """
         return self._A._infer_dtype()
 
 
@@ -529,16 +593,38 @@ class _ChainPyTorchLinearOperator(PyTorchLinearOperator):
         super().__init__(B._in_shape, A._out_shape)
 
     def _infer_dtype(self) -> dtype:
+        """Determine the linear operator's data type.
+
+        Returns:
+            The linear operator's dtype.
+        """
         return self._A._infer_dtype()
 
     def _infer_device(self) -> device:
+        """Determine the device the linear operators is defined on.
+
+        Returns:
+            The linear operator's device.
+        """
         return self._A._infer_device()
 
     def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+        """Multiply the linear operator onto a matrix in list format.
+
+        Args:
+            X: The matrix to multiply onto in list format.
+
+        Returns:
+            The result of the multiplication in list format.
+        """
         return self._A._matmat(self._B._matmat(X))
 
     def _adjoint(self) -> _ChainPyTorchLinearOperator:
-        """Adjoint of product: (AB)* = B*A*."""
+        """Return the linear operator's adjoint: (AB)* = B*A*.
+
+        Returns:
+            A linear operator representing the adjoint.
+        """
         return _ChainPyTorchLinearOperator(self._B.adjoint(), self._A.adjoint())
 
 
