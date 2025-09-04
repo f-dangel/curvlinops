@@ -57,7 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    [PR](https://github.com/f-dangel/curvlinops/pull/173))
 
 - Implement composition rules for PyTorch linear operators
-  ([PR](https://github.com/f-dangel/curvlinops/pull/177))
+  ([PR](https://github.com/f-dangel/curvlinops/pull/185))
   For two linear operators `A`, `B` and a scalar `s`, this
   allows writing `A + B`, `A - B`, `A @ B`, `s * A`, `A * s`.
 
