@@ -21,7 +21,7 @@ from curvlinops import (
     LSMRInverseLinearOperator,
     NeumannInverseLinearOperator,
 )
-from curvlinops._torch_base import IdentityLinearOperator
+from curvlinops.outer import IdentityLinearOperator
 from curvlinops.examples.functorch import functorch_ggn
 from curvlinops.examples.utils import report_nonclose
 from test.utils import (
@@ -37,7 +37,7 @@ KFAC_MIN_DAMPING = 1e-8
 
 
 def test_CGInverseLinearOperator_damped_GGN(inv_case, delta: float = 2e-2):
-    """Test matrix-vector multiplication by the inverse damped GGN with CG."""
+    """Test matrix multiplication with the inverse damped GGN with CG."""
     model_func, loss_func, params, data, batch_size_fn = inv_case
     (dev,), (dt,) = {p.device for p in params}, {p.dtype for p in params}
 
@@ -58,54 +58,29 @@ def test_CGInverseLinearOperator_damped_GGN(inv_case, delta: float = 2e-2):
     )
 
 
-def test_LSMR_inverse_damped_GGN_matvec(inv_case, delta: float = 2e-2):
-    """Test matrix-vector multiplication by the inverse damped GGN with LSMR."""
+def test_LSMRInverseLinearOperator_damped_GGN(inv_case, delta: float = 2e-2):
+    """Test matrix multiplication with the inverse damped GGN with LSMR."""
     model_func, loss_func, params, data, batch_size_fn = inv_case
+    (dev,), (dt,) = {p.device for p in params}, {p.dtype for p in params}
 
     GGN = GGNLinearOperator(
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn
-    ).to_scipy()
-    damping = aslinearoperator(delta * sparse.eye(GGN.shape[0]))
+    )
+    damping = delta * IdentityLinearOperator([p.shape for p in params], dev, dt)
 
-    inv_GGN = LSMRInverseLinearOperator(GGN + damping)
     # set hyperparameters such that LSMR is accurate enough
-    inv_GGN.set_lsmr_hyperparameters(atol=0, btol=0, maxiter=2 * GGN.shape[0])
-    inv_GGN_functorch = inv(
-        functorch_ggn(model_func, loss_func, params, data, input_key="x")
-        .detach()
-        .cpu()
-        .numpy()
-        + delta * eye(GGN.shape[1])
+    inv_GGN = LSMRInverseLinearOperator(
+        GGN + damping, atol=0, btol=0, maxiter=2 * GGN.shape[0]
+    )
+    inv_GGN_naive = torch.linalg.inv(
+        functorch_ggn(model_func, loss_func, params, data, input_key="x").detach()
+        + delta * torch.eye(GGN.shape[1], device=dev, dtype=dt)
     )
 
-    x = random.rand(GGN.shape[1])
-    report_nonclose(inv_GGN @ x, inv_GGN_functorch @ x, rtol=5e-3, atol=1e-5)
-
-
-def test_LSMR_inverse_damped_GGN_matmat(
-    inv_case, delta: float = 1e-2, num_vecs: int = 3
-):
-    """Test matrix-matrix multiplication by the inverse damped GGN with LSMR."""
-    model_func, loss_func, params, data, batch_size_fn = inv_case
-
-    GGN = GGNLinearOperator(
-        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
-    ).to_scipy()
-    damping = aslinearoperator(delta * sparse.eye(GGN.shape[0]))
-
-    inv_GGN = LSMRInverseLinearOperator(GGN + damping)
-    # set hyperparameters such that LSMR is accurate enough
-    inv_GGN.set_lsmr_hyperparameters(atol=0, btol=0, maxiter=2 * GGN.shape[0])
-    inv_GGN_functorch = inv(
-        functorch_ggn(model_func, loss_func, params, data, input_key="x")
-        .detach()
-        .cpu()
-        .numpy()
-        + delta * eye(GGN.shape[1])
+    compare_consecutive_matmats(inv_GGN, adjoint=False, is_vec=False)
+    compare_matmat(
+        inv_GGN, inv_GGN_naive, adjoint=False, is_vec=False, rtol=5e-3, atol=1e-5
     )
-
-    X = random.rand(GGN.shape[1], num_vecs)
-    report_nonclose(inv_GGN @ X, inv_GGN_functorch @ X, rtol=1e-2, atol=1e-5)
 
 
 def test_Neumann_inverse_damped_GGN_matvec(inv_case, delta: float = 1e-2):

@@ -48,7 +48,7 @@ Inverses
    :members: __init__
 
 .. autoclass:: curvlinops.LSMRInverseLinearOperator
-   :members: __init__, set_lsmr_hyperparameters, matvec_with_info
+   :members: __init__
 
 .. autoclass:: curvlinops.NeumannInverseLinearOperator
    :members: __init__, set_neumann_hyperparameters
