@@ -23,9 +23,9 @@ from curvlinops import (
 )
 from curvlinops.examples.functorch import functorch_ggn
 from curvlinops.examples.utils import report_nonclose
-from curvlinops.utils import allclose_report
 from test.utils import (
     cast_input,
+    compare_consecutive_matmats,
     compare_matmat,
     compare_state_dicts,
     eye_like,
@@ -292,7 +292,9 @@ def test_KFAC_inverse_damped_matmat(
         KFAC, damping=(delta, delta), cache=cache
     )
 
+    compare_consecutive_matmats(inv_KFAC, adjoint, is_vec)
     compare_matmat(inv_KFAC, inv_KFAC_naive, adjoint, is_vec)
+    compare_consecutive_matmats(inv_KFAC_tuple, adjoint, is_vec)
     compare_matmat(inv_KFAC_tuple, inv_KFAC_naive, adjoint, is_vec)
 
     assert inv_KFAC._cache == cache
@@ -428,6 +430,7 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901, PLR0912, PLR09
         min_damping=KFAC_MIN_DAMPING,
     )
 
+    compare_consecutive_matmats(inv_KFAC, adjoint, is_vec)
     compare_matmat(inv_KFAC, inv_KFAC_naive, adjoint, is_vec)
 
     assert inv_KFAC._cache == cache
@@ -523,6 +526,7 @@ def test_KFAC_inverse_exactly_damped_matmat(
         KFAC, damping=delta, cache=cache, use_exact_damping=True
     )
 
+    compare_consecutive_matmats(inv_KFAC, adjoint, is_vec)
     compare_matmat(inv_KFAC, inv_KFAC_naive, adjoint, is_vec)
 
     assert inv_KFAC._cache == cache
@@ -701,10 +705,17 @@ def test_EKFAC_inverse_exactly_damped_matmat(
     cache: bool,
     exclude: str,
     separate_weight_and_bias: bool,
+    adjoint: bool,
+    is_vec: bool,
     shuffle: bool,
     delta: float = 1e-2,
 ):
-    """Test matrix-matrix multiplication by an inverse (exactly) damped EKFAC approximation."""
+    """Test matrix-matrix multiplication by an inverse (exactly) damped EKFAC approximation.
+
+    Args:
+        adjoint: Whether to test the adjoint operator.
+        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
+    """
     model_func, loss_func, params, data, batch_size_fn = inv_case
     params = maybe_exclude_or_shuffle_parameters(params, model_func, exclude, shuffle)
     dtype = torch.float64  # use double precision for better numerical stability
@@ -747,12 +758,8 @@ def test_EKFAC_inverse_exactly_damped_matmat(
         EKFAC, damping=delta, cache=cache, use_exact_damping=True
     )
 
-    num_vectors = 2
-    X = torch.rand(EKFAC.shape[1], num_vectors, dtype=dtype, device=EKFAC._device)
-    inv_EKFAC_X = inv_EKFAC @ X
-    inv_EKFAC_naive_X = inv_EKFAC_naive @ X
-    # test for equivalence
-    assert allclose_report(inv_EKFAC_X, inv_EKFAC_naive_X)
+    compare_consecutive_matmats(inv_EKFAC, adjoint, is_vec)
+    compare_matmat(inv_EKFAC, inv_EKFAC_naive, adjoint, is_vec)
 
     assert inv_EKFAC._cache == cache
     # test that the cache is empty

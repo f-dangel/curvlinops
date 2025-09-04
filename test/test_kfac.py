@@ -41,6 +41,7 @@ from test.utils import (
     binary_classification_targets,
     block_diagonal,
     classification_targets,
+    compare_consecutive_matmats,
     compare_matmat,
     maybe_exclude_or_shuffle_parameters,
     regression_targets,
@@ -655,6 +656,7 @@ def test_KFACLinearOperator(
     dtype = kfac._infer_dtype()
     kfac_mat = kfac @ torch_eye(kfac.shape[1], device=device, dtype=dtype)
 
+    compare_consecutive_matmats(kfac, adjoint, is_vec)
     compare_matmat(kfac, kfac_mat, adjoint, is_vec, rtol=1e-5, atol=1e-7)
 
 
