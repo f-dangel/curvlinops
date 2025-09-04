@@ -45,7 +45,7 @@ Inverses
 --------
 
 .. autoclass:: curvlinops.CGInverseLinearOperator
-   :members: __init__, set_cg_hyperparameters
+   :members: __init__
 
 .. autoclass:: curvlinops.LSMRInverseLinearOperator
    :members: __init__, set_lsmr_hyperparameters, matvec_with_info

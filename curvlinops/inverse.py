@@ -1,13 +1,25 @@
 """Implements linear operator inverses."""
 
+from __future__ import annotations
+
 from math import sqrt
-from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar, Union
+from typing import Any, Dict, List, Optional, Tuple, TypeVar, Union
 from warnings import warn
 
 from einops import rearrange
 from numpy import allclose, column_stack, ndarray
 from scipy.sparse.linalg import LinearOperator, cg, lsmr
-from torch import Tensor, cat, cholesky_inverse, eye, float64, outer
+from torch import (
+    Tensor,
+    cat,
+    cholesky_inverse,
+    device,
+    dtype,
+    eye,
+    float64,
+    from_numpy,
+    outer,
+)
 from torch.linalg import cholesky, eigh
 
 from curvlinops._torch_base import PyTorchLinearOperator
@@ -34,60 +46,96 @@ class _InverseLinearOperator(LinearOperator):
         return column_stack([self @ col for col in X.T])
 
 
-class CGInverseLinearOperator(_InverseLinearOperator):
-    """Class for inverse linear operators via conjugate gradients."""
+class InversePyTorchLinearOperator(PyTorchLinearOperator):
+    """Base class for inverses of PyTorch linear operators."""
 
-    def __init__(self, A: LinearOperator):
+    def __init__(self, A: PyTorchLinearOperator):
         """Store the linear operator whose inverse should be represented.
 
         Args:
-            A: Linear operator whose inverse is formed. Must be symmetric and
-                positive-definite.
+            A: PyTorch linear operator whose inverse is formed.
         """
-        super().__init__(A.dtype, A.shape)
+        super().__init__(A._in_shape, A._out_shape)
         self._A = A
 
-        # CG hyperparameters
-        self.set_cg_hyperparameters()
-
-    def set_cg_hyperparameters(
-        self,
-        x0: Optional[ndarray] = None,
-        maxiter: Optional[int] = None,
-        M: Optional[Union[ndarray, LinearOperator]] = None,
-        callback: Optional[Callable] = None,
-        atol: Optional[float] = None,
-        tol: Optional[float] = 1e-5,
-    ):
-        """Store hyperparameters for CG.
-
-        They will be used to approximate the inverse matrix-vector products.
-
-        For more detail, see
-        https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.linalg.cg.html.
-
-        # noqa: DAR101
-        """
-        self._cg_hyperparameters = {
-            "x0": x0,
-            "maxiter": maxiter,
-            "M": M,
-            "callback": callback,
-            "atol": atol,
-            "tol": tol,
-        }
-
-    def _matvec(self, x: ndarray) -> ndarray:
-        """Multiply x by the inverse of A.
-
-        Args:
-             x: Vector for multiplication.
+    def _infer_dtype(self) -> dtype:
+        """Determine the linear operator's data type.
 
         Returns:
-             Result of inverse matrix-vector multiplication, ``A⁻¹ @ x``.
+            The linear operator's dtype.
         """
-        result, _ = cg(self._A, x, **self._cg_hyperparameters)
-        return result
+        return self._A._infer_dtype()
+
+    def _infer_device(self) -> device:
+        """Determine the device the linear operators is defined on.
+
+        Returns:
+            The linear operator's device.
+        """
+        return self._A._infer_device()
+
+
+class CGInverseLinearOperator(InversePyTorchLinearOperator):
+    """Class for inverse linear operators via conjugate gradients.
+
+    Note:
+        Internally, this operator uses SciPy's CPU implementation of CG as PyTorch
+        currently does not offer a CG interface that purely relies on matrix-vector
+        products.
+    """
+
+    def __init__(self, A: PyTorchLinearOperator, **cg_hyperparameters):
+        """Store the linear operator whose inverse should be represented.
+
+        Args:
+            A: PyTorch linear operator whose inverse is formed. Must represent a
+                symmetric and positive-definite matrix.
+            cg_hyperparameters: Keyword arguments for SciPy's CG implementation.
+                For details, see
+                https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.linalg.cg.html.
+        """
+        super().__init__(A)
+        self._A_scipy = A.to_scipy()
+        self._cg_hyperparameters = cg_hyperparameters
+
+    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+        """Multiply X by the inverse of A.
+
+        Args:
+             X: Matrix for multiplication.
+
+        Returns:
+             Result of inverse matrix-vector multiplication, ``A⁻¹ @ X``.
+        """
+        # flatten and convert to numpy
+        X_np = (
+            cat([x.flatten(end_dim=-2) for x in X])
+            .cpu()
+            .numpy()
+            .astype(self._A_scipy.dtype)
+        )
+        _, num_vecs = X_np.shape
+
+        # apply CG to each vector in SciPy
+        Ainv_X = [cg(self._A_scipy, x, **self._cg_hyperparameters)[0] for x in X_np.T]
+        Ainv_X = column_stack(Ainv_X)
+
+        # convert to PyTorch and unflatten
+        dev, dt = self._infer_device(), self._infer_dtype()
+        Ainv_X = from_numpy(Ainv_X).to(dev, dt)
+        Ainv_X = [
+            r.reshape(*s, num_vecs)
+            for r, s in zip(Ainv_X.split(self._out_shape_flat), self._out_shape)
+        ]
+        return Ainv_X
+
+    def _adjoint(self) -> CGInverseLinearOperator:
+        """Return the linear operator's adjoint: (A^-1)* = (A*)^-1.
+
+        Returns:
+            A linear operator representing the adjoint.
+        """
+        return CGInverseLinearOperator(self._A._adjoint(), **self._cg_hyperparameters)
 
 
 class LSMRInverseLinearOperator(_InverseLinearOperator):

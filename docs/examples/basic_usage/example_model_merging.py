@@ -32,24 +32,22 @@ This requires multiplying with the inverse of the sum of Fisher matrices
 :py:class:`curvlinops.CGInverseLinearOperator` for that.
 
 Let's start with the imports.
-
 """
 
-import numpy
-import torch
+from torch.optim import SGD
+from torch import device, cuda, manual_seed, rand
 from backpack.utils.convert_parameters import vector_to_parameter_list
-from scipy import sparse
-from scipy.sparse.linalg import aslinearoperator
-from torch import nn
+from torch.nn import Sequential, Linear, Sigmoid, ReLU, MSELoss
+from torch.nn.utils import parameters_to_vector
 from torch.utils.data import DataLoader, TensorDataset
 
 from curvlinops import CGInverseLinearOperator, GGNLinearOperator
+from curvlinops.outer import IdentityLinearOperator
 
 # make deterministic
-torch.manual_seed(0)
-numpy.random.seed(0)
+manual_seed(0)
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+DEVICE = device("cuda" if cuda.is_available() else "cpu")
 
 # %%
 #
@@ -67,18 +65,18 @@ N = 20  # number of data per task
 batch_size = 7
 
 
-def make_architecture() -> nn.Sequential:
+def make_architecture() -> Sequential:
     """Create a neural network.
 
     Returns:
         A neural network.
     """
-    return nn.Sequential(
-        nn.Linear(D_in, D_hidden),
-        nn.ReLU(),
-        nn.Linear(D_hidden, D_hidden),
-        nn.Sigmoid(),
-        nn.Linear(D_hidden, D_out),
+    return Sequential(
+        Linear(D_in, D_hidden),
+        ReLU(),
+        Linear(D_hidden, D_hidden),
+        Sigmoid(),
+        Linear(D_hidden, D_out),
     )
 
 
@@ -88,13 +86,13 @@ def make_dataset() -> TensorDataset:
     Returns:
         A synthetic regression data set.
     """
-    X, y = torch.rand(N, D_in), torch.rand(N, D_out)
+    X, y = rand(N, D_in), rand(N, D_out)
     return TensorDataset(X, y)
 
 
 models = [make_architecture().to(DEVICE) for _ in range(T)]
 data_loaders = [DataLoader(make_dataset(), batch_size=batch_size) for _ in range(T)]
-loss_functions = [nn.MSELoss(reduction="mean").to(DEVICE) for _ in range(T)]
+loss_functions = [MSELoss(reduction="mean").to(DEVICE) for _ in range(T)]
 
 # %%
 #
@@ -110,7 +108,7 @@ for task_idx in range(T):
     model = models[task_idx]
     data_loader = data_loaders[task_idx]
     loss_function = loss_functions[task_idx]
-    optimizer = torch.optim.SGD(model.parameters(), lr=1e-2)
+    optimizer = SGD(model.parameters(), lr=1e-2)
 
     for epoch in range(num_epochs):
         for batch_idx, (X, y) in enumerate(data_loader):
@@ -136,7 +134,7 @@ fishers = [
         loss_function,
         [p for p in model.parameters() if p.requires_grad],
         data_loader,
-    ).to_scipy()
+    )
     for model, loss_function, data_loader in zip(models, loss_functions, data_loaders)
 ]
 
@@ -145,14 +143,13 @@ fishers = [
 # Fisher-weighted Averaging
 # -------------------------
 #
-# Next, we also need the trained parameters as :py:mod:`scipy` vectors:
+# Next, we also need the trained parameters as vectors:
 
-# flatten and convert to numpy
+# flatten and concatenate
 thetas = [
-    nn.utils.parameters_to_vector((p for p in model.parameters() if p.requires_grad))
+    parameters_to_vector((p for p in model.parameters() if p.requires_grad)).detach()
     for model in models
 ]
-thetas = [theta.cpu().detach().numpy() for theta in thetas]
 
 # %%
 #
@@ -168,10 +165,11 @@ rhs = sum(fisher @ theta for fisher, theta in zip(fishers, thetas))
 # term:
 
 dim = fishers[0].shape[0]
-identity = sparse.eye(dim)
+param_shapes = [p.shape for p in models[0].parameters() if p.requires_grad]
+identity = IdentityLinearOperator(param_shapes, DEVICE, rhs.dtype)
 damping = 1e-3
 
-fisher_sum = aslinearoperator(damping * identity)
+fisher_sum = damping * identity
 
 for fisher in fishers:
     fisher_sum += fisher
@@ -208,19 +206,17 @@ average_params = sum(thetas) / len(thetas)
 fisher_model = make_architecture()
 
 params = [p for p in fisher_model.parameters() if p.requires_grad]
-theta_fisher = vector_to_parameter_list(
-    torch.from_numpy(fisher_weighted_params), params
-)
+theta_fisher = vector_to_parameter_list(fisher_weighted_params, params)
 for theta, param in zip(theta_fisher, params):
-    param.data = theta.to(param.device).to(param.dtype).data
+    param.data = theta.to(param.device, param.dtype).data
 
 # same for the average-weighted parameters
 average_model = make_architecture()
 
 params = [p for p in average_model.parameters() if p.requires_grad]
-theta_average = vector_to_parameter_list(torch.from_numpy(average_params), params)
+theta_average = vector_to_parameter_list(average_params, params)
 for theta, param in zip(theta_average, params):
-    param.data = theta.to(param.device).to(param.dtype).data
+    param.data = theta.to(param.device, param.dtype).data
 
 # %%
 #
