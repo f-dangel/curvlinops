@@ -4,14 +4,17 @@ from __future__ import annotations
 
 from typing import List
 
-from numpy import column_stack, ndarray, zeros
-from scipy.sparse.linalg import LinearOperator
+from torch import Tensor, zeros
+
+from curvlinops._torch_base import PyTorchLinearOperator
 
 
-class SubmatrixLinearOperator(LinearOperator):
+class SubmatrixLinearOperator(PyTorchLinearOperator):
     """Class for sub-matrices of linear operators."""
 
-    def __init__(self, A: LinearOperator, row_idxs: List[int], col_idxs: List[int]):
+    def __init__(
+        self, A: PyTorchLinearOperator, row_idxs: List[int], col_idxs: List[int]
+    ):
         """Store the linear operator and indices of its sub-matrix.
 
         Represents the sub-matrix ``A[row_idxs, :][col_idxs, :]``.
@@ -23,6 +26,8 @@ class SubmatrixLinearOperator(LinearOperator):
         """
         self._A = A
         self.set_submatrix(row_idxs, col_idxs)
+        self._infer_dtype = A._infer_dtype
+        self._infer_device = A._infer_device
 
     def set_submatrix(self, row_idxs: List[int], col_idxs: List[int]):
         """Define the sub-matrix.
@@ -48,38 +53,30 @@ class SubmatrixLinearOperator(LinearOperator):
                 raise ValueError("Index lists contain out-of-bounds indices.")
             shape.append(len(idxs))
 
-        super().__init__(self._A.dtype, shape)
+        in_shape, out_shape = [(shape[1],)], [(shape[0],)]
+        super().__init__(in_shape, out_shape)
         self._row_idxs = row_idxs
         self._col_idxs = col_idxs
 
-    def _matvec(self, x: ndarray) -> ndarray:
-        """Multiply x by the sub-matrix of A.
+    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+        """Matrix-matrix multiplication.
 
         Args:
-             x: Vector for multiplication. Has shape ``[len(col_idxs)]``.
+            X: A list that contains a single tensor, which is the input tensor.
 
         Returns:
-             Result of the (sub-matrix)-vector-multiplication,
-             ``A[row_idxs, :][:, col_idxs] @ x``. Has shape ``[len(row_idxs)]``.
+            A list that contains a single tensor, which is the output tensor.
         """
-        v = zeros((self._A.shape[1],), dtype=self._A.dtype)
-        v[self._col_idxs] = x
-        Av = self._A @ v
-
-        return Av[self._row_idxs]
-
-    def _matmat(self, X: ndarray) -> ndarray:
-        """Multiply each column of X by the sub-matrix of A.
-
-        Args:
-            X: Matrix for multiplication. Has shape ``[len(col_idxs), N]`` with
-                abitrary ``N``.
-
-        Returns:
-            Result of the (sub-matrix)-matrix-multiplication,
-            ``A[row_idxs, :][:, col_idxs] @ x``. Has shape ``[len(row_idxs), N]``.
-        """
-        return column_stack([self @ col for col in X.T])
+        (M,) = X
+        V = zeros(
+            self._A.shape[1],
+            M.shape[-1],
+            dtype=self._infer_dtype(),
+            device=self._infer_device(),
+        )
+        V[self._col_idxs] = M
+        AV = self._A @ V
+        return [AV[self._row_idxs]]
 
     def _adjoint(self) -> SubmatrixLinearOperator:
         """Return the adjoint of the sub-matrix.
