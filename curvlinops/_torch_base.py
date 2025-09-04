@@ -76,8 +76,8 @@ class PyTorchLinearOperator:
         self.shape = (sum(self._out_shape_flat), sum(self._in_shape_flat))
 
     def __matmul__(
-        self, X: Union[List[Tensor], Tensor | PyTorchLinearOperator]
-    ) -> Union[List[Tensor], Tensor | _ChainPyTorchLinearOperator]:
+        self, X: Union[List[Tensor], Tensor, PyTorchLinearOperator]
+    ) -> Union[List[Tensor], Tensor, _ChainPyTorchLinearOperator]:
         """Multiply onto a vector or matrix given as PyTorch tensor or tensor list.
 
         Args:
