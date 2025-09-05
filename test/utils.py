@@ -142,9 +142,8 @@ def block_diagonal(
     data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
     batch_size_fn: Optional[Callable[[MutableMapping], int]] = None,
     separate_weight_and_bias: bool = True,
-    return_numpy: bool = True,
     optional_linop_args: Optional[Dict[str, Any]] = None,
-) -> Union[ndarray, Tensor]:
+) -> Tensor:
     """Compute the block-diagonal of the matrix induced by a linear operator.
 
     Args:
@@ -156,8 +155,6 @@ def block_diagonal(
         batch_size_fn: A function that returns the batch size given a dict-like ``X``.
         separate_weight_and_bias: Whether to treat weight and bias of a layer as
             separate blocks in the block-diagonal. Default: ``True``.
-        return_numpy: Whether to return the block-diagonal as a numpy array.
-            Default: ``True``.
 
     Returns:
         The block-diagonal matrix.
@@ -207,8 +204,7 @@ def block_diagonal(
             matrix_blocks[i][j].zero_()
 
     # concatenate all blocks
-    block_diag = cat([cat(row_blocks, dim=1) for row_blocks in matrix_blocks], dim=0)
-    return block_diag.cpu().numpy() if return_numpy else block_diag
+    return cat([cat(row_blocks, dim=1) for row_blocks in matrix_blocks], dim=0)
 
 
 class WeightShareModel(Sequential):
@@ -775,9 +771,7 @@ def _test_inplace_activations(
     params = list(model.parameters())
 
     # 1) compare (E)KFAC and GGN
-    ggn = block_diagonal(
-        GGNLinearOperator, model, loss_func, params, data, return_numpy=False
-    )
+    ggn = block_diagonal(GGNLinearOperator, model, loss_func, params, data)
     linop = linop_cls(model, loss_func, params, data, fisher_type=FisherType.TYPE2)
     linop_mat = linop @ eye_like(linop)
     assert allclose_report(ggn, linop_mat)
@@ -786,9 +780,7 @@ def _test_inplace_activations(
     for mod in model.modules():
         if hasattr(mod, "inplace"):
             mod.inplace = False
-    ggn_no_inplace = block_diagonal(
-        GGNLinearOperator, model, loss_func, params, data, return_numpy=False
-    )
+    ggn_no_inplace = block_diagonal(GGNLinearOperator, model, loss_func, params, data)
     assert allclose_report(ggn, ggn_no_inplace)
 
 
@@ -1025,7 +1017,6 @@ def _test_ekfac_closer_to_exact_than_kfac(
         data,
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
-        return_numpy=False,
         optional_linop_args=optional_linop_args,
     )
 

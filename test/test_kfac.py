@@ -85,7 +85,6 @@ def test_kfac_type2(
         data,
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
-        return_numpy=False,
     )
     kfac = KFACLinearOperator(
         model,
@@ -154,7 +153,6 @@ def test_kfac_type2_weight_sharing(
         data,
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
-        return_numpy=False,
     )
     kfac = KFACLinearOperator(
         model,
@@ -212,7 +210,6 @@ def test_kfac_mc(
         data,
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
-        return_numpy=False,
     )
     kfac = KFACLinearOperator(
         model,
@@ -277,7 +274,6 @@ def test_kfac_mc_weight_sharing(
         data,
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
-        return_numpy=False,
     )
     kfac = KFACLinearOperator(
         model,
@@ -327,7 +323,6 @@ def test_kfac_one_datum(
         data,
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
-        return_numpy=False,
     )
     kfac = KFACLinearOperator(
         model,
@@ -372,7 +367,6 @@ def test_kfac_mc_one_datum(
         data,
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
-        return_numpy=False,
     )
     kfac = KFACLinearOperator(
         model,
@@ -421,7 +415,6 @@ def test_kfac_ef_one_datum(
         data,
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
-        return_numpy=False,
     )
 
     kfac = KFACLinearOperator(
@@ -891,7 +884,6 @@ def test_forward_only_fisher_type_exact_case(
         data,
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
-        return_numpy=False,
     )
 
     # Compute KFAC with `fisher_type=FisherType.FORWARD_ONLY`
@@ -989,7 +981,6 @@ def test_forward_only_fisher_type_exact_weight_sharing_case(
         data,
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
-        return_numpy=False,
     )
     foof = KFACLinearOperator(
         model,
