@@ -3,7 +3,6 @@
 from typing import Dict, Iterable, List, Tuple, Union
 
 from einops.layers.torch import Rearrange
-from numpy import eye, random
 from pytest import mark
 from torch import (
     Tensor,
@@ -15,8 +14,6 @@ from torch import (
     rand_like,
 )
 from torch import eye as torch_eye
-from test.utils import eye_like
-from curvlinops.utils import allclose_report
 from torch.nn import (
     BCEWithLogitsLoss,
     CrossEntropyLoss,
@@ -29,8 +26,8 @@ from torch.nn import (
 )
 
 from curvlinops import EFLinearOperator, GGNLinearOperator
-from curvlinops.examples.utils import report_nonclose
 from curvlinops.kfac import FisherType, KFACLinearOperator, KFACType
+from curvlinops.utils import allclose_report
 from test.cases import DEVICES, DEVICES_IDS
 from test.utils import (
     Conv2dModel,
@@ -45,6 +42,7 @@ from test.utils import (
     classification_targets,
     compare_consecutive_matmats,
     compare_matmat,
+    eye_like,
     maybe_exclude_or_shuffle_parameters,
     regression_targets,
 )
@@ -1095,7 +1093,6 @@ def test_bug_132_dtype_deterministic_checks(dev: device):
     """
     # make deterministic
     manual_seed(0)
-    random.seed(0)
 
     # create a toy problem, load everything to float64
     dt = float64
