@@ -51,7 +51,7 @@ Inverses
    :members: __init__
 
 .. autoclass:: curvlinops.NeumannInverseLinearOperator
-   :members: __init__, set_neumann_hyperparameters
+   :members: __init__
 
 .. autoclass:: curvlinops.KFACInverseLinearOperator
    :members: __init__
