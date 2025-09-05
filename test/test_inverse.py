@@ -27,7 +27,7 @@ from curvlinops import (
     NeumannInverseLinearOperator,
 )
 from curvlinops.examples.functorch import functorch_ggn
-from curvlinops.examples.utils import report_nonclose
+from curvlinops.utils import allclose_report
 from curvlinops.outer import IdentityLinearOperator
 from test.test__torch_base import TensorLinearOperator
 from test.utils import (
@@ -568,7 +568,7 @@ def test_KFAC_inverse_save_and_load_state_dict(
 
     # check that the two inverse KFACs are equal
     compare_state_dicts(inv_kfac.state_dict(), inv_kfac_new.state_dict())
-    report_nonclose(inv_kfac_as_mat, inv_kfac_new @ eye(kfac.shape[1]))
+    assert allclose_report(inv_kfac_as_mat, inv_kfac_new @ eye(kfac.shape[1]))
 
 
 @mark.parametrize("use_exact_damping", [True, False], ids=["exact_damping", ""])
@@ -634,7 +634,7 @@ def test_KFAC_inverse_from_state_dict(
     # check that the two inverse KFACs are equal
     compare_state_dicts(inv_kfac.state_dict(), inv_kfac_new.state_dict())
     test_vec = rand(kfac.shape[1])
-    report_nonclose(inv_kfac @ test_vec, inv_kfac_new @ test_vec)
+    assert allclose_report(inv_kfac @ test_vec, inv_kfac_new @ test_vec)
 
 
 """KFACInverseLinearOperator with EKFACLinearOperator tests."""
@@ -766,7 +766,7 @@ def test_EKFAC_inverse_save_and_load_state_dict():
     # check that the two inverse KFACs are equal
     compare_state_dicts(inv_ekfac.state_dict(), inv_ekfac_new.state_dict())
     test_vec = rand(inv_ekfac.shape[1])
-    report_nonclose(inv_ekfac @ test_vec, inv_ekfac_new @ test_vec)
+    assert allclose_report(inv_ekfac @ test_vec, inv_ekfac_new @ test_vec)
 
 
 def test_EKFAC_inverse_from_state_dict():
@@ -798,4 +798,4 @@ def test_EKFAC_inverse_from_state_dict():
     # check that the two inverse KFACs are equal
     compare_state_dicts(inv_ekfac.state_dict(), inv_ekfac_new.state_dict())
     test_vec = rand(ekfac.shape[1])
-    report_nonclose(inv_ekfac @ test_vec, inv_ekfac_new @ test_vec)
+    assert allclose_report(inv_ekfac @ test_vec, inv_ekfac_new @ test_vec)
