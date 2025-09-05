@@ -144,7 +144,7 @@ def block_diagonal(
     separate_weight_and_bias: bool = True,
     return_numpy: bool = True,
     optional_linop_args: Optional[Dict[str, Any]] = None,
-) -> ndarray:
+) -> Union[ndarray, Tensor]:
     """Compute the block-diagonal of the matrix induced by a linear operator.
 
     Args:

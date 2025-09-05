@@ -15,6 +15,8 @@ from torch import (
     rand_like,
 )
 from torch import eye as torch_eye
+from test.utils import eye_like
+from curvlinops.utils import allclose_report
 from torch.nn import (
     BCEWithLogitsLoss,
     CrossEntropyLoss,
@@ -85,8 +87,9 @@ def test_kfac_type2(
         data,
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
+        return_numpy=False,
     )
-    kfac_torch = KFACLinearOperator(
+    kfac = KFACLinearOperator(
         model,
         loss_func,
         params,
@@ -95,14 +98,13 @@ def test_kfac_type2(
         fisher_type=FisherType.TYPE2,
         separate_weight_and_bias=separate_weight_and_bias,
     )
-    kfac = kfac_torch.to_scipy()
-    kfac_mat = kfac @ eye(kfac.shape[1])
+    kfac_mat = kfac @ eye_like(kfac)
 
-    report_nonclose(ggn, kfac_mat)
+    assert allclose_report(ggn, kfac_mat)
 
     # Check that input covariances were not computed
     if exclude == "weight":
-        assert len(kfac_torch._input_covariances) == 0
+        assert len(kfac._input_covariances) == 0
 
 
 @mark.parametrize("setting", [KFACType.EXPAND, KFACType.REDUCE])
@@ -154,8 +156,9 @@ def test_kfac_type2_weight_sharing(
         data,
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
+        return_numpy=False,
     )
-    kfac_torch = KFACLinearOperator(
+    kfac = KFACLinearOperator(
         model,
         loss_func,
         params,
@@ -165,14 +168,13 @@ def test_kfac_type2_weight_sharing(
         kfac_approx=setting,  # choose KFAC approximation consistent with setting
         separate_weight_and_bias=separate_weight_and_bias,
     )
-    kfac = kfac_torch.to_scipy()
-    kfac_mat = kfac @ eye(kfac.shape[1])
+    kfac_mat = kfac @ eye_like(kfac)
 
-    report_nonclose(ggn, kfac_mat, rtol=1e-4)
+    assert allclose_report(ggn, kfac_mat, rtol=1e-4)
 
     # Check that input covariances were not computed
     if exclude == "weight":
-        assert len(kfac_torch._input_covariances) == 0
+        assert len(kfac._input_covariances) == 0
 
 
 @mark.parametrize(
@@ -212,6 +214,7 @@ def test_kfac_mc(
         data,
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
+        return_numpy=False,
     )
     kfac = KFACLinearOperator(
         model,
@@ -222,13 +225,13 @@ def test_kfac_mc(
         fisher_type=FisherType.MC,
         mc_samples=2_000,
         separate_weight_and_bias=separate_weight_and_bias,
-    ).to_scipy()
-    kfac_mat = kfac @ eye(kfac.shape[1])
+    )
+    kfac_mat = kfac @ eye_like(kfac)
 
     atol = {"sum": 5e-1, "mean": 1e-2}[loss_func.reduction]
     rtol = {"sum": 2e-2, "mean": 2e-2}[loss_func.reduction]
 
-    report_nonclose(ggn, kfac_mat, rtol=rtol, atol=atol)
+    assert allclose_report(ggn, kfac_mat, rtol=rtol, atol=atol)
 
 
 @mark.parametrize(
@@ -276,6 +279,7 @@ def test_kfac_mc_weight_sharing(
         data,
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
+        return_numpy=False,
     )
     kfac = KFACLinearOperator(
         model,
@@ -287,13 +291,13 @@ def test_kfac_mc_weight_sharing(
         mc_samples=2_000,
         kfac_approx=setting,  # choose KFAC approximation consistent with setting
         separate_weight_and_bias=separate_weight_and_bias,
-    ).to_scipy()
-    kfac_mat = kfac @ eye(kfac.shape[1])
+    )
+    kfac_mat = kfac @ eye_like(kfac)
 
     atol = {"sum": 5e-1, "mean": 1e-2}[loss_func.reduction]
     rtol = {"sum": 2e-2, "mean": 2e-2}[loss_func.reduction]
 
-    report_nonclose(ggn, kfac_mat, rtol=rtol, atol=atol)
+    assert allclose_report(ggn, kfac_mat, rtol=rtol, atol=atol)
 
 
 @mark.parametrize(
@@ -325,6 +329,7 @@ def test_kfac_one_datum(
         data,
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
+        return_numpy=False,
     )
     kfac = KFACLinearOperator(
         model,
@@ -334,10 +339,10 @@ def test_kfac_one_datum(
         batch_size_fn=batch_size_fn,
         fisher_type=FisherType.TYPE2,
         separate_weight_and_bias=separate_weight_and_bias,
-    ).to_scipy()
-    kfac_mat = kfac @ eye(kfac.shape[1])
+    )
+    kfac_mat = kfac @ eye_like(kfac)
 
-    report_nonclose(ggn, kfac_mat)
+    assert allclose_report(ggn, kfac_mat)
 
 
 @mark.parametrize(
@@ -369,6 +374,7 @@ def test_kfac_mc_one_datum(
         data,
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
+        return_numpy=False,
     )
     kfac = KFACLinearOperator(
         model,
@@ -379,13 +385,13 @@ def test_kfac_mc_one_datum(
         fisher_type=FisherType.MC,
         mc_samples=11_000,
         separate_weight_and_bias=separate_weight_and_bias,
-    ).to_scipy()
-    kfac_mat = kfac @ eye(kfac.shape[1])
+    )
+    kfac_mat = kfac @ eye_like(kfac)
 
     atol = {"sum": 1e-3, "mean": 1e-3}[loss_func.reduction]
     rtol = {"sum": 3e-2, "mean": 3e-2}[loss_func.reduction]
 
-    report_nonclose(ggn, kfac_mat, rtol=rtol, atol=atol)
+    assert allclose_report(ggn, kfac_mat, rtol=rtol, atol=atol)
 
 
 @mark.parametrize(
@@ -417,6 +423,7 @@ def test_kfac_ef_one_datum(
         data,
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
+        return_numpy=False,
     )
 
     kfac = KFACLinearOperator(
@@ -427,10 +434,10 @@ def test_kfac_ef_one_datum(
         batch_size_fn=batch_size_fn,
         fisher_type=FisherType.EMPIRICAL,
         separate_weight_and_bias=separate_weight_and_bias,
-    ).to_scipy()
-    kfac_mat = kfac @ eye(kfac.shape[1])
+    )
+    kfac_mat = kfac @ eye_like(kfac)
 
-    report_nonclose(ef, kfac_mat)
+    assert allclose_report(ef, kfac_mat)
 
 
 @mark.parametrize("dev", DEVICES, ids=DEVICES_IDS)
@@ -500,14 +507,8 @@ def test_multi_dim_output(
 
     # KFAC for deep linear network with 4d input and output
     params = list(model.parameters())
-    kfac = KFACLinearOperator(
-        model,
-        loss_func,
-        params,
-        data,
-        fisher_type=fisher_type,
-    ).to_scipy()
-    kfac_mat = kfac @ eye(kfac.shape[1])
+    kfac = KFACLinearOperator(model, loss_func, params, data, fisher_type=fisher_type)
+    kfac_mat = kfac @ eye_like(kfac)
 
     # KFAC for deep linear network with 4d input and equivalent 2d output
     manual_seed(711)
@@ -531,10 +532,10 @@ def test_multi_dim_output(
         params_flat,
         data_flat,
         fisher_type=fisher_type,
-    ).to_scipy()
-    kfac_flat_mat = kfac_flat @ eye(kfac_flat.shape[1])
+    )
+    kfac_flat_mat = kfac_flat @ eye_like(kfac_flat)
 
-    report_nonclose(kfac_mat, kfac_flat_mat)
+    assert allclose_report(kfac_mat, kfac_flat_mat)
 
 
 @mark.parametrize("fisher_type", KFACLinearOperator._SUPPORTED_FISHER_TYPE)
@@ -581,14 +582,13 @@ def test_expand_setting_scaling(
 
     # KFAC with sum reduction
     loss_func = loss(reduction="sum").to(dev)
-    kfac_sum_torch = KFACLinearOperator(
+    kfac_sum = KFACLinearOperator(
         model,
         loss_func,
         params,
         data,
         fisher_type=fisher_type,
     )
-    kfac_sum = kfac_sum_torch.to_scipy()
     # FOOF does not scale the gradient covariances, even when using a mean reduction
     if fisher_type != FisherType.FORWARD_ONLY:
         # Simulate a mean reduction by manually scaling the gradient covariances
@@ -597,9 +597,9 @@ def test_expand_setting_scaling(
             output_random_variable_size = 3
             # MSE loss averages over number of output channels
             loss_term_factor *= output_random_variable_size
-        for ggT in kfac_sum_torch._gradient_covariances.values():
-            ggT.div_(kfac_sum_torch._N_data * loss_term_factor)
-    kfac_simulated_mean_mat = kfac_sum @ eye(kfac_sum.shape[1])
+        for ggT in kfac_sum._gradient_covariances.values():
+            ggT.div_(kfac_sum._N_data * loss_term_factor)
+    kfac_simulated_mean_mat = kfac_sum @ eye_like(kfac_sum)
 
     # KFAC with mean reduction
     loss_func = loss(reduction="mean").to(dev)
@@ -609,10 +609,10 @@ def test_expand_setting_scaling(
         params,
         data,
         fisher_type=fisher_type,
-    ).to_scipy()
-    kfac_mean_mat = kfac_mean @ eye(kfac_mean.shape[1])
+    )
+    kfac_mean_mat = kfac_mean @ eye_like(kfac_mean)
 
-    report_nonclose(kfac_simulated_mean_mat, kfac_mean_mat)
+    assert allclose_report(kfac_simulated_mean_mat, kfac_mean_mat)
 
 
 @mark.parametrize("separate_weight_and_bias", [False], ids=["joint_bias"])
@@ -823,7 +823,7 @@ def test_forward_only_fisher_type(
         foof_simulated._gradient_covariances[name] = torch_eye(
             block.shape[0], dtype=block.dtype, device=block.device
         )
-    simulated_foof_mat = foof_simulated.to_scipy() @ eye(foof_simulated.shape[1])
+    simulated_foof_mat = foof_simulated @ eye_like(foof_simulated)
 
     # Compute KFAC with `fisher_type=FisherType.FORWARD_ONLY`
     foof = KFACLinearOperator(
@@ -835,12 +835,12 @@ def test_forward_only_fisher_type(
         separate_weight_and_bias=separate_weight_and_bias,
         fisher_type=FisherType.FORWARD_ONLY,
     )
-    foof_mat = foof.to_scipy() @ eye(foof.shape[1])
+    foof_mat = foof @ eye_like(foof)
 
     # Check for equivalence
     assert len(foof_simulated._input_covariances) == len(foof._input_covariances)
     assert len(foof_simulated._gradient_covariances) == len(foof._gradient_covariances)
-    report_nonclose(simulated_foof_mat, foof_mat)
+    assert allclose_report(simulated_foof_mat, foof_mat)
 
     # Check that input covariances were not computed
     if exclude == "weight":
@@ -893,6 +893,7 @@ def test_forward_only_fisher_type_exact_case(
         data,
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
+        return_numpy=False,
     )
 
     # Compute KFAC with `fisher_type=FisherType.FORWARD_ONLY`
@@ -905,7 +906,7 @@ def test_forward_only_fisher_type_exact_case(
         separate_weight_and_bias=separate_weight_and_bias,
         fisher_type=FisherType.FORWARD_ONLY,
     )
-    foof_mat = foof.to_scipy() @ eye(foof.shape[1])
+    foof_mat = foof @ eye_like(foof)
 
     # Check for equivalence
     num_data = sum(X.shape[0] for X, _ in data)
@@ -913,7 +914,7 @@ def test_forward_only_fisher_type_exact_case(
     out_dim = y.shape[1]
     # See the docstring for the explanation of the scale
     scale = num_data if loss_func.reduction == "sum" else 1 / out_dim
-    report_nonclose(ggn, 2 * scale * foof_mat)
+    assert allclose_report(ggn, 2 * scale * foof_mat)
 
     # Check that input covariances were not computed
     if exclude == "weight":
@@ -990,6 +991,7 @@ def test_forward_only_fisher_type_exact_weight_sharing_case(
         data,
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
+        return_numpy=False,
     )
     foof = KFACLinearOperator(
         model,
@@ -1001,7 +1003,7 @@ def test_forward_only_fisher_type_exact_weight_sharing_case(
         kfac_approx=setting,  # choose KFAC approximation consistent with setting
         separate_weight_and_bias=separate_weight_and_bias,
     )
-    foof_mat = foof.to_scipy() @ eye(foof.shape[1])
+    foof_mat = foof @ eye_like(foof)
 
     # Check for equivalence
     num_data = sum(X.shape[0] for X, _ in data)
@@ -1016,7 +1018,7 @@ def test_forward_only_fisher_type_exact_weight_sharing_case(
             else X.shape[1:-1].numel()
         )
         scale *= sequence_length
-    report_nonclose(ggn, 2 * scale * foof_mat, rtol=1e-4)
+    assert allclose_report(ggn, 2 * scale * foof_mat, rtol=1e-4)
 
     # Check that input covariances were not computed
     if exclude == "weight":
