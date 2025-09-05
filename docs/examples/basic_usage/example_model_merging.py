@@ -34,11 +34,11 @@ This requires multiplying with the inverse of the sum of Fisher matrices
 Let's start with the imports.
 """
 
-from torch.optim import SGD
-from torch import device, cuda, manual_seed, rand
 from backpack.utils.convert_parameters import vector_to_parameter_list
-from torch.nn import Sequential, Linear, Sigmoid, ReLU, MSELoss
+from torch import cuda, device, manual_seed, rand
+from torch.nn import Linear, MSELoss, ReLU, Sequential, Sigmoid
 from torch.nn.utils import parameters_to_vector
+from torch.optim import SGD
 from torch.utils.data import DataLoader, TensorDataset
 
 from curvlinops import CGInverseLinearOperator, GGNLinearOperator

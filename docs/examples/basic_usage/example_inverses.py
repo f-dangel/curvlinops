@@ -21,13 +21,11 @@ and cross-entropy loss.
 As always, let's first import the required functionality.
 """
 
-from curvlinops.utils import allclose_report
 import matplotlib.pyplot as plt
-import numpy
-from torch.linalg import inv
 from scipy.sparse.linalg import eigsh
-from torch.nn import Sequential, Linear, ReLU, Sigmoid, MSELoss
-from torch import manual_seed, float64, device, rand, eye, cuda
+from torch import cuda, device, eye, float64, manual_seed, rand
+from torch.linalg import inv
+from torch.nn import Linear, MSELoss, ReLU, Sequential, Sigmoid
 from torch.nn.utils import parameters_to_vector
 
 from curvlinops import (
@@ -37,6 +35,7 @@ from curvlinops import (
 )
 from curvlinops.examples.functorch import functorch_ggn, functorch_gradient_and_loss
 from curvlinops.outer import IdentityLinearOperator
+from curvlinops.utils import allclose_report
 
 # make deterministic
 manual_seed(0)
@@ -248,8 +247,7 @@ plt.colorbar(image, ax=ax[1], shrink=0.5)
 #
 # To make the Neumann series converge, we need to know the largest eigenvalue
 # of the matrix to be inverted:
-damped_GGN_scipy = damped_GGN.to_scipy()
-max_eigval = eigsh(damped_GGN_scipy, k=1, which="LM", return_eigenvectors=False)[0]
+max_eigval = eigsh(damped_GGN.to_scipy(), k=1, which="LM", return_eigenvectors=False)[0]
 # eigenvalues (scale * damped_GGN_mat) are in [0; 2)
 scale = 1.0 if max_eigval < 2.0 else 1.99 / max_eigval
 
@@ -261,8 +259,8 @@ num_terms = [10]
 neumann_inverses = []
 
 for n in num_terms:
-    inv = NeumannInverseLinearOperator(damped_GGN_scipy, scale=scale, num_terms=n)
-    neumann_inverses.append(inv @ numpy.eye(inv.shape[1]))
+    inv = NeumannInverseLinearOperator(damped_GGN, scale=scale, num_terms=n)
+    neumann_inverses.append(inv @ eye(inv.shape[1], device=DEVICE, dtype=DTYPE))
 
 # %%
 #
@@ -274,7 +272,7 @@ plt.suptitle("Inverse damped Fisher (logarithm of absolute values)")
 for i, (n, inv) in enumerate(zip(num_terms, neumann_inverses)):
     ax = axes.flat[i]
     ax.set_title(f"Neumann, {n} terms")
-    image = ax.imshow(numpy.log10(numpy.abs(inv)))
+    image = ax.imshow(inv.abs().log10())
     plt.colorbar(image, ax=ax, shrink=0.5)
 
 ax = axes.flat[-1]

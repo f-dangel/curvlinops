@@ -18,8 +18,8 @@ from torch import (
     eye,
     float64,
     from_numpy,
-    outer,
     isnan,
+    outer,
 )
 from torch.linalg import cholesky, eigh
 

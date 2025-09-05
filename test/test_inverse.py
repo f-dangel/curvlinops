@@ -4,15 +4,15 @@ import os
 from math import sqrt
 from typing import Iterable, List, Tuple, Union
 
-from torch import eye, float64, Tensor, rand, manual_seed, load, save
-from torch.linalg import inv, eigh
 from pytest import mark, raises
+from torch import Tensor, eye, float64, load, manual_seed, rand, save
+from torch.linalg import eigh, inv
 from torch.nn import (
     CrossEntropyLoss,
+    Linear,
     Module,
     MSELoss,
     Parameter,
-    Linear,
     ReLU,
     Sequential,
 )
@@ -26,9 +26,9 @@ from curvlinops import (
     LSMRInverseLinearOperator,
     NeumannInverseLinearOperator,
 )
-from curvlinops.outer import IdentityLinearOperator
 from curvlinops.examples.functorch import functorch_ggn
 from curvlinops.examples.utils import report_nonclose
+from curvlinops.outer import IdentityLinearOperator
 from test.test__torch_base import TensorLinearOperator
 from test.utils import (
     cast_input,
