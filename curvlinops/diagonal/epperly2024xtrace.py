@@ -1,17 +1,17 @@
 """Implements the XDiag algorithm from Epperly 2024."""
 
-from torch import column_stack, dot, einsum
-from torch.linalg import inv, qr
-from torch import Tensor
-from curvlinops._torch_base import PyTorchLinearOperator
+from typing import Union
 
+from torch import Tensor, column_stack, dot, einsum
+from torch.linalg import inv, qr
+
+from curvlinops._torch_base import PyTorchLinearOperator
 from curvlinops.sampling import random_vector
 from curvlinops.utils import (
     assert_divisible_by,
     assert_is_square,
     assert_matvecs_subseed_dim,
 )
-from typing import Union
 
 
 def xdiag(A: Union[PyTorchLinearOperator, Tensor], num_matvecs: int) -> Tensor:
