@@ -1,10 +1,9 @@
 """Sampling methods for random vectors."""
 
-from numpy import ndarray
-from numpy.random import binomial, randn
+from torch import Tensor, device, dtype, empty, randn
 
 
-def rademacher(dim: int) -> ndarray:
+def rademacher(dim: int, device: device, dtype: dtype) -> Tensor:
     """Draw a vector with i.i.d. Rademacher elements.
 
     Args:
@@ -13,11 +12,11 @@ def rademacher(dim: int) -> ndarray:
     Returns:
         Vector with i.i.d. Rademacher elements and specified dimension.
     """
-    num_trials, success_prob = 1, 0.5
-    return binomial(num_trials, success_prob, size=dim).astype(float) * 2 - 1
+    p_success = 0.5
+    return empty(dim, device=device, dtype=dtype).bernoulli_(p_success).mul_(2).sub_(1)
 
 
-def normal(dim: int) -> ndarray:
+def normal(dim: int, device: device, dtype: dtype) -> Tensor:
     """Draw a vector with i.i.d. standard normal elements.
 
     Args:
@@ -26,10 +25,10 @@ def normal(dim: int) -> ndarray:
     Returns:
         Vector with i.i.d. standard normal elements and specified dimension.
     """
-    return randn(dim)
+    return randn(dim, device=device, dtype=dtype)
 
 
-def random_vector(dim: int, distribution: str) -> ndarray:
+def random_vector(dim: int, distribution: str, device: device, dtype: dtype) -> Tensor:
     """Draw a vector with i.i.d. elements.
 
     Args:
@@ -44,8 +43,8 @@ def random_vector(dim: int, distribution: str) -> ndarray:
         ValueError: If the distribution is unknown.
     """
     if distribution == "rademacher":
-        return rademacher(dim)
+        return rademacher(dim, device, dtype)
     elif distribution == "normal":
-        return normal(dim)
+        return normal(dim, device, dtype)
     else:
         raise ValueError(f"Unknown distribution {distribution:!r}.")

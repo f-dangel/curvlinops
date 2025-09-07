@@ -1,15 +1,19 @@
 """Vanilla Hutchinson trace estimation."""
 
-from numpy import column_stack, einsum
-from scipy.sparse.linalg import LinearOperator
+from typing import Union
 
+from torch import Tensor, column_stack, einsum
+
+from curvlinops._torch_base import PyTorchLinearOperator
 from curvlinops.sampling import random_vector
 from curvlinops.utils import assert_is_square, assert_matvecs_subseed_dim
 
 
 def hutchinson_trace(
-    A: LinearOperator, num_matvecs: int, distribution: str = "rademacher"
-) -> float:
+    A: Union[Tensor, PyTorchLinearOperator],
+    num_matvecs: int,
+    distribution: str = "rademacher",
+) -> Tensor:
     r"""Estimate a linear operator's trace using the Girard-Hutchinson method.
 
     For details, see
@@ -50,23 +54,29 @@ def hutchinson_trace(
         The estimated trace of the linear operator.
 
     Example:
-        >>> from numpy import trace, mean
-        >>> from numpy.random import rand, seed
-        >>> seed(0) # make deterministic
+        >>> from torch import manual_seed, rand
+        >>> _ = manual_seed(0) # make deterministic
         >>> A = rand(50, 50)
-        >>> tr_A = trace(A) # exact trace as reference
+        >>> tr_A = A.trace().item() # exact trace as reference
         >>> # one- and multi-sample approximations
-        >>> tr_A_low_precision = hutchinson_trace(A, num_matvecs=1)
-        >>> tr_A_high_precision = hutchinson_trace(A, num_matvecs=40)
+        >>> tr_A_low_precision = hutchinson_trace(A, num_matvecs=1).item()
+        >>> tr_A_high_precision = hutchinson_trace(A, num_matvecs=40).item()
         >>> # compute the relative errors
         >>> rel_error_low_precision = abs(tr_A - tr_A_low_precision) / abs(tr_A)
         >>> rel_error_high_precision = abs(tr_A - tr_A_high_precision) / abs(tr_A)
         >>> assert rel_error_low_precision > rel_error_high_precision
         >>> round(tr_A, 4), round(tr_A_low_precision, 4), round(tr_A_high_precision, 4)
-        (25.7342, 59.7307, 20.033)
+        (23.7836, -10.0279, 20.8427)
     """
     dim = assert_is_square(A)
     assert_matvecs_subseed_dim(A, num_matvecs)
-    G = column_stack([random_vector(dim, distribution) for _ in range(num_matvecs)])
+    dev, dt = (
+        (A._infer_device(), A._infer_dtype())
+        if isinstance(A, PyTorchLinearOperator)
+        else (A.device, A.dtype)
+    )
+    G = column_stack(
+        [random_vector(dim, distribution, dev, dt) for _ in range(num_matvecs)]
+    )
 
     return einsum("ij,ij", G, A @ G) / num_matvecs
