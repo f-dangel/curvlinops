@@ -83,12 +83,12 @@ def hutchpp_trace(
     assert_matvecs_subseed_dim(A, num_matvecs)
     assert_divisible_by(num_matvecs, 3, "num_matvecs")
     N = num_matvecs // 3
-
     dev, dt = (
         (A._infer_device(), A._infer_dtype())
         if isinstance(A, PyTorchLinearOperator)
         else (A.device, A.dtype)
     )
+
     # compute the orthogonal basis for the subspace spanned by AS, and evaluate the
     # exact trace using 2/3 of the available matrix-vector products
     AS = A @ column_stack([random_vector(dim, distribution, dev, dt) for _ in range(N)])

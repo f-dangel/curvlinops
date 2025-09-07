@@ -695,9 +695,9 @@ def eye_like(A: Union[Tensor, PyTorchLinearOperator]) -> Tensor:
 
 
 def check_estimator_convergence(
-    estimator: Callable[[], ndarray],
+    estimator: Callable[[], Tensor],
     num_matvecs: int,
-    truth: float,
+    truth: Tensor,
     max_total_matvecs: int = 100_000,
     check_every: int = 100,
     target_rel_error: float = 1e-3,
@@ -719,7 +719,7 @@ def check_estimator_convergence(
     """
     used_matvecs, converged = 0, False
 
-    def relative_l_inf_error(a_true: ndarray, a: ndarray) -> float:
+    def relative_l_inf_error(a_true: Tensor, a: Tensor) -> Tensor:
         """Compute the relative infinity norm error.
 
         For scalars, this is simply | a - a_true | / | a_true |, the metric used by
@@ -735,7 +735,7 @@ def check_estimator_convergence(
             a: The estimated value.
         """
         assert a.shape == a_true.shape
-        return abs(a - a_true).max() / abs(a_true).max()
+        return (a - a_true).abs().max() / a_true.abs().max()
 
     estimates = []
     while used_matvecs < max_total_matvecs and not converged:
@@ -744,7 +744,7 @@ def check_estimator_convergence(
 
         num_estimates = len(estimates)
         if num_estimates % check_every == 0:
-            rel_error = relative_l_inf_error(truth, sum(estimates) / num_estimates)
+            rel_error = relative_l_inf_error(truth, sum(estimates) / len(estimates))
             print(f"Relative error after {used_matvecs} matvecs: {rel_error:.5f}.")
             converged = rel_error < target_rel_error
 
