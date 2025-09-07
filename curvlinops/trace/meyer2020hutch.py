@@ -1,9 +1,11 @@
 """Implementation of Hutch++ trace estimation from Meyer et al."""
 
-from numpy import column_stack, einsum
-from numpy.linalg import qr
-from scipy.sparse.linalg import LinearOperator
+from typing import Union
 
+from torch import Tensor, column_stack, einsum
+from torch.linalg import qr
+
+from curvlinops._torch_base import PyTorchLinearOperator
 from curvlinops.sampling import random_vector
 from curvlinops.utils import (
     assert_divisible_by,
@@ -13,8 +15,10 @@ from curvlinops.utils import (
 
 
 def hutchpp_trace(
-    A: LinearOperator, num_matvecs: int, distribution: str = "rademacher"
-) -> float:
+    A: Union[PyTorchLinearOperator, Tensor],
+    num_matvecs: int,
+    distribution: str = "rademacher",
+) -> Tensor:
     r"""Estimate a linear operator's trace using the Hutch++ method.
 
     In contrast to vanilla Hutchinson, Hutch++ has lower variance, but requires more
@@ -61,35 +65,39 @@ def hutchpp_trace(
         The estimated trace of the linear operator.
 
     Example:
-        >>> from numpy import trace, mean
-        >>> from numpy.random import rand, seed
-        >>> seed(0) # make deterministic
+        >>> from torch import manual_seed, rand
+        >>> _ = manual_seed(0) # make deterministic
         >>> A = rand(50, 50)
-        >>> tr_A = trace(A) # exact trace as reference
+        >>> tr_A = A.trace().item() # exact trace as reference
         >>> # one- and multi-sample approximations
-        >>> tr_A_low_precision = hutchpp_trace(A, num_matvecs=3)
-        >>> tr_A_high_precision = hutchpp_trace(A, num_matvecs=30)
+        >>> tr_A_low_precision = hutchpp_trace(A, num_matvecs=3).item()
+        >>> tr_A_high_precision = hutchpp_trace(A, num_matvecs=30).item()
         >>> # compute the relative errors
         >>> rel_error_low_precision = abs(tr_A - tr_A_low_precision) / abs(tr_A)
         >>> rel_error_high_precision = abs(tr_A - tr_A_high_precision) / abs(tr_A)
         >>> assert rel_error_low_precision > rel_error_high_precision
         >>> round(tr_A, 4), round(tr_A_low_precision, 4), round(tr_A_high_precision, 4)
-        (25.7342, 50.3488, 26.052)
+        (23.7836, 15.7879, 19.6381)
     """
     dim = assert_is_square(A)
     assert_matvecs_subseed_dim(A, num_matvecs)
     assert_divisible_by(num_matvecs, 3, "num_matvecs")
     N = num_matvecs // 3
 
+    dev, dt = (
+        (A._infer_device(), A._infer_dtype())
+        if isinstance(A, PyTorchLinearOperator)
+        else (A.device, A.dtype)
+    )
     # compute the orthogonal basis for the subspace spanned by AS, and evaluate the
     # exact trace using 2/3 of the available matrix-vector products
-    AS = A @ column_stack([random_vector(dim, distribution) for _ in range(N)])
+    AS = A @ column_stack([random_vector(dim, distribution, dev, dt) for _ in range(N)])
     Q, _ = qr(AS)
     tr_QT_A_Q = einsum("ji,ji", Q, A @ Q)
 
     # compute the trace in the complementary space using the remaining 1/3 of the
     # matrix-vector products
-    G = column_stack([random_vector(dim, distribution) for _ in range(N)])
+    G = column_stack([random_vector(dim, distribution, dev, dt) for _ in range(N)])
 
     # project out subspace
     A_proj_G = A @ (G - Q @ (Q.T @ G))
