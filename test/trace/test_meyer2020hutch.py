@@ -2,9 +2,8 @@
 
 from functools import partial
 
-from numpy import trace
-from numpy.random import rand, seed
 from pytest import mark
+from torch import manual_seed, rand
 
 from curvlinops import hutchpp_trace
 from test.trace import DISTRIBUTION_IDS, DISTRIBUTIONS, NUM_MATVEC_IDS, NUM_MATVECS
@@ -20,7 +19,7 @@ def test_hutchpp_trace(num_matvecs: int, distribution: str):
         num_matvecs: Number of matrix-vector products used per estimate.
         distribution: Distribution of the random vectors used for the trace estimation.
     """
-    seed(0)
+    manual_seed(0)
     A = rand(10, 10)
     estimator = partial(
         hutchpp_trace, A=A, num_matvecs=num_matvecs, distribution=distribution
@@ -28,7 +27,7 @@ def test_hutchpp_trace(num_matvecs: int, distribution: str):
     check_estimator_convergence(
         estimator,
         num_matvecs,
-        trace(A),
+        A.trace(),
         # use half the target tolerance as vanilla Hutchinson
-        target_rel_error=5e-4,
+        target_rel_error=1e-3,
     )

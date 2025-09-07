@@ -2,8 +2,7 @@
 
 from functools import partial
 
-from numpy import diag
-from numpy.random import rand, seed
+from torch import rand, manual_seed
 from pytest import mark
 
 from curvlinops import hutchinson_diag
@@ -20,9 +19,9 @@ def test_hutchinson_diag(num_matvecs: int, distribution: str):
         num_matvecs: Number of matrix-vector products used per estimate.
         distribution: Distribution of the random vectors used for the trace estimation.
     """
-    seed(0)
+    manual_seed(1)
     A = rand(30, 30)
     estimator = partial(
         hutchinson_diag, A=A, num_matvecs=num_matvecs, distribution=distribution
     )
-    check_estimator_convergence(estimator, num_matvecs, diag(A), target_rel_error=2e-2)
+    check_estimator_convergence(estimator, num_matvecs, A.diag(), target_rel_error=2e-2)

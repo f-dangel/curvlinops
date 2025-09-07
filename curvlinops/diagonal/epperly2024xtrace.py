@@ -1,8 +1,9 @@
 """Implements the XDiag algorithm from Epperly 2024."""
 
-from numpy import column_stack, dot, einsum, ndarray
-from numpy.linalg import inv, qr
-from scipy.sparse.linalg import LinearOperator
+from torch import column_stack, dot, einsum
+from torch.linalg import inv, qr
+from torch import Tensor
+from curvlinops._torch_base import PyTorchLinearOperator
 
 from curvlinops.sampling import random_vector
 from curvlinops.utils import (
@@ -10,9 +11,10 @@ from curvlinops.utils import (
     assert_is_square,
     assert_matvecs_subseed_dim,
 )
+from typing import Union
 
 
-def xdiag(A: LinearOperator, num_matvecs: int) -> ndarray:
+def xdiag(A: Union[PyTorchLinearOperator, Tensor], num_matvecs: int) -> Tensor:
     """Estimate a linear operator's diagonal using the XDiag algorithm.
 
     The method is presented in `this paper <https://arxiv.org/pdf/2301.07825>`_:
@@ -35,10 +37,17 @@ def xdiag(A: LinearOperator, num_matvecs: int) -> ndarray:
     dim = assert_is_square(A)
     assert_matvecs_subseed_dim(A, num_matvecs)
     assert_divisible_by(num_matvecs, 2, "num_matvecs")
+    dev, dt = (
+        (A._infer_device(), A._infer_dtype())
+        if isinstance(A, PyTorchLinearOperator)
+        else (A.device, A.dtype)
+    )
 
     # draw random vectors and compute their matrix-vector products
     num_vecs = num_matvecs // 2
-    W = column_stack([random_vector(dim, "rademacher") for _ in range(num_vecs)])
+    W = column_stack(
+        [random_vector(dim, "rademacher", dev, dt) for _ in range(num_vecs)]
+    )
     A_W = A @ W
 
     # compute the orthogonal basis for all test vectors, and its associated diagonal
@@ -54,12 +63,9 @@ def xdiag(A: LinearOperator, num_matvecs: int) -> ndarray:
     D = 1 / (RT_inv**2).sum(0) ** 0.5
     S = einsum("ij,j->ij", RT_inv, D)
     # Further simplification then leads to
-    diagonal = (
-        diag_Q_QT_A
-        - einsum("ij,jk,lk,li->i", Q, S, S, QT_A, optimize="optimal") / num_vecs
-    )
+    diagonal = diag_Q_QT_A - einsum("ij,jk,lk,li->i", Q, S, S, QT_A) / num_vecs
 
-    def deflate(v: ndarray, s: ndarray) -> ndarray:
+    def deflate(v: Tensor, s: Tensor) -> Tensor:
         """Apply (I - s sT) to a vector.
 
         Args:
