@@ -212,10 +212,12 @@ class TensorLinearOperator(PyTorchLinearOperator):
         self._A = A
         self.SELF_ADJOINT = A.shape == A.T.shape and A.allclose(A.T)
 
-    def _infer_device(self) -> device:
+    @property
+    def device(self) -> device:
         return self._A.device
 
-    def _infer_dtype(self) -> dtype:
+    @property
+    def dtype(self) -> dtype:
         return self._A.dtype
 
     def _adjoint(self) -> TensorLinearOperator:

@@ -644,7 +644,7 @@ def test_KFACLinearOperator(
     )
 
     device = kfac._device
-    dtype = kfac._infer_dtype()
+    dtype = kfac.dtype
     kfac_mat = kfac @ torch_eye(kfac.shape[1], device=device, dtype=dtype)
 
     compare_consecutive_matmats(kfac, adjoint, is_vec)
