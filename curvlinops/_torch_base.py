@@ -50,7 +50,7 @@ class PyTorchLinearOperator:
 
     The interface also supports exporting the PyTorch linear operator to a SciPy linear
     operator, which can be useful for interfacing with SciPy routines. To achieve this,
-    the functions ``_infer_device`` and ``_infer_dtype`` must be implemented.
+    the properties ``.device`` and ``.dtype`` must be implemented.
 
     Attributes:
         SELF_ADJOINT: Whether the linear operator is self-adjoint. If ``True``,
@@ -361,8 +361,7 @@ class PyTorchLinearOperator:
             A SciPy linear operator that carries out the matrix-vector products
             in PyTorch.
         """
-        dev = self._infer_device()
-        dt = self._infer_dtype()
+        dev, dt = self.device, self.dtype
 
         scipy_matmat = self._scipy_compatible(self.__matmul__, dev, dt)
         A_adjoint = self.adjoint()
@@ -377,7 +376,8 @@ class PyTorchLinearOperator:
             dtype=numpy.dtype(dtype) if dtype is None else dtype,
         )
 
-    def _infer_device(self) -> device:
+    @property
+    def device(self) -> device:
         """Infer the linear operator's device.
 
         Returns:  # noqa: D402
@@ -388,7 +388,8 @@ class PyTorchLinearOperator:
         """
         raise NotImplementedError
 
-    def _infer_dtype(self) -> dtype:
+    @property
+    def dtype(self) -> dtype:
         """Infer the linear operator's data type.
 
         Returns: # noqa: D402
@@ -458,15 +459,15 @@ class _SumPyTorchLinearOperator(PyTorchLinearOperator):
                 "Output shapes of linear operators must match:"
                 + f"Got {A._out_shape} vs. {B._out_shape}."
             )
-        if A._infer_device() != B._infer_device():
+        if A.device != B.device:
             raise ValueError(
                 "Devices of linear operators must match:"
-                + f"Got {A._infer_device()} vs. {B._infer_device()}."
+                + f"Got {A.device} vs. {B.device}."
             )
-        if A._infer_dtype() != B._infer_dtype():
+        if A.dtype != B.dtype:
             raise ValueError(
                 "Dtypes of linear operators must match:"
-                + f"Got {A._infer_dtype()} vs. {B._infer_dtype()}."
+                + f"Got {A.dtype} vs. {B.dtype}."
             )
         super().__init__(A._in_shape, A._out_shape)
         self._A, self._B = A, B
@@ -493,21 +494,23 @@ class _SumPyTorchLinearOperator(PyTorchLinearOperator):
         """
         return _SumPyTorchLinearOperator(self._A.adjoint(), self._B.adjoint())
 
-    def _infer_device(self) -> device:
+    @property
+    def device(self) -> device:
         """Determine the device the linear operators is defined on.
 
         Returns:
             The linear operator's device.
         """
-        return self._A._infer_device()
+        return self._A.device
 
-    def _infer_dtype(self) -> dtype:
+    @property
+    def dtype(self) -> dtype:
         """Determine the linear operator's data type.
 
         Returns:
             The linear operator's dtype.
         """
-        return self._A._infer_dtype()
+        return self._A.dtype
 
 
 class _ScalePyTorchLinearOperator(PyTorchLinearOperator):
@@ -544,21 +547,23 @@ class _ScalePyTorchLinearOperator(PyTorchLinearOperator):
         """
         return _ScalePyTorchLinearOperator(self._A.adjoint(), self._scalar)
 
-    def _infer_device(self) -> device:
+    @property
+    def device(self) -> device:
         """Determine the device the linear operators is defined on.
 
         Returns:
             The linear operator's device.
         """
-        return self._A._infer_device()
+        return self._A.device
 
-    def _infer_dtype(self) -> dtype:
+    @property
+    def dtype(self) -> dtype:
         """Determine the linear operator's data type.
 
         Returns:
             The linear operator's dtype.
         """
-        return self._A._infer_dtype()
+        return self._A.dtype
 
 
 class _ChainPyTorchLinearOperator(PyTorchLinearOperator):
@@ -577,36 +582,38 @@ class _ChainPyTorchLinearOperator(PyTorchLinearOperator):
         """
         if A._in_shape != B._out_shape:
             raise ValueError(f"{A._in_shape=} does not match {B._out_shape}.")
-        if A._infer_device() != B._infer_device():
+        if A.device != B.device:
             raise ValueError(
                 "Devices of linear operators must match:"
-                + f"Got {A._infer_device()} vs. {B._infer_device()}."
+                + f"Got {A.device} vs. {B.device}."
             )
-        if A._infer_dtype() != B._infer_dtype():
+        if A.dtype != B.dtype:
             raise ValueError(
                 "Dtypes of linear operators must match:"
-                + f"Got {A._infer_dtype()} vs. {B._infer_dtype()}."
+                + f"Got {A.dtype} vs. {B.dtype}."
             )
         self._A, self._B = A, B
 
         # Inherit shapes from the operands
         super().__init__(B._in_shape, A._out_shape)
 
-    def _infer_dtype(self) -> dtype:
+    @property
+    def dtype(self) -> dtype:
         """Determine the linear operator's data type.
 
         Returns:
             The linear operator's dtype.
         """
-        return self._A._infer_dtype()
+        return self._A.dtype
 
-    def _infer_device(self) -> device:
+    @property
+    def device(self) -> device:
         """Determine the device the linear operators is defined on.
 
         Returns:
             The linear operator's device.
         """
-        return self._A._infer_device()
+        return self._A.device
 
     def _matmat(self, X: List[Tensor]) -> List[Tensor]:
         """Multiply the linear operator onto a matrix in list format.
@@ -725,7 +732,6 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
         self._model_func = model_func
         self._loss_func = loss_func
         self._data = data
-        self._device = self._infer_device()
         self._progressbar = progressbar
         self._batch_size_fn = (
             (lambda X: X.shape[0]) if batch_size_fn is None else batch_size_fn
@@ -818,19 +824,20 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
             Mini-batches ``(X, y)``.
         """
         data_iter = self._data
+        dev = self.device
 
         if self._progressbar:
             desc = f"{self.__class__.__name__}{'' if desc is None else f'.{desc}'}"
             if add_device_to_desc:
-                desc = f"{desc} (on {str(self._device)})"
+                desc = f"{desc} (on {str(dev)})"
             data_iter = tqdm(data_iter, desc=desc)
 
         for X, y in data_iter:
             # Assume everything is handled by the model
             # if `X` is a custom data format
             if isinstance(X, Tensor):
-                X = X.to(self._device)
-            y = y.to(self._device)
+                X = X.to(dev)
+            y = y.to(dev)
             yield (X, y)
 
     def _get_normalization_factor(
@@ -899,9 +906,7 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
         if self._loss_func is None:
             raise ValueError("No loss function specified.")
 
-        total_loss = tensor(
-            [0.0], device=self._device, dtype=self._infer_dtype()
-        ).squeeze()
+        total_loss = tensor([0.0], device=self.device, dtype=self.dtype).squeeze()
         total_grad = [zeros_like(p) for p in self._params]
 
         for _, _, loss, grad_params in self.data_prediction_loss_gradient(
@@ -934,8 +939,8 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
         else:
             total_grad1 = [zeros_like(p) for p in self._params]
             total_grad2 = [zeros_like(p) for p in self._params]
-            total_loss1 = tensor(0.0, device=self._device, dtype=self._infer_dtype())
-            total_loss2 = tensor(0.0, device=self._device, dtype=self._infer_dtype())
+            total_loss1 = tensor(0.0, device=self.device, dtype=self.dtype)
+            total_loss2 = tensor(0.0, device=self.device, dtype=self.dtype)
 
         # loop twice over the data loader, accumulate total quantities and compare
         # batch quantities if the linear operator demands fixed data order
@@ -1041,7 +1046,7 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
         Raises:
             RuntimeError: If the two matrix-vector products yield different results.
         """
-        v = rand(self.shape[1], device=self._device, dtype=self._infer_dtype())
+        v = rand(self.shape[1], device=self.device, dtype=self.dtype)
         Av1 = self @ v
         Av2 = self @ v
         if not allclose_report(Av1, Av2, rtol=rtol, atol=atol):
@@ -1051,7 +1056,8 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
     #                                 SCIPY EXPORT                                #
     ###############################################################################
 
-    def _infer_device(self) -> device:
+    @property
+    def device(self) -> device:
         """Infer the device onto which to load NumPy vectors for the matrix multiply.
 
         Returns:
@@ -1065,7 +1071,8 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
             raise RuntimeError(f"Could not infer device. Parameters live on {devices}.")
         return devices.pop()
 
-    def _infer_dtype(self) -> dtype:
+    @property
+    def dtype(self) -> dtype:
         """Infer the data type to which to load NumPy vectors for the matrix multiply.
 
         Returns:
