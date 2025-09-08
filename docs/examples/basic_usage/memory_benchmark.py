@@ -18,7 +18,11 @@ from memory_profiler import memory_usage
 from torch import cuda, device, manual_seed, rand
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
-from curvlinops import KFACInverseLinearOperator, KFACLinearOperator
+from curvlinops import (
+    KFACInverseLinearOperator,
+    KFACLinearOperator,
+    EKFACLinearOperator,
+)
 
 
 def run_peakmem_benchmark(  # noqa: C901, PLR0915
@@ -69,11 +73,14 @@ def run_peakmem_benchmark(  # noqa: C901, PLR0915
             linop_str, model, loss_function, params, data, check_deterministic=False
         )
 
-        if isinstance(linop, KFACLinearOperator):
+        if isinstance(linop, (KFACLinearOperator, EKFACLinearOperator)):
             linop.compute_kronecker_factors()
-
+        if isinstance(linop, EKFACLinearOperator):
+            linop.compute_eigenvalue_correction()
         if isinstance(linop, KFACInverseLinearOperator):
             linop._A.compute_kronecker_factors()
+            if isinstance(linop._A, EKFACLinearOperator):
+                linop._A.compute_eigenvalue_correction()
             # damp and invert the Kronecker matrices
             for mod_name in linop._A._mapping:
                 linop._compute_or_get_cached_inverse(mod_name)
@@ -91,11 +98,14 @@ def run_peakmem_benchmark(  # noqa: C901, PLR0915
         )
         v = rand(linop.shape[1], device=dev)
 
-        if isinstance(linop, KFACLinearOperator):
+        if isinstance(linop, (KFACLinearOperator, EKFACLinearOperator)):
             linop.compute_kronecker_factors()
-
+        if isinstance(linop, EKFACLinearOperator):
+            linop.compute_eigenvalue_correction()
         if isinstance(linop, KFACInverseLinearOperator):
             linop._A.compute_kronecker_factors()
+            if isinstance(linop._A, EKFACLinearOperator):
+                linop._A.compute_eigenvalue_correction()
             # damp and invert the Kronecker matrices
             for mod_name in linop._A._mapping:
                 linop._compute_or_get_cached_inverse(mod_name)

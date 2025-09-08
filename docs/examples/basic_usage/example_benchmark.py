@@ -292,7 +292,12 @@ def setup_linop(
         linop = linop_cls(*args, **kwargs)
 
     if linop_str in {"KFAC inverse", "EKFAC inverse"}:
-        linop = KFACInverseLinearOperator(linop, damping=1e-3, cache=True)
+        linop = KFACInverseLinearOperator(
+            linop,
+            damping=1e-3,
+            cache=True,
+            use_exact_damping=linop_str == "EKFAC inverse",
+        )
 
     return linop
 
@@ -494,7 +499,7 @@ def visualize_time_benchmark(
             with open(benchpath(name, problem_str, device_str, op_str), "r") as f:
                 results[op_str] = json.load(f)["time"]
 
-        if name in {"KFAC", "KFAC inverse"}:
+        if name in {"KFAC", "KFAC inverse", "EKFAC", "EKFAC inverse"}:
             ax.barh(
                 idx - 0.2,
                 width=results["precompute"],
