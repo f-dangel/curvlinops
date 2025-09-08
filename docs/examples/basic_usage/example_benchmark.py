@@ -48,6 +48,7 @@ from tueplots import bundles
 
 from curvlinops import (
     EFLinearOperator,
+    EKFACLinearOperator,
     FisherMCLinearOperator,
     GGNLinearOperator,
     HessianLinearOperator,
@@ -207,6 +208,8 @@ LINOP_STRS = [
     "Monte-Carlo Fisher",
     "KFAC",
     "KFAC inverse",
+    "EKFAC",
+    "EKFAC inverse",
 ]
 
 # %%
@@ -278,6 +281,8 @@ def setup_linop(
         "Monte-Carlo Fisher": FisherMCLinearOperator,
         "KFAC": KFACLinearOperator,
         "KFAC inverse": KFACLinearOperator,
+        "EKFAC": EKFACLinearOperator,
+        "EKFAC inverse": EKFACLinearOperator,
     }[linop_str]
 
     # Double-backward through efficient attention is unsupported, disable fused kernels
@@ -286,7 +291,7 @@ def setup_linop(
     with sdpa_kernel(SDPBackend.MATH) if attention_double_backward else nullcontext():
         linop = linop_cls(*args, **kwargs)
 
-    if linop_str == "KFAC inverse":
+    if linop_str in {"KFAC inverse", "EKFAC inverse"}:
         linop = KFACInverseLinearOperator(linop, damping=1e-3, cache=True)
 
     return linop
@@ -384,10 +389,14 @@ def run_time_benchmark(  # noqa: C901
             _ = linop.gradient_and_loss()
 
     def f_precompute():
-        if isinstance(linop, KFACLinearOperator):
+        if isinstance(linop, (KFACLinearOperator, EKFACLinearOperator)):
             linop.compute_kronecker_factors()
+        if isinstance(linop, EKFACLinearOperator):
+            linop.compute_eigenvalue_correction()
         if isinstance(linop, KFACInverseLinearOperator):
             linop._A.compute_kronecker_factors()
+            if isinstance(linop._A, EKFACLinearOperator):
+                linop._A.compute_eigenvalue_correction()
             # damp and invert the Kronecker matrices
             for mod_name in linop._A._mapping:
                 linop._compute_or_get_cached_inverse(mod_name)
