@@ -51,6 +51,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     which are now available through `@`
   - `SubmatrixLinearOperator`
     ([PR](https://github.com/f-dangel/curvlinops/pull/177))
+  - Linear operators for approximate inversion (`CGInverseLinearOperator`, `LSMRInverseLinearOperator`, `NeumannInverseLinearOperator`)
+    ([PR](https://github.com/f-dangel/curvlinops/pull/186))
 
 - Add `EKFACLinearOperator` which implements EKFAC
   ([paper](https://arxiv.org/abs/1806.03884),
