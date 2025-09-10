@@ -64,6 +64,8 @@ install-docs:
 install-test:
 	@pip install -e .[test]
 
+.PHONY: test
+
 test:
 	@pytest -vx -n auto --cov=curvlinops --doctest-modules curvlinops test
 
