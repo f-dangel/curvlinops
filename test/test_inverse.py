@@ -42,26 +42,32 @@ from test.utils import (
 KFAC_MIN_DAMPING = 1e-8
 
 
-def test_CGInverseLinearOperator_damped_GGN(inv_case, delta: float = 2e-2):
-    """Test matrix multiplication with the inverse damped GGN with CG."""
+def test_CGInverseLinearOperator_damped_GGN(inv_case, delta_rel: float = 2e-2):
+    """Test matrix multiplication with the inverse damped GGN with CG.
+
+    Args:
+        inv_case: Tuple of model, loss function, parameters, data, batch size getter.
+        delta_rel: Relative damping factor that is multiplied onto the average trace
+            to obtain the damping value.
+    """
     model_func, loss_func, params, data, batch_size_fn = inv_case
     (dev,), (dt,) = {p.device for p in params}, {p.dtype for p in params}
 
+    GGN_naive = functorch_ggn(
+        model_func, loss_func, params, data, input_key="x"
+    ).detach()
+    # add damping proportional to average trace
+    delta = delta_rel * GGN_naive.diag().mean().item()
+    damping = delta * IdentityLinearOperator([p.shape for p in params], dev, dt)
     GGN = GGNLinearOperator(
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn
     )
-    damping = delta * IdentityLinearOperator([p.shape for p in params], dev, dt)
+    inv_GGN_naive = inv(GGN_naive + delta * eye(GGN.shape[1], dtype=dt))
 
-    inv_GGN = CGInverseLinearOperator(GGN + damping)
-    inv_GGN_naive = inv(
-        functorch_ggn(model_func, loss_func, params, data, input_key="x").detach()
-        + delta * eye(GGN.shape[1], device=dev, dtype=dt)
-    )
-
+    # specify tolerance to get solution with accuracy
+    inv_GGN = CGInverseLinearOperator(GGN + damping, tolerance=1e-4)
     compare_consecutive_matmats(inv_GGN, adjoint=False, is_vec=False)
-    compare_matmat(
-        inv_GGN, inv_GGN_naive, adjoint=False, is_vec=False, rtol=1e-2, atol=5e-5
-    )
+    compare_matmat(inv_GGN, inv_GGN_naive, adjoint=False, is_vec=False, rtol=1e-2)
 
 
 def test_LSMRInverseLinearOperator_damped_GGN(inv_case, delta: float = 2e-2):
