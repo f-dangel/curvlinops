@@ -13,7 +13,6 @@ MAX_REPEATS_MC_SAMPLES_IDS = [
 CHECK_EVERY = 100
 
 
-@mark.montecarlo
 @mark.parametrize(
     "max_repeats,mc_samples", MAX_REPEATS_MC_SAMPLES, ids=MAX_REPEATS_MC_SAMPLES_IDS
 )

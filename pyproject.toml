@@ -59,7 +59,7 @@ test = [
     "coveralls",
     "pytest",
     "pytest-cov",
-    "pytest-optional-tests",
+    "pytest-xdist", # distributing tests onto multiple CPUs
 ]
 
 # Dependencies needed for linting.
