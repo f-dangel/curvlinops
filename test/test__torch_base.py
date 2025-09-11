@@ -278,7 +278,10 @@ def test_ChainPyTorchLinearOperator(adjoint: bool, is_vec: bool):
     manual_seed(0)
     A = linspace(1, 10, steps=20).reshape(5, 4)
     B = rand(4, 3)
+    C = rand(3, 2)
 
-    AB = A @ B
-    AB_linop = TensorLinearOperator(A) @ TensorLinearOperator(B)
-    compare_matmat(AB_linop, AB, adjoint, is_vec)
+    ABC = A @ B @ C
+    ABC_linop = (
+        TensorLinearOperator(A) @ TensorLinearOperator(B) @ TensorLinearOperator(C)
+    )
+    compare_matmat(ABC_linop, ABC, adjoint, is_vec)
