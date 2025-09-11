@@ -1,13 +1,26 @@
 """Tests the linear operator interface in PyTorch."""
 
+from __future__ import annotations
+
 from typing import Iterable, Iterator, List, MutableMapping, Tuple, Union
 
 from pytest import raises
-from torch import Tensor, randperm, zeros
+from torch import (
+    Tensor,
+    device,
+    dtype,
+    linspace,
+    manual_seed,
+    rand,
+    rand_like,
+    randperm,
+    zeros,
+)
 
 from curvlinops._torch_base import CurvatureLinearOperator, PyTorchLinearOperator
 from curvlinops.examples.functorch import functorch_gradient_and_loss
 from curvlinops.utils import allclose_report
+from test.utils import compare_matmat
 
 
 def test_input_formatting():
@@ -179,3 +192,96 @@ def test_gradient_and_loss(case):
     assert len(gradient) == len(gradient_functorch)
     for g, g_functorch in zip(gradient, gradient_functorch):
         assert allclose_report(g, g_functorch)
+
+
+class TensorLinearOperator(PyTorchLinearOperator):
+    """Linear operator wrapping a single tensor as a linear operator."""
+
+    def __init__(self, A: Tensor):
+        """Initialize linear operator from a 2D tensor.
+
+        Args:
+            A: A 2D tensor representing the matrix.
+
+        Raises:
+            ValueError: If ``A`` is not a 2D tensor.
+        """
+        if A.ndim != 2:
+            raise ValueError(f"Input tensor must be 2D. Got {A.ndim}D.")
+        super().__init__([(A.shape[1],)], [(A.shape[0],)])
+        self._A = A
+        self.SELF_ADJOINT = A.shape == A.T.shape and A.allclose(A.T)
+
+    def _infer_device(self) -> device:
+        return self._A.device
+
+    def _infer_dtype(self) -> dtype:
+        return self._A.dtype
+
+    def _adjoint(self) -> TensorLinearOperator:
+        return TensorLinearOperator(self._A.conj().T)
+
+    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+        return [self._A @ X[0]]
+
+
+def test_SumPyTorchLinearOperator(adjoint: bool, is_vec: bool):
+    """Test adding two PyTorch linear operators.
+
+    Args:
+        adjoint: Whether to test the adjoint operator.
+        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
+    """
+    manual_seed(0)
+    A = linspace(1, 10, steps=20).reshape(5, 4)
+    B = rand_like(A)
+
+    # test addition
+    A_plus_B = A + B
+    A_linop, B_linop = TensorLinearOperator(A), TensorLinearOperator(B)
+    A_plus_B_linop = A_linop + B_linop
+    compare_matmat(A_plus_B_linop, A_plus_B, adjoint, is_vec)
+
+    # test subtraction
+    A_minus_B = A - B
+    A_linop, B_linop = TensorLinearOperator(A), TensorLinearOperator(B)
+    A_minus_B_linop = A_linop - B_linop
+    compare_matmat(A_minus_B_linop, A_minus_B, adjoint, is_vec)
+
+
+def test_ScalePyTorchLinearOperator(adjoint: bool, is_vec: bool):
+    """Test scaling a PyTorch linear operator with a scalar.
+
+    Args:
+        adjoint: Whether to test the adjoint operator.
+        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
+    """
+    A = linspace(1, 10, steps=20).reshape(5, 4)
+    scalar = 0.1
+
+    A_scaled = scalar * A
+    A_linop = TensorLinearOperator(A)
+
+    # scale from the right
+    compare_matmat(A_linop * scalar, A_scaled, adjoint, is_vec)
+    # scale from the left
+    compare_matmat(scalar * A_linop, A_scaled, adjoint, is_vec)
+
+
+def test_ChainPyTorchLinearOperator(adjoint: bool, is_vec: bool):
+    """Test chaining two PyTorch linear operators.
+
+    Args:
+        adjoint: Whether to test the adjoint operator.
+        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
+    """
+    manual_seed(0)
+    A = linspace(1, 10, steps=20).reshape(5, 4)
+    B = rand(4, 3)
+    C = rand(3, 2)
+
+    ABC = A @ B @ C
+    ABC_linop = (
+        TensorLinearOperator(A) @ TensorLinearOperator(B) @ TensorLinearOperator(C)
+    )
+    compare_matmat(ABC_linop, ABC, adjoint, is_vec)
