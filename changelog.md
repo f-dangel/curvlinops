@@ -51,7 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     which are now available through `@`
   - `SubmatrixLinearOperator`
     ([PR](https://github.com/f-dangel/curvlinops/pull/177))
-  - `CGInverseLinearOperator`, `NeumannInverseLinearOperator`, and `LSMRInverseLinearOperator``
+  - `CGInverseLinearOperator`, `NeumannInverseLinearOperator`, and `LSMRInverseLinearOperator`
     ([PR](https://github.com/f-dangel/curvlinops/pull/186)),
     also removing their public methods for specifying hyper-parameters and instead accepting them as keyword arguments in the constructor
 
