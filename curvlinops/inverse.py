@@ -1,13 +1,26 @@
 """Implements linear operator inverses."""
 
+from __future__ import annotations
+
 from math import sqrt
-from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar, Union
+from typing import Any, Dict, List, Optional, Tuple, TypeVar, Union
 from warnings import warn
 
 from einops import rearrange
-from numpy import allclose, column_stack, ndarray
-from scipy.sparse.linalg import LinearOperator, cg, lsmr
-from torch import Tensor, cat, cholesky_inverse, eye, float64, outer
+from numpy import column_stack
+from scipy.sparse.linalg import cg, lsmr
+from torch import (
+    Tensor,
+    cat,
+    cholesky_inverse,
+    device,
+    dtype,
+    eye,
+    float64,
+    from_numpy,
+    isnan,
+    outer,
+)
 from torch.linalg import cholesky, eigh
 
 from curvlinops._torch_base import PyTorchLinearOperator
@@ -19,160 +32,182 @@ KFACInvType = TypeVar(
 )
 
 
-class _InverseLinearOperator(LinearOperator):
-    """Base class for (approximate) inverses of linear operators."""
+class _InversePyTorchLinearOperator(PyTorchLinearOperator):
+    """Base class for inverses of PyTorch linear operators."""
 
-    def _matmat(self, X: ndarray) -> ndarray:
-        """Matrix-matrix multiplication.
-
-        Args:
-            X: Matrix for multiplication.
-
-        Returns:
-            Matrix-multiplication result ``A⁻¹@ X``.
-        """
-        return column_stack([self @ col for col in X.T])
-
-
-class CGInverseLinearOperator(_InverseLinearOperator):
-    """Class for inverse linear operators via conjugate gradients."""
-
-    def __init__(self, A: LinearOperator):
+    def __init__(self, A: PyTorchLinearOperator):
         """Store the linear operator whose inverse should be represented.
 
         Args:
-            A: Linear operator whose inverse is formed. Must be symmetric and
-                positive-definite.
+            A: PyTorch linear operator whose inverse is formed.
+
+        Raises:
+            ValueError: If the passed linear operator is not quadratic.
         """
-        super().__init__(A.dtype, A.shape)
+        if A._in_shape != A._out_shape:
+            raise ValueError(
+                "Input linear operator must be square to form an inverse."
+                + f"Got {A._in_shape} != {A._out_shape}."
+            )
+        super().__init__(A._in_shape, A._out_shape)
         self._A = A
 
-        # CG hyperparameters
-        self.set_cg_hyperparameters()
-
-    def set_cg_hyperparameters(
-        self,
-        x0: Optional[ndarray] = None,
-        maxiter: Optional[int] = None,
-        M: Optional[Union[ndarray, LinearOperator]] = None,
-        callback: Optional[Callable] = None,
-        atol: Optional[float] = None,
-        tol: Optional[float] = 1e-5,
-    ):
-        """Store hyperparameters for CG.
-
-        They will be used to approximate the inverse matrix-vector products.
-
-        For more detail, see
-        https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.linalg.cg.html.
-
-        # noqa: DAR101
-        """
-        self._cg_hyperparameters = {
-            "x0": x0,
-            "maxiter": maxiter,
-            "M": M,
-            "callback": callback,
-            "atol": atol,
-            "tol": tol,
-        }
-
-    def _matvec(self, x: ndarray) -> ndarray:
-        """Multiply x by the inverse of A.
-
-        Args:
-             x: Vector for multiplication.
+    def _infer_dtype(self) -> dtype:
+        """Determine the linear operator's data type.
 
         Returns:
-             Result of inverse matrix-vector multiplication, ``A⁻¹ @ x``.
+            The linear operator's dtype.
         """
-        result, _ = cg(self._A, x, **self._cg_hyperparameters)
-        return result
+        return self._A._infer_dtype()
+
+    def _infer_device(self) -> device:
+        """Determine the device the linear operators is defined on.
+
+        Returns:
+            The linear operator's device.
+        """
+        return self._A._infer_device()
 
 
-class LSMRInverseLinearOperator(_InverseLinearOperator):
-    """Class for inverse linear operators via LSMR.
+class CGInverseLinearOperator(_InversePyTorchLinearOperator):
+    """Class for inverse linear operators via conjugate gradients.
 
-    See https://arxiv.org/abs/1006.0758 for details on the LSMR algorithm.
+    Note:
+        Internally, this operator uses SciPy's CPU implementation of CG as PyTorch
+        currently does not offer a CG interface that purely relies on matrix-vector
+        products.
     """
 
-    def __init__(self, A: LinearOperator):
+    def __init__(self, A: PyTorchLinearOperator, **cg_hyperparameters):
+        """Store the linear operator whose inverse should be represented.
+
+        Args:
+            A: PyTorch linear operator whose inverse is formed. Must represent a
+                symmetric and positive-definite matrix.
+            cg_hyperparameters: Keyword arguments for SciPy's CG implementation.
+                For details, see
+                https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.linalg.cg.html.
+        """
+        super().__init__(A)
+        self._A_scipy = A.to_scipy()
+        self._cg_hyperparameters = cg_hyperparameters
+
+    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+        """Multiply X by the inverse of A.
+
+        Args:
+             X: Matrix for multiplication.
+
+        Returns:
+             Result of inverse matrix-vector multiplication, ``A⁻¹ @ X``.
+        """
+        # flatten and convert to numpy
+        X_np = (
+            cat([x.flatten(end_dim=-2) for x in X])
+            .cpu()
+            .numpy()
+            .astype(self._A_scipy.dtype)
+        )
+        _, num_vecs = X_np.shape
+
+        # apply CG to each vector in SciPy (returns solution and info)
+        Ainv_X = [cg(self._A_scipy, x, **self._cg_hyperparameters) for x in X_np.T]
+        self._cg_info = [result[1] for result in Ainv_X]
+        Ainv_X = column_stack([result[0] for result in Ainv_X])
+
+        # convert to PyTorch and unflatten
+        dev, dt = self._infer_device(), self._infer_dtype()
+        Ainv_X = from_numpy(Ainv_X).to(dev, dt)
+        Ainv_X = [
+            r.reshape(*s, num_vecs)
+            for r, s in zip(Ainv_X.split(self._out_shape_flat), self._out_shape)
+        ]
+        return Ainv_X
+
+    def _adjoint(self) -> CGInverseLinearOperator:
+        """Return the linear operator's adjoint: (A^-1)* = (A*)^-1.
+
+        Returns:
+            A linear operator representing the adjoint.
+        """
+        return CGInverseLinearOperator(self._A._adjoint(), **self._cg_hyperparameters)
+
+
+class LSMRInverseLinearOperator(_InversePyTorchLinearOperator):
+    """Class for inverse PyTorch linear operators via LSMR.
+
+    See https://arxiv.org/abs/1006.0758 for details on the LSMR algorithm.
+
+    Note:
+        Internally, this operator uses SciPy's CPU implementation of LSMR as PyTorch
+        currently does not offer an LSMR interface that purely relies on matrix-vector
+        products.
+    """
+
+    def __init__(self, A: PyTorchLinearOperator, **lsmr_hyperparameters):
         """Store the linear operator whose inverse should be represented.
 
         Args:
             A: Linear operator whose inverse is formed.
+            lsmr_hyperparameters: The hyper-parameters that will be passed to the
+                LSMR implementation in SciPy. For more detail, see
+                https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.linalg.lsmr.html.
         """
-        super().__init__(A.dtype, A.shape)
-        self._A = A
+        super().__init__(A)
+        self._A_scipy = A.to_scipy()
+        self._lsmr_hyperparameters = lsmr_hyperparameters
 
-        # LSMR hyperparameters
-        self.set_lsmr_hyperparameters()
-
-    def set_lsmr_hyperparameters(
-        self,
-        damp: float = 0.0,
-        atol: Optional[float] = 1e-6,
-        btol: Optional[float] = 1e-6,
-        conlim: Optional[float] = 1e8,
-        maxiter: Optional[int] = None,
-        show: Optional[bool] = False,
-        x0: Optional[ndarray] = None,
-    ):
-        """Store hyperparameters for LSMR.
-
-        They will be used to approximate the inverse matrix-vector products.
-
-        For more detail, see
-        https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.linalg.lsmr.html.
-
-        # noqa: DAR101
-        """
-        self._lsmr_hyperparameters = {
-            "damp": damp,
-            "atol": atol,
-            "btol": btol,
-            "conlim": conlim,
-            "maxiter": maxiter,
-            "show": show,
-            "x0": x0,
-        }
-
-    def matvec_with_info(
-        self, x: ndarray
-    ) -> Tuple[ndarray, int, int, float, float, float, float, float]:
-        """Multiply x by the inverse of A and return additional information.
+    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+        """Multiply the inverse of A onto a matrix X in list format.
 
         Args:
-             x: Vector for multiplication.
+             X: Matrix for multiplication in list format.
 
         Returns:
-            Result of inverse matrix-vector multiplication, ``A⁻¹ @ x`` with additional
-            information; see
-            https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.linalg.lsmr.html
-            for details (same return values).
+             Result of inverse matrix-matrix multiplication, ``A⁻¹ @ X`` in list format.
         """
-        return lsmr(self._A, x, **self._lsmr_hyperparameters)
+        # flatten and convert to numpy
+        X_np = (
+            cat([x.flatten(end_dim=-2) for x in X])
+            .cpu()
+            .numpy()
+            .astype(self._A_scipy.dtype)
+        )
+        _, num_vecs = X_np.shape
 
-    def _matvec(self, x: ndarray) -> ndarray:
-        """Multiply x by the inverse of A.
+        # apply LSMR to each vector in SciPy (returns solution and info)
+        Ainv_X = [lsmr(self._A_scipy, x, **self._lsmr_hyperparameters) for x in X_np.T]
+        self._lsmr_info = [result[1:] for result in Ainv_X]
+        Ainv_X = column_stack([result[0] for result in Ainv_X])
 
-        Args:
-             x: Vector for multiplication.
+        # convert to PyTorch and unflatten
+        dev, dt = self._infer_device(), self._infer_dtype()
+        Ainv_X = from_numpy(Ainv_X).to(dev, dt)
+        Ainv_X = [
+            r.reshape(*s, num_vecs)
+            for r, s in zip(Ainv_X.split(self._out_shape_flat), self._out_shape)
+        ]
+        return Ainv_X
+
+    def _adjoint(self) -> LSMRInverseLinearOperator:
+        """Return the linear operator's adjoint: (A^-1)* = (A*)^-1.
 
         Returns:
-             Result of inverse matrix-vector multiplication, ``A⁻¹ @ x``.
+            A linear operator representing the adjoint.
         """
-        return self.matvec_with_info(x)[0]
+        return LSMRInverseLinearOperator(
+            self._A._adjoint(), **self._lsmr_hyperparameters
+        )
 
 
-class NeumannInverseLinearOperator(_InverseLinearOperator):
+class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
     """Class for inverse linear operators via truncated Neumann series.
 
     # noqa: B950
 
     See https://en.wikipedia.org/w/index.php?title=Neumann_series&oldid=1131424698#Approximate_matrix_inversion.
 
-    Motivated by (referred to as lorraine2020optimizing in the following)
+    Motivated by
 
     - Lorraine, J., Vicol, P., & Duvenaud, D. (2020). Optimizing millions of
       hyperparameters by implicit differentiation. In International Conference on
@@ -187,16 +222,12 @@ class NeumannInverseLinearOperator(_InverseLinearOperator):
         Use :py:class:`curvlinops.CGInverLinearOperator` for better accuracy.
     """
 
-    DEFAULT_NUM_TERMS = 100
-    DEFAULT_SCALE = 1.0
-    DEFAULT_CHECK_NAN = True
-
     def __init__(
         self,
-        A: LinearOperator,
-        num_terms: int = DEFAULT_NUM_TERMS,
-        scale: float = DEFAULT_SCALE,
-        check_nan: bool = DEFAULT_CHECK_NAN,
+        A: PyTorchLinearOperator,
+        num_terms: int = 100,
+        scale: float = 1.0,
+        check_nan: bool = True,
     ):
         r"""Store the linear operator whose inverse should be represented.
 
@@ -240,37 +271,16 @@ class NeumannInverseLinearOperator(_InverseLinearOperator):
             check_nan: Whether to check for NaNs while applying the truncated Neumann
                 series. Default: ``True``.
         """
-        super().__init__(A.dtype, A.shape)
-        self._A = A
-        self.set_neumann_hyperparameters(
-            num_terms=num_terms, scale=scale, check_nan=check_nan
-        )
-
-    def set_neumann_hyperparameters(
-        self,
-        num_terms: int = DEFAULT_NUM_TERMS,
-        scale: float = DEFAULT_SCALE,
-        check_nan: bool = DEFAULT_CHECK_NAN,
-    ):
-        """Store hyperparameters for the truncated Neumann series.
-
-        Args:
-            num_terms: Number of terms in the truncated Neumann series.
-                Default: ``100``.
-            scale: Scale applied to the matrix in the Neumann iteration. Crucial
-                for convergence of Neumann series. Default: ``1.0``.
-            check_nan: Whether to check for NaNs while applying the truncated Neumann
-                series. Default: ``True``.
-        """
+        super().__init__(A)
         self._num_terms = num_terms
         self._scale = scale
         self._check_nan = check_nan
 
-    def _matvec(self, x: ndarray) -> ndarray:
-        """Multiply x by the inverse of A.
+    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+        """Multiply the inverse of A onto a matrix in list format.
 
         Args:
-             x: Vector for multiplication.
+             X: Matrix for multiplication in list format.
 
         Returns:
              Result of inverse matrix-vector multiplication, ``A⁻¹ @ x``.
@@ -278,20 +288,36 @@ class NeumannInverseLinearOperator(_InverseLinearOperator):
         Raises:
             ValueError: If ``NaN`` check is turned on and ``NaN``s are detected.
         """
-        result, v = x.copy(), x.copy()
+        result_list, v_list = [x.clone() for x in X], [x.clone() for x in X]
 
         for idx in range(self._num_terms):
-            v = v - self._scale * (self._A @ v)
-            result = result + v
+            v_list = [
+                v.sub_(Av, alpha=self._scale)
+                for v, Av in zip(v_list, self._A._matmat(v_list))
+            ]
+            result_list = [result.add_(v) for result, v in zip(result_list, v_list)]
 
-            if self._check_nan and not allclose(result, result):
+            if self._check_nan and any(isnan(result).any() for result in result_list):
                 raise ValueError(
                     f"Detected NaNs after application of {idx}-th term."
                     + " This is probably because the Neumann series is non-convergent."
                     + " Try decreasing `scale` and read the comment on convergence."
                 )
 
-        return self._scale * result
+        return [result.mul_(self._scale) for result in result_list]
+
+    def _adjoint(self) -> NeumannInverseLinearOperator:
+        """Return the linear operator's adjoint: (A^-1)* = (A*)^-1.
+
+        Returns:
+            A linear operator representing the adjoint.
+        """
+        return NeumannInverseLinearOperator(
+            self._A._adjoint(),
+            num_terms=self._num_terms,
+            scale=self._scale,
+            check_nan=self._check_nan,
+        )
 
 
 class KFACInverseLinearOperator(PyTorchLinearOperator):
