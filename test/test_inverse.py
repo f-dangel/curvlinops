@@ -4,13 +4,18 @@ import os
 from math import sqrt
 from typing import Iterable, List, Tuple, Union
 
-import torch
-from numpy import array, eye, random
-from numpy.linalg import eigh, inv
 from pytest import mark, raises
-from scipy import sparse
-from scipy.sparse.linalg import aslinearoperator
-from torch.nn import CrossEntropyLoss, Module, MSELoss, Parameter
+from torch import Tensor, eye, float64, load, manual_seed, rand, save
+from torch.linalg import eigh, inv
+from torch.nn import (
+    CrossEntropyLoss,
+    Linear,
+    Module,
+    MSELoss,
+    Parameter,
+    ReLU,
+    Sequential,
+)
 
 from curvlinops import (
     CGInverseLinearOperator,
@@ -23,6 +28,8 @@ from curvlinops import (
 )
 from curvlinops.examples.functorch import functorch_ggn
 from curvlinops.examples.utils import report_nonclose
+from curvlinops.outer import IdentityLinearOperator
+from test.test__torch_base import TensorLinearOperator
 from test.utils import (
     cast_input,
     compare_consecutive_matmats,
@@ -35,123 +42,85 @@ from test.utils import (
 KFAC_MIN_DAMPING = 1e-8
 
 
-def test_CG_inverse_damped_GGN_matvec(inv_case, delta: float = 2e-2):
-    """Test matrix-vector multiplication by the inverse damped GGN with CG."""
+def test_CGInverseLinearOperator_damped_GGN(inv_case, delta_rel: float = 2e-2):
+    """Test matrix multiplication with the inverse damped GGN with CG.
+
+    Args:
+        inv_case: Tuple of model, loss function, parameters, data, batch size getter.
+        delta_rel: Relative damping factor that is multiplied onto the average trace
+            to obtain the damping value.
+    """
     model_func, loss_func, params, data, batch_size_fn = inv_case
+    (dev,), (dt,) = {p.device for p in params}, {p.dtype for p in params}
 
-    GGN = GGNLinearOperator(
-        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
-    ).to_scipy()
-    damping = aslinearoperator(delta * sparse.eye(GGN.shape[0]))
-
-    inv_GGN = CGInverseLinearOperator(GGN + damping)
-    inv_GGN_functorch = inv(
-        functorch_ggn(model_func, loss_func, params, data, input_key="x")
-        .detach()
-        .cpu()
-        .numpy()
-        + delta * eye(GGN.shape[1])
-    )
-
-    x = random.rand(GGN.shape[1])
-    report_nonclose(inv_GGN @ x, inv_GGN_functorch @ x, rtol=1e-2, atol=1e-5)
-
-
-def test_CG_inverse_damped_GGN_matmat(inv_case, delta: float = 1e-2, num_vecs: int = 3):
-    """Test matrix-matrix multiplication by the inverse damped GGN with CG."""
-    model_func, loss_func, params, data, batch_size_fn = inv_case
-
-    GGN = GGNLinearOperator(
-        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
-    ).to_scipy()
-    damping = aslinearoperator(delta * sparse.eye(GGN.shape[0]))
-
-    inv_GGN = CGInverseLinearOperator(GGN + damping)
-    inv_GGN_functorch = inv(
-        functorch_ggn(model_func, loss_func, params, data, input_key="x")
-        .detach()
-        .cpu()
-        .numpy()
-        + delta * eye(GGN.shape[1])
-    )
-
-    X = random.rand(GGN.shape[1], num_vecs)
-    report_nonclose(inv_GGN @ X, inv_GGN_functorch @ X, rtol=5e-3, atol=1e-5)
-
-
-def test_LSMR_inverse_damped_GGN_matvec(inv_case, delta: float = 2e-2):
-    """Test matrix-vector multiplication by the inverse damped GGN with LSMR."""
-    model_func, loss_func, params, data, batch_size_fn = inv_case
-
-    GGN = GGNLinearOperator(
-        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
-    ).to_scipy()
-    damping = aslinearoperator(delta * sparse.eye(GGN.shape[0]))
-
-    inv_GGN = LSMRInverseLinearOperator(GGN + damping)
-    # set hyperparameters such that LSMR is accurate enough
-    inv_GGN.set_lsmr_hyperparameters(atol=0, btol=0, maxiter=2 * GGN.shape[0])
-    inv_GGN_functorch = inv(
-        functorch_ggn(model_func, loss_func, params, data, input_key="x")
-        .detach()
-        .cpu()
-        .numpy()
-        + delta * eye(GGN.shape[1])
-    )
-
-    x = random.rand(GGN.shape[1])
-    report_nonclose(inv_GGN @ x, inv_GGN_functorch @ x, rtol=5e-3, atol=1e-5)
-
-
-def test_LSMR_inverse_damped_GGN_matmat(
-    inv_case, delta: float = 1e-2, num_vecs: int = 3
-):
-    """Test matrix-matrix multiplication by the inverse damped GGN with LSMR."""
-    model_func, loss_func, params, data, batch_size_fn = inv_case
-
-    GGN = GGNLinearOperator(
-        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
-    ).to_scipy()
-    damping = aslinearoperator(delta * sparse.eye(GGN.shape[0]))
-
-    inv_GGN = LSMRInverseLinearOperator(GGN + damping)
-    # set hyperparameters such that LSMR is accurate enough
-    inv_GGN.set_lsmr_hyperparameters(atol=0, btol=0, maxiter=2 * GGN.shape[0])
-    inv_GGN_functorch = inv(
-        functorch_ggn(model_func, loss_func, params, data, input_key="x")
-        .detach()
-        .cpu()
-        .numpy()
-        + delta * eye(GGN.shape[1])
-    )
-
-    X = random.rand(GGN.shape[1], num_vecs)
-    report_nonclose(inv_GGN @ X, inv_GGN_functorch @ X, rtol=1e-2, atol=1e-5)
-
-
-def test_Neumann_inverse_damped_GGN_matvec(inv_case, delta: float = 1e-2):
-    """Test matrix-vector multiplication by the inverse damped GGN with Neumann."""
-    model_func, loss_func, params, data, batch_size_fn = inv_case
-
-    GGN = GGNLinearOperator(
-        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
-    ).to_scipy()
-    damping = aslinearoperator(delta * sparse.eye(GGN.shape[0]))
-
-    damped_GGN_functorch = functorch_ggn(
+    GGN_naive = functorch_ggn(
         model_func, loss_func, params, data, input_key="x"
-    ).detach().cpu().numpy() + delta * eye(GGN.shape[1])
-    inv_GGN_functorch = inv(damped_GGN_functorch)
+    ).detach()
+    # add damping proportional to average trace
+    delta = delta_rel * GGN_naive.diag().mean().item()
+    damping = delta * IdentityLinearOperator([p.shape for p in params], dev, dt)
+    GGN = GGNLinearOperator(
+        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
+    )
+    inv_GGN_naive = inv(GGN_naive + delta * eye(GGN.shape[1], dtype=dt))
+
+    # specify tolerance to get solution with accuracy
+    inv_GGN = CGInverseLinearOperator(GGN + damping, tolerance=1e-4)
+    compare_consecutive_matmats(inv_GGN, adjoint=False, is_vec=False)
+    compare_matmat(inv_GGN, inv_GGN_naive, adjoint=False, is_vec=False, rtol=1e-2)
+
+
+def test_LSMRInverseLinearOperator_damped_GGN(inv_case, delta: float = 2e-2):
+    """Test matrix multiplication with the inverse damped GGN with LSMR."""
+    model_func, loss_func, params, data, batch_size_fn = inv_case
+    (dev,), (dt,) = {p.device for p in params}, {p.dtype for p in params}
+
+    GGN = GGNLinearOperator(
+        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
+    )
+    damping = delta * IdentityLinearOperator([p.shape for p in params], dev, dt)
+
+    # set hyperparameters such that LSMR is accurate enough
+    inv_GGN = LSMRInverseLinearOperator(
+        GGN + damping, atol=0, btol=0, maxiter=2 * GGN.shape[0]
+    )
+    inv_GGN_naive = inv(
+        functorch_ggn(model_func, loss_func, params, data, input_key="x").detach()
+        + delta * eye(GGN.shape[1], device=dev, dtype=dt)
+    )
+
+    compare_consecutive_matmats(inv_GGN, adjoint=False, is_vec=False)
+    compare_matmat(
+        inv_GGN, inv_GGN_naive, adjoint=False, is_vec=False, rtol=5e-3, atol=1e-5
+    )
+
+
+def test_NeumannInverseLinearOperator_damped_GGN(inv_case, delta: float = 2e-2):
+    """Test matrix multiplication by the inverse damped GGN with Neumann."""
+    model_func, loss_func, params, data, batch_size_fn = inv_case
+    (dev,), (dt,) = {p.device for p in params}, {p.dtype for p in params}
+
+    GGN = GGNLinearOperator(
+        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
+    )
+    damping = delta * IdentityLinearOperator([p.shape for p in params], dev, dt)
+
+    damped_GGN_naive = functorch_ggn(
+        model_func, loss_func, params, data, input_key="x"
+    ).detach() + delta * eye(GGN.shape[1], dtype=dt, device=dev)
+    inv_GGN_naive = inv(damped_GGN_naive)
 
     # set scale such that Neumann series converges
-    eval_max = eigh(damped_GGN_functorch)[0][-1]
+    eval_max = eigh(damped_GGN_naive)[0][-1]
     scale = 1.0 if eval_max < 2 else 1.9 / eval_max
 
     # NOTE This may break when other cases are added because slow convergence
-    inv_GGN = NeumannInverseLinearOperator(GGN + damping, num_terms=7_000, scale=scale)
+    inv_GGN = NeumannInverseLinearOperator(GGN + damping, num_terms=2_500, scale=scale)
 
-    x = random.rand(GGN.shape[1])
-    report_nonclose(inv_GGN @ x, inv_GGN_functorch @ x, rtol=1e-1, atol=1e-1)
+    compare_consecutive_matmats(inv_GGN, adjoint=False, is_vec=False)
+    compare_matmat(
+        inv_GGN, inv_GGN_naive, adjoint=False, is_vec=False, rtol=1e-1, atol=1e-1
+    )
 
 
 def test_NeumannInverseLinearOperator_toy():
@@ -160,53 +129,47 @@ def test_NeumannInverseLinearOperator_toy():
     The example is from
     https://en.wikipedia.org/w/index.php?title=Neumann_series&oldid=1131424698#Example
     """
-    random.seed(1234)
-    A = array(
+    manual_seed(1234)
+    A = Tensor(
         [
             [0.0, 1.0 / 2.0, 1.0 / 4.0],
             [5.0 / 7.0, 0.0, 1.0 / 7.0],
             [3.0 / 10.0, 3.0 / 5.0, 0.0],
         ]
-    )
-    A += eye(A.shape[1])
+    ).double()
+    A += eye(A.shape[1]).double()
     # eigenvalues of A: [1.82122892 0.47963837 0.69913271]
 
     inv_A = inv(A)
-    inv_A_neumann = NeumannInverseLinearOperator(aslinearoperator(A))
-    inv_A_neumann.set_neumann_hyperparameters(num_terms=1_000)
+    inv_A_neumann = NeumannInverseLinearOperator(
+        TensorLinearOperator(A), num_terms=1_000
+    )
 
-    x = random.rand(A.shape[1])
-    report_nonclose(inv_A @ x, inv_A_neumann @ x, rtol=1e-3, atol=1e-5)
+    compare_consecutive_matmats(inv_A_neumann, adjoint=False, is_vec=False)
+    compare_matmat(
+        inv_A_neumann, inv_A, adjoint=False, is_vec=False, rtol=1e-3, atol=1e-5
+    )
 
     # If we double the matrix, the Neumann series won't converge anymore ...
     B = 2 * A
     inv_B = inv(B)
-    inv_B_neumann = NeumannInverseLinearOperator(aslinearoperator(B))
-    inv_B_neumann.set_neumann_hyperparameters(num_terms=1_000)
-
-    y = random.rand(B.shape[1])
+    inv_B_neumann = NeumannInverseLinearOperator(
+        TensorLinearOperator(B), num_terms=1_000
+    )
 
     # ... therefore, we should get NaNs during the iteration
     with raises(ValueError):
-        inv_B_neumann @ y
+        compare_consecutive_matmats(inv_B_neumann, adjoint=False, is_vec=False)
 
     # ... but if we scale the matrix back internally, the Neumann series converges
-    inv_B_neumann.set_neumann_hyperparameters(num_terms=1_000, scale=0.5)
-    report_nonclose(inv_B @ y, inv_B_neumann @ y, rtol=1e-3, atol=1e-5)
+    inv_B_neumann = NeumannInverseLinearOperator(
+        TensorLinearOperator(B), num_terms=1_000, scale=0.5
+    )
 
-    inv_ground_truth = inv(B)
-    inv_neumann = eye(B.shape[1])
-
-    temp = eye(B.shape[1])
-    scale = 0.5
-    for _ in range(1000):
-        temp = temp - scale * B @ temp
-        inv_neumann = inv_neumann + temp
-
-    inv_neumann = scale * inv_neumann
-
-    report_nonclose(inv_neumann, inv_ground_truth, rtol=1e-3, atol=1e-5)
-    report_nonclose(inv_neumann @ y, inv_ground_truth @ y, rtol=1e-3, atol=1e-5)
+    compare_consecutive_matmats(inv_B_neumann, adjoint=False, is_vec=False)
+    compare_matmat(
+        inv_B_neumann, inv_B, adjoint=False, is_vec=False, rtol=1e-3, atol=1e-5
+    )
 
 
 """KFACInverseLinearOperator with KFACLinearOperator tests."""
@@ -226,7 +189,7 @@ def test_KFAC_inverse_damped_matmat(
         Module,
         Union[MSELoss, CrossEntropyLoss],
         List[Parameter],
-        Iterable[Tuple[torch.Tensor, torch.Tensor]],
+        Iterable[Tuple[Tensor, Tensor]],
     ],
     fisher_type: str,
     cache: bool,
@@ -245,7 +208,7 @@ def test_KFAC_inverse_damped_matmat(
     """
     model_func, loss_func, params, data, batch_size_fn = case
     params = maybe_exclude_or_shuffle_parameters(params, model_func, exclude, shuffle)
-    dtype = torch.float64  # use double precision for better numerical stability
+    dtype = float64  # use double precision for better numerical stability
     model_func = model_func.to(dtype=dtype)
     loss_func = loss_func.to(dtype=dtype)
     params = [p.to(dtype=dtype) for p in params]
@@ -276,9 +239,7 @@ def test_KFAC_inverse_damped_matmat(
         aaT.add_(eye_like(aaT), alpha=delta)
     for ggT in KFAC._gradient_covariances.values():
         ggT.add_(eye_like(ggT), alpha=delta)
-    inv_KFAC_naive = torch.inverse(
-        KFAC @ torch.eye(KFAC.shape[0], device=device, dtype=dtype)
-    )
+    inv_KFAC_naive = inv(KFAC @ eye(KFAC.shape[0], device=device, dtype=dtype))
 
     # remove damping and pass it on as an argument instead
     for aaT in KFAC._input_covariances.values():
@@ -321,7 +282,7 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901, PLR0912, PLR09
         Module,
         Union[MSELoss, CrossEntropyLoss],
         List[Parameter],
-        Iterable[Tuple[torch.Tensor, torch.Tensor]],
+        Iterable[Tuple[Tensor, Tensor]],
     ],
     cache: bool,
     exclude: str,
@@ -340,7 +301,7 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901, PLR0912, PLR09
     """
     model_func, loss_func, params, data, batch_size_fn = case
     params = maybe_exclude_or_shuffle_parameters(params, model_func, exclude, shuffle)
-    dtype = torch.float64  # use double precision for better numerical stability
+    dtype = float64  # use double precision for better numerical stability
     model_func = model_func.to(dtype=dtype)
     loss_func = loss_func.to(dtype=dtype)
     params = [p.to(dtype=dtype) for p in params]
@@ -389,9 +350,7 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901, PLR0912, PLR09
             ggT.add_(eye_like(ggT), alpha=damping_ggT)
 
     # manual heuristically damped inverse
-    inv_KFAC_naive = torch.inverse(
-        KFAC @ torch.eye(KFAC.shape[0], device=device, dtype=dtype)
-    )
+    inv_KFAC_naive = inv(KFAC @ eye(KFAC.shape[0], device=device, dtype=dtype))
 
     # remove heuristic damping
     for mod_name in KFAC._mapping.keys():
@@ -457,7 +416,7 @@ def test_KFAC_inverse_exactly_damped_matmat(
         Module,
         Union[MSELoss, CrossEntropyLoss],
         List[Parameter],
-        Iterable[Tuple[torch.Tensor, torch.Tensor]],
+        Iterable[Tuple[Tensor, Tensor]],
     ],
     cache: bool,
     exclude: str,
@@ -475,7 +434,7 @@ def test_KFAC_inverse_exactly_damped_matmat(
     """
     model_func, loss_func, params, data, batch_size_fn = case
     params = maybe_exclude_or_shuffle_parameters(params, model_func, exclude, shuffle)
-    dtype = torch.float64  # use double precision for better numerical stability
+    dtype = float64  # use double precision for better numerical stability
     model_func = model_func.to(dtype=dtype)
     loss_func = loss_func.to(dtype=dtype)
     params = [p.to(dtype=dtype) for p in params]
@@ -500,8 +459,8 @@ def test_KFAC_inverse_exactly_damped_matmat(
     )
 
     # manual exactly damped inverse
-    KFAC_mat = KFAC @ torch.eye(KFAC.shape[0], dtype=dtype, device=device)
-    inv_KFAC_naive = torch.inverse(KFAC_mat + delta * eye_like(KFAC_mat))
+    KFAC_mat = KFAC @ eye(KFAC.shape[0], dtype=dtype, device=device)
+    inv_KFAC_naive = inv(KFAC_mat + delta * eye_like(KFAC_mat))
 
     # check that passing a tuple for exact damping will fail
     with raises(
@@ -559,16 +518,16 @@ def test_KFAC_inverse_save_and_load_state_dict(
     shuffle: bool,
 ):
     """Test that KFACInverseLinearOperator can be saved and loaded from state dict."""
-    torch.manual_seed(0)
+    manual_seed(0)
     batch_size, D_in, D_hidden, D_out = 4, 3, 5, 2
-    X = torch.rand(batch_size, D_in)
-    y = torch.rand(batch_size, D_out)
-    model = torch.nn.Sequential(
-        torch.nn.Linear(D_in, D_hidden),
-        torch.nn.ReLU(),
-        torch.nn.Linear(D_hidden, D_hidden, bias=False),
-        torch.nn.ReLU(),
-        torch.nn.Linear(D_hidden, D_out),
+    X = rand(batch_size, D_in)
+    y = rand(batch_size, D_out)
+    model = Sequential(
+        Linear(D_in, D_hidden),
+        ReLU(),
+        Linear(D_hidden, D_hidden, bias=False),
+        ReLU(),
+        Linear(D_hidden, D_out),
     )
 
     params = list(model.parameters())
@@ -594,28 +553,28 @@ def test_KFAC_inverse_save_and_load_state_dict(
         kfac, damping=1e-2, retry_double_precision=False, cache=cache, **kwargs
     )
     # trigger inverse computation and maybe caching
-    inv_kfac_as_mat = inv_kfac @ torch.eye(kfac.shape[1])
+    inv_kfac_as_mat = inv_kfac @ eye(kfac.shape[1])
 
     # save state dict
     state_dict = inv_kfac.state_dict()
     INV_KFAC_PATH = "inv_kfac_state_dict.pt"
-    torch.save(state_dict, INV_KFAC_PATH)
+    save(state_dict, INV_KFAC_PATH)
 
     # create new inverse KFAC with different linop input and try to load state dict
     wrong_kfac = KFACLinearOperator(model, CrossEntropyLoss(), params, [(X, y)])
     inv_kfac_wrong = KFACInverseLinearOperator(wrong_kfac)
     with raises(ValueError, match="mismatch"):
-        inv_kfac_wrong.load_state_dict(torch.load(INV_KFAC_PATH, weights_only=False))
+        inv_kfac_wrong.load_state_dict(load(INV_KFAC_PATH, weights_only=False))
 
     # create new inverse KFAC and load state dict
     inv_kfac_new = KFACInverseLinearOperator(kfac)
-    inv_kfac_new.load_state_dict(torch.load(INV_KFAC_PATH, weights_only=False))
+    inv_kfac_new.load_state_dict(load(INV_KFAC_PATH, weights_only=False))
     # clean up
     os.remove(INV_KFAC_PATH)
 
     # check that the two inverse KFACs are equal
     compare_state_dicts(inv_kfac.state_dict(), inv_kfac_new.state_dict())
-    report_nonclose(inv_kfac_as_mat, inv_kfac_new @ torch.eye(kfac.shape[1]))
+    report_nonclose(inv_kfac_as_mat, inv_kfac_new @ eye(kfac.shape[1]))
 
 
 @mark.parametrize("use_exact_damping", [True, False], ids=["exact_damping", ""])
@@ -637,16 +596,16 @@ def test_KFAC_inverse_from_state_dict(
     shuffle: bool,
 ):
     """Test that KFACInverseLinearOperator can be created from state dict."""
-    torch.manual_seed(0)
+    manual_seed(0)
     batch_size, D_in, D_hidden, D_out = 4, 3, 5, 2
-    X = torch.rand(batch_size, D_in)
-    y = torch.rand(batch_size, D_out)
-    model = torch.nn.Sequential(
-        torch.nn.Linear(D_in, D_hidden),
-        torch.nn.ReLU(),
-        torch.nn.Linear(D_hidden, D_hidden, bias=False),
-        torch.nn.ReLU(),
-        torch.nn.Linear(D_hidden, D_out),
+    X = rand(batch_size, D_in)
+    y = rand(batch_size, D_out)
+    model = Sequential(
+        Linear(D_in, D_hidden),
+        ReLU(),
+        Linear(D_hidden, D_hidden, bias=False),
+        ReLU(),
+        Linear(D_hidden, D_out),
     )
 
     params = list(model.parameters())
@@ -671,7 +630,7 @@ def test_KFAC_inverse_from_state_dict(
     inv_kfac = KFACInverseLinearOperator(
         kfac, damping=1e-2, retry_double_precision=False, cache=cache, **kwargs
     )
-    test_vec = torch.rand(kfac.shape[1])
+    test_vec = rand(kfac.shape[1])
     inv_kfac @ test_vec  # triggers inverse computation and maybe caching
     state_dict = inv_kfac.state_dict()
 
@@ -680,7 +639,7 @@ def test_KFAC_inverse_from_state_dict(
 
     # check that the two inverse KFACs are equal
     compare_state_dicts(inv_kfac.state_dict(), inv_kfac_new.state_dict())
-    test_vec = torch.rand(kfac.shape[1])
+    test_vec = rand(kfac.shape[1])
     report_nonclose(inv_kfac @ test_vec, inv_kfac_new @ test_vec)
 
 
@@ -700,7 +659,7 @@ def test_EKFAC_inverse_exactly_damped_matmat(
         Module,
         Union[MSELoss, CrossEntropyLoss],
         List[Parameter],
-        Iterable[Tuple[torch.Tensor, torch.Tensor]],
+        Iterable[Tuple[Tensor, Tensor]],
     ],
     cache: bool,
     exclude: str,
@@ -718,7 +677,7 @@ def test_EKFAC_inverse_exactly_damped_matmat(
     """
     model_func, loss_func, params, data, batch_size_fn = inv_case
     params = maybe_exclude_or_shuffle_parameters(params, model_func, exclude, shuffle)
-    dtype = torch.float64  # use double precision for better numerical stability
+    dtype = float64  # use double precision for better numerical stability
     model_func = model_func.to(dtype=dtype)
     loss_func = loss_func.to(dtype=dtype)
     params = [p.to(dtype=dtype) for p in params]
@@ -742,9 +701,9 @@ def test_EKFAC_inverse_exactly_damped_matmat(
     )
 
     # manual exactly damped inverse
-    inv_EKFAC_naive = torch.inverse(
-        EKFAC @ torch.eye(EKFAC.shape[0], dtype=dtype, device=EKFAC._device)
-        + delta * torch.eye(EKFAC.shape[0], dtype=dtype, device=EKFAC._device)
+    inv_EKFAC_naive = inv(
+        EKFAC @ eye(EKFAC.shape[0], dtype=dtype, device=EKFAC._device)
+        + delta * eye(EKFAC.shape[0], dtype=dtype, device=EKFAC._device)
     )
 
     # check that passing a tuple for exact damping will fail
@@ -769,11 +728,11 @@ def test_EKFAC_inverse_exactly_damped_matmat(
 
 def test_EKFAC_inverse_save_and_load_state_dict():
     """Test that KFACInverseLinearOperator can be saved and loaded from state dict."""
-    torch.manual_seed(0)
+    manual_seed(0)
     batch_size, D_in, D_out = 4, 3, 2
-    X = torch.rand(batch_size, D_in)
-    y = torch.rand(batch_size, D_out)
-    model = torch.nn.Linear(D_in, D_out)
+    X = rand(batch_size, D_in)
+    y = rand(batch_size, D_out)
+    model = Linear(D_in, D_out)
 
     params = list(model.parameters())
     # create and compute EKFAC
@@ -789,12 +748,12 @@ def test_EKFAC_inverse_save_and_load_state_dict():
     inv_ekfac = KFACInverseLinearOperator(
         ekfac, damping=1e-2, use_exact_damping=True, retry_double_precision=False
     )
-    _ = inv_ekfac @ torch.eye(ekfac.shape[1])  # to trigger inverse computation
+    _ = inv_ekfac @ eye(ekfac.shape[1])  # to trigger inverse computation
 
     # save state dict
     state_dict = inv_ekfac.state_dict()
     INV_EKFAC_PATH = "inv_ekfac_state_dict.pt"
-    torch.save(state_dict, INV_EKFAC_PATH)
+    save(state_dict, INV_EKFAC_PATH)
 
     # create new inverse EKFAC with different linop input and try to load state dict
     wrong_ekfac = EKFACLinearOperator(model, CrossEntropyLoss(), params, [(X, y)])
@@ -802,27 +761,27 @@ def test_EKFAC_inverse_save_and_load_state_dict():
         wrong_ekfac, damping=1e-2, use_exact_damping=True
     )
     with raises(ValueError, match="mismatch"):
-        inv_ekfac_wrong.load_state_dict(torch.load(INV_EKFAC_PATH, weights_only=False))
+        inv_ekfac_wrong.load_state_dict(load(INV_EKFAC_PATH, weights_only=False))
 
     # create new inverse KFAC and load state dict
     inv_ekfac_new = KFACInverseLinearOperator(ekfac, use_exact_damping=True)
-    inv_ekfac_new.load_state_dict(torch.load(INV_EKFAC_PATH, weights_only=False))
+    inv_ekfac_new.load_state_dict(load(INV_EKFAC_PATH, weights_only=False))
     # clean up
     os.remove(INV_EKFAC_PATH)
 
     # check that the two inverse KFACs are equal
     compare_state_dicts(inv_ekfac.state_dict(), inv_ekfac_new.state_dict())
-    test_vec = torch.rand(inv_ekfac.shape[1])
+    test_vec = rand(inv_ekfac.shape[1])
     report_nonclose(inv_ekfac @ test_vec, inv_ekfac_new @ test_vec)
 
 
 def test_EKFAC_inverse_from_state_dict():
     """Test that KFACInverseLinearOperator can be created from state dict."""
-    torch.manual_seed(0)
+    manual_seed(0)
     batch_size, D_in, D_out = 4, 3, 2
-    X = torch.rand(batch_size, D_in)
-    y = torch.rand(batch_size, D_out)
-    model = torch.nn.Linear(D_in, D_out)
+    X = rand(batch_size, D_in)
+    y = rand(batch_size, D_out)
+    model = Linear(D_in, D_out)
 
     params = list(model.parameters())
     # create and compute EKFAC
@@ -844,5 +803,5 @@ def test_EKFAC_inverse_from_state_dict():
 
     # check that the two inverse KFACs are equal
     compare_state_dicts(inv_ekfac.state_dict(), inv_ekfac_new.state_dict())
-    test_vec = torch.rand(ekfac.shape[1])
+    test_vec = rand(ekfac.shape[1])
     report_nonclose(inv_ekfac @ test_vec, inv_ekfac_new @ test_vec)
