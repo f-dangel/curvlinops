@@ -1,12 +1,111 @@
 """Contains LinearOperator implementation of the GGN."""
 
 from collections.abc import MutableMapping
-from typing import List, Union
+from typing import Callable, List, Tuple, Union
+from torch.func import functional_call
+from torch.func import jvp, vjp, jacrev
 
-from backpack.hessianfree.ggnvp import ggn_vector_product_from_plist
-from torch import Tensor, zeros_like
+from torch import Tensor, no_grad, vmap
+from torch.nn import Module, Parameter
 
 from curvlinops._torch_base import CurvatureLinearOperator
+
+
+def make_batch_ggn_matrix_product(
+    model_func: Module, loss_func: Module, params: Tuple[Parameter, ...]
+) -> Callable[[Tensor, Tensor, Tuple[Tensor, ...]], Tuple[Tensor, ...]]:
+    r"""Set up function that multiplies the mini-batch GGN onto a matrix in list format.
+
+    Args:
+        model_func: The neural network :math:`f_{\mathbf{\theta}}`.
+        loss_func: The loss function :math:`\ell`.
+        params: A tuple of parameters w.r.t. which the GGN is computed.
+            All parameters must be part of ``model_func.parameters()``.
+
+    Returns:
+        A function that takes inputs ``X``, ``y``, and a matrix ``M`` in list
+        format, and returns the mini-batch GGN applied to ``M`` in list format.
+    """
+    # detect the parameters w.r.t. which the GGN is computed
+    free_param_names = []
+    for p in params:
+        (name,) = [n for n, pp in model_func.named_parameters() if pp is p]
+        free_param_names.append(name)
+
+    # detect the frozen parameters and buffers that are not considered by the GGN
+    frozen_model_params = {
+        n: p for n, p in model_func.named_parameters() if n not in free_param_names
+    }
+    frozen_model_buffers = dict(model_func.named_buffers())
+
+    # extract the frozen parameters and buffers of the loss function
+    frozen_loss_params = dict(loss_func.named_parameters())
+    frozen_loss_buffers = dict(loss_func.named_buffers())
+
+    @no_grad()
+    def ggn_vector_product(
+        X: Tensor, y: Tensor, *v: Tuple[Tensor, ...]
+    ) -> Tuple[Tensor, ...]:
+        """Multiply the mini-batch GGN on a vector in list format.
+
+        Args:
+            X: Input to the DNN.
+            y: Ground truth.
+            *v: Vector to be multiplied with in tensor list format.
+
+        Returns:
+            Result of GGN multiplication in list format. Has the same shape as
+            ``v``, i.e. each tensor in the list has the shape of a parameter.
+        """
+
+        def f(*params: Tuple[Tensor, ...]) -> Tensor:
+            """Compute the neural net's mini-batch prediction given the parameters.
+
+            Args:
+                params: The parameters w.r.t. which the GGN is computed.
+
+            Returns:
+                The neural network's prediction.
+            """
+            assert len(params) == len(free_param_names)
+            free_params = dict(zip(free_param_names, params))
+            return functional_call(
+                model_func,
+                {**free_params, **frozen_model_params, **frozen_model_buffers},
+                X,
+            )
+
+        def c(f: Tensor) -> Tensor:
+            """Compute the mini-batch loss given the neural network's prediction.
+
+            Args:
+                f: The neural network's prediction.
+
+            Returns:
+                The mini-batch loss.
+            """
+            return functional_call(
+                loss_func, {**frozen_loss_params, **frozen_loss_buffers}, (f, y)
+            )
+
+        # Apply the Jacobian of f onto v: v → Jv
+        f_value, f_jvp = jvp(f, params, v)
+        # Apply the criterion's Hessian onto Jv: Jv → HJv
+        c_grad_func = jacrev(c)
+        _, c_hvp = jvp(c_grad_func, (f_value,), (f_jvp,))
+        # Apply the transposed Jacobian of f onto HJv: HJv → JᵀHJv
+        _, f_vjp_func = vjp(f, *params)
+
+        return f_vjp_func(c_hvp)
+
+    # Vectorize over vectors to multiply onto a matrix in list format
+    return vmap(
+        ggn_vector_product,
+        # No vmap in X, y, assume last axis is vmapped in the matrix list
+        in_dims=(None, None) + tuple(p.ndim for p in params),
+        # Vmapped output axis is last
+        out_dims=tuple(p.ndim for p in params),
+    )
 
 
 class GGNLinearOperator(CurvatureLinearOperator):
@@ -61,18 +160,8 @@ class GGNLinearOperator(CurvatureLinearOperator):
             ``M``, i.e. each tensor in the list has the shape of a parameter and a
             trailing dimension of matrix columns.
         """
-        output = self._model_func(X)
-        loss = self._loss_func(output, y)
-
-        # collect matrix-matrix products per parameter
-        (num_vecs,) = {m.shape[-1] for m in M}
-        GM = [zeros_like(m) for m in M]
-
-        for n in range(num_vecs):
-            col_n = ggn_vector_product_from_plist(
-                loss, output, self._params, [m[..., n] for m in M]
+        if not hasattr(self, "_ggnmp"):
+            self._ggnmp = make_batch_ggn_matrix_product(
+                self._model_func, self._loss_func, tuple(self._params)
             )
-            for GM_p, col_n_p in zip(GM, col_n):
-                GM_p[..., n].add_(col_n_p)
-
-        return GM
+        return list(self._ggnmp(X, y, *M))
