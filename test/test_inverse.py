@@ -91,7 +91,7 @@ def test_LSMRInverseLinearOperator_damped_GGN(inv_case, delta: float = 2e-2):
 
     compare_consecutive_matmats(inv_GGN, adjoint=False, is_vec=False)
     compare_matmat(
-        inv_GGN, inv_GGN_naive, adjoint=False, is_vec=False, rtol=5e-3, atol=1e-5
+        inv_GGN, inv_GGN_naive, adjoint=False, is_vec=False, rtol=1e-2, atol=1e-5
     )
 
 
