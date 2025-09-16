@@ -1,9 +1,11 @@
 """General utility functions."""
 
-from typing import List, Tuple, Union
+from typing import Callable, List, Tuple, Union
 
 from numpy import cumsum
 from torch import Tensor
+from torch.func import functional_call
+from torch.nn import Module
 
 
 def split_list(x: Union[List, Tuple], sizes: List[int]) -> List[List]:
@@ -115,3 +117,46 @@ def assert_divisible_by(num: int, divisor: int, name: str):
     """
     if num % divisor != 0:
         raise ValueError(f"{name} ({num}) must be divisible by {divisor}.")
+
+
+def make_functional_call(
+    module: Module, free_param_names: List[str]
+) -> Callable[..., Tensor]:
+    """Create a function that calls a module with given free parameters.
+
+    Args:
+        module: The PyTorch module to make functional.
+        free_param_names: Names of parameters that will be passed as arguments.
+
+    Returns:
+        A function that takes free parameters and module inputs, returning the
+        module's output. For model functions, inputs are typically (X,). For loss
+        functions, inputs are typically (predictions, targets).
+    """
+    # Detect frozen parameters and buffers not in free_param_names
+    frozen_params = {
+        n: p for n, p in module.named_parameters() if n not in free_param_names
+    }
+    frozen_buffers = dict(module.named_buffers())
+    num_free_params = len(free_param_names)
+
+    def functional_module(*args) -> Tensor:
+        """Call the module functionally with free parameters and module inputs.
+
+        Args:
+            *args: First len(free_param_names) arguments are free parameters,
+                   remaining arguments are inputs to the module.
+
+        Returns:
+            Module output.
+        """
+        # Separate free parameters and module inputs
+        free_params = dict(zip(free_param_names, args[:num_free_params]))
+        module_inputs = args[num_free_params:]
+
+        # Call module with all parameters and buffers
+        return functional_call(
+            module, {**free_params, **frozen_params, **frozen_buffers}, module_inputs
+        )
+
+    return functional_module

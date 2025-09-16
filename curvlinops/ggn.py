@@ -4,10 +4,11 @@ from collections.abc import MutableMapping
 from typing import Callable, List, Tuple, Union
 
 from torch import Tensor, no_grad, vmap
-from torch.func import functional_call, jacrev, jvp, vjp
+from torch.func import jacrev, jvp, vjp
 from torch.nn import Module, Parameter
 
 from curvlinops._torch_base import CurvatureLinearOperator
+from curvlinops.utils import make_functional_call
 
 
 def make_batch_ggn_matrix_product(
@@ -31,15 +32,9 @@ def make_batch_ggn_matrix_product(
         (name,) = [n for n, pp in model_func.named_parameters() if pp is p]
         free_param_names.append(name)
 
-    # detect the frozen parameters and buffers that are not considered by the GGN
-    frozen_model_params = {
-        n: p for n, p in model_func.named_parameters() if n not in free_param_names
-    }
-    frozen_model_buffers = dict(model_func.named_buffers())
-
-    # extract the frozen parameters and buffers of the loss function
-    frozen_loss_params = dict(loss_func.named_parameters())
-    frozen_loss_buffers = dict(loss_func.named_buffers())
+    # Create functional versions of model and loss
+    f = make_functional_call(model_func, free_param_names)  # *params, X -> prediction
+    c = make_functional_call(loss_func, [])  # prediction, y -> loss
 
     @no_grad()
     def ggn_vector_product(
@@ -56,48 +51,17 @@ def make_batch_ggn_matrix_product(
             Result of GGN multiplication in list format. Has the same shape as
             ``v``, i.e. each tensor in the list has the shape of a parameter.
         """
-
-        def f(*params: Tuple[Tensor, ...]) -> Tensor:
-            """Compute the neural net's mini-batch prediction given the parameters.
-
-            Args:
-                params: The parameters w.r.t. which the GGN is computed.
-
-            Returns:
-                The neural network's prediction.
-            """
-            assert len(params) == len(free_param_names)
-            free_params = dict(zip(free_param_names, params))
-            return functional_call(
-                model_func,
-                {**free_params, **frozen_model_params, **frozen_model_buffers},
-                X,
-            )
-
-        def c(f: Tensor) -> Tensor:
-            """Compute the mini-batch loss given the neural network's prediction.
-
-            Args:
-                f: The neural network's prediction.
-
-            Returns:
-                The mini-batch loss.
-            """
-            return functional_call(
-                loss_func, {**frozen_loss_params, **frozen_loss_buffers}, (f, y)
-            )
-
         # Apply the Jacobian of f onto v: v → Jv
-        f_val, f_jvp = jvp(f, params, v)
+        f_val, f_jvp = jvp(lambda *params: f(*params, X), params, v)
 
         # Apply the criterion's Hessian onto Jv: Jv → HJv
-        c_grad_func = jacrev(c)
+        c_grad_func = jacrev(lambda pred: c(pred, y))
         _, c_hvp = jvp(c_grad_func, (f_val,), (f_jvp,))
 
         # Apply the transposed Jacobian of f onto HJv: HJv → JᵀHJv
         # NOTE This re-evaluates the net's forward pass. [Unverified] It should be op-
         # timized away by common sub-expression elimination if you compile the function.
-        _, f_vjp_func = vjp(f, *params)
+        _, f_vjp_func = vjp(lambda *params: f(*params, X), *params)
         return f_vjp_func(c_hvp)
 
     # Vectorize over vectors to multiply onto a matrix in list format
@@ -107,6 +71,8 @@ def make_batch_ggn_matrix_product(
         in_dims=(None, None) + tuple(p.ndim for p in params),
         # Vmapped output axis is last
         out_dims=tuple(p.ndim for p in params),
+        # We want each vector to be multiplied with the same mini-batch GGN
+        randomness="same",
     )
 
 
