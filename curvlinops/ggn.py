@@ -2,10 +2,9 @@
 
 from collections.abc import MutableMapping
 from typing import Callable, List, Tuple, Union
-from torch.func import functional_call
-from torch.func import jvp, vjp, jacrev
 
 from torch import Tensor, no_grad, vmap
+from torch.func import functional_call, jacrev, jvp, vjp
 from torch.nn import Module, Parameter
 
 from curvlinops._torch_base import CurvatureLinearOperator
@@ -89,13 +88,16 @@ def make_batch_ggn_matrix_product(
             )
 
         # Apply the Jacobian of f onto v: v → Jv
-        f_value, f_jvp = jvp(f, params, v)
+        f_val, f_jvp = jvp(f, params, v)
+
         # Apply the criterion's Hessian onto Jv: Jv → HJv
         c_grad_func = jacrev(c)
-        _, c_hvp = jvp(c_grad_func, (f_value,), (f_jvp,))
-        # Apply the transposed Jacobian of f onto HJv: HJv → JᵀHJv
-        _, f_vjp_func = vjp(f, *params)
+        _, c_hvp = jvp(c_grad_func, (f_val,), (f_jvp,))
 
+        # Apply the transposed Jacobian of f onto HJv: HJv → JᵀHJv
+        # NOTE This re-evaluates the net's forward pass. [Unverified] It should be op-
+        # timized away by common sub-expression elimination if you compile the function.
+        _, f_vjp_func = vjp(f, *params)
         return f_vjp_func(c_hvp)
 
     # Vectorize over vectors to multiply onto a matrix in list format
