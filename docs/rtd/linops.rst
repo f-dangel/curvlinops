@@ -45,13 +45,13 @@ Inverses
 --------
 
 .. autoclass:: curvlinops.CGInverseLinearOperator
-   :members: __init__, set_cg_hyperparameters
+   :members: __init__
 
 .. autoclass:: curvlinops.LSMRInverseLinearOperator
-   :members: __init__, set_lsmr_hyperparameters, matvec_with_info
+   :members: __init__
 
 .. autoclass:: curvlinops.NeumannInverseLinearOperator
-   :members: __init__, set_neumann_hyperparameters
+   :members: __init__
 
 .. autoclass:: curvlinops.KFACInverseLinearOperator
    :members: __init__
