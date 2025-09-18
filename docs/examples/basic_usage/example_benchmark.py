@@ -178,7 +178,7 @@ def setup_problem(
     loss_function = loss_function.to(dev)
 
     # Only use parameters of supported layers for KFAC
-    if linop_str in {"KFAC", "KFAC inverse"}:
+    if linop_str in {"KFAC", "KFAC inverse", "EKFAC", "EKFAC inverse"}:
         params = []
         supported_layers = [
             m for m in model.modules() if isinstance(m, (Linear, Conv2d))
