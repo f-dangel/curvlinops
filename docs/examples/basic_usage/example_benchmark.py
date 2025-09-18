@@ -28,6 +28,7 @@ from typing import Iterable, List, Tuple
 import matplotlib.pyplot as plt
 from benchmark_utils import (
     GPTWrapper,
+    setup_synthetic_cifar10_resnet18,
     setup_synthetic_imagenet_resnet50,
     setup_synthetic_shakespeare_nanogpt,
 )
@@ -113,6 +114,7 @@ if ON_RTD:
 else:
     PROBLEM_STRS = [
         "synthetic_mnist_cnn",
+        "synthetic_cifar10_resnet18",
         "synthetic_imagenet_resnet50",
         "synthetic_shakespeare_nanogpt",
     ]
@@ -167,6 +169,7 @@ def setup_problem(
     """
     setup_func = {
         "synthetic_mnist_cnn": setup_synthetic_mnist_cnn,
+        "synthetic_cifar10_resnet18": setup_synthetic_cifar10_resnet18,
         "synthetic_imagenet_resnet50": setup_synthetic_imagenet_resnet50,
         "synthetic_shakespeare_nanogpt": setup_synthetic_shakespeare_nanogpt,
     }[problem_str]

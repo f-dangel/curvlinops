@@ -19,9 +19,9 @@ from torch import cuda, device, manual_seed, rand
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
 from curvlinops import (
+    EKFACLinearOperator,
     KFACInverseLinearOperator,
     KFACLinearOperator,
-    EKFACLinearOperator,
 )
 
 

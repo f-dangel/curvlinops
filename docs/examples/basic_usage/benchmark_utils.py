@@ -7,7 +7,7 @@ from typing import List, Tuple
 import requests
 from torch import Tensor, rand, randint, stack, zeros_like
 from torch.nn import CrossEntropyLoss, Module, Parameter
-from torchvision.models import ResNet50_Weights, resnet50
+from torchvision.models import resnet18, resnet50
 
 # In the execution with sphinx-gallery, __file__ is not defined and we need
 # to set it manually using the trick from https://stackoverflow.com/a/53293924
@@ -112,7 +112,28 @@ def setup_synthetic_imagenet_resnet50(
     X = rand(batch_size, 3, 224, 224)
     y = randint(0, 1000, (batch_size,))
     data = [(X, y)]
-    model = resnet50(weights=ResNet50_Weights.DEFAULT)
+    model = resnet50()
+    loss_function = CrossEntropyLoss()
+
+    return model, loss_function, data
+
+def setup_synthetic_cifar10_resnet18(
+    batch_size: int = 512,
+) -> Tuple[Module, CrossEntropyLoss, List[Tuple[Tensor, Tensor]]]:
+    """Set up ResNet18 on synthetic CIFAR10 for the benchmark.
+
+    Args:
+        batch_size: The batch size to use. Default is ``512``.
+
+    Returns:
+        A tuple containing the ResNet18 model, the loss function
+        and the data.
+    """
+    X = rand(batch_size, 3, 32, 32)
+    num_classes = 10
+    y = randint(0, num_classes, (batch_size,))
+    data = [(X, y)]
+    model = resnet18(num_classes = num_classes)
     loss_function = CrossEntropyLoss()
 
     return model, loss_function, data
