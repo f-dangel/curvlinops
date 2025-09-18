@@ -7,7 +7,7 @@ from typing import List, Tuple
 import requests
 from torch import Tensor, rand, randint, stack, zeros_like
 from torch.nn import CrossEntropyLoss, Module, Parameter
-from torchvision.models import resnet18, resnet50
+from torchvision.models import ResNet50_Weights, resnet18, resnet50
 
 # In the execution with sphinx-gallery, __file__ is not defined and we need
 # to set it manually using the trick from https://stackoverflow.com/a/53293924
@@ -112,7 +112,7 @@ def setup_synthetic_imagenet_resnet50(
     X = rand(batch_size, 3, 224, 224)
     y = randint(0, 1000, (batch_size,))
     data = [(X, y)]
-    model = resnet50()
+    model = resnet50(weights=ResNet50_Weights.DEFAULT)
     loss_function = CrossEntropyLoss()
 
     return model, loss_function, data
