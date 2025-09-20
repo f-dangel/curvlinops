@@ -51,8 +51,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     which are now available through `@`
   - `SubmatrixLinearOperator`
     ([PR](https://github.com/f-dangel/curvlinops/pull/177))
-  - Linear operators for approximate inversion (`CGInverseLinearOperator`, `LSMRInverseLinearOperator`, `NeumannInverseLinearOperator`)
-    ([PR](https://github.com/f-dangel/curvlinops/pull/186))
+  - `CGInverseLinearOperator`, `NeumannInverseLinearOperator`, and `LSMRInverseLinearOperator`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/186)),
+    also removing their public methods for specifying hyper-parameters and instead accepting them as keyword arguments in the constructor
 
 - Add `EKFACLinearOperator` which implements EKFAC
   ([paper](https://arxiv.org/abs/1806.03884),
@@ -89,6 +90,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Test that two consecutive matrix-vector products of a linear operator match
   ([issue](https://github.com/f-dangel/curvlinops/issues/159),
    [PR](https://github.com/f-dangel/curvlinops/pull/175))
+- Reduce usage of SciPy in tests and examples
+  ([PR](https://github.com/f-dangel/curvlinops/pull/187))
 
 ## [2.0.1] - 2024-10-25
 
