@@ -15,7 +15,7 @@ from typing import List, Tuple
 import numpy
 import scipy
 import torch
-from torch import nn
+from torch import from_numpy, nn
 
 from curvlinops import HessianLinearOperator
 from curvlinops.examples.functorch import functorch_hessian
@@ -99,7 +99,7 @@ print(f"Leading {k} Hessian eigenvalues (functorch): {top_k_evals_functorch}")
 #  Both results should match.
 
 print(f"Comparing leading {k} Hessian eigenvalues (linear operator vs. functorch).")
-assert allclose_report(top_k_evals, top_k_evals_functorch)
+assert allclose_report(from_numpy(top_k_evals).float(), top_k_evals_functorch)
 
 # %%
 #
@@ -192,7 +192,9 @@ def power_method(
 
 top_k_evals_power, _ = power_method(H, tol=1e-4, k=k)
 print(f"Comparing leading {k} Hessian eigenvalues (eigsh vs. power).")
-assert allclose_report(top_k_evals_functorch, top_k_evals_power, rtol=2e-2, atol=1e-6)
+assert allclose_report(
+    top_k_evals_functorch, from_numpy(top_k_evals_power).float(), rtol=2e-2, atol=1e-6
+)
 
 # %%
 #
