@@ -28,6 +28,7 @@ from curvlinops import (
 )
 from curvlinops.examples.functorch import functorch_ggn
 from curvlinops.outer import IdentityLinearOperator
+from curvlinops.utils import allclose_report
 from test.test__torch_base import TensorLinearOperator
 from test.utils import (
     cast_input,
@@ -37,7 +38,6 @@ from test.utils import (
     eye_like,
     maybe_exclude_or_shuffle_parameters,
 )
-from curvlinops.utils import allclose_report
 
 KFAC_MIN_DAMPING = 1e-8
 
