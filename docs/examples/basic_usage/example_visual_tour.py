@@ -11,11 +11,20 @@ First, the imports.
 from typing import Callable, Tuple
 
 import matplotlib.pyplot as plt
-import numpy
-import torch
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
-from torch import nn
+from numpy import cumsum
+from torch import Tensor, cuda, device, eye, manual_seed, rand, randint
+from torch.nn import (
+    Conv2d,
+    CrossEntropyLoss,
+    Flatten,
+    Linear,
+    ReLU,
+    Sequential,
+    Sigmoid,
+)
+from torch.utils.data import DataLoader, TensorDataset
 from tueplots import bundles
 
 from curvlinops import (
@@ -27,10 +36,9 @@ from curvlinops import (
 )
 
 # make deterministic
-torch.manual_seed(0)
-numpy.random.seed(0)
+manual_seed(0)
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+DEVICE = device("cuda" if cuda.is_available() else "cpu")
 
 # %%
 # Setup
@@ -46,21 +54,21 @@ in_features_shape = (in_channels, 10, 10)
 num_classes = 5
 
 # dataset
-dataset = torch.utils.data.TensorDataset(
-    torch.rand(num_data, *in_features_shape),  # X
-    torch.randint(size=(num_data,), low=0, high=num_classes),  # y
+dataset = TensorDataset(
+    rand(num_data, *in_features_shape),  # X
+    randint(size=(num_data,), low=0, high=num_classes),  # y
 )
-dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size)
+dataloader = DataLoader(dataset, batch_size=batch_size)
 
 # model
-model = nn.Sequential(
-    nn.Conv2d(in_channels, 4, 3, padding=1),
-    nn.ReLU(),
-    nn.Conv2d(4, 4, 5, padding=2, stride=2),
-    nn.Sigmoid(),
-    nn.Conv2d(4, 1, 3, padding=1),
-    nn.Flatten(),
-    nn.Linear(25, num_classes),
+model = Sequential(
+    Conv2d(in_channels, 4, 3, padding=1),
+    ReLU(),
+    Conv2d(4, 4, 5, padding=2, stride=2),
+    Sigmoid(),
+    Conv2d(4, 1, 3, padding=1),
+    Flatten(),
+    Linear(25, num_classes),
 ).to(DEVICE)
 
 params = [p for p in model.parameters() if p.requires_grad]
@@ -70,7 +78,7 @@ num_params_layer = [
 ]
 num_tensors_layer = [len(list(child.parameters())) for child in model.children()]
 
-loss_function = nn.CrossEntropyLoss(reduction="mean").to(DEVICE)
+loss_function = CrossEntropyLoss(reduction="mean").to(DEVICE)
 
 print(f"Total parameters: {num_params}")
 print(f"Layer parameters: {num_params_layer}")
@@ -85,28 +93,26 @@ print(f"Layer parameters: {num_params_layer}")
 #
 # First, create the linear operators:
 
-Hessian_linop = HessianLinearOperator(
-    model, loss_function, params, dataloader
-).to_scipy()
-GGN_linop = GGNLinearOperator(model, loss_function, params, dataloader).to_scipy()
-EF_linop = EFLinearOperator(model, loss_function, params, dataloader).to_scipy()
+Hessian_linop = HessianLinearOperator(model, loss_function, params, dataloader)
+GGN_linop = GGNLinearOperator(model, loss_function, params, dataloader)
+EF_linop = EFLinearOperator(model, loss_function, params, dataloader)
 Hessian_blocked_linop = HessianLinearOperator(
     model,
     loss_function,
     params,
     dataloader,
     block_sizes=[s for s in num_tensors_layer if s != 0],
-).to_scipy()
-F_linop = FisherMCLinearOperator(model, loss_function, params, dataloader).to_scipy()
+)
+F_linop = FisherMCLinearOperator(model, loss_function, params, dataloader)
 KFAC_linop = KFACLinearOperator(
     model, loss_function, params, dataloader, separate_weight_and_bias=False
-).to_scipy()
+)
 
 # %%
 #
 # Then, compute the matrices
 
-identity = numpy.eye(num_params).astype(Hessian_linop.dtype)
+identity = eye(num_params, device=DEVICE)
 
 Hessian_mat = Hessian_linop @ identity
 GGN_mat = GGN_linop @ identity
@@ -135,7 +141,7 @@ rows, columns = 2, 3
 
 
 def plot(
-    transform: Callable[[numpy.ndarray], numpy.ndarray], transform_title: str = None
+    transform: Callable[[Tensor], Tensor], transform_title: str = None
 ) -> Tuple[Figure, Axes]:
     """Visualize transformed curvature matrices using a shared domain.
 
@@ -160,7 +166,7 @@ def plot(
         img = ax.imshow(transform(mat), vmin=min_value, vmax=max_value)
 
         # layer blocks
-        boundaries = [0] + numpy.cumsum(num_params_layer).tolist()
+        boundaries = [0] + cumsum(num_params_layer).tolist()
         for pos in boundaries:
             if pos not in [0, num_params]:
                 style = {"color": "w", "lw": 0.5, "ls": "-"}
@@ -197,8 +203,8 @@ plot_config = bundles.icml2024(column="full", nrows=1.5 * rows, ncols=columns)
 # We will show their logarithmic absolute value:
 
 
-def logabs(mat, epsilon=1e-6):
-    return numpy.log10(numpy.clip(numpy.abs(mat), a_min=epsilon, a_max=None))
+def logabs(mat: Tensor, epsilon: float = 1e-6) -> Tensor:
+    return mat.abs().clamp(min=epsilon).log10()
 
 
 with plt.rc_context(plot_config):

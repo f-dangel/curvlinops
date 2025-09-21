@@ -22,19 +22,30 @@ coincide as the Monte-Carlo approximation converges.
 Let's get the imports out of our way.
 """
 
+from math import isclose
+
 import matplotlib.pyplot as plt
-import numpy
-import torch
 from matplotlib import animation
-from torch import nn
+from torch import (
+    Tensor,
+    cuda,
+    device,
+    eye,
+    int32,
+    logspace,
+    manual_seed,
+    rand,
+    randint,
+    unique,
+    zeros,
+)
+from torch.linalg import matrix_norm
+from torch.nn import CrossEntropyLoss, Linear, ReLU, Sequential, Sigmoid
 
 from curvlinops import FisherMCLinearOperator, GGNLinearOperator
 
 # make deterministic
-torch.manual_seed(0)
-numpy.random.seed(0)
-
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+manual_seed(0)
 
 # %%
 # Setup
@@ -48,26 +59,25 @@ D_in = 7
 D_hidden = 5
 C = 3
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+DEVICE = device("cuda" if cuda.is_available() else "cpu")
 
 data = [
     (
-        torch.rand(N, D_in).to(DEVICE),  # X
-        torch.randint(low=0, high=C, size=(N,)).to(DEVICE),  # y
+        rand(N, D_in, device=DEVICE),  # X
+        randint(low=0, high=C, size=(N,), device=DEVICE),  # y
     )
     for N in Ns
 ]
-
-model = nn.Sequential(
-    nn.Linear(D_in, D_hidden),
-    nn.ReLU(),
-    nn.Linear(D_hidden, D_hidden),
-    nn.Sigmoid(),
-    nn.Linear(D_hidden, C),
+model = Sequential(
+    Linear(D_in, D_hidden),
+    ReLU(),
+    Linear(D_hidden, D_hidden),
+    Sigmoid(),
+    Linear(D_hidden, C),
 ).to(DEVICE)
 params = [p for p in model.parameters() if p.requires_grad]
 
-loss_function = nn.CrossEntropyLoss(reduction="mean").to(DEVICE)
+loss_function = CrossEntropyLoss(reduction="mean").to(DEVICE)
 
 
 # %%
@@ -78,11 +88,11 @@ loss_function = nn.CrossEntropyLoss(reduction="mean").to(DEVICE)
 # Fisher and compute their matrix representations by multiplying them onto the
 # identity matrix:
 
-GGN = GGNLinearOperator(model, loss_function, params, data).to_scipy()
-F = FisherMCLinearOperator(model, loss_function, params, data).to_scipy()
+GGN = GGNLinearOperator(model, loss_function, params, data)
+F = FisherMCLinearOperator(model, loss_function, params, data)
 
 D = GGN.shape[0]
-identity = numpy.eye(D)
+identity = eye(D, device=DEVICE)
 
 GGN_mat = GGN @ identity
 F_mat = F @ identity
@@ -91,8 +101,7 @@ F_mat = F @ identity
 #
 # We can use the residual's Frobenius norm to quantify the approximation error
 # of the Monte-Carlo estimator:
-
-residual_norm = numpy.linalg.norm(GGN_mat - F_mat)
+residual_norm = matrix_norm(GGN_mat - F_mat)
 print(f"Residual (Frobenius) norm: {residual_norm:.5f}")
 
 # %%
@@ -109,11 +118,9 @@ mc_samples = [1, 2, 4, 8]
 residual_norms = []
 
 for mc in mc_samples:
-    F = FisherMCLinearOperator(
-        model, loss_function, params, data, mc_samples=mc
-    ).to_scipy()
+    F = FisherMCLinearOperator(model, loss_function, params, data, mc_samples=mc)
     F_mat = F @ identity
-    residual_norms.append(numpy.linalg.norm(GGN_mat - F_mat))
+    residual_norms.append(matrix_norm(GGN_mat - F_mat))
 
 for mc, norm in zip(mc_samples, residual_norms):
     print(f"mc_samples = {mc},\tresidual (Frobenius) norm = {norm:.5f}")
@@ -133,20 +140,16 @@ for mc, norm in zip(mc_samples, residual_norms):
 # first linear operator, we generate some random numbers to show that the
 # global random number generator does not influence the Monte-Carlo estimator:
 
-F1_mat = (
-    FisherMCLinearOperator(model, loss_function, params, data).to_scipy() @ identity
-)
+F1_mat = FisherMCLinearOperator(model, loss_function, params, data) @ identity
 
 # draw some random numbers to modify the global random number generator's state
-torch.rand(123)
+rand(123)
 
-F2_mat = (
-    FisherMCLinearOperator(model, loss_function, params, data).to_scipy() @ identity
-)
+F2_mat = FisherMCLinearOperator(model, loss_function, params, data) @ identity
 
 # still, we get the same deterministic approximation
-residual_norm = numpy.linalg.norm(F1_mat - F2_mat)
-if numpy.isclose(residual_norm, 0.0):
+residual_norm = matrix_norm(F1_mat - F2_mat).item()
+if isclose(residual_norm, 0.0):
     print(residual_norm)
 else:
     raise RuntimeError(f"Residual Frobenius norm should be 0. Got {residual_norm}.")
@@ -163,19 +166,17 @@ else:
 
 seed1 = 123456
 F1_mat = (
-    FisherMCLinearOperator(model, loss_function, params, data, seed=seed1).to_scipy()
-    @ identity
+    FisherMCLinearOperator(model, loss_function, params, data, seed=seed1) @ identity
 )
 
 seed2 = 654321
 F2_mat = (
-    FisherMCLinearOperator(model, loss_function, params, data, seed=seed2).to_scipy()
-    @ identity
+    FisherMCLinearOperator(model, loss_function, params, data, seed=seed2) @ identity
 )
 
 # now, we get two different deterministic approximations
-residual_norm = numpy.linalg.norm(F1_mat - F2_mat)
-if not numpy.isclose(residual_norm, 0.0):
+residual_norm = matrix_norm(F1_mat - F2_mat).item()
+if not isclose(residual_norm, 0.0):
     print(residual_norm)
 else:
     raise RuntimeError(f"Residual Frobenius norm should be ≠0. Got {residual_norm}.")
@@ -196,11 +197,9 @@ else:
 # We will use a :code:`logspace` for taking snapshots.
 
 num_steps = 25
-mc_samples = numpy.unique(
-    numpy.logspace(0, 2, num_steps, endpoint=True, dtype=numpy.int32)
-)
+mc_samples = unique(logspace(0, 2, num_steps, dtype=int32))
 F_snapshots = []
-F_accumulated = numpy.zeros((D, D))
+F_accumulated = zeros((D, D), device=DEVICE)
 start_seed = 123456789
 
 for seed, mc in enumerate(range(mc_samples.max()), start=start_seed):
@@ -209,7 +208,7 @@ for seed, mc in enumerate(range(mc_samples.max()), start=start_seed):
     # linear operators indeed realize deterministic matrices.
     F = FisherMCLinearOperator(
         model, loss_function, params, data, seed=seed, check_deterministic=False
-    ).to_scipy()
+    )
     F_accumulated += F @ identity
     if mc + 1 in mc_samples:
         F_snapshots.append(F_accumulated / (mc + 1))
@@ -222,10 +221,10 @@ for seed, mc in enumerate(range(mc_samples.max()), start=start_seed):
 # value (shifted by a small constant to avoid taking the logarithm of 0):
 
 residual_snapshots = [mat - GGN_mat for mat in F_snapshots]
-residual_norms = [numpy.linalg.norm(res) for res in residual_snapshots]
+residual_norms = [matrix_norm(res) for res in residual_snapshots]
 
 
-def transform(mat: numpy.ndarray, epsilon: float = 1e-5) -> numpy.ndarray:
+def transform(mat: Tensor, epsilon: float = 1e-5) -> Tensor:
     """Transformation applied to the matrix before plotting.
 
     Applies element-wise absolute value, shifts by epsilon, then takes the
@@ -238,7 +237,7 @@ def transform(mat: numpy.ndarray, epsilon: float = 1e-5) -> numpy.ndarray:
     Returns:
         Transformed matrix
     """
-    return numpy.log10(numpy.abs(mat) + epsilon)
+    return (mat.abs() + epsilon).log10()
 
 
 # %%
