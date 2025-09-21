@@ -127,6 +127,33 @@ class HessianLinearOperator(CurvatureLinearOperator):
         \nabla_{\mathbf{\theta}}^2
         \ell(f_{\mathbf{\theta}}(\mathbf{x}_n), \mathbf{y}_n)\,.
 
+    Example:
+        >>> from torch import rand, eye, allclose, kron, manual_seed
+        >>> from torch.nn import Linear, MSELoss
+        >>> from curvlinops import HessianLinearOperator
+        >>>
+        >>> # Create a simple linear model without bias
+        >>> _ = manual_seed(0) # make deterministic
+        >>> D_in, D_out = 4, 2
+        >>> num_data, num_batches = 10, 3
+        >>> model = Linear(D_in, D_out, bias=False)
+        >>> params = list(model.parameters())
+        >>> loss_func = MSELoss(reduction='sum')
+        >>>
+        >>> # Generate synthetic dataset and chunk into batches
+        >>> X, y = rand(num_data, D_in),  rand(num_data, D_out)
+        >>> data = list(zip(X.split(num_batches), y.split(num_batches)))
+        >>>
+        >>> # Create Hessian linear operator
+        >>> H_op = HessianLinearOperator(model, loss_func, params, data)
+        >>>
+        >>> # Compare with the known Hessian matrix 2 I ⊗ Xᵀ X
+        >>> H_mat = 2 * kron(eye(D_out), X.T @ X)
+        >>> P = sum(p.numel() for p in params)
+        >>> v = rand(P) # generate a random vector
+        >>> (H_mat @ v).allclose(H_op @ v)
+        True
+
     Attributes:
         SUPPORTS_BLOCKS: Whether the linear operator supports block operations.
             Default is ``True``.
