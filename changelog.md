@@ -90,6 +90,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Test that two consecutive matrix-vector products of a linear operator match
   ([issue](https://github.com/f-dangel/curvlinops/issues/159),
    [PR](https://github.com/f-dangel/curvlinops/pull/175))
+- Reduce usage of SciPy in tests and examples
+  ([PR](https://github.com/f-dangel/curvlinops/pull/187))
 
 ## [2.0.1] - 2024-10-25
 

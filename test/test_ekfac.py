@@ -81,7 +81,6 @@ def test_ekfac_type2(
         data,
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
-        return_numpy=False,
     )
     ekfac = EKFACLinearOperator(
         model,
@@ -156,7 +155,6 @@ def test_ekfac_type2_weight_sharing(
         data,
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
-        return_numpy=False,
     )
     ekfac = EKFACLinearOperator(
         model,
@@ -214,7 +212,6 @@ def test_ekfac_mc(
         data,
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
-        return_numpy=False,
     )
     ekfac = EKFACLinearOperator(
         model,
@@ -290,7 +287,6 @@ def test_ekfac_mc_weight_sharing(
         data,
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
-        return_numpy=False,
     )
     ekfac = EKFACLinearOperator(
         model,
@@ -344,7 +340,6 @@ def test_ekfac_one_datum(
         data,
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
-        return_numpy=False,
     )
     ekfac = EKFACLinearOperator(
         model,
@@ -389,7 +384,6 @@ def test_ekfac_mc_one_datum(
         data,
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
-        return_numpy=False,
     )
     ekfac = EKFACLinearOperator(
         model,
@@ -438,7 +432,6 @@ def test_ekfac_ef_one_datum(
         data,
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
-        return_numpy=False,
     )
 
     ekfac = EKFACLinearOperator(
