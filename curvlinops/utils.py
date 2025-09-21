@@ -3,7 +3,7 @@
 from typing import List, Tuple, Union
 
 from numpy import cumsum, ndarray
-from torch import Tensor, from_numpy
+from torch import Tensor, as_tensor
 
 
 def split_list(x: Union[List, Tuple], sizes: List[int]) -> List[List]:
@@ -45,8 +45,7 @@ def allclose_report(
     Returns:
         ``True`` if the tensors are close, ``False`` otherwise.
     """
-    tensor1 = from_numpy(tensor1) if isinstance(tensor1, ndarray) else tensor1
-    tensor2 = from_numpy(tensor2) if isinstance(tensor2, ndarray) else tensor2
+    tensor1, tensor2 = as_tensor(tensor1), as_tensor(tensor2)
 
     close = tensor1.allclose(tensor2, rtol=rtol, atol=atol)
     if not close:
