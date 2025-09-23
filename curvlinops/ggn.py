@@ -11,9 +11,61 @@ from curvlinops._torch_base import CurvatureLinearOperator
 from curvlinops.utils import make_functional_call
 
 
+def make_ggn_vector_product(
+    f: Callable[..., Tensor], c: Callable[[Tensor, Tensor], Tensor]
+) -> Callable[
+    [Tuple[Tensor, ...], Tensor, Tensor, Tuple[Tensor, ...]], Tuple[Tensor, ...]
+]:
+    """Create a function that computes GGN-vector products for given f and c functions.
+
+    Args:
+        f: Function that takes parameters and input, returns prediction.
+            Signature: (*params, X) -> prediction
+        c: Function that takes prediction and target, returns loss.
+            Signature: (prediction, y) -> loss
+
+    Returns:
+        A function that computes GGN-vector products.
+        Signature: (params, X, y, *v) -> GGN @ v
+    """
+
+    @no_grad()
+    def ggn_vector_product(
+        params: Tuple[Tensor, ...], X: Tensor, y: Tensor, *v: Tuple[Tensor, ...]
+    ) -> Tuple[Tensor, ...]:
+        """Multiply the GGN on a vector in list format.
+
+        Args:
+            params: Parameters of the model.
+            X: Input to the DNN.
+            y: Ground truth.
+            *v: Vector to be multiplied with in tensor list format.
+
+        Returns:
+            Result of GGN multiplication in list format. Has the same shape as
+            ``v``, i.e. each tensor in the list has the shape of a parameter.
+        """
+        # Apply the Jacobian of f onto v: v → Jv
+        f_val, f_jvp = jvp(lambda *params_inner: f(*params_inner, X), params, v)
+
+        # Apply the criterion's Hessian onto Jv: Jv → HJv
+        c_grad_func = jacrev(lambda pred: c(pred, y))
+        _, c_hvp = jvp(c_grad_func, (f_val,), (f_jvp,))
+
+        # Apply the transposed Jacobian of f onto HJv: HJv → JᵀHJv
+        # NOTE This re-evaluates the net's forward pass. [Unverified] It should be op-
+        # timized away by common sub-expression elimination if you compile the function.
+        _, f_vjp_func = vjp(lambda *params_inner: f(*params_inner, X), *params)
+        return f_vjp_func(c_hvp)
+
+    return ggn_vector_product
+
+
 def make_batch_ggn_matrix_product(
     model_func: Module, loss_func: Module, params: Tuple[Parameter, ...]
-) -> Callable[[Tensor, Tensor, Tuple[Tensor, ...]], Tuple[Tensor, ...]]:
+) -> Callable[
+    [Union[Tensor, MutableMapping], Tensor, Tuple[Tensor, ...]], Tuple[Tensor, ...]
+]:
     r"""Set up function that multiplies the mini-batch GGN onto a matrix in list format.
 
     Args:
@@ -36,9 +88,11 @@ def make_batch_ggn_matrix_product(
     f = make_functional_call(model_func, free_param_names)  # *params, X -> prediction
     c = make_functional_call(loss_func, [])  # prediction, y -> loss
 
-    @no_grad()
+    # Create the functional GGN-vector product
+    ggn_vp = make_ggn_vector_product(f, c)
+
     def ggn_vector_product(
-        X: Tensor, y: Tensor, *v: Tuple[Tensor, ...]
+        X: Union[Tensor, MutableMapping], y: Tensor, *v: Tuple[Tensor, ...]
     ) -> Tuple[Tensor, ...]:
         """Multiply the mini-batch GGN on a vector in list format.
 
@@ -51,18 +105,7 @@ def make_batch_ggn_matrix_product(
             Result of GGN multiplication in list format. Has the same shape as
             ``v``, i.e. each tensor in the list has the shape of a parameter.
         """
-        # Apply the Jacobian of f onto v: v → Jv
-        f_val, f_jvp = jvp(lambda *params: f(*params, X), params, v)
-
-        # Apply the criterion's Hessian onto Jv: Jv → HJv
-        c_grad_func = jacrev(lambda pred: c(pred, y))
-        _, c_hvp = jvp(c_grad_func, (f_val,), (f_jvp,))
-
-        # Apply the transposed Jacobian of f onto HJv: HJv → JᵀHJv
-        # NOTE This re-evaluates the net's forward pass. [Unverified] It should be op-
-        # timized away by common sub-expression elimination if you compile the function.
-        _, f_vjp_func = vjp(lambda *params: f(*params, X), *params)
-        return f_vjp_func(c_hvp)
+        return ggn_vp(params, X, y, *v)
 
     # Vectorize over vectors to multiply onto a matrix in list format
     return vmap(
