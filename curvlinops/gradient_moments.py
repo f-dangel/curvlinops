@@ -13,6 +13,59 @@ from curvlinops.ggn import make_ggn_vector_product
 from curvlinops.utils import make_functional_call
 
 
+def make_flattening_functions(
+    model_func: Module, loss_func: Module, free_param_names: List[str]
+) -> Tuple[Callable[..., Tensor], Callable[[Tensor, Tensor], Tensor]]:
+    """Create flattened versions of model and loss functions.
+
+    Args:
+        model_func: The neural network module.
+        loss_func: The loss function module.
+        free_param_names: Names of parameters that will be passed as arguments.
+
+    Returns:
+        Tuple of (f_flat, c_flat) where:
+        - f_flat: Function that executes model and flattens batch and shared axes
+        - c_flat: Function that executes loss with flattened labels
+    """
+    # Create functional versions of model and loss
+    f = make_functional_call(model_func, free_param_names)  # *params, X -> prediction
+    c = make_functional_call(loss_func, [])  # prediction, y -> loss
+
+    def f_flat(*params_and_X: Union[Tensor, MutableMapping]) -> Tensor:
+        """Execute model and flatten batch and shared axes.
+
+        If >2d output we convert to an equivalent 2d output for loss computation.
+        For CrossEntropyLoss: (batch, c, ...) -> (batch*..., c)
+        For other losses: (batch, ..., c) -> (batch*..., c)
+        """
+        *params_inner, X = params_and_X
+        output = f(*params_inner, X)
+        return rearrange(
+            output,
+            "batch c ... -> (batch ...) c"
+            if isinstance(loss_func, CrossEntropyLoss)
+            else "batch ... c -> (batch ...) c",
+        )
+
+    def c_flat(output_flat: Tensor, y: Tensor) -> Tensor:
+        """Execute loss with flattened labels.
+
+        Flattens the labels to match the flattened output format:
+        For CrossEntropyLoss: (batch, ...) -> (batch*...)
+        For other losses: (batch, ..., c) -> (batch*..., c)
+        """
+        y_flat = rearrange(
+            y,
+            "batch ... -> (batch ...)"
+            if isinstance(loss_func, CrossEntropyLoss)
+            else "batch ... c -> (batch ...) c",
+        )
+        return c(output_flat, y_flat)
+
+    return f_flat, c_flat
+
+
 def make_batch_ef_matrix_product(
     model_func: Module, loss_func: Module, params: Tuple[Parameter, ...]
 ) -> Callable[
@@ -47,33 +100,8 @@ def make_batch_ef_matrix_product(
         (name,) = [n for n, pp in model_func.named_parameters() if pp is p]
         free_param_names.append(name)
 
-    # Create functional versions of model and loss
-    f = make_functional_call(model_func, free_param_names)  # *params, X -> prediction
-    c = make_functional_call(loss_func, [])  # prediction, y -> loss
-
-    # Handle networks which output an additional dimension other than batch and output
-    # features by combining the additional axes with the batch axis.
-    def f_flat(*params_and_X: Union[Tensor, MutableMapping]) -> Tensor:
-        """Execute model and flatten batch and shared axes."""
-        *params_inner, X = params_and_X
-        output = f(*params_inner, X)
-        return rearrange(
-            output,
-            "batch c ... -> (batch ...) c"
-            if isinstance(loss_func, CrossEntropyLoss)
-            else "batch ... c -> (batch ...) c",
-        )
-
-    def c_flat(output_flat: Tensor, y: Tensor) -> Tensor:
-        """Execute loss with flattened labels."""
-        y_flat = rearrange(
-            y,
-            "batch ... -> (batch ...)"
-            if isinstance(loss_func, CrossEntropyLoss)
-            else "batch ... c -> (batch ...) c",
-        )
-        return c(output_flat, y_flat)
-
+    # Create flattened versions of model and loss functions
+    f_flat, c_flat = make_flattening_functions(model_func, loss_func, free_param_names)
     c_flat_grad = grad(c_flat, argnums=0)
 
     def c_pseudo_flat(output_flat: Tensor, y: Tensor) -> Tensor:
