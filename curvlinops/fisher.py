@@ -15,98 +15,6 @@ from curvlinops.ggn import make_ggn_vector_product
 from curvlinops.gradient_moments import make_flattening_functions
 
 
-def make_grad_output_sampler(
-    loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss]
-) -> Callable[[Tensor, int, Tensor, Generator], Tensor]:
-    """Create a function that samples gradients w.r.t. network outputs.
-
-    Args:
-        loss_func: The loss function to create the sampler for.
-
-    Returns:
-        A function that samples gradients w.r.t. the model prediction.
-        Signature: (output, num_samples, y, generator) -> grad_samples
-
-    Raises:
-        NotImplementedError: For unsupported loss functions.
-    """
-
-    def sample_grad_output(
-        output: Tensor, num_samples: int, y: Tensor, generator: Generator
-    ) -> Tensor:
-        """Draw would-be gradients ``∇_f log p(·|f)`` with explicit generator.
-
-        For a single data point, the would-be gradient's outer product equals the
-        Hessian ``∇²_f log p(·|f)`` in expectation.
-
-        Currently only supports ``MSELoss``, ``CrossEntropyLoss``, and
-        ``BCEWithLogitsLoss``.
-
-        The returned gradient does not account for the scaling of the loss function by
-        the output dimension ``C`` that ``MSELoss`` and ``BCEWithLogitsLoss`` apply when
-        ``reduction='mean'``.
-
-        Args:
-            output: model prediction ``f`` for multiple data with batch axis as
-                0th dimension.
-            num_samples: Number of samples to draw.
-            y: Labels of the data on which output was produced.
-            generator: Random generator for sampling.
-
-        Returns:
-            Samples of the gradient w.r.t. the model prediction.
-            Has shape ``[num_samples, *output.shape]``.
-
-        Raises:
-            NotImplementedError: For unsupported loss functions.
-            NotImplementedError: If the prediction does not have two dimensions.
-            NotImplementedError: If binary classification labels are not binary.
-        """
-        if output.ndim != 2:
-            raise NotImplementedError(f"Only 2d outputs supported. Got {output.shape}")
-
-        _, C = output.shape
-
-        if isinstance(loss_func, MSELoss):
-            std = as_tensor(sqrt(0.5), device=output.device)
-            mean = zeros(
-                num_samples, *output.shape, device=output.device, dtype=output.dtype
-            )
-            return 2 * normal(mean, std, generator=generator)
-
-        elif isinstance(loss_func, CrossEntropyLoss):
-            prob = softmax(output, dim=1)
-            sample = prob.multinomial(
-                num_samples=num_samples, replacement=True, generator=generator
-            )
-            sample = rearrange(sample, "batch s -> s batch")
-            onehot_sample = one_hot(sample, num_classes=C)
-            # repeat ``num_sample`` times along a new leading axis to avoid broadcasting
-            prob = prob.unsqueeze(0).expand_as(onehot_sample)
-            return prob - onehot_sample
-
-        elif isinstance(loss_func, BCEWithLogitsLoss):
-            # Check if targets are binary by ensuring all values are 0 or 1
-            is_binary = (y == 0).logical_or(y == 1).all()
-            if not is_binary:
-                raise NotImplementedError(
-                    "Only binary targets (0, 1) are currently supported with"
-                    + f" BCEWithLogitsLoss. Got non-binary values {y.unique()}."
-                )
-            prob = output.sigmoid()
-            # repeat ``num_sample`` times along a new leading axis
-            prob = prob.unsqueeze(0).expand(num_samples, -1, -1)
-            sample = prob.bernoulli(generator=generator)
-            return prob - sample
-
-        else:
-            raise NotImplementedError(
-                f"Supported losses: {(MSELoss, CrossEntropyLoss, BCEWithLogitsLoss)}"
-            )
-
-    return sample_grad_output
-
-
 class FisherMCLinearOperator(CurvatureLinearOperator):
     r"""Monte-Carlo approximation of the Fisher as SciPy linear operator.
 
@@ -317,73 +225,6 @@ class FisherMCLinearOperator(CurvatureLinearOperator):
 
         return list(self._fmcmp(X, y, self._mc_samples, self._generator, *M))
 
-    def sample_grad_output(self, output: Tensor, num_samples: int, y: Tensor) -> Tensor:
-        """Draw would-be gradients ``∇_f log p(·|f)``.
-
-        For a single data point, the would-be gradient's outer product equals the
-        Hessian ``∇²_f log p(·|f)`` in expectation.
-
-        Currently only supports ``MSELoss``, ``CrossEntropyLoss``, and
-        ``BCEWithLogitsLoss``.
-
-        The returned gradient does not account for the scaling of the loss function by
-        the output dimension ``C`` that ``MSELoss`` and ``BCEWithLogitsLoss`` apply when
-        ``reduction='mean'``.
-
-        Args:
-            output: model prediction ``f`` for multiple data with batch axis as
-                0th dimension.
-            num_samples: Number of samples to draw.
-            y: Labels of the data on which output was produced.
-
-        Returns:
-            Samples of the gradient w.r.t. the model prediction.
-            Has shape ``[num_samples, *output.shape]``.
-
-        Raises:
-            NotImplementedError: For unsupported loss functions.
-            NotImplementedError: If the prediction does not have two dimensions.
-            NotImplementedError: If binary classification labels are not binary.
-        """
-        if output.ndim != 2:
-            raise NotImplementedError(f"Only 2d outputs supported. Got {output.shape}")
-
-        C = output.shape[1]
-
-        if isinstance(self._loss_func, MSELoss):
-            std = as_tensor(sqrt(0.5), device=output.device)
-            mean = zeros(
-                num_samples, *output.shape, device=output.device, dtype=output.dtype
-            )
-            return 2 * normal(mean, std, generator=self._generator)
-
-        elif isinstance(self._loss_func, CrossEntropyLoss):
-            prob = softmax(output, dim=1)
-            sample = prob.multinomial(
-                num_samples=num_samples, replacement=True, generator=self._generator
-            )
-            sample = rearrange(sample, "batch s -> s batch")
-            onehot_sample = one_hot(sample, num_classes=C)
-            # repeat ``num_sample`` times along a new leading axis to avoid broadcasting
-            prob = prob.unsqueeze(0).expand_as(onehot_sample)
-            return prob - onehot_sample
-
-        elif isinstance(self._loss_func, BCEWithLogitsLoss):
-            unique = set(y.unique().flatten().tolist())
-            if not unique.issubset({0, 1}):
-                raise NotImplementedError(
-                    "Only binary targets (0, 1) are currently supported with"
-                    + f" BCEWithLogitsLoss. Got {unique}."
-                )
-            prob = output.sigmoid()
-            # repeat ``num_sample`` times along a new leading axis
-            prob = prob.unsqueeze(0).expand(num_samples, -1, -1)
-            sample = prob.bernoulli(generator=self._generator)
-            return prob - sample
-
-        else:
-            raise NotImplementedError(f"Supported losses: {self.supported_losses}")
-
 
 def make_batch_fmc_matrix_product(
     model_func: Module, loss_func: Module, params: Tuple[Parameter, ...]
@@ -469,7 +310,6 @@ def make_batch_fmc_matrix_product(
         )
         return 0.5 / (mc_samples * reduction_factor) * (inner_products**2).sum()
 
-
     def fmc_vector_product(
         X: Union[Tensor, MutableMapping],
         y: Tensor,
@@ -491,7 +331,9 @@ def make_batch_fmc_matrix_product(
             shape as ``v``, i.e. each tensor in the list has the shape of a parameter.
         """
         # Create pseudo-loss with current mc_samples and generator
-        c_pseudo_wrapper = partial(c_pseudo_flat, mc_samples=mc_samples, generator=generator)
+        c_pseudo_wrapper = partial(
+            c_pseudo_flat, mc_samples=mc_samples, generator=generator
+        )
 
         # Create the functional MC Fisher-vector product using GGN of pseudo-loss
         fmc_vp = make_ggn_vector_product(f_flat, c_pseudo_wrapper)
@@ -507,3 +349,95 @@ def make_batch_fmc_matrix_product(
         # We want each vector to be multiplied with the same mini-batch MC Fisher
         randomness="same",
     )
+
+
+def make_grad_output_sampler(
+    loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
+) -> Callable[[Tensor, int, Tensor, Generator], Tensor]:
+    """Create a function that samples gradients w.r.t. network outputs.
+
+    Args:
+        loss_func: The loss function to create the sampler for.
+
+    Returns:
+        A function that samples gradients w.r.t. the model prediction.
+        Signature: (output, num_samples, y, generator) -> grad_samples
+
+    Raises:
+        NotImplementedError: For unsupported loss functions.
+    """
+
+    def sample_grad_output(
+        output: Tensor, num_samples: int, y: Tensor, generator: Generator
+    ) -> Tensor:
+        """Draw would-be gradients ``∇_f log p(·|f)`` with explicit generator.
+
+        For a single data point, the would-be gradient's outer product equals the
+        Hessian ``∇²_f log p(·|f)`` in expectation.
+
+        Currently only supports ``MSELoss``, ``CrossEntropyLoss``, and
+        ``BCEWithLogitsLoss``.
+
+        The returned gradient does not account for the scaling of the loss function by
+        the output dimension ``C`` that ``MSELoss`` and ``BCEWithLogitsLoss`` apply when
+        ``reduction='mean'``.
+
+        Args:
+            output: model prediction ``f`` for multiple data with batch axis as
+                0th dimension.
+            num_samples: Number of samples to draw.
+            y: Labels of the data on which output was produced.
+            generator: Random generator for sampling.
+
+        Returns:
+            Samples of the gradient w.r.t. the model prediction.
+            Has shape ``[num_samples, *output.shape]``.
+
+        Raises:
+            NotImplementedError: For unsupported loss functions.
+            NotImplementedError: If the prediction does not have two dimensions.
+            NotImplementedError: If binary classification labels are not binary.
+        """
+        if output.ndim != 2:
+            raise NotImplementedError(f"Only 2d outputs supported. Got {output.shape}")
+
+        _, C = output.shape
+
+        if isinstance(loss_func, MSELoss):
+            std = as_tensor(sqrt(0.5), device=output.device)
+            mean = zeros(
+                num_samples, *output.shape, device=output.device, dtype=output.dtype
+            )
+            return 2 * normal(mean, std, generator=generator)
+
+        elif isinstance(loss_func, CrossEntropyLoss):
+            prob = softmax(output, dim=1)
+            sample = prob.multinomial(
+                num_samples=num_samples, replacement=True, generator=generator
+            )
+            sample = rearrange(sample, "batch s -> s batch")
+            onehot_sample = one_hot(sample, num_classes=C)
+            # repeat ``num_sample`` times along a new leading axis to avoid broadcasting
+            prob = prob.unsqueeze(0).expand_as(onehot_sample)
+            return prob - onehot_sample
+
+        elif isinstance(loss_func, BCEWithLogitsLoss):
+            # Check if targets are binary by ensuring all values are 0 or 1
+            is_binary = (y == 0).logical_or(y == 1).all()
+            if not is_binary:
+                raise NotImplementedError(
+                    "Only binary targets (0, 1) are currently supported with"
+                    + f" BCEWithLogitsLoss. Got non-binary values {y.unique()}."
+                )
+            prob = output.sigmoid()
+            # repeat ``num_sample`` times along a new leading axis
+            prob = prob.unsqueeze(0).expand(num_samples, -1, -1)
+            sample = prob.bernoulli(generator=generator)
+            return prob - sample
+
+        else:
+            raise NotImplementedError(
+                f"Supported losses: {(MSELoss, CrossEntropyLoss, BCEWithLogitsLoss)}"
+            )
+
+    return sample_grad_output
