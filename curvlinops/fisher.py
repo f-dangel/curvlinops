@@ -338,7 +338,7 @@ class FisherMCLinearOperator(CurvatureLinearOperator):
 def make_batch_fmc_matrix_product(
     model_func: Module, loss_func: Module, params: Tuple[Parameter, ...]
 ) -> Callable[
-    [Union[Tensor, MutableMapping], Tensor, Tuple[Tensor, ...], int, int],
+    [Union[Tensor, MutableMapping], Tensor, Tuple[Tensor, ...], int, Generator],
     Tuple[Tensor, ...],
 ]:
     r"""Set up function that multiplies the mini-batch MC Fisher onto a matrix.
@@ -354,11 +354,9 @@ def make_batch_fmc_matrix_product(
             All parameters must be part of ``model_func.parameters()``.
 
     Returns:
-        A tuple of (fmc_vector_product, fmc_matrix_product) where:
-        - fmc_vector_product: Takes ``X``, ``y``, ``mc_samples``, ``seed``, and a
-          vector ``v`` in list format, returns MC Fisher applied to ``v``.
-        - fmc_matrix_product: Takes ``X``, ``y``, a matrix ``M`` in list format,
-          ``mc_samples``, and ``seed``, returns MC Fisher applied to ``M``.
+        A function that takes inputs ``X``, ``y``, a matrix ``M`` in list format,
+        ``mc_samples``, and ``generator``, and returns the mini-batch MC Fisher
+        applied to ``M`` in list format.
     """
     # detect the parameters w.r.t. which the MC Fisher is computed
     free_param_names = []
@@ -370,7 +368,7 @@ def make_batch_fmc_matrix_product(
     f_flat, _ = make_flattening_functions(model_func, loss_func, free_param_names)
 
     def c_pseudo_flat(
-        output_flat: Tensor, y: Tensor, mc_samples: int, seed: int
+        output_flat: Tensor, y: Tensor, mc_samples: int, generator: Generator
     ) -> Tensor:
         """Compute MC-Fisher pseudo-loss: L' = 0.5 / (M * c) * sum_n sum_m <f_n, g_nm>^2.
 
@@ -381,9 +379,9 @@ def make_batch_fmc_matrix_product(
 
         The reduction factor adjusts the scale depending on the loss reduction used.
         """
-        # Sample gradients w.r.t. output using the provided seed
-        grad_output_samples = sample_grad_output_with_seed(
-            output_flat, mc_samples, y, seed
+        # Sample gradients w.r.t. output using the provided generator
+        grad_output_samples = sample_grad_output_with_generator(
+            output_flat, mc_samples, y, generator
         )
 
         # Adjust the scale depending on the loss reduction used
@@ -403,10 +401,10 @@ def make_batch_fmc_matrix_product(
         )
         return 0.5 / (mc_samples * reduction_factor) * (inner_products**2).sum()
 
-    def sample_grad_output_with_seed(
-        output: Tensor, num_samples: int, y: Tensor, seed: int
+    def sample_grad_output_with_generator(
+        output: Tensor, num_samples: int, y: Tensor, generator: Generator
     ) -> Tensor:
-        """Draw would-be gradients ``∇_f log p(·|f)`` with explicit seed handling.
+        """Draw would-be gradients ``∇_f log p(·|f)`` with explicit generator.
 
         For a single data point, the would-be gradient's outer product equals the
         Hessian ``∇²_f log p(·|f)`` in expectation.
@@ -423,7 +421,7 @@ def make_batch_fmc_matrix_product(
                 0th dimension.
             num_samples: Number of samples to draw.
             y: Labels of the data on which output was produced.
-            seed: Random seed for sampling.
+            generator: Random generator for sampling.
 
         Returns:
             Samples of the gradient w.r.t. the model prediction.
@@ -436,10 +434,6 @@ def make_batch_fmc_matrix_product(
         """
         if output.ndim != 2:
             raise NotImplementedError(f"Only 2d outputs supported. Got {output.shape}")
-
-        # Create and seed generator
-        generator = Generator(device=output.device)
-        generator.manual_seed(seed)
 
         C = output.shape[1]
 
@@ -482,25 +476,25 @@ def make_batch_fmc_matrix_product(
     def fmc_vector_product(
         X: Union[Tensor, MutableMapping],
         y: Tensor,
-        mc_samples: int,
-        seed: int,
         *v: Tuple[Tensor, ...],
+        mc_samples: int,
+        generator: Generator,
     ) -> Tuple[Tensor, ...]:
         """Multiply the mini-batch MC Fisher on a vector in list format.
 
         Args:
             X: Input to the DNN.
             y: Ground truth.
-            mc_samples: Number of Monte Carlo samples to use.
-            seed: Random seed for MC sampling.
             *v: Vector to be multiplied with in tensor list format.
+            mc_samples: Number of Monte Carlo samples to use.
+            generator: Random generator for MC sampling.
 
         Returns:
             Result of MC Fisher multiplication in list format. Has the same
             shape as ``v``, i.e. each tensor in the list has the shape of a parameter.
         """
-        # Create pseudo-loss with current mc_samples and seed
-        c_pseudo_wrapper = partial(c_pseudo_flat, mc_samples=mc_samples, seed=seed)
+        # Create pseudo-loss with current mc_samples and generator
+        c_pseudo_wrapper = partial(c_pseudo_flat, mc_samples=mc_samples, generator=generator)
 
         # Create the functional MC Fisher-vector product using GGN of pseudo-loss
         fmc_vp = make_ggn_vector_product(f_flat, c_pseudo_wrapper)
@@ -510,7 +504,7 @@ def make_batch_fmc_matrix_product(
     return vmap(
         fmc_vector_product,
         # Assume last axis is vmapped in the matrix list
-        in_dims=(None, None, None, None) + tuple(p.ndim for p in params),
+        in_dims=(None, None) + tuple(p.ndim for p in params) + (None, None),
         # Vmapped output axis is last
         out_dims=tuple(p.ndim for p in params),
         # We want each vector to be multiplied with the same mini-batch MC Fisher
