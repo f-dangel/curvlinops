@@ -1,7 +1,7 @@
 """Contains LinearOperator implementation of the approximate Fisher."""
 
 from collections.abc import MutableMapping
-from functools import partial
+from functools import cached_property, partial
 from math import sqrt
 from typing import Callable, Iterable, List, Optional, Tuple, Union
 
@@ -201,6 +201,13 @@ class FisherMCLinearOperator(CurvatureLinearOperator):
 
         return super()._matmat(M)
 
+    @cached_property
+    def _fmcmp(self):
+        """Lazy initialization of MC Fisher matrix product function."""
+        return make_batch_fmc_matrix_product(
+            self._model_func, self._loss_func, tuple(self._params)
+        )
+
     def _matmat_batch(
         self, X: Union[Tensor, MutableMapping], y: Tensor, M: List[Tensor]
     ) -> List[Tensor]:
@@ -218,11 +225,6 @@ class FisherMCLinearOperator(CurvatureLinearOperator):
             as ``M``, i.e. each tensor in the list has the shape of a parameter and a
             trailing dimension of matrix columns.
         """
-        if not hasattr(self, "_fmcmp"):
-            self._fmcmp = make_batch_fmc_matrix_product(
-                self._model_func, self._loss_func, tuple(self._params)
-            )
-
         return list(self._fmcmp(X, y, self._mc_samples, self._generator, *M))
 
 

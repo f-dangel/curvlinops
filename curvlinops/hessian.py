@@ -1,7 +1,7 @@
 """Contains a linear operator implementation of the Hessian."""
 
 from collections.abc import MutableMapping
-from functools import partial
+from functools import cached_property, partial
 from typing import Callable, List, Optional, Tuple, Union
 
 from torch import Tensor, no_grad, vmap
@@ -164,6 +164,13 @@ class HessianLinearOperator(CurvatureLinearOperator):
     SELF_ADJOINT: bool = True
     SUPPORTS_BLOCKS: bool = True
 
+    @cached_property
+    def _hmp(self):
+        """Lazy initialization of Hessian matrix product function."""
+        return make_batch_hessian_matrix_product(
+            self._model_func, self._loss_func, self._params, self._block_sizes
+        )
+
     def _matmat_batch(
         self, X: Union[Tensor, MutableMapping], y: Tensor, M: List[Tensor]
     ) -> List[Tensor]:
@@ -181,9 +188,4 @@ class HessianLinearOperator(CurvatureLinearOperator):
             ``M``, i.e. each tensor in the list has the shape of a parameter and a
             trailing dimension of matrix columns.
         """
-        if not hasattr(self, "_hmp"):
-            self._hmp = make_batch_hessian_matrix_product(
-                self._model_func, self._loss_func, self._params, self._block_sizes
-            )
-
         return list(self._hmp(X, y, *M))

@@ -1,6 +1,7 @@
 """Contains linear operator implementation of gradient moment matrices."""
 
 from collections.abc import MutableMapping
+from functools import cached_property
 from typing import Callable, Iterable, List, Optional, Tuple, Union
 
 from einops import einsum, rearrange
@@ -262,6 +263,13 @@ class EFLinearOperator(CurvatureLinearOperator):
             batch_size_fn=batch_size_fn,
         )
 
+    @cached_property
+    def _efmp(self):
+        """Lazy initialization of empirical Fisher matrix product function."""
+        return make_batch_ef_matrix_product(
+            self._model_func, self._loss_func, tuple(self._params)
+        )
+
     def _matmat_batch(
         self, X: Union[Tensor, MutableMapping], y: Tensor, M: List[Tensor]
     ) -> List[Tensor]:
@@ -279,10 +287,6 @@ class EFLinearOperator(CurvatureLinearOperator):
             ``M``, i.e. each tensor in the list has the shape of a parameter and a
             trailing dimension of matrix columns.
         """
-        if not hasattr(self, "_efmp"):
-            self._efmp = make_batch_ef_matrix_product(
-                self._model_func, self._loss_func, tuple(self._params)
-            )
         return list(self._efmp(X, y, *M))
 
         # OLD IMPLEMENTATION (kept as reference):

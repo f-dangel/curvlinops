@@ -1,6 +1,7 @@
 """Contains LinearOperator implementation of the GGN."""
 
 from collections.abc import MutableMapping
+from functools import cached_property
 from typing import Callable, List, Tuple, Union
 
 from torch import Tensor, no_grad, vmap
@@ -154,6 +155,13 @@ class GGNLinearOperator(CurvatureLinearOperator):
 
     SELF_ADJOINT: bool = True
 
+    @cached_property
+    def _ggnmp(self):
+        """Lazy initialization of GGN matrix product function."""
+        return make_batch_ggn_matrix_product(
+            self._model_func, self._loss_func, tuple(self._params)
+        )
+
     def _matmat_batch(
         self, X: Union[Tensor, MutableMapping], y: Tensor, M: List[Tensor]
     ) -> List[Tensor]:
@@ -171,8 +179,4 @@ class GGNLinearOperator(CurvatureLinearOperator):
             ``M``, i.e. each tensor in the list has the shape of a parameter and a
             trailing dimension of matrix columns.
         """
-        if not hasattr(self, "_ggnmp"):
-            self._ggnmp = make_batch_ggn_matrix_product(
-                self._model_func, self._loss_func, tuple(self._params)
-            )
         return list(self._ggnmp(X, y, *M))
