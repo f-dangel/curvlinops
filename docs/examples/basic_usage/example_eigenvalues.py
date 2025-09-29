@@ -99,7 +99,7 @@ print(f"Leading {k} Hessian eigenvalues (functorch): {top_k_evals_functorch}")
 #  Both results should match.
 
 print(f"Comparing leading {k} Hessian eigenvalues (linear operator vs. functorch).")
-assert allclose_report(top_k_evals, top_k_evals_functorch)
+assert allclose_report(top_k_evals, top_k_evals_functorch.double())
 
 # %%
 #
@@ -192,7 +192,9 @@ def power_method(
 
 top_k_evals_power, _ = power_method(H, tol=1e-4, k=k)
 print(f"Comparing leading {k} Hessian eigenvalues (eigsh vs. power).")
-assert allclose_report(top_k_evals_functorch, top_k_evals_power, rtol=2e-2, atol=1e-6)
+assert allclose_report(
+    top_k_evals_functorch.double(), top_k_evals_power, rtol=2e-2, atol=1e-6
+)
 
 # %%
 #

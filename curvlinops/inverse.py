@@ -11,13 +11,13 @@ from numpy import column_stack
 from scipy.sparse.linalg import cg, lsmr
 from torch import (
     Tensor,
+    as_tensor,
     cat,
     cholesky_inverse,
     device,
     dtype,
     eye,
     float64,
-    from_numpy,
     isnan,
     outer,
 )
@@ -118,7 +118,7 @@ class CGInverseLinearOperator(_InversePyTorchLinearOperator):
         Ainv_X = column_stack([result[0] for result in Ainv_X])
 
         # convert to PyTorch and unflatten
-        Ainv_X = from_numpy(Ainv_X).to(self.device, self.dtype)
+        Ainv_X = as_tensor(Ainv_X, device=self.device, dtype=self.dtype)
         Ainv_X = [
             r.reshape(*s, num_vecs)
             for r, s in zip(Ainv_X.split(self._out_shape_flat), self._out_shape)
@@ -182,7 +182,7 @@ class LSMRInverseLinearOperator(_InversePyTorchLinearOperator):
         Ainv_X = column_stack([result[0] for result in Ainv_X])
 
         # convert to PyTorch and unflatten
-        Ainv_X = from_numpy(Ainv_X).to(self.device, self.dtype)
+        Ainv_X = as_tensor(Ainv_X, device=self.device, dtype=self.dtype)
         Ainv_X = [
             r.reshape(*s, num_vecs)
             for r, s in zip(Ainv_X.split(self._out_shape_flat), self._out_shape)

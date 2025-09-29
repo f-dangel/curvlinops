@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import List
 
-from torch import Tensor, zeros, dtype, device
+from torch import Tensor, device, dtype, zeros
 
 from curvlinops._torch_base import PyTorchLinearOperator
 
@@ -26,6 +26,8 @@ class SubmatrixLinearOperator(PyTorchLinearOperator):
         """
         self._A = A
         self.set_submatrix(row_idxs, col_idxs)
+        self._infer_dtype = A._infer_dtype
+        self._infer_device = A._infer_device
 
     @property
     def dtype(self) -> dtype:
@@ -84,12 +86,7 @@ class SubmatrixLinearOperator(PyTorchLinearOperator):
             A list that contains a single tensor, which is the output tensor.
         """
         (M,) = X
-        V = zeros(
-            self._A.shape[1],
-            M.shape[-1],
-            dtype=self.dtype,
-            device=self.device,
-        )
+        V = zeros(self._A.shape[1], M.shape[-1], dtype=self.dtype, device=self.device)
         V[self._col_idxs] = M
         AV = self._A @ V
         return [AV[self._row_idxs]]

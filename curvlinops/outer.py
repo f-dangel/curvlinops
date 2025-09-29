@@ -104,18 +104,18 @@ class IdentityLinearOperator(PyTorchLinearOperator):
 
     @property
     def dtype(self) -> dtype:
-        """Return the linear operator's device.
+        """Return the data type of the linear operator.
 
         Returns:
-            The device on which the linear operator is defined.
+            The data type of the linear operator.
         """
         return self._dtype
 
     @property
     def device(self) -> device:
-        """Return the data type of the linear operator.
+        """Return the linear operator's device.
 
         Returns:
-            The data type of the linear operator.
+            The device on which the linear operator is defined.
         """
         return self._device

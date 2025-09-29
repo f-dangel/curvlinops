@@ -601,8 +601,7 @@ def compare_consecutive_matmats(
     tol = {"atol": atol, "rtol": rtol}
 
     # Generate the vector using rand_accepted_formats
-    dt = op.dtype
-    dev = op.device
+    dt, dev = op.dtype, op.device
     _, X, _ = rand_accepted_formats(
         [tuple(s) for s in op._in_shape],
         is_vec=is_vec,
