@@ -19,7 +19,7 @@ from torch import nn
 
 from curvlinops import HessianLinearOperator
 from curvlinops.examples.functorch import functorch_hessian
-from curvlinops.examples.utils import report_nonclose
+from curvlinops.utils import allclose_report
 
 # make deterministic
 torch.manual_seed(0)
@@ -88,10 +88,8 @@ print(f"Leading {k} Hessian eigenvalues: {top_k_evals}")
 # :code:`functorch`, compute all its eigenvalues with
 # :func:`scipy.linalg.eigh`, then extract the top :math:`k`.
 
-H_functorch = (
-    functorch_hessian(model, loss_function, params, data).detach().cpu().numpy()
-)
-evals_functorch, _ = scipy.linalg.eigh(H_functorch)
+H_functorch = functorch_hessian(model, loss_function, params, data).detach()
+evals_functorch, _ = torch.linalg.eigh(H_functorch)
 top_k_evals_functorch = evals_functorch[-k:]
 
 print(f"Leading {k} Hessian eigenvalues (functorch): {top_k_evals_functorch}")
@@ -101,7 +99,7 @@ print(f"Leading {k} Hessian eigenvalues (functorch): {top_k_evals_functorch}")
 #  Both results should match.
 
 print(f"Comparing leading {k} Hessian eigenvalues (linear operator vs. functorch).")
-report_nonclose(top_k_evals, top_k_evals_functorch)
+assert allclose_report(top_k_evals, top_k_evals_functorch.double())
 
 # %%
 #
@@ -194,7 +192,9 @@ def power_method(
 
 top_k_evals_power, _ = power_method(H, tol=1e-4, k=k)
 print(f"Comparing leading {k} Hessian eigenvalues (eigsh vs. power).")
-report_nonclose(top_k_evals_functorch, top_k_evals_power, rtol=2e-2, atol=1e-6)
+assert allclose_report(
+    top_k_evals_functorch.double(), top_k_evals_power, rtol=2e-2, atol=1e-6
+)
 
 # %%
 #
