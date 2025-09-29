@@ -2,8 +2,8 @@
 
 from functools import partial
 
-from torch import rand, manual_seed
 from pytest import mark
+from torch import manual_seed, rand
 
 from curvlinops import hutchinson_diag
 from test.diagonal import DISTRIBUTION_IDS, DISTRIBUTIONS, NUM_MATVEC_IDS, NUM_MATVECS
