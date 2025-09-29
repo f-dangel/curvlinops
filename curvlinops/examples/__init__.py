@@ -28,13 +28,37 @@ class TensorLinearOperator(PyTorchLinearOperator):
         self.SELF_ADJOINT = A.shape == A.T.shape and A.allclose(A.T)
 
     def _infer_device(self) -> device:
+        """Infer the linear operator's device.
+
+        Returns:
+            The linear operator's device.
+        """
         return self._A.device
 
     def _infer_dtype(self) -> dtype:
+        """Infer the linear operator's data type.
+
+        Returns:
+            The linear operator's data type.
+        """
         return self._A.dtype
 
     def _adjoint(self) -> TensorLinearOperator:
+        """Return a linear operator representing the adjoint.
+
+        Returns:
+            The adjoint linear operator.
+        """
         return TensorLinearOperator(self._A.conj().T)
 
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
-        return [self._A @ X[0]]
+    def _matmat(self, M: List[Tensor]) -> List[Tensor]:
+        """Multiply the linear operator onto a matrix in list format.
+
+        Args:
+            M: Matrix for multiplication in list format.
+
+        Returns:
+            Result of the matrix-matrix multiplication in list format.
+        """
+        (M0,) = M
+        return [self._A @ M0]
