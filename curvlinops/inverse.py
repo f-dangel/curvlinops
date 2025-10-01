@@ -320,7 +320,7 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
         )
 
 
-class KFACInverseLinearOperator(PyTorchLinearOperator):
+class KFACInverseLinearOperator(_InversePyTorchLinearOperator):
     """Class to invert instances of the ``KFACLinearOperator``.
 
     Attributes:
@@ -381,10 +381,6 @@ class KFACInverseLinearOperator(PyTorchLinearOperator):
             raise ValueError(
                 "The input `A` must be an instance of `KFACLinearOperator`."
             )
-        super().__init__(
-            [tuple(s) for s in A._in_shape], [tuple(s) for s in A._out_shape]
-        )
-        self._A = A
         if use_heuristic_damping and use_exact_damping:
             raise ValueError("Either use heuristic damping or exact damping, not both.")
         if (use_heuristic_damping or use_exact_damping) and isinstance(damping, tuple):
@@ -402,6 +398,7 @@ class KFACInverseLinearOperator(PyTorchLinearOperator):
         self._retry_double_precision = retry_double_precision
         self._inverse_input_covariances: Dict[str, FactorType] = {}
         self._inverse_gradient_covariances: Dict[str, FactorType] = {}
+        super().__init__(A)
 
     def _compute_damping(
         self, aaT: Optional[Tensor], ggT: Optional[Tensor]
@@ -724,21 +721,3 @@ class KFACInverseLinearOperator(PyTorchLinearOperator):
         )
         inv_kfac.load_state_dict(state_dict)
         return inv_kfac
-
-    @property
-    def dtype(self) -> dtype:
-        """Determine the linear operator's data type.
-
-        Returns:
-            The linear operator's dtype.
-        """
-        return self._A.dtype
-
-    @property
-    def device(self) -> device:
-        """Determine the device the linear operators is defined on.
-
-        Returns:
-            The linear operator's device.
-        """
-        return self._A.device
