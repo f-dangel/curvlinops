@@ -1,15 +1,19 @@
 """Hutchinson-style matrix diagonal estimation."""
 
-from numpy import column_stack, einsum, ndarray
-from scipy.sparse.linalg import LinearOperator
+from typing import Union
 
+from torch import Tensor, column_stack, einsum
+
+from curvlinops._torch_base import PyTorchLinearOperator
 from curvlinops.sampling import random_vector
 from curvlinops.utils import assert_is_square, assert_matvecs_subseed_dim
 
 
 def hutchinson_diag(
-    A: LinearOperator, num_matvecs: int, distribution: str = "rademacher"
-) -> ndarray:
+    A: Union[PyTorchLinearOperator, Tensor],
+    num_matvecs: int,
+    distribution: str = "rademacher",
+) -> Tensor:
     r"""Estimate a linear operator's diagonal using Hutchinson's method.
 
     For details, see
@@ -50,24 +54,30 @@ def hutchinson_diag(
         The estimated diagonal of the linear operator.
 
     Example:
-        >>> from numpy import diag
-        >>> from numpy.random import rand, seed
-        >>> from numpy.linalg import norm
-        >>> seed(0) # make deterministic
+        >>> from torch import manual_seed, rand
+        >>> from torch.linalg import vector_norm
+        >>> _ = manual_seed(0) # make deterministic
         >>> A = rand(40, 40)
-        >>> diag_A = diag(A) # exact diagonal as reference
+        >>> diag_A = A.diag() # exact diagonal as reference
         >>> # one- and multi-sample approximations
         >>> diag_A_low_precision = hutchinson_diag(A, num_matvecs=1)
         >>> diag_A_high_precision = hutchinson_diag(A, num_matvecs=30)
         >>> # compute residual norms
-        >>> error_low_precision = norm(diag_A - diag_A_low_precision) / norm(diag_A)
-        >>> error_high_precision = norm(diag_A - diag_A_high_precision) / norm(diag_A)
+        >>> error_low_precision = (vector_norm(diag_A - diag_A_low_precision) / vector_norm(diag_A)).item()
+        >>> error_high_precision = (vector_norm(diag_A - diag_A_high_precision) / vector_norm(diag_A)).item()
         >>> assert error_low_precision > error_high_precision
         >>> round(error_low_precision, 4), round(error_high_precision, 4)
-        (4.616, 1.2441)
+        (3.2648, 0.9253)
     """
     dim = assert_is_square(A)
     assert_matvecs_subseed_dim(A, num_matvecs)
-    G = column_stack([random_vector(dim, distribution) for _ in range(num_matvecs)])
+    dev, dt = (
+        (A._infer_device(), A._infer_dtype())
+        if isinstance(A, PyTorchLinearOperator)
+        else (A.device, A.dtype)
+    )
+    G = column_stack(
+        [random_vector(dim, distribution, dev, dt) for _ in range(num_matvecs)]
+    )
 
     return einsum("ij,ij->i", G, A @ G) / num_matvecs

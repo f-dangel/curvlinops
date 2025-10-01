@@ -1,14 +1,14 @@
 """Test ``curvlinops.trace.epperli2024xtrace."""
 
 from functools import partial
+from typing import Union
 
-from numpy import column_stack, dot, isclose, mean, trace
-from numpy.linalg import qr
-from numpy.random import rand, seed
 from pytest import mark
-from scipy.sparse.linalg import LinearOperator
+from torch import Tensor, column_stack, dot, isclose, manual_seed, rand, trace
+from torch.linalg import qr
 
 from curvlinops import xtrace
+from curvlinops._torch_base import PyTorchLinearOperator
 from curvlinops.sampling import random_vector
 from test.trace import DISTRIBUTION_IDS, DISTRIBUTIONS
 from test.utils import check_estimator_convergence
@@ -18,8 +18,10 @@ NUM_MATVEC_IDS = [f"num_matvecs={num_matvecs}" for num_matvecs in NUM_MATVECS]
 
 
 def xtrace_naive(
-    A: LinearOperator, num_matvecs: int, distribution: str = "rademacher"
-) -> float:
+    A: Union[PyTorchLinearOperator, Tensor],
+    num_matvecs: int,
+    distribution: str = "rademacher",
+) -> Tensor:
     """Naive reference implementation of XTrace.
 
     See Algorithm 1.2 in https://arxiv.org/pdf/2301.07825.
@@ -48,8 +50,15 @@ def xtrace_naive(
             f" Got {num_matvecs}.",
         )
     num_vecs = num_matvecs // 2
+    dev, dt = (
+        (A._infer_device(), A._infer_dtype())
+        if isinstance(A, PyTorchLinearOperator)
+        else (A.device, A.dtype)
+    )
 
-    W = column_stack([random_vector(dim, distribution) for _ in range(num_vecs)])
+    W = column_stack(
+        [random_vector(dim, distribution, dev, dt) for _ in range(num_vecs)]
+    )
     A_W = A @ W
 
     traces = []
@@ -69,9 +78,9 @@ def xtrace_naive(
         PT_A_P_w_i = A_P_w_i - Q_i @ (Q_i.T @ A_P_w_i)
         tr_w_i = dot(w_i, PT_A_P_w_i)
 
-        traces.append(float(tr_QT_i_A_Q_i + tr_w_i))
+        traces.append(tr_QT_i_A_Q_i + tr_w_i)
 
-    return mean(traces)
+    return sum(traces) / len(traces)
 
 
 @mark.parametrize("num_matvecs", NUM_MATVECS, ids=NUM_MATVEC_IDS)
@@ -83,13 +92,13 @@ def test_xtrace(distribution: str, num_matvecs: int):
         distribution: Distribution of the random vectors used for the trace estimation.
         num_matvecs: Number of matrix-vector multiplications used by one estimator.
     """
-    seed(0)
+    manual_seed(0)
     A = rand(15, 15)
     estimator = partial(xtrace, A=A, num_matvecs=num_matvecs, distribution=distribution)
     check_estimator_convergence(
         estimator,
         num_matvecs,
-        trace(A),
+        A.trace(),
         # use half the target tolerance as vanilla Hutchinson
         target_rel_error=5e-4,
     )
@@ -106,13 +115,13 @@ def test_xtrace_matches_naive(num_matvecs: int, distribution: str, num_seeds: in
         num_seeds: Number of different seeds to test the estimators with.
             Default: ``5``.
     """
-    seed(0)
+    manual_seed(0)
     A = rand(50, 50)
 
     # check for different seeds
     for i in range(num_seeds):
-        seed(i)
+        manual_seed(i)
         efficient = xtrace(A, num_matvecs, distribution=distribution)
-        seed(i)
+        manual_seed(i)
         naive = xtrace_naive(A, num_matvecs, distribution=distribution)
         assert isclose(efficient, naive)
