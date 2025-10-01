@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added/New
 
 - **Backward-incompatible:** Refactor class-based trace and diagonal estimators
-  into functions ([PR](https://github.com/f-dangel/curvlinops/pull/168)):
+  into functions ([PR](https://github.com/f-dangel/curvlinops/pull/168)) and assume
+  PyTorch instead of SciPy linear operators ([PR](https://github.com/f-dangel/curvlinops/pull/188)):
   - If you used `HutchinsonTraceEstimator`, switch to `hutchinson_trace`
   - If you used `HutchPPTraceEstimator`, switch to `hutchpp_trace`
   - If you used `HutchinsonDiagonalEstimator`, switch to `hutchinson_diag`
@@ -78,6 +79,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (previously always on CPU)
   ([PR](https://github.com/f-dangel/curvlinops/pull/160))
 - Fixed the default value for `conlim` in `LSMRInverseLinearOperator` from `1e-8` to `1e8` ([PR](https://github.com/f-dangel/curvlinops/pull/180))
+- Bug in XDiag implementation that would only work with dense matrices, but not with
+  linear operators ([PR](https://github.com/f-dangel/curvlinops/pull/188))
 
 ### Internal
 
