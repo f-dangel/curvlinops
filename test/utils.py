@@ -686,11 +686,7 @@ def eye_like(A: Union[Tensor, PyTorchLinearOperator]) -> Tensor:
     """
     dim1, dim_2 = A.shape
     (dim,) = {dim1, dim_2}
-    return eye(
-        dim,
-        dtype=A.dtype if isinstance(A, PyTorchLinearOperator) else A.dtype,
-        device=A.device if isinstance(A, PyTorchLinearOperator) else A.device,
-    )
+    return eye(dim, dtype=A.dtype, device=A.device)
 
 
 def check_estimator_convergence(
