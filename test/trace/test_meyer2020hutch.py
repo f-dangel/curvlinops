@@ -25,9 +25,5 @@ def test_hutchpp_trace(num_matvecs: int, distribution: str):
         hutchpp_trace, A=A, num_matvecs=num_matvecs, distribution=distribution
     )
     check_estimator_convergence(
-        estimator,
-        num_matvecs,
-        A.trace(),
-        # use half the target tolerance as vanilla Hutchinson
-        target_rel_error=1e-3,
+        estimator, num_matvecs, A.trace(), target_rel_error=1e-3
     )
