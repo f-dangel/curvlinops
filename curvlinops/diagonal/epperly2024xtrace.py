@@ -47,7 +47,7 @@ def xdiag(A: Union[PyTorchLinearOperator, Tensor], num_matvecs: int) -> Tensor:
 
     # compute the orthogonal basis for all test vectors, and its associated diagonal
     Q, R = qr(A_W)
-    QT_A = Q.T @ A
+    QT_A = (A.adjoint() @ Q).T
     diag_Q_QT_A = einsum("ij,ji->i", Q, QT_A)
 
     # Compute and average the diagonals in the bases {Q_i} that would result had we left

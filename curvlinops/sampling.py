@@ -8,6 +8,8 @@ def rademacher(dim: int, device: device, dtype: dtype) -> Tensor:
 
     Args:
         dim: Dimension of the vector.
+        device: Device on which the vector is allocated.
+        dtype: Data type of the vector.
 
     Returns:
         Vector with i.i.d. Rademacher elements and specified dimension.
@@ -21,6 +23,8 @@ def normal(dim: int, device: device, dtype: dtype) -> Tensor:
 
     Args:
         dim: Dimension of the vector.
+        device: Device on which the vector is allocated.
+        dtype: Data type of the vector.
 
     Returns:
         Vector with i.i.d. standard normal elements and specified dimension.
@@ -35,6 +39,8 @@ def random_vector(dim: int, distribution: str, device: device, dtype: dtype) -> 
         dim: Dimension of the vector.
         distribution: Distribution of the vector's elements. Either ``'rademacher'`` or
             ``'normal'``.
+        device: Device on which the vector is allocated.
+        dtype: Data type of the vector.
 
     Returns:
         Vector with i.i.d. elements and specified dimension.

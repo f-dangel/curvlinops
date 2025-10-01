@@ -2,8 +2,8 @@
 
 from functools import partial
 
-from numpy.random import rand, seed
 from pytest import mark
+from torch import manual_seed, rand
 
 from curvlinops import hutchinson_squared_fro
 from test.utils import check_estimator_convergence
@@ -24,7 +24,7 @@ def test_hutchinson_squared_fro(num_matvecs: int, distribution: str):
         num_matvecs: Number of matrix-vector products used per estimate.
         distribution: Distribution of the random vectors used for the estimation.
     """
-    seed(0)
+    manual_seed(0)
     A = rand(10, 15)
     estimator = partial(
         hutchinson_squared_fro, A=A, num_matvecs=num_matvecs, distribution=distribution
