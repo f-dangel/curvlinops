@@ -381,6 +381,7 @@ class KFACInverseLinearOperator(_InversePyTorchLinearOperator):
             raise ValueError(
                 "The input `A` must be an instance of `KFACLinearOperator`."
             )
+        super().__init__(A)
         if use_heuristic_damping and use_exact_damping:
             raise ValueError("Either use heuristic damping or exact damping, not both.")
         if (use_heuristic_damping or use_exact_damping) and isinstance(damping, tuple):
@@ -398,7 +399,6 @@ class KFACInverseLinearOperator(_InversePyTorchLinearOperator):
         self._retry_double_precision = retry_double_precision
         self._inverse_input_covariances: Dict[str, FactorType] = {}
         self._inverse_gradient_covariances: Dict[str, FactorType] = {}
-        super().__init__(A)
 
     def _compute_damping(
         self, aaT: Optional[Tensor], ggT: Optional[Tensor]

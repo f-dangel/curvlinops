@@ -26,8 +26,6 @@ class SubmatrixLinearOperator(PyTorchLinearOperator):
         """
         self._A = A
         self.set_submatrix(row_idxs, col_idxs)
-        self._infer_dtype = A._infer_dtype
-        self._infer_device = A._infer_device
 
     @property
     def dtype(self) -> dtype:
