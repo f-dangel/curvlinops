@@ -13,7 +13,6 @@ from torch import (
     rand,
     rand_like,
 )
-from torch import eye as torch_eye
 from torch.nn import (
     BCEWithLogitsLoss,
     CrossEntropyLoss,
@@ -642,10 +641,7 @@ def test_KFACLinearOperator(
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
     )
-
-    device = kfac._device
-    dtype = kfac._infer_dtype()
-    kfac_mat = kfac @ torch_eye(kfac.shape[1], device=device, dtype=dtype)
+    kfac_mat = kfac @ eye_like(kfac)
 
     compare_consecutive_matmats(kfac, adjoint, is_vec)
     compare_matmat(kfac, kfac_mat, adjoint, is_vec, rtol=1e-5, atol=1e-7)
@@ -811,9 +807,7 @@ def test_forward_only_fisher_type(
     )
     # Manually set all gradient covariances to the identity to simulate FOOF
     for name, block in foof_simulated._gradient_covariances.items():
-        foof_simulated._gradient_covariances[name] = torch_eye(
-            block.shape[0], dtype=block.dtype, device=block.device
-        )
+        foof_simulated._gradient_covariances[name] = eye_like(block)
     simulated_foof_mat = foof_simulated @ eye_like(foof_simulated)
 
     # Compute KFAC with `fisher_type=FisherType.FORWARD_ONLY`

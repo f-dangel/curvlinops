@@ -41,14 +41,9 @@ def xdiag_naive(A: Union[PyTorchLinearOperator, Tensor], num_matvecs: int) -> Te
             f" Got {num_matvecs}.",
         )
     num_vecs = num_matvecs // 2
-    dev, dt = (
-        (A._infer_device(), A._infer_dtype())
-        if isinstance(A, PyTorchLinearOperator)
-        else (A.device, A.dtype)
-    )
 
     W = column_stack(
-        [random_vector(dim, "rademacher", dev, dt) for _ in range(num_vecs)]
+        [random_vector(dim, "rademacher", A.device, A.dtype) for _ in range(num_vecs)]
     )
     A_W = A @ W
 

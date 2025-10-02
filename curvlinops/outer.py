@@ -102,7 +102,8 @@ class IdentityLinearOperator(PyTorchLinearOperator):
         """
         return X
 
-    def _infer_dtype(self) -> dtype:
+    @property
+    def dtype(self) -> dtype:
         """Return the data type of the linear operator.
 
         Returns:
@@ -110,7 +111,8 @@ class IdentityLinearOperator(PyTorchLinearOperator):
         """
         return self._dtype
 
-    def _infer_device(self) -> device:
+    @property
+    def device(self) -> device:
         """Return the linear operator's device.
 
         Returns:

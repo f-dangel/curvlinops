@@ -50,14 +50,9 @@ def xtrace_naive(
             f" Got {num_matvecs}.",
         )
     num_vecs = num_matvecs // 2
-    dev, dt = (
-        (A._infer_device(), A._infer_dtype())
-        if isinstance(A, PyTorchLinearOperator)
-        else (A.device, A.dtype)
-    )
 
     W = column_stack(
-        [random_vector(dim, distribution, dev, dt) for _ in range(num_vecs)]
+        [random_vector(dim, distribution, A.device, A.dtype) for _ in range(num_vecs)]
     )
     A_W = A @ W
 

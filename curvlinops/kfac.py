@@ -501,8 +501,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
             )
 
         # loop over data set, computing the Kronecker factors
-        if self._generator is None or self._generator.device != self._device:
-            self._generator = Generator(device=self._device)
+        if self._generator is None or self._generator.device != self.device:
+            self._generator = Generator(device=self.device)
         self._generator.manual_seed(self._seed)
 
         for X, y in self._loop_over_data(desc="KFAC matrices"):
@@ -634,7 +634,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
                 # just call `next(iter(param_pos.values()))` to get the first parameter.
                 param = self._params[next(iter(param_pos.values()))]
                 self._gradient_covariances[mod_name] = eye(
-                    param.shape[0], dtype=param.dtype, device=self._device
+                    param.shape[0], dtype=param.dtype, device=self.device
                 )
 
         else:

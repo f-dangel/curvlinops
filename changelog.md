@@ -95,6 +95,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    [PR](https://github.com/f-dangel/curvlinops/pull/175))
 - Reduce usage of SciPy in tests and examples
   ([PR](https://github.com/f-dangel/curvlinops/pull/187))
+- Introduce `property`s for a linear operator's data type (`.dtype`) and device (`.device`)
+  ([PR](https://github.com/f-dangel/curvlinops/pull/189))
 
 ## [2.0.1] - 2024-10-25
 

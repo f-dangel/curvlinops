@@ -695,10 +695,7 @@ def test_EKFAC_inverse_exactly_damped_matmat(
     )
 
     # manual exactly damped inverse
-    inv_EKFAC_naive = inv(
-        EKFAC @ eye(EKFAC.shape[0], dtype=dtype, device=EKFAC._device)
-        + delta * eye(EKFAC.shape[0], dtype=dtype, device=EKFAC._device)
-    )
+    inv_EKFAC_naive = inv(EKFAC @ eye_like(EKFAC) + delta * eye_like(EKFAC))
 
     # check that passing a tuple for exact damping will fail
     with raises(ValueError):

@@ -11,13 +11,13 @@ from numpy import column_stack
 from scipy.sparse.linalg import cg, lsmr
 from torch import (
     Tensor,
+    as_tensor,
     cat,
     cholesky_inverse,
     device,
     dtype,
     eye,
     float64,
-    from_numpy,
     isnan,
     outer,
 )
@@ -52,21 +52,23 @@ class _InversePyTorchLinearOperator(PyTorchLinearOperator):
         super().__init__(A._in_shape, A._out_shape)
         self._A = A
 
-    def _infer_dtype(self) -> dtype:
+    @property
+    def dtype(self) -> dtype:
         """Determine the linear operator's data type.
 
         Returns:
             The linear operator's dtype.
         """
-        return self._A._infer_dtype()
+        return self._A.dtype
 
-    def _infer_device(self) -> device:
+    @property
+    def device(self) -> device:
         """Determine the device the linear operators is defined on.
 
         Returns:
             The linear operator's device.
         """
-        return self._A._infer_device()
+        return self._A.device
 
 
 class CGInverseLinearOperator(_InversePyTorchLinearOperator):
@@ -116,8 +118,7 @@ class CGInverseLinearOperator(_InversePyTorchLinearOperator):
         Ainv_X = column_stack([result[0] for result in Ainv_X])
 
         # convert to PyTorch and unflatten
-        dev, dt = self._infer_device(), self._infer_dtype()
-        Ainv_X = from_numpy(Ainv_X).to(dev, dt)
+        Ainv_X = as_tensor(Ainv_X, device=self.device, dtype=self.dtype)
         Ainv_X = [
             r.reshape(*s, num_vecs)
             for r, s in zip(Ainv_X.split(self._out_shape_flat), self._out_shape)
@@ -181,8 +182,7 @@ class LSMRInverseLinearOperator(_InversePyTorchLinearOperator):
         Ainv_X = column_stack([result[0] for result in Ainv_X])
 
         # convert to PyTorch and unflatten
-        dev, dt = self._infer_device(), self._infer_dtype()
-        Ainv_X = from_numpy(Ainv_X).to(dev, dt)
+        Ainv_X = as_tensor(Ainv_X, device=self.device, dtype=self.dtype)
         Ainv_X = [
             r.reshape(*s, num_vecs)
             for r, s in zip(Ainv_X.split(self._out_shape_flat), self._out_shape)
@@ -320,7 +320,7 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
         )
 
 
-class KFACInverseLinearOperator(PyTorchLinearOperator):
+class KFACInverseLinearOperator(_InversePyTorchLinearOperator):
     """Class to invert instances of the ``KFACLinearOperator``.
 
     Attributes:
@@ -381,12 +381,7 @@ class KFACInverseLinearOperator(PyTorchLinearOperator):
             raise ValueError(
                 "The input `A` must be an instance of `KFACLinearOperator`."
             )
-        super().__init__(
-            [tuple(s) for s in A._in_shape], [tuple(s) for s in A._out_shape]
-        )
-        self._A = A
-        self._infer_device = A._infer_device
-        self._infer_dtype = A._infer_dtype
+        super().__init__(A)
         if use_heuristic_damping and use_exact_damping:
             raise ValueError("Either use heuristic damping or exact damping, not both.")
         if (use_heuristic_damping or use_exact_damping) and isinstance(damping, tuple):

@@ -27,7 +27,8 @@ class TensorLinearOperator(PyTorchLinearOperator):
         self._A = A
         self.SELF_ADJOINT = A.shape == A.T.shape and A.allclose(A.T)
 
-    def _infer_device(self) -> device:
+    @property
+    def device(self) -> device:
         """Infer the linear operator's device.
 
         Returns:
@@ -35,7 +36,8 @@ class TensorLinearOperator(PyTorchLinearOperator):
         """
         return self._A.device
 
-    def _infer_dtype(self) -> dtype:
+    @property
+    def dtype(self) -> dtype:
         """Infer the linear operator's data type.
 
         Returns:

@@ -227,7 +227,7 @@ def test_ekfac_mc(
 
     # Scale absolute tolerance by the number of outputs when using sum reduction.
     num_outputs = sum(y.numel() for _, y in data)
-    device_atol = 5e-3 if ekfac._infer_device() == device("cpu") else 1e-2
+    device_atol = 5e-3 if ekfac.device == device("cpu") else 1e-2
     atol = {"sum": device_atol * num_outputs, "mean": device_atol}[loss_func.reduction]
     rtol = {"sum": 2e-2, "mean": 2e-2}[loss_func.reduction]
 
@@ -304,7 +304,7 @@ def test_ekfac_mc_weight_sharing(
 
     # Scale absolute tolerance by the number of outputs when using sum reduction.
     num_outputs = sum(y.numel() for _, y in data)
-    device_atol = 5e-3 if ekfac._infer_device() == device("cpu") else 1e-2
+    device_atol = 5e-3 if ekfac.device == device("cpu") else 1e-2
     atol = {"sum": device_atol * num_outputs, "mean": device_atol}[loss_func.reduction]
     rtol = {"sum": 2e-2, "mean": 2e-2}[loss_func.reduction]
 

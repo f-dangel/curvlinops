@@ -547,8 +547,8 @@ def compare_matmat(
         op, mat = op.adjoint(), mat.conj().T
 
     num_vecs = 1 if is_vec else num_vecs
-    dt = op._infer_dtype()
-    dev = op._infer_device()
+    dt = op.dtype
+    dev = op.device
     x_list, x_tensor, x_numpy = rand_accepted_formats(
         [tuple(s) for s in op._in_shape], is_vec, dt, dev, num_vecs=num_vecs
     )
@@ -601,8 +601,7 @@ def compare_consecutive_matmats(
     tol = {"atol": atol, "rtol": rtol}
 
     # Generate the vector using rand_accepted_formats
-    dt = op._infer_dtype()
-    dev = op._infer_device()
+    dt, dev = op.dtype, op.device
     _, X, _ = rand_accepted_formats(
         [tuple(s) for s in op._in_shape],
         is_vec=is_vec,
@@ -651,8 +650,8 @@ def compare_matmat_expectation(
         op, mat = op.adjoint(), mat.conj().T
 
     num_vecs = 1 if is_vec else num_vecs
-    dt = op._infer_dtype()
-    dev = op._infer_device()
+    dt = op.dtype
+    dev = op.device
     _, x, _ = rand_accepted_formats(
         [tuple(s) for s in op._in_shape], is_vec, dt, dev, num_vecs=num_vecs
     )
@@ -687,11 +686,7 @@ def eye_like(A: Union[Tensor, PyTorchLinearOperator]) -> Tensor:
     """
     dim1, dim_2 = A.shape
     (dim,) = {dim1, dim_2}
-    return eye(
-        dim,
-        dtype=A._infer_dtype() if isinstance(A, PyTorchLinearOperator) else A.dtype,
-        device=A._infer_device() if isinstance(A, PyTorchLinearOperator) else A.device,
-    )
+    return eye(dim, dtype=A.dtype, device=A.device)
 
 
 def check_estimator_convergence(
