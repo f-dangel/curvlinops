@@ -55,6 +55,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `CGInverseLinearOperator`, `NeumannInverseLinearOperator`, and `LSMRInverseLinearOperator`
     ([PR](https://github.com/f-dangel/curvlinops/pull/186)),
     also removing their public methods for specifying hyper-parameters and instead accepting them as keyword arguments in the constructor
+    - Switch CG implementation from SciPy to GPyTorch `CGInverseLinearOperator`
+      ([PR](https://github.com/f-dangel/curvlinops/pull/190))
 
 - Add `EKFACLinearOperator` which implements EKFAC
   ([paper](https://arxiv.org/abs/1806.03884),

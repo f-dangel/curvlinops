@@ -48,7 +48,7 @@ manual_seed(0)
 # We will use synthetic data, consisting of two mini-batches, a small MLP, and
 # mean-squared error as loss function.
 
-N = 20
+N = 64
 D_in = 7
 D_hidden = 5
 D_out = 3
@@ -91,7 +91,13 @@ damped_GGN = GGN + damping
 #
 # and the linear operator of its inverse:
 
-inverse_damped_GGN = CGInverseLinearOperator(damped_GGN)
+inverse_damped_GGN = CGInverseLinearOperator(
+    damped_GGN,
+    eps=0,  # do not add CG-internal damping
+    # use a small number of iterations for a rough solution
+    max_iter=5,
+    max_tridiag_iter=5,
+)
 
 # %%
 #
@@ -164,7 +170,7 @@ assert allclose_report(gradient, gradient_functorch)
 natural_gradient_functorch = inv_damped_GGN_mat @ gradient_functorch
 
 print("Comparing natural gradient with functorch's natural gradient.")
-rtol, atol = 5e-3, 1e-5
+rtol, atol = 5e-3, 5e-5
 assert allclose_report(
     natural_gradient, natural_gradient_functorch, rtol=rtol, atol=atol
 )
@@ -177,7 +183,10 @@ assert allclose_report(
 
 inverse_damped_GGN = CGInverseLinearOperator(
     damped_GGN,
-    tol=1e-7,  # default is 1e-5
+    eps=0,  # do not add CG-internal damping
+    # increase number of iterations to get an better approximation
+    max_iter=10,
+    max_tridiag_iter=10,
 )
 natural_gradient_more_accurate = inverse_damped_GGN @ gradient
 
