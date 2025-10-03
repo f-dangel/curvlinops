@@ -64,8 +64,8 @@ def test_CGInverseLinearOperator_damped_GGN(inv_case, delta_rel: float = 2e-2):
     )
     inv_GGN_naive = inv(GGN_naive + delta * eye_like(GGN_naive))
 
-    # specify tolerance to get solution with accuracy
-    inv_GGN = CGInverseLinearOperator(GGN + damping, tolerance=1e-4)
+    # specify tolerance and turn off internal damping to get solution with accuracy
+    inv_GGN = CGInverseLinearOperator(GGN + damping, eps=0, tolerance=1e-5)
     compare_consecutive_matmats(inv_GGN, adjoint=False, is_vec=False)
     compare_matmat(inv_GGN, inv_GGN_naive, adjoint=False, is_vec=False, rtol=1e-2)
 
