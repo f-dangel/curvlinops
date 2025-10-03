@@ -10,11 +10,10 @@ Remember to run :code:`pip install -U transformers datasets`
 from collections import UserDict
 from collections.abc import MutableMapping
 
-import numpy as np
-import torch
 import torch.utils.data as data_utils
 from datasets import Dataset
-from torch import nn
+from torch import Tensor, bfloat16, eye, manual_seed, no_grad
+from torch.nn import CrossEntropyLoss, Module
 from transformers import (
     DataCollatorWithPadding,
     GPT2Config,
@@ -26,8 +25,7 @@ from transformers import (
 from curvlinops import GGNLinearOperator
 
 # make deterministic
-torch.manual_seed(0)
-np.random.seed(0)
+manual_seed(0)
 
 # %%
 #
@@ -83,7 +81,7 @@ for k, v in data.items():
 # Let's wrap the HF model to conform this requirement then.
 
 
-class MyGPT2(nn.Module):
+class MyGPT2(Module):
     """
     Huggingface LLM wrapper.
 
@@ -108,7 +106,7 @@ class MyGPT2(nn.Module):
         for p in self.hf_model.score.parameters():
             p.requires_grad = True
 
-    def forward(self, data: MutableMapping) -> torch.Tensor:
+    def forward(self, data: MutableMapping) -> Tensor:
         """
         Custom forward function. Handles things like moving the
         input tensor to the correct device inside.
@@ -127,9 +125,9 @@ class MyGPT2(nn.Module):
         return output_dict.logits
 
 
-model = MyGPT2(tokenizer).to(torch.bfloat16)
+model = MyGPT2(tokenizer).to(bfloat16)
 
-with torch.no_grad():
+with no_grad():
     logits = model(data)
     print(f"Logits shape: {logits.shape}")
 
@@ -153,14 +151,14 @@ params = [p for p in model.parameters() if p.requires_grad]
 
 ggn = GGNLinearOperator(
     model,
-    nn.CrossEntropyLoss(),
+    CrossEntropyLoss(),
     params,
     [(data, data["labels"])],  # We still need to input a list of "(X, y)" pairs!
     check_deterministic=False,
     batch_size_fn=batch_size_fn,  # Remember to specify this!
-).to_scipy()
+)
 
-G = ggn @ np.eye(ggn.shape[0])
+G = ggn @ eye(ggn.shape[0], device=params[0].device)
 
 print(f"GGN shape: {G.shape}")
 

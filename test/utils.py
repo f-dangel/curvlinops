@@ -142,9 +142,8 @@ def block_diagonal(
     data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
     batch_size_fn: Optional[Callable[[MutableMapping], int]] = None,
     separate_weight_and_bias: bool = True,
-    return_numpy: bool = True,
     optional_linop_args: Optional[Dict[str, Any]] = None,
-) -> ndarray:
+) -> Tensor:
     """Compute the block-diagonal of the matrix induced by a linear operator.
 
     Args:
@@ -156,8 +155,6 @@ def block_diagonal(
         batch_size_fn: A function that returns the batch size given a dict-like ``X``.
         separate_weight_and_bias: Whether to treat weight and bias of a layer as
             separate blocks in the block-diagonal. Default: ``True``.
-        return_numpy: Whether to return the block-diagonal as a numpy array.
-            Default: ``True``.
 
     Returns:
         The block-diagonal matrix.
@@ -207,8 +204,7 @@ def block_diagonal(
             matrix_blocks[i][j].zero_()
 
     # concatenate all blocks
-    block_diag = cat([cat(row_blocks, dim=1) for row_blocks in matrix_blocks], dim=0)
-    return block_diag.cpu().numpy() if return_numpy else block_diag
+    return cat([cat(row_blocks, dim=1) for row_blocks in matrix_blocks], dim=0)
 
 
 class WeightShareModel(Sequential):
@@ -551,8 +547,8 @@ def compare_matmat(
         op, mat = op.adjoint(), mat.conj().T
 
     num_vecs = 1 if is_vec else num_vecs
-    dt = op._infer_dtype()
-    dev = op._infer_device()
+    dt = op.dtype
+    dev = op.device
     x_list, x_tensor, x_numpy = rand_accepted_formats(
         [tuple(s) for s in op._in_shape], is_vec, dt, dev, num_vecs=num_vecs
     )
@@ -605,8 +601,7 @@ def compare_consecutive_matmats(
     tol = {"atol": atol, "rtol": rtol}
 
     # Generate the vector using rand_accepted_formats
-    dt = op._infer_dtype()
-    dev = op._infer_device()
+    dt, dev = op.dtype, op.device
     _, X, _ = rand_accepted_formats(
         [tuple(s) for s in op._in_shape],
         is_vec=is_vec,
@@ -655,8 +650,8 @@ def compare_matmat_expectation(
         op, mat = op.adjoint(), mat.conj().T
 
     num_vecs = 1 if is_vec else num_vecs
-    dt = op._infer_dtype()
-    dev = op._infer_device()
+    dt = op.dtype
+    dev = op.device
     _, x, _ = rand_accepted_formats(
         [tuple(s) for s in op._in_shape], is_vec, dt, dev, num_vecs=num_vecs
     )
@@ -691,17 +686,13 @@ def eye_like(A: Union[Tensor, PyTorchLinearOperator]) -> Tensor:
     """
     dim1, dim_2 = A.shape
     (dim,) = {dim1, dim_2}
-    return eye(
-        dim,
-        dtype=A._infer_dtype() if isinstance(A, PyTorchLinearOperator) else A.dtype,
-        device=A._infer_device() if isinstance(A, PyTorchLinearOperator) else A.device,
-    )
+    return eye(dim, dtype=A.dtype, device=A.device)
 
 
 def check_estimator_convergence(
-    estimator: Callable[[], ndarray],
+    estimator: Callable[[], Tensor],
     num_matvecs: int,
-    truth: float,
+    truth: Tensor,
     max_total_matvecs: int = 100_000,
     check_every: int = 100,
     target_rel_error: float = 1e-3,
@@ -723,7 +714,7 @@ def check_estimator_convergence(
     """
     used_matvecs, converged = 0, False
 
-    def relative_l_inf_error(a_true: ndarray, a: ndarray) -> float:
+    def relative_l_inf_error(a_true: Tensor, a: Tensor) -> Tensor:
         """Compute the relative infinity norm error.
 
         For scalars, this is simply | a - a_true | / | a_true |, the metric used by
@@ -739,7 +730,7 @@ def check_estimator_convergence(
             a: The estimated value.
         """
         assert a.shape == a_true.shape
-        return abs(a - a_true).max() / abs(a_true).max()
+        return (a - a_true).abs().max() / a_true.abs().max()
 
     estimates = []
     while used_matvecs < max_total_matvecs and not converged:
@@ -748,7 +739,7 @@ def check_estimator_convergence(
 
         num_estimates = len(estimates)
         if num_estimates % check_every == 0:
-            rel_error = relative_l_inf_error(truth, sum(estimates) / num_estimates)
+            rel_error = relative_l_inf_error(truth, sum(estimates) / len(estimates))
             print(f"Relative error after {used_matvecs} matvecs: {rel_error:.5f}.")
             converged = rel_error < target_rel_error
 
@@ -775,9 +766,7 @@ def _test_inplace_activations(
     params = list(model.parameters())
 
     # 1) compare (E)KFAC and GGN
-    ggn = block_diagonal(
-        GGNLinearOperator, model, loss_func, params, data, return_numpy=False
-    )
+    ggn = block_diagonal(GGNLinearOperator, model, loss_func, params, data)
     linop = linop_cls(model, loss_func, params, data, fisher_type=FisherType.TYPE2)
     linop_mat = linop @ eye_like(linop)
     assert allclose_report(ggn, linop_mat)
@@ -786,9 +775,7 @@ def _test_inplace_activations(
     for mod in model.modules():
         if hasattr(mod, "inplace"):
             mod.inplace = False
-    ggn_no_inplace = block_diagonal(
-        GGNLinearOperator, model, loss_func, params, data, return_numpy=False
-    )
+    ggn_no_inplace = block_diagonal(GGNLinearOperator, model, loss_func, params, data)
     assert allclose_report(ggn, ggn_no_inplace)
 
 
@@ -1025,7 +1012,6 @@ def _test_ekfac_closer_to_exact_than_kfac(
         data,
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
-        return_numpy=False,
         optional_linop_args=optional_linop_args,
     )
 

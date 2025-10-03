@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added/New
 
 - **Backward-incompatible:** Refactor class-based trace and diagonal estimators
-  into functions ([PR](https://github.com/f-dangel/curvlinops/pull/168)):
+  into functions ([PR](https://github.com/f-dangel/curvlinops/pull/168)) and assume
+  PyTorch instead of SciPy linear operators ([PR](https://github.com/f-dangel/curvlinops/pull/188)):
   - If you used `HutchinsonTraceEstimator`, switch to `hutchinson_trace`
   - If you used `HutchPPTraceEstimator`, switch to `hutchpp_trace`
   - If you used `HutchinsonDiagonalEstimator`, switch to `hutchinson_diag`
@@ -80,6 +81,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (previously always on CPU)
   ([PR](https://github.com/f-dangel/curvlinops/pull/160))
 - Fixed the default value for `conlim` in `LSMRInverseLinearOperator` from `1e-8` to `1e8` ([PR](https://github.com/f-dangel/curvlinops/pull/180))
+- Bug in XDiag implementation that would only work with dense matrices, but not with
+  linear operators ([PR](https://github.com/f-dangel/curvlinops/pull/188))
 
 ### Internal
 
@@ -92,6 +95,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Test that two consecutive matrix-vector products of a linear operator match
   ([issue](https://github.com/f-dangel/curvlinops/issues/159),
    [PR](https://github.com/f-dangel/curvlinops/pull/175))
+- Reduce usage of SciPy in tests and examples
+  ([PR](https://github.com/f-dangel/curvlinops/pull/187))
+- Introduce `property`s for a linear operator's data type (`.dtype`) and device (`.device`)
+  ([PR](https://github.com/f-dangel/curvlinops/pull/189))
 
 ## [2.0.1] - 2024-10-25
 
