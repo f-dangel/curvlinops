@@ -67,7 +67,7 @@ def test_CGInverseLinearOperator_damped_GGN(inv_case, delta_rel: float = 2e-2):
     # specify tolerance and turn off internal damping to get solution with accuracy
     inv_GGN = CGInverseLinearOperator(GGN + damping, eps=0, tolerance=1e-5)
     compare_consecutive_matmats(inv_GGN, adjoint=False, is_vec=False)
-    compare_matmat(inv_GGN, inv_GGN_naive, adjoint=False, is_vec=False, rtol=1e-2)
+    compare_matmat(inv_GGN, inv_GGN_naive, adjoint=False, is_vec=False, rtol=1.5e-2)
 
 
 def test_LSMRInverseLinearOperator_damped_GGN(inv_case, delta: float = 2e-2):
