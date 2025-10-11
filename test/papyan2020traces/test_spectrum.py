@@ -35,7 +35,7 @@ def test_example_verification_spectral_density():
 
 def test_approximate_boundaries():
     """Test spectrum boundary approximation with partially supplied boundaries."""
-    A_diag = tensor([1.0, 2.0, 3.0, 4.0, 5.0])
+    A_diag = tensor([1.0, 2.0, 3.0, 4.0, 5.0]).double()
     A_matrix = A_diag.diag()
     A = TensorLinearOperator(A_matrix)
     lambda_min, lambda_max = A_diag.min().item(), A_diag.max().item()
@@ -58,7 +58,7 @@ def test_approximate_boundaries():
 
 def test_approximate_boundaries_abs():
     """Test abs spectrum boundary approximation with partially supplied boundaries."""
-    A_diag = tensor([-2.0, -1.0, 3.0, 4.0, 5.0])
+    A_diag = tensor([-2.0, -1.0, 3.0, 4.0, 5.0]).double()
     A_matrix = A_diag.diag()
     A = TensorLinearOperator(A_matrix)
     lambda_abs_min, lambda_abs_max = (
