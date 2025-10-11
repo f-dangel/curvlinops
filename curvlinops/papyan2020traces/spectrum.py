@@ -1,4 +1,4 @@
-"""Spectral analysis methods for SciPy linear operators.
+"""Spectral analysis methods for PyTorch linear operators.
 
 From Papyan, 2020:
 
@@ -6,18 +6,28 @@ From Papyan, 2020:
   of Machine Learning Research (JMLR), https://jmlr.org/papers/v21/20-933.html
 """
 
+from math import log, sqrt
 from typing import List, Tuple, Union
 
-from numpy import exp, inner, linspace, log, ndarray, pi, sqrt, zeros, zeros_like
-from numpy.linalg import norm
-from numpy.random import randn
-from scipy.linalg import eigh, eigh_tridiagonal
-from scipy.sparse import diags
-from scipy.sparse.linalg import LinearOperator, eigsh
+from scipy.linalg import eigh_tridiagonal
+from scipy.sparse.linalg import eigsh
+from torch import (
+    Tensor,
+    as_tensor,
+    diag_embed,
+    linspace,
+    randn,
+    zeros,
+    zeros_like,
+)
+from torch.distributions import Normal
+from torch.linalg import eigh, vector_norm
+
+from curvlinops._torch_base import PyTorchLinearOperator
 
 
 def lanczos_approximate_spectrum(
-    A: LinearOperator,
+    A: PyTorchLinearOperator,
     ncv: int,
     num_points: int = 1024,
     num_repeats: int = 1,
@@ -27,7 +37,7 @@ def lanczos_approximate_spectrum(
     ] = None,
     margin: float = 0.05,
     boundaries_tol: float = 1e-2,
-) -> Tuple[ndarray, ndarray]:
+) -> Tuple[Tensor, Tensor]:
     """Approximate the spectral density p(λ) = 1/d ∑ᵢ δ(λ - λᵢ) of A ∈ Rᵈˣᵈ.
 
     Implements algorithm 2 (:code:`LanczosApproxSpec`) of Papyan, 2020
@@ -59,7 +69,7 @@ def lanczos_approximate_spectrum(
     """
     boundaries = approximate_boundaries(A, tol=boundaries_tol, boundaries=boundaries)
 
-    average_density = zeros(num_points)
+    average_density = zeros(num_points, device=A.device, dtype=A.dtype)
 
     for n in range(num_repeats):
         lanczos_iter = fast_lanczos(A, ncv)
@@ -73,12 +83,12 @@ def lanczos_approximate_spectrum(
 
 
 def lanczos_approximate_spectrum_from_iter(
-    lanczos_iter: Tuple[ndarray, ndarray],
+    lanczos_iter: Tuple[Tensor, Tensor],
     boundaries: Tuple[float, float],
     num_points: int,
     kappa: float,
     margin: float,
-) -> Tuple[ndarray, ndarray]:
+) -> Tuple[Tensor, Tensor]:
     eval_min, eval_max = boundaries
     _width = eval_max - eval_min
     _padding = margin * _width
@@ -88,23 +98,26 @@ def lanczos_approximate_spectrum_from_iter(
     c = (eval_max + eval_min) / 2
     d = (eval_max - eval_min) / 2
 
+    evals, evecs = lanczos_iter
+    device, dtype = evals.device, evals.dtype
+
     # estimate on grid [-1; 1]
-    grid_norm = linspace(-1, 1, num_points, endpoint=True)
+    grid_norm = linspace(-1, 1, num_points, device=device, dtype=dtype)
     density = zeros_like(grid_norm)
 
-    evals, evecs = lanczos_iter
     ncv = evals.shape[0]
     nodes = (evals - c) / d
     # Repeat as ``(ncv, num_points)`` arrays to avoid broadcasting
-    grid = grid_norm.reshape((1, num_points)).repeat(ncv, axis=0)
-    nodes = nodes.reshape((ncv, 1)).repeat(num_points, axis=1)
-    weights = (evecs[0, :] ** 2 / d).reshape((ncv, 1)).repeat(num_points, axis=1)
+    grid = grid_norm.reshape((1, num_points)).repeat(ncv, 1)
+    nodes = nodes.reshape((ncv, 1)).repeat(1, num_points)
+    weights = (evecs[0, :] ** 2 / d).reshape((ncv, 1)).repeat(1, num_points)
 
     # width of Gaussian bump in [-1; 1]
     sigma = 2 / (ncv - 1) / sqrt(8 * log(kappa))
-    density = (weights * _gaussian(grid, nodes, sigma)).sum(0)
+    normal_dist = Normal(nodes, sigma)
+    density = (weights * normal_dist.log_prob(grid).exp()).sum(0)
 
-    return linspace(eval_min, eval_max, num_points, endpoint=True), density
+    return linspace(eval_min, eval_max, num_points, device=device, dtype=dtype), density
 
 
 class _LanczosSpectrumCached:
@@ -114,7 +127,7 @@ class _LanczosSpectrumCached:
     hyperparameters.
     """
 
-    def __init__(self, A: LinearOperator, ncv: int):
+    def __init__(self, A: PyTorchLinearOperator, ncv: int):
         """Initialize.
 
         Args:
@@ -123,9 +136,9 @@ class _LanczosSpectrumCached:
         """
         self._A = A
         self._ncv = ncv
-        self._lanczos_iters: List[Tuple[ndarray, ndarray]] = []
+        self._lanczos_iters: List[Tuple[Tensor, Tensor]] = []
 
-    def _get_lanczos_iters(self, num_iters: int) -> List[Tuple[ndarray, ndarray]]:
+    def _get_lanczos_iters(self, num_iters: int) -> List[Tuple[Tensor, Tensor]]:
         while len(self._lanczos_iters) < num_iters:
             self._lanczos_iters.append(fast_lanczos(self._A, self._ncv))
 
@@ -141,7 +154,7 @@ class LanczosApproximateSpectrumCached(_LanczosSpectrumCached):
 
     def __init__(
         self,
-        A: LinearOperator,
+        A: PyTorchLinearOperator,
         ncv: int,
         boundaries: Union[
             Tuple[float, float], Tuple[float, None], Tuple[None, float], None
@@ -171,7 +184,7 @@ class LanczosApproximateSpectrumCached(_LanczosSpectrumCached):
         num_points: int = 1024,
         kappa: float = 3.0,
         margin: float = 0.05,
-    ) -> Tuple[ndarray, ndarray]:
+    ) -> Tuple[Tensor, Tensor]:
         """Approximate the spectal density of A.
 
         Args:
@@ -199,7 +212,7 @@ class LanczosApproximateSpectrumCached(_LanczosSpectrumCached):
 
 
 def lanczos_approximate_log_spectrum(
-    A: LinearOperator,
+    A: PyTorchLinearOperator,
     ncv: int,
     num_points: int = 1024,
     num_repeats: int = 1,
@@ -210,7 +223,7 @@ def lanczos_approximate_log_spectrum(
     margin: float = 0.05,
     boundaries_tol: float = 1e-2,
     epsilon: float = 1e-5,
-) -> Tuple[ndarray, ndarray]:
+) -> Tuple[Tensor, Tensor]:
     """Approximate the spectral density p(λ) = 1/d ∑ᵢ δ(λ - λᵢ) of log(|A| + εI) ∈ Rᵈˣᵈ.
 
     Follows the idea of Section C.7 in Papyan, 2020
@@ -249,7 +262,7 @@ def lanczos_approximate_log_spectrum(
         A, tol=boundaries_tol, boundaries=boundaries
     )
 
-    average_density = zeros(num_points)
+    average_density = zeros(num_points, device=A.device, dtype=A.dtype)
 
     for n in range(num_repeats):
         lanczos_iter = fast_lanczos(A, ncv)
@@ -263,13 +276,13 @@ def lanczos_approximate_log_spectrum(
 
 
 def lanczos_approximate_log_spectrum_from_iter(
-    lanczos_iter: Tuple[ndarray, ndarray],
+    lanczos_iter: Tuple[Tensor, Tensor],
     boundaries: Tuple[float, float],
     num_points: int,
     kappa: float,
     margin: float,
     epsilon: float,
-) -> Tuple[ndarray, ndarray]:
+) -> Tuple[Tensor, Tensor]:
     log_eval_min, log_eval_max = (log(boundary + epsilon) for boundary in boundaries)
     _width = log_eval_max - log_eval_min
     _padding = margin * _width
@@ -279,25 +292,27 @@ def lanczos_approximate_log_spectrum_from_iter(
     c = (log_eval_max + log_eval_min) / 2
     d = (log_eval_max - log_eval_min) / 2
 
-    # estimate on grid [-1; 1]
-    grid_norm = linspace(-1, 1, num_points, endpoint=True)
-    grid_out = exp(grid_norm * d + c)
-
     evals, evecs = lanczos_iter
+    device, dtype = evals.device, evals.dtype
 
-    abs_evals = abs(evals) + epsilon
-    log_evals = log(abs_evals)
+    # estimate on grid [-1; 1]
+    grid_norm = linspace(-1, 1, num_points, device=device, dtype=dtype)
+    grid_out = (grid_norm * d + c).exp()
+
+    abs_evals = evals.abs() + epsilon
+    log_evals = abs_evals.log()
     nodes = (log_evals - c) / d
 
     # Repeat as ``(ncv, num_points)`` arrays to avoid broadcasting
     ncv = evals.shape[0]
-    grid = grid_norm.reshape((1, num_points)).repeat(ncv, axis=0)
-    nodes = nodes.reshape((ncv, 1)).repeat(num_points, axis=1)
-    weights = (evecs[0, :] ** 2).reshape((ncv, 1)).repeat(num_points, axis=1)
+    grid = grid_norm.reshape((1, num_points)).repeat(ncv, 1)
+    nodes = nodes.reshape((ncv, 1)).repeat(1, num_points)
+    weights = (evecs[0, :] ** 2).reshape((ncv, 1)).repeat(1, num_points)
 
     # width of Gaussian bump in [-1; 1]
     sigma = 2 / (ncv - 1) / sqrt(8 * log(kappa))
-    density = (weights * _gaussian(grid, nodes, sigma)).sum(0) / (d * grid_out)
+    normal_dist = Normal(nodes, sigma)
+    density = (weights * normal_dist.log_prob(grid).exp()).sum(0) / (d * grid_out)
 
     return grid_out, density
 
@@ -311,7 +326,7 @@ class LanczosApproximateLogSpectrumCached(_LanczosSpectrumCached):
 
     def __init__(
         self,
-        A: LinearOperator,
+        A: PyTorchLinearOperator,
         ncv: int,
         boundaries: Union[
             Tuple[float, float], Tuple[float, None], Tuple[None, float], None
@@ -342,7 +357,7 @@ class LanczosApproximateLogSpectrumCached(_LanczosSpectrumCached):
         kappa: float = 3.0,
         margin: float = 0.05,
         epsilon: float = 1e-5,
-    ) -> Tuple[ndarray, ndarray]:
+    ) -> Tuple[Tensor, Tensor]:
         """Approximate the spectal density of A.
 
         Args:
@@ -372,8 +387,8 @@ class LanczosApproximateLogSpectrumCached(_LanczosSpectrumCached):
 
 
 def fast_lanczos(
-    A: LinearOperator, ncv: int, use_eigh_tridiagonal: bool = False
-) -> Tuple[ndarray, ndarray]:
+    A: PyTorchLinearOperator, ncv: int, use_eigh_tridiagonal: bool = False
+) -> Tuple[Tensor, Tensor]:
     """Lanczos iterations for large-scale problems (no reorthogonalization step).
 
     Implements algorithm 2 of Papyan, 2020 (https://jmlr.org/papers/v21/20-933.html).
@@ -389,41 +404,54 @@ def fast_lanczos(
         Eigenvalues and eigenvectors of the tri-diagonal matrix built up during
         Lanczos iterations. ``evecs[:, i]`` is normalized eigenvector of ``evals[i]``.
     """
-    alphas, betas = zeros(ncv), zeros(ncv - 1)
+    device, dtype = A.device, A.dtype
+    alphas = zeros(ncv, device=device, dtype=dtype)
+    betas = zeros(ncv - 1, device=device, dtype=dtype)
 
     dim = A.shape[1]
     v, v_prev = None, None
 
     for m in range(ncv):
         if m == 0:
-            v = randn(dim)
-            v /= norm(v)
+            v = randn(dim, device=device, dtype=dtype)
+            v /= vector_norm(v)
             v_next = A @ v
 
         else:
             v_next = A @ v - betas[m - 1] * v_prev
 
-        alphas[m] = inner(v_next, v)
+        alphas[m] = (v_next * v).sum()
         v_next -= alphas[m] * v
 
         last = m == ncv - 1
         if not last:
-            betas[m] = norm(v_next)
+            betas[m] = vector_norm(v_next)
             v_next /= betas[m]
             v_prev = v
             v = v_next
 
     if use_eigh_tridiagonal:
-        evals, evecs = eigh_tridiagonal(alphas, betas)
+        # Convert to NumPy for SciPy operations
+        evals_np, evecs_np = eigh_tridiagonal(
+            alphas.detach().cpu().numpy(), betas.detach().cpu().numpy()
+        )
+        # Convert back to PyTorch tensors
+        evals = as_tensor(evals_np, device=device, dtype=dtype)
+        evecs = as_tensor(evecs_np, device=device, dtype=dtype)
     else:
-        T = diags([betas, alphas, betas], offsets=[-1, 0, 1]).todense()
+        # Build tridiagonal matrix using PyTorch
+        T = (
+            diag_embed(alphas)
+            + diag_embed(betas, offset=1)
+            + diag_embed(betas, offset=-1)
+        )
         evals, evecs = eigh(T)
 
     return evals, evecs
 
 
 def approximate_boundaries(
-    A: LinearOperator,
+    A: PyTorchLinearOperator,
     tol: float = 1e-2,
     boundaries: Union[
         Tuple[float, float], Tuple[float, None], Tuple[None, float], None
@@ -443,22 +471,23 @@ def approximate_boundaries(
         Estimates of λₘᵢₙ and λₘₐₓ.
     """
     eigsh_kwargs = {"tol": tol, "return_eigenvectors": False}
+    A_scipy = A.to_scipy()
 
     if boundaries is None:
-        eval_min, eval_max = eigsh(A, k=2, which="BE", **eigsh_kwargs)
+        eval_min, eval_max = eigsh(A_scipy, k=2, which="BE", **eigsh_kwargs)
     else:
         eval_min, eval_max = boundaries
 
         if eval_min is None:
-            (eval_min,) = eigsh(A, k=1, which="SA", **eigsh_kwargs)
+            (eval_min,) = eigsh(A_scipy, k=1, which="SA", **eigsh_kwargs)
         if eval_max is None:
-            (eval_max,) = eigsh(A, k=1, which="LA", **eigsh_kwargs)
+            (eval_max,) = eigsh(A_scipy, k=1, which="LA", **eigsh_kwargs)
 
     return eval_min, eval_max
 
 
 def approximate_boundaries_abs(
-    A: LinearOperator,
+    A: PyTorchLinearOperator,
     tol: float = 1e-2,
     boundaries: Union[
         Tuple[float, float], Tuple[float, None], Tuple[None, float], None
@@ -480,23 +509,11 @@ def approximate_boundaries_abs(
     eval_min, eval_max = (None, None) if boundaries is None else boundaries
 
     eigsh_kwargs = {"tol": tol, "return_eigenvectors": False}
+    A_scipy = A.to_scipy()
+
     if eval_max is None:
-        (eval_max,) = eigsh(A, k=1, which="LM", **eigsh_kwargs)
+        (eval_max,) = eigsh(A_scipy, k=1, which="LM", **eigsh_kwargs)
     if eval_min is None:
-        (eval_min,) = eigsh(A, k=1, which="SM", **eigsh_kwargs)
+        (eval_min,) = eigsh(A_scipy, k=1, which="SM", **eigsh_kwargs)
 
     return abs(eval_min), abs(eval_max)
-
-
-def _gaussian(x: ndarray, mu: ndarray, sigma: float) -> ndarray:
-    """Normal distribution pdf.
-
-    Args:
-        x: Position to evaluate.
-        mu: Mean values.
-        sigma: Standard deviation.
-
-    Returns:
-        Values of normal distribution.
-    """
-    return exp(-0.5 * ((x - mu) / sigma) ** 2) / (sigma * sqrt(2 * pi))

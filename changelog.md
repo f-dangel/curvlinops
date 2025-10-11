@@ -58,6 +58,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Switch CG implementation from SciPy to GPyTorch `CGInverseLinearOperator`
       ([PR](https://github.com/f-dangel/curvlinops/pull/190))
 
+- **Backward-incompatible** Refactor spectral density estimation methods to expect PyTorch linear operators and use PyTorch functions internally rather than SciPy/NumPy
+  ([PR](https://github.com/f-dangel/curvlinops/pull/194))
+
 - Add `EKFACLinearOperator` which implements EKFAC
   ([paper](https://arxiv.org/abs/1806.03884),
    [PR](https://github.com/f-dangel/curvlinops/pull/173))
