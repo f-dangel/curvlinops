@@ -17,9 +17,7 @@ from scipy.sparse.linalg import eigsh
 from torch import (
     Tensor,
     as_tensor,
-    exp,
     linspace,
-    log,
     logspace,
     manual_seed,
     randn,
@@ -388,7 +386,7 @@ with plt.rc_context(plot_config):
     plt.xlabel(r"Absolute eigenvalue $\nu = |\lambda| + \epsilon$")
     plt.ylabel(r"Spectral density $\rho(\log\nu)$")
 
-    Y_log_abs_evals = log(Y_evals.abs() + epsilon)
+    Y_log_abs_evals = (Y_evals.abs() + epsilon).log()
 
     xlimits_no_margin = (Y_log_abs_evals.min().item(), Y_log_abs_evals.max().item())
     width_no_margins = xlimits_no_margin[1] - xlimits_no_margin[0]
@@ -401,7 +399,7 @@ with plt.rc_context(plot_config):
     num_bins = 40
     bins = logspace(xlimits[0], xlimits[1], num_bins, base=e)
     plt.hist(
-        exp(Y_log_abs_evals),
+        Y_log_abs_evals.exp(),
         bins=bins,
         log=True,
         density=True,
@@ -448,7 +446,7 @@ with plt.rc_context(plot_config):
         )
 
         ax[idx].hist(
-            exp(Y_log_abs_evals),
+            Y_log_abs_evals.exp(),
             bins=bins,
             log=True,
             density=True,
