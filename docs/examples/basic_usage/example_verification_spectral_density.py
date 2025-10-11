@@ -27,8 +27,7 @@ from torch.distributions import Pareto
 from torch.linalg import eigh
 from tueplots import bundles
 
-from curvlinops.examples import TensorLinearOperator
-from curvlinops.outer import OuterProductLinearOperator
+from curvlinops.examples import OuterProductLinearOperator, TensorLinearOperator
 from curvlinops.papyan2020traces.spectrum import (
     LanczosApproximateLogSpectrumCached,
     LanczosApproximateSpectrumCached,

@@ -33,8 +33,8 @@ from curvlinops import (
     GGNLinearOperator,
     NeumannInverseLinearOperator,
 )
+from curvlinops.examples import IdentityLinearOperator
 from curvlinops.examples.functorch import functorch_ggn, functorch_gradient_and_loss
-from curvlinops.outer import IdentityLinearOperator
 from curvlinops.utils import allclose_report
 
 # make deterministic
