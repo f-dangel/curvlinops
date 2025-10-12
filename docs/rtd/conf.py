@@ -21,10 +21,6 @@ project = "Curvlinops"
 copyright = "2022, F. Dangel, L. Tatzel, R. Eschenhagen"
 author = "F. Dangel, L. Tatzel, R. Eschenhagen"
 
-# The full version, including alpha/beta/rc tags
-release = "1.2.0"
-
-
 # -- General configuration ---------------------------------------------------
 
 # Add any Sphinx extension module names here, as strings. They can be
@@ -65,7 +61,7 @@ sphinx_gallery_conf = {
     "default_thumb_file": "assets/logo.png",
     "filename_pattern": "example",
     "matplotlib_animations": True,
-    "ignore_pattern": "memory_benchmark.py",
+    "ignore_pattern": "memory_benchmark.py|benchmark_utils.py",
 }
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ["_templates"]
