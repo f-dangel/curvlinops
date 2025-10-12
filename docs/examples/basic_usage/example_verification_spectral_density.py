@@ -9,15 +9,25 @@ plots for synthetic spectra shown in Figure 15 of the paper.
 Here are the imports:
 """
 
+from math import e
 from os import getenv
 
 import matplotlib.pyplot as plt
-from numpy import e, exp, linspace, log, logspace, matmul, ndarray, zeros
-from numpy.linalg import eigh
-from numpy.random import pareto, randn, seed
-from scipy.sparse.linalg import aslinearoperator, eigsh
+from scipy.sparse.linalg import eigsh
+from torch import (
+    Tensor,
+    as_tensor,
+    linspace,
+    logspace,
+    manual_seed,
+    randn,
+    zeros,
+)
+from torch.distributions import Pareto
+from torch.linalg import eigh
 from tueplots import bundles
 
+from curvlinops.examples import TensorLinearOperator
 from curvlinops.outer import OuterProductLinearOperator
 from curvlinops.papyan2020traces.spectrum import (
     LanczosApproximateLogSpectrumCached,
@@ -30,7 +40,7 @@ from curvlinops.papyan2020traces.spectrum import (
 # Therefore, we are turning it off if the script executes on GHA.
 USETEX = not getenv("CI")
 
-seed(0)
+manual_seed(0)
 
 # %%
 #
@@ -47,7 +57,7 @@ seed(0)
 # Here is the function to draw a sample for :math:`\mathbf{Y}`:
 
 
-def create_matrix(dim: int = 2000) -> ndarray:
+def create_matrix(dim: int = 2000) -> Tensor:
     """Draw a matrix from the matrix distribution used in papyan2020traces, Figure 15a.
 
     Args:
@@ -63,7 +73,7 @@ def create_matrix(dim: int = 2000) -> ndarray:
 
     Z = randn(dim, dim)
 
-    return X + 1 / dim * matmul(Z, Z.transpose())
+    return X + Z @ Z.T / dim
 
 
 Y = create_matrix()
@@ -78,9 +88,9 @@ Y_evals, _ = eigh(Y)
 # %%
 #
 # For an approximation of the eigenvalue spectrum we just need a
-# :class:`LinearOperator <scipy.sparse.linalg.LinearOperator>` of :code:`Y`:
+# :class:`PyTorchLinearOperator <curvlinops._torch_base.PyTorchLinearOperator>` of :code:`Y`:
 
-Y_linop = aslinearoperator(Y)
+Y_linop = TensorLinearOperator(Y)
 
 # %%
 #
@@ -103,7 +113,7 @@ margin = 0.05
 # For convenience, we feed the eigenvalues at the spectrum's edges as
 # boundaries, so they don't get recomputed:
 
-boundaries = (Y_evals.min(), Y_evals.max())
+boundaries = (Y_evals.min().item(), Y_evals.max().item())
 
 # %%
 #
@@ -133,9 +143,9 @@ with plt.rc_context(plot_config):
     plt.xlabel(r"Eigenvalue $\lambda$")
     plt.ylabel(r"Spectral density $\rho(\lambda)$")
 
-    left, right = grid[0], grid[-1]
+    left, right = grid[0].item(), grid[-1].item()
     num_bins = 40
-    bins = linspace(left, right, num_bins, endpoint=True)
+    bins = linspace(left, right, num_bins)
     plt.hist(
         Y_evals,
         bins=bins,
@@ -214,9 +224,13 @@ with plt.rc_context(plot_config):
 
 k = 3
 print(f"Computing top-{k} eigenvalues of normalized operator")
-Y_top_evals, Y_top_evecs = eigsh(Y_linop, k=k, which="LA")
+Y_top_evals, Y_top_evecs = eigsh(Y_linop.to_scipy(), k=k, which="LA")
 
-Y_top_linop = OuterProductLinearOperator(Y_top_evals, Y_top_evecs)
+# Convert NumPy arrays to PyTorch tensors
+Y_top_evals_tensor = as_tensor(Y_top_evals, dtype=Y.dtype, device=Y.device)
+Y_top_evecs_tensor = as_tensor(Y_top_evecs, dtype=Y.dtype, device=Y.device)
+
+Y_top_linop = OuterProductLinearOperator(Y_top_evals_tensor, Y_top_evecs_tensor)
 
 Y_deflated_linop = Y_linop - Y_top_linop
 
@@ -283,10 +297,10 @@ with plt.rc_context(plot_config):
 #
 # Here is the function to draw a sample for :math:`\mathbf{Y}`:
 
-seed(0)
+manual_seed(0)
 
 
-def create_matrix_log_spectrum(dim: int = 500) -> ndarray:
+def create_matrix_log_spectrum(dim: int = 500) -> Tensor:
     """Draw a matrix from the matrix distribution used in papyan2020traces, Figure 15b.
 
     Args:
@@ -295,9 +309,10 @@ def create_matrix_log_spectrum(dim: int = 500) -> ndarray:
     Returns:
         A sample from the matrix distribution.
     """
-    Z = pareto(a=1, size=(dim, 2 * dim))
+    pareto_dist = Pareto(1.0, 1.0)
+    Z = pareto_dist.sample((dim, 2 * dim))
 
-    return 1 / (2 * dim) * Z @ Z.transpose()
+    return Z @ Z.T / (2 * dim)
 
 
 Y = create_matrix_log_spectrum()
@@ -323,7 +338,7 @@ epsilon = 1e-5
 print("Computing the full log-spectrum")
 Y_evals, _ = eigh(Y)
 
-Y_linop = aslinearoperator(Y)
+Y_linop = TensorLinearOperator(Y)
 
 # %%
 #
@@ -343,8 +358,8 @@ kappa = 1.04  # not specified in the paper → hand-tuned
 # For convenience, we feed the eigenvalue magnitudes at the spectrum's edges as
 # boundaries, so they don't get recomputed:
 
-Y_abs_evals = abs(Y_evals)
-boundaries = (Y_abs_evals.min(), Y_abs_evals.max())
+Y_abs_evals = Y_evals.abs()
+boundaries = (Y_abs_evals.min().item(), Y_abs_evals.max().item())
 
 print("Approximating log-spectrum")
 grid, density = lanczos_approximate_log_spectrum(
@@ -371,9 +386,9 @@ with plt.rc_context(plot_config):
     plt.xlabel(r"Absolute eigenvalue $\nu = |\lambda| + \epsilon$")
     plt.ylabel(r"Spectral density $\rho(\log\nu)$")
 
-    Y_log_abs_evals = log(abs(Y_evals) + epsilon)
+    Y_log_abs_evals = (Y_evals.abs() + epsilon).log()
 
-    xlimits_no_margin = (Y_log_abs_evals.min(), Y_log_abs_evals.max())
+    xlimits_no_margin = (Y_log_abs_evals.min().item(), Y_log_abs_evals.max().item())
     width_no_margins = xlimits_no_margin[1] - xlimits_no_margin[0]
     xlimits = [
         xlimits_no_margin[0] - margin * width_no_margins,
@@ -382,9 +397,9 @@ with plt.rc_context(plot_config):
 
     plt.semilogx()
     num_bins = 40
-    bins = logspace(*xlimits, num=num_bins, endpoint=True, base=e)
+    bins = logspace(xlimits[0], xlimits[1], num_bins, base=e)
     plt.hist(
-        exp(Y_log_abs_evals),
+        Y_log_abs_evals.exp(),
         bins=bins,
         log=True,
         density=True,
@@ -431,7 +446,7 @@ with plt.rc_context(plot_config):
         )
 
         ax[idx].hist(
-            exp(Y_log_abs_evals),
+            Y_log_abs_evals.exp(),
             bins=bins,
             log=True,
             density=True,
