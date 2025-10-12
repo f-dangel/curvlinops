@@ -102,6 +102,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([PR](https://github.com/f-dangel/curvlinops/pull/187))
 - Introduce `property`s for a linear operator's data type (`.dtype`) and device (`.device`)
   ([PR](https://github.com/f-dangel/curvlinops/pull/189))
+- Move utility linear operators for examples into a single file
+  ([PR](https://github.com/f-dangel/curvlinops/pull/195))
 
 ## [2.0.1] - 2024-10-25
 

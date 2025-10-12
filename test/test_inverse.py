@@ -26,8 +26,8 @@ from curvlinops import (
     LSMRInverseLinearOperator,
     NeumannInverseLinearOperator,
 )
+from curvlinops.examples import IdentityLinearOperator
 from curvlinops.examples.functorch import functorch_ggn
-from curvlinops.outer import IdentityLinearOperator
 from curvlinops.utils import allclose_report
 from test.test__torch_base import TensorLinearOperator
 from test.utils import (
