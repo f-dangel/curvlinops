@@ -17,7 +17,7 @@
 
 # -- Project information -----------------------------------------------------
 
-project = "CurvLinOps"
+project = "Curvlinops"
 copyright = "2022, F. Dangel, L. Tatzel, R. Eschenhagen"
 author = "F. Dangel, L. Tatzel, R. Eschenhagen"
 

@@ -65,9 +65,6 @@ Sub-matrices
 Spectral density approximation
 ==============================
 
-.. note::
-   This functionality currently expects SciPy ``LinearOperator``s.
-
 .. autofunction:: curvlinops.lanczos_approximate_spectrum
 
 .. autofunction:: curvlinops.lanczos_approximate_log_spectrum
@@ -99,8 +96,7 @@ Frobenius norm approximation
 Experimental
 ============
 
-The API of experimental features may be subject to changes, or they might become
-deprecated.
+Experimental features may be subject to changes or become deprecated.
 
 .. autoclass:: curvlinops.experimental.ActivationHessianLinearOperator
    :members: __init__

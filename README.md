@@ -8,20 +8,24 @@
 This library provides **lin**ear **op**erator**s**---a unified interface for matrix-free computation---for deep learning **curv**ature matrices in PyTorch.
 `curvlinops` is inspired by SciPy's [`sparse.linalg.LinearOperator`](https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.linalg.LinearOperator.html) interface and implements a PyTorch version.
 
+You can read our [position paper](https://arxiv.org/abs/2501.19183) to know more about why combining linear operators with curvature matrices might be a good idea.
+
 Main features:
 
 - **Broad support of curvature matrices.** `curvlinops` supports many common curvature matrices and approximations thereof, such as the Hessian, Fisher, generalized Gauss-Newton, and K-FAC ([overview](https://curvlinops.readthedocs.io/en/latest/linops.html#linear-operators), [visual tour](https://curvlinops.readthedocs.io/en/latest/basic_usage/example_visual_tour.html#visualization)).
 
-- **Unified interface.** All linear operators share the same interface, making it easy to switch between different curvature matrices.
+- **Unified interface.** All linear operators share the same interface, making it easy to switch between curvature matrices.
 
-- **Fully PyTorch.** All computations can be done on a GPU.
+- **Purely PyTorch.** All computations can run on a GPU.
 
 - **SciPy export.** You can export a `curvlinops` linear operator to a SciPy `LinearOperator` with `.to_scipy()`.
   This allows plugging it into `scipy`, while carrying out the heavy lifting (matrix-vector multiplies) in PyTorch on GPU.
   My favorite example is
 [`scipy.sparse.linalg.eigsh`](https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.linalg.eigsh.html) that lets you compute a subset of eigen-pairs ([example](https://curvlinops.readthedocs.io/en/latest/basic_usage/example_eigenvalues.html)).
 
-- **Randomized estimation algorithms.** `curvlinops` offers functionality to estimate properties the matrix represented by a linear operators, like its spectral density, inverse, trace, or diagonal.
+- **Randomized estimation algorithms.** `curvlinops` offers functionality to estimate properties the matrix represented by a linear operators, like its spectral density ([example](https://curvlinops.readthedocs.io/en/latest/basic_usage/example_verification_spectral_density.html)),
+  inverse ([example](https://curvlinops.readthedocs.io/en/latest/basic_usage/example_inverses.html)),
+  trace & diagonal ([example](https://curvlinops.readthedocs.io/en/latest/basic_usage/example_trace_diagonal_estimation.html)).
 
 ## Installation
 
@@ -44,7 +48,7 @@ pip install curvlinops-for-pytorch
 
 ## Citation
 
-If you find `curvlinops` useful for your work, consider citing our position paper
+If you find `curvlinops` useful for your work, consider citing our [position paper](https://arxiv.org/abs/2501.19183)
 
 ```bibtex
 
@@ -61,13 +65,13 @@ If you find `curvlinops` useful for your work, consider citing our position pape
 
 ## Future ideas
 
-Other features that could be supported in the future include:
+- Refactor the back-end for curvature-matrix multiplication into pure functions
+  to improve recycle-ability and ease the use of `torch.compile`.
 
-- Other matrices
+- Multi-GPU support.
 
-  - the centered gradient covariance
-  - terms of the [hierarchical GGN
-    decomposition](https://arxiv.org/abs/2008.11865)
+- Include more curvature matrices
+  - E.g. the [GGN's hierarchical decomposition](https://arxiv.org/abs/2008.11865)
 
 ###### Logo mage credits
 - PyTorch logo: https://github.com/soumith, [CC BY-SA
