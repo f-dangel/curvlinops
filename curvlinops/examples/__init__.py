@@ -88,17 +88,18 @@ class OuterProductLinearOperator(PyTorchLinearOperator):
         self._A = A
         self._c = c
 
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, M: List[Tensor]) -> List[Tensor]:
         """Apply the linear operator to a matrix in list format.
 
         Args:
-            X: The matrix to multiply onto in list format.
+            M: The matrix to multiply onto in list format.
 
         Returns:
             The result of the multiplication in list format.
         """
+        (M0,) = M
         # Compute ∑ᵢ cᵢ aᵢ aᵢᵀ @ X
-        return [einsum("ik,k,jk,jl->il", self._A, self._c, self._A, X[0])]
+        return [einsum("ik,k,jk,jl->il", self._A, self._c, self._A, M0)]
 
     def _adjoint(self) -> OuterProductLinearOperator:
         """Return the linear operator representing the adjoint.
@@ -146,16 +147,16 @@ class IdentityLinearOperator(PyTorchLinearOperator):
         self._device = device
         self._dtype = dtype
 
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, M: List[Tensor]) -> List[Tensor]:
         """Apply the linear operator to a matrix in list format.
 
         Args:
-            X: The matrix to multiply onto in list format.
+            M: The matrix to multiply onto in list format.
 
         Returns:
             The result of the matrix multiplication in list format.
         """
-        return X
+        return M
 
     @property
     def dtype(self) -> dtype:
