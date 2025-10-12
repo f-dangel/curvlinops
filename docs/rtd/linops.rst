@@ -65,6 +65,9 @@ Sub-matrices
 Spectral density approximation
 ==============================
 
+.. note::
+   This functionality currently expects SciPy ``LinearOperator``s.
+
 .. autofunction:: curvlinops.lanczos_approximate_spectrum
 
 .. autofunction:: curvlinops.lanczos_approximate_log_spectrum

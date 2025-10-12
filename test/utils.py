@@ -601,8 +601,7 @@ def compare_consecutive_matmats(
     tol = {"atol": atol, "rtol": rtol}
 
     # Generate the vector using rand_accepted_formats
-    dt = op.dtype
-    dev = op.device
+    dt, dev = op.dtype, op.device
     _, X, _ = rand_accepted_formats(
         [tuple(s) for s in op._in_shape],
         is_vec=is_vec,
@@ -687,11 +686,7 @@ def eye_like(A: Union[Tensor, PyTorchLinearOperator]) -> Tensor:
     """
     dim1, dim_2 = A.shape
     (dim,) = {dim1, dim_2}
-    return eye(
-        dim,
-        dtype=A.dtype if isinstance(A, PyTorchLinearOperator) else A.dtype,
-        device=A.device if isinstance(A, PyTorchLinearOperator) else A.device,
-    )
+    return eye(dim, dtype=A.dtype, device=A.device)
 
 
 def check_estimator_convergence(

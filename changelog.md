@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added/New
 
 - **Backward-incompatible:** Refactor class-based trace and diagonal estimators
-  into functions ([PR](https://github.com/f-dangel/curvlinops/pull/168)):
+  into functions ([PR](https://github.com/f-dangel/curvlinops/pull/168)) and assume
+  PyTorch instead of SciPy linear operators ([PR](https://github.com/f-dangel/curvlinops/pull/188)):
   - If you used `HutchinsonTraceEstimator`, switch to `hutchinson_trace`
   - If you used `HutchPPTraceEstimator`, switch to `hutchpp_trace`
   - If you used `HutchinsonDiagonalEstimator`, switch to `hutchinson_diag`
@@ -51,6 +52,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     which are now available through `@`
   - `SubmatrixLinearOperator`
     ([PR](https://github.com/f-dangel/curvlinops/pull/177))
+  - `CGInverseLinearOperator`, `NeumannInverseLinearOperator`, and `LSMRInverseLinearOperator`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/186)),
+    also removing their public methods for specifying hyper-parameters and instead accepting them as keyword arguments in the constructor
+    - Switch CG implementation from SciPy to GPyTorch `CGInverseLinearOperator`
+      ([PR](https://github.com/f-dangel/curvlinops/pull/190))
+
+- **Backward-incompatible** Refactor spectral density estimation methods to expect PyTorch linear operators and use PyTorch functions internally rather than SciPy/NumPy
+  ([PR](https://github.com/f-dangel/curvlinops/pull/194))
 
 - Add `EKFACLinearOperator` which implements EKFAC
   ([paper](https://arxiv.org/abs/1806.03884),
@@ -75,6 +84,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (previously always on CPU)
   ([PR](https://github.com/f-dangel/curvlinops/pull/160))
 - Fixed the default value for `conlim` in `LSMRInverseLinearOperator` from `1e-8` to `1e8` ([PR](https://github.com/f-dangel/curvlinops/pull/180))
+- Bug in XDiag implementation that would only work with dense matrices, but not with
+  linear operators ([PR](https://github.com/f-dangel/curvlinops/pull/188))
 
 ### Internal
 
@@ -87,6 +98,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Test that two consecutive matrix-vector products of a linear operator match
   ([issue](https://github.com/f-dangel/curvlinops/issues/159),
    [PR](https://github.com/f-dangel/curvlinops/pull/175))
+- Reduce usage of SciPy in tests and examples
+  ([PR](https://github.com/f-dangel/curvlinops/pull/187))
+- Introduce `property`s for a linear operator's data type (`.dtype`) and device (`.device`)
+  ([PR](https://github.com/f-dangel/curvlinops/pull/189))
+- Move utility linear operators for examples into a single file
+  ([PR](https://github.com/f-dangel/curvlinops/pull/195))
 
 ## [2.0.1] - 2024-10-25
 

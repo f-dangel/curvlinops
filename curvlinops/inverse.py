@@ -7,17 +7,18 @@ from typing import Any, Dict, List, Optional, Tuple, TypeVar, Union
 from warnings import warn
 
 from einops import rearrange
+from linear_operator.utils.linear_cg import linear_cg
 from numpy import column_stack
-from scipy.sparse.linalg import cg, lsmr
+from scipy.sparse.linalg import lsmr
 from torch import (
     Tensor,
+    as_tensor,
     cat,
     cholesky_inverse,
     device,
     dtype,
     eye,
     float64,
-    from_numpy,
     isnan,
     outer,
 )
@@ -75,9 +76,7 @@ class CGInverseLinearOperator(_InversePyTorchLinearOperator):
     """Class for inverse linear operators via conjugate gradients.
 
     Note:
-        Internally, this operator uses SciPy's CPU implementation of CG as PyTorch
-        currently does not offer a CG interface that purely relies on matrix-vector
-        products.
+        Internally, this operator uses GPyTorch's implementation of CG.
     """
 
     def __init__(self, A: PyTorchLinearOperator, **cg_hyperparameters):
@@ -86,12 +85,11 @@ class CGInverseLinearOperator(_InversePyTorchLinearOperator):
         Args:
             A: PyTorch linear operator whose inverse is formed. Must represent a
                 symmetric and positive-definite matrix.
-            cg_hyperparameters: Keyword arguments for SciPy's CG implementation.
-                For details, see
-                https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.linalg.cg.html.
+            cg_hyperparameters: Keyword arguments for GPyTorch's CG implementation.
+                For details, see the documentation of the ``linear_cg`` function in
+                https://github.com/cornellius-gp/linear_operator/blob/main/linear_operator/utils/linear_cg.py.
         """
         super().__init__(A)
-        self._A_scipy = A.to_scipy()
         self._cg_hyperparameters = cg_hyperparameters
 
     def _matmat(self, X: List[Tensor]) -> List[Tensor]:
@@ -103,27 +101,16 @@ class CGInverseLinearOperator(_InversePyTorchLinearOperator):
         Returns:
              Result of inverse matrix-vector multiplication, ``A⁻¹ @ X``.
         """
-        # flatten and convert to numpy
-        X_np = (
-            cat([x.flatten(end_dim=-2) for x in X])
-            .cpu()
-            .numpy()
-            .astype(self._A_scipy.dtype)
-        )
-        _, num_vecs = X_np.shape
+        X_flat = cat([x.flatten(end_dim=-2) for x in X])
+        _, num_vecs = X_flat.shape
 
-        # apply CG to each vector in SciPy (returns solution and info)
-        Ainv_X = [cg(self._A_scipy, x, **self._cg_hyperparameters) for x in X_np.T]
-        self._cg_info = [result[1] for result in Ainv_X]
-        Ainv_X = column_stack([result[0] for result in Ainv_X])
+        # batched CG for all vectors in parallel
+        Ainv_X = linear_cg(self._A.__matmul__, X_flat, **self._cg_hyperparameters)
 
-        # convert to PyTorch and unflatten
-        Ainv_X = from_numpy(Ainv_X).to(self.device, self.dtype)
-        Ainv_X = [
+        return [
             r.reshape(*s, num_vecs)
             for r, s in zip(Ainv_X.split(self._out_shape_flat), self._out_shape)
         ]
-        return Ainv_X
 
     def _adjoint(self) -> CGInverseLinearOperator:
         """Return the linear operator's adjoint: (A^-1)* = (A*)^-1.
@@ -182,7 +169,7 @@ class LSMRInverseLinearOperator(_InversePyTorchLinearOperator):
         Ainv_X = column_stack([result[0] for result in Ainv_X])
 
         # convert to PyTorch and unflatten
-        Ainv_X = from_numpy(Ainv_X).to(self.device, self.dtype)
+        Ainv_X = as_tensor(Ainv_X, device=self.device, dtype=self.dtype)
         Ainv_X = [
             r.reshape(*s, num_vecs)
             for r, s in zip(Ainv_X.split(self._out_shape_flat), self._out_shape)
@@ -320,7 +307,7 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
         )
 
 
-class KFACInverseLinearOperator(PyTorchLinearOperator):
+class KFACInverseLinearOperator(_InversePyTorchLinearOperator):
     """Class to invert instances of the ``KFACLinearOperator``.
 
     Attributes:
@@ -381,12 +368,7 @@ class KFACInverseLinearOperator(PyTorchLinearOperator):
             raise ValueError(
                 "The input `A` must be an instance of `KFACLinearOperator`."
             )
-        super().__init__(
-            [tuple(s) for s in A._in_shape], [tuple(s) for s in A._out_shape]
-        )
-        self._A = A
-        self.device = A.device
-        self.dtype = A.dtype
+        super().__init__(A)
         if use_heuristic_damping and use_exact_damping:
             raise ValueError("Either use heuristic damping or exact damping, not both.")
         if (use_heuristic_damping or use_exact_damping) and isinstance(damping, tuple):

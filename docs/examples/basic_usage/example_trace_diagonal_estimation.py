@@ -13,24 +13,24 @@ from os import getenv
 from typing import Dict
 
 import matplotlib.pyplot as plt
-from numpy import (
+from torch import (
+    Tensor,
     arange,
-    array,
-    diag,
+    as_tensor,
     float64,
+    int32,
     linspace,
+    manual_seed,
     median,
-    ndarray,
-    percentile,
-    trace,
-    unique,
+    quantile,
+    randn,
+    stack,
 )
-from numpy.linalg import qr
-from numpy.random import randn, seed
-from scipy.sparse.linalg import aslinearoperator
+from torch.linalg import qr
 from tueplots import bundles
 
 from curvlinops import hutchinson_diag, hutchinson_trace, hutchpp_trace, xdiag, xtrace
+from curvlinops.examples import TensorLinearOperator
 
 # LaTeX is not available on RTD and we also want to analyze smaller matrices
 # to reduce build time
@@ -45,7 +45,7 @@ DIM = 200 if RTD else 1000
 # Number of repeats for the Hutchinson estimator to compute error bars
 NUM_REPEATS = 50 if RTD else 200
 
-seed(0)  # make deterministic
+manual_seed(0)  # make deterministic
 
 # %%
 #
@@ -60,7 +60,7 @@ seed(0)  # make deterministic
 # Here is a function that creates such a matrix:
 
 
-def create_power_law_matrix(dim: int = DIM, c: float = 1.0) -> ndarray:
+def create_power_law_matrix(dim: int = DIM, c: float = 1.0) -> Tensor:
     """Draw a matrix with a power law spectrum.
 
     Eigenvalues λ_i are given by λ_i = i^(-c), where i is the index of the eigenvalue
@@ -75,10 +75,10 @@ def create_power_law_matrix(dim: int = DIM, c: float = 1.0) -> ndarray:
         A sample matrix with a power law spectrum.
     """
     # Create the diagonal matrix Λ with Λii = i^(-c)
-    L = diag(arange(1, dim + 1, dtype=float64) ** (-c))
+    L = (arange(1, dim + 1, dtype=float64) ** (-c)).diag()
 
     # Generate a random Gaussian matrix and orthogonalize it to get Q
-    Q, _ = qr(randn(dim, dim))
+    Q, _ = qr(randn(dim, dim, dtype=float64))
 
     # Construct the matrix A = Q^T Λ Q
     return Q.T @ L @ Q
@@ -95,13 +95,13 @@ def create_power_law_matrix(dim: int = DIM, c: float = 1.0) -> ndarray:
 # To get started, let's create a power law matrix and turn it into a linear operator:
 
 Y_mat = create_power_law_matrix()
-Y = aslinearoperator(Y_mat)
+Y = TensorLinearOperator(Y_mat)
 
 # %%
 #
 # For reference, let's compute the exact trace:
 
-exact_trace = trace(Y_mat)
+exact_trace = Y_mat.trace()
 print(f"Exact trace: {exact_trace:.3f}")
 
 # %%
@@ -118,12 +118,12 @@ print(f"Exact trace: {exact_trace:.3f}")
 num_matvecs = 5
 
 # Generate estimates, repeat process multiple times so we have error bars.
-estimates = [hutchinson_trace(Y, num_matvecs) for _ in range(NUM_REPEATS)]
+estimates = stack([hutchinson_trace(Y, num_matvecs) for _ in range(NUM_REPEATS)])
 
 # Calculate the median and quartiles (error bars) of the estimates
 med = median(estimates)
-quartile1 = percentile(estimates, 25)
-quartile3 = percentile(estimates, 75)
+quartile1 = quantile(estimates, 0.25)
+quartile3 = quantile(estimates, 0.75)
 
 # Print the exact trace and the statistical measures of the estimates
 print(f"Exact trace: {exact_trace:.3f}")
@@ -172,14 +172,14 @@ Y_mat = create_power_law_matrix(c=2.0)
 #
 # Here is a function that computes these relative trace errors for a given matrix:
 
-NUM_MATVECS_HUTCH = unique(linspace(1, 100, 50, dtype=int))
+NUM_MATVECS_HUTCH = linspace(1, 100, 50, dtype=int32).unique()
 # Hutch++ requires matrix-vector products divisible by 3
-NUM_MATVECS_HUTCHPP = unique(NUM_MATVECS_HUTCH + (3 - divmod(NUM_MATVECS_HUTCH, 3)[1]))
+NUM_MATVECS_HUTCHPP = (NUM_MATVECS_HUTCH + (3 - NUM_MATVECS_HUTCH % 3)).unique()
 # XTrace requires matrix-vector products divisible by 2
-NUM_MATVECS_XTRACE = unique(NUM_MATVECS_HUTCH + (2 - divmod(NUM_MATVECS_HUTCH, 2)[1]))
+NUM_MATVECS_XTRACE = (NUM_MATVECS_HUTCH + (2 - NUM_MATVECS_HUTCH % 2)).unique()
 
 
-def compute_relative_trace_errors(Y_mat: ndarray) -> Dict[str, Dict[str, ndarray]]:
+def compute_relative_trace_errors(Y_mat: Tensor) -> Dict[str, Dict[str, Tensor]]:
     """Compute the relative trace errors for Hutchinson's method, Hutch++, and XTrace.
 
     Args:
@@ -188,8 +188,8 @@ def compute_relative_trace_errors(Y_mat: ndarray) -> Dict[str, Dict[str, ndarray
     Returns:
         Dictionary with the relative trace errors.
     """
-    Y = aslinearoperator(Y_mat)
-    exact_trace = trace(Y_mat)
+    Y = TensorLinearOperator(Y_mat)
+    exact_trace = Y_mat.trace()
 
     # compute median and quartiles for Hutchinson's method
     estimators = {
@@ -206,16 +206,16 @@ def compute_relative_trace_errors(Y_mat: ndarray) -> Dict[str, Dict[str, ndarray
         quartile3 = []
 
         for n in num_matvecs_method:
-            estimates = [method(Y, n) for _ in range(NUM_REPEATS)]
-            errors = [abs(e - exact_trace) / abs(exact_trace) for e in estimates]
+            estimates = stack([method(Y, n) for _ in range(NUM_REPEATS)])
+            errors = (estimates - exact_trace).abs() / abs(exact_trace)
             med.append(median(errors))
-            quartile1.append(percentile(errors, 25))
-            quartile3.append(percentile(errors, 75))
+            quartile1.append(quantile(errors, 0.25))
+            quartile3.append(quantile(errors, 0.75))
 
         results[name] = {
-            "med": array(med),
-            "quartile1": array(quartile1),
-            "quartile3": array(quartile3),
+            "med": as_tensor(med),
+            "quartile1": as_tensor(quartile1),
+            "quartile3": as_tensor(quartile3),
             "num_matvecs": num_matvecs_method,
         }
 
@@ -254,7 +254,7 @@ for method, data in results.items():
 
 
 def plot_estimation_results(
-    results: Dict[str, Dict[str, ndarray]], ax: plt.Axes, target: str = "trace"
+    results: Dict[str, Dict[str, Tensor]], ax: plt.Axes, target: str = "trace"
 ) -> None:
     """Plot the trace estimation results on the given Axes.
 
@@ -325,8 +325,8 @@ with plt.rc_context(PLOT_CONFIG):
 # operator, and compute its diagonal for reference:
 
 Y_mat = create_power_law_matrix()
-Y = aslinearoperator(Y_mat)
-exact_diag = diag(Y_mat)
+Y = TensorLinearOperator(Y_mat)
+exact_diag = Y_mat.diag()
 
 # %%
 #
@@ -336,7 +336,7 @@ exact_diag = diag(Y_mat)
 # entries, divided by the maximum absolute entry of the exact diagonal.
 
 
-def relative_l_inf_error(est: ndarray, exact: ndarray) -> float:
+def relative_l_inf_error(est: Tensor, exact: Tensor) -> Tensor:
     """Compute the relative L-infinity error between two vectors.
 
     Args:
@@ -346,7 +346,7 @@ def relative_l_inf_error(est: ndarray, exact: ndarray) -> float:
     Returns:
         Relative L-infinity error.
     """
-    return max(abs(est - exact)) / max(abs(exact))
+    return (est - exact).abs().max() / exact.abs().max()
 
 
 # %%
@@ -364,12 +364,12 @@ num_matvecs = 5
 
 # Generate estimates, repeat process multiple times so we have error bars.
 estimates = [hutchinson_diag(Y, num_matvecs) for _ in range(NUM_REPEATS)]
-errors = [relative_l_inf_error(e, exact_diag) for e in estimates]
+errors = stack([relative_l_inf_error(e, exact_diag) for e in estimates])
 
 # Calculate the median and quartiles (error bars) of the estimates
 med = median(errors)
-quartile1 = percentile(errors, 25)
-quartile3 = percentile(errors, 75)
+quartile1 = quantile(errors, 0.25)
+quartile3 = quantile(errors, 0.75)
 
 # Print the exact trace and the statistical measures of the estimates
 print("Relative errors:")
@@ -387,12 +387,12 @@ print(f"\t- Third quartile (75%): {quartile3:.3f}")
 #
 # Here is a function that computes these relative diagonal errors for a given matrix:
 
-NUM_MATVECS_HUTCH = unique(linspace(1, 100, 50, dtype=int))
+NUM_MATVECS_HUTCH = linspace(1, 100, 50, dtype=int32).unique()
 # XTrace requires matrix-vector products divisible by 2
-NUM_MATVECS_XDIAG = unique(NUM_MATVECS_HUTCH + (2 - divmod(NUM_MATVECS_HUTCH, 2)[1]))
+NUM_MATVECS_XDIAG = (NUM_MATVECS_HUTCH + (2 - NUM_MATVECS_HUTCH % 2)).unique()
 
 
-def compute_relative_diagonal_errors(Y_mat: ndarray) -> Dict[str, Dict[str, ndarray]]:
+def compute_relative_diagonal_errors(Y_mat: Tensor) -> Dict[str, Dict[str, Tensor]]:
     """Compute the relative diagonal errors for Hutchinson's method and XDiag.
 
     Args:
@@ -401,8 +401,8 @@ def compute_relative_diagonal_errors(Y_mat: ndarray) -> Dict[str, Dict[str, ndar
     Returns:
         Dictionary with the relative diagonal errors.
     """
-    Y = aslinearoperator(Y_mat)
-    exact_diag = diag(Y_mat)
+    Y = TensorLinearOperator(Y_mat)
+    exact_diag = Y_mat.diag()
 
     # compute median and quartiles for Hutchinson's method
     estimators = {
@@ -419,15 +419,15 @@ def compute_relative_diagonal_errors(Y_mat: ndarray) -> Dict[str, Dict[str, ndar
 
         for n in num_matvecs_method:
             estimates = [method(Y, n) for _ in range(NUM_REPEATS)]
-            errors = [relative_l_inf_error(e, exact_diag) for e in estimates]
+            errors = stack([relative_l_inf_error(e, exact_diag) for e in estimates])
             med.append(median(errors))
-            quartile1.append(percentile(errors, 25))
-            quartile3.append(percentile(errors, 75))
+            quartile1.append(quantile(errors, 0.25))
+            quartile3.append(quantile(errors, 0.75))
 
         results[name] = {
-            "med": array(med),
-            "quartile1": array(quartile1),
-            "quartile3": array(quartile3),
+            "med": as_tensor(med),
+            "quartile1": as_tensor(quartile1),
+            "quartile3": as_tensor(quartile3),
             "num_matvecs": num_matvecs_method,
         }
 
