@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Type, U
 from einops import rearrange, reduce
 from einops.layers.torch import Rearrange
 from numpy import ndarray
-from pytest import raises
+from pytest import raises, warns
 from torch import (
     Tensor,
     allclose,
@@ -931,7 +931,8 @@ def _test_save_and_load_state_dict(
         [(X, y)],
         check_deterministic=False,  # turn off to avoid computing linop again
     )
-    linop_new.load_state_dict(load(PATH, weights_only=False))
+    with warns(UserWarning, match="will overwrite the parameters"):
+        linop_new.load_state_dict(load(PATH, weights_only=False))
     # clean up
     os.remove(PATH)
 

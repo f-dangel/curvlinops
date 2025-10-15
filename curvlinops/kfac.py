@@ -23,6 +23,7 @@ from enum import Enum, EnumMeta
 from functools import partial
 from math import sqrt
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, TypeVar, Union
+from warnings import warn
 
 from einops import einsum, rearrange, reduce
 from torch import Generator, Tensor, cat, eye, randn, stack
@@ -1105,6 +1106,10 @@ class KFACLinearOperator(CurvatureLinearOperator):
     def load_state_dict(self, state_dict: Dict[str, Any]):
         """Load the state of the KFAC linear operator.
 
+        Warning:
+            Loading a state dict will overwrite the parameters of the model underlying
+            the linear operator!
+
         Args:
             state_dict: State dictionary.
 
@@ -1112,6 +1117,9 @@ class KFACLinearOperator(CurvatureLinearOperator):
             ValueError: If the loss function does not match the state dict.
             ValueError: If the loss function reduction does not match the state dict.
         """
+        warn(
+            "Loading a state dict will overwrite the parameters of the model underlying the linear operator!"
+        )
         self._model_func.load_state_dict(state_dict["model_func_state_dict"])
         # Verify that the loss function and its reduction match the state dict
         loss_func_type = {
