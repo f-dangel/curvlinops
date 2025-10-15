@@ -1118,7 +1118,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
             ValueError: If the loss function reduction does not match the state dict.
         """
         warn(
-            "Loading a state dict will overwrite the parameters of the model underlying the linear operator!"
+            "Loading a state dict will overwrite the parameters of the model underlying the linear operator!",
+            stacklevel=2,
         )
         self._model_func.load_state_dict(state_dict["model_func_state_dict"])
         # Verify that the loss function and its reduction match the state dict
