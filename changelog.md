@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added/New
 
+- Add warning about overwriting model parameters when loading state dict in (E)KFAC ([PR](https://github.com/f-dangel/curvlinops/pull/196))
+
 - **Backward-incompatible:** Refactor class-based trace and diagonal estimators
   into functions ([PR](https://github.com/f-dangel/curvlinops/pull/168)) and assume
   PyTorch instead of SciPy linear operators ([PR](https://github.com/f-dangel/curvlinops/pull/188)):
