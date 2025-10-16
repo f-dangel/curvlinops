@@ -39,10 +39,10 @@ extensions = [
 # -- Intersphinx config -----------------------------------------------------
 
 intersphinx_mapping = {
-    "torch": ("https://pytorch.org/docs/stable/", None),
+    "torch": ("https://docs.pytorch.org/docs/stable/", None),
     "backpack": ("https://docs.backpack.pt/en/master", None),
-    "scipy": ("http://docs.scipy.org/doc/scipy/reference/", None),
-    "numpy": ("http://docs.scipy.org/doc/numpy/", None),
+    "scipy": ("https://docs.scipy.org/doc/scipy", None),
+    "numpy": ("https://numpy.org/doc/stable/", None),
     "matplotlib": ("https://matplotlib.org/stable/", None),
     "curvlinops": ("https://curvlinops.readthedocs.io/en/latest/", None),
 }
