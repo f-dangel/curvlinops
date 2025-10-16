@@ -57,7 +57,7 @@ If you find `curvlinops` useful for your work, consider citing our [position pap
                   Operators},
   author =       {Dangel, Felix and Eschenhagen, Runa and Ormaniec, Weronika and
                   Fernandez, Andres and Tatzel, Lukas and Kristiadi, Agustinus},
-  journal =      {arXiv},
+  journal =      {arXiv 2501.19183},
   year =         2025,
 }
 
