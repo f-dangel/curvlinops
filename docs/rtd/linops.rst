@@ -99,8 +99,7 @@ Frobenius norm approximation
 Experimental
 ============
 
-The API of experimental features may be subject to changes, or they might become
-deprecated.
+Experimental features may be subject to changes or become deprecated.
 
 .. autoclass:: curvlinops.experimental.ActivationHessianLinearOperator
    :members: __init__

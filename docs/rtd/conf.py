@@ -17,13 +17,9 @@
 
 # -- Project information -----------------------------------------------------
 
-project = "CurvLinOps"
+project = "Curvlinops"
 copyright = "2022, F. Dangel, L. Tatzel, R. Eschenhagen"
 author = "F. Dangel, L. Tatzel, R. Eschenhagen"
-
-# The full version, including alpha/beta/rc tags
-release = "1.2.0"
-
 
 # -- General configuration ---------------------------------------------------
 
@@ -40,13 +36,18 @@ extensions = [
     "sphinx.ext.viewcode",  # show source code links
 ]
 
+# -- Autodoc configuration --------------------------------------------------
+
+# Set maximum line length for signatures before wrapping to multiple lines
+maximum_signature_line_length = 200
+
 # -- Intersphinx config -----------------------------------------------------
 
 intersphinx_mapping = {
-    "torch": ("https://pytorch.org/docs/stable/", None),
+    "torch": ("https://docs.pytorch.org/docs/stable/", None),
     "backpack": ("https://docs.backpack.pt/en/master", None),
-    "scipy": ("http://docs.scipy.org/doc/scipy/reference/", None),
-    "numpy": ("http://docs.scipy.org/doc/numpy/", None),
+    "scipy": ("https://docs.scipy.org/doc/scipy", None),
+    "numpy": ("https://numpy.org/doc/stable/", None),
     "matplotlib": ("https://matplotlib.org/stable/", None),
     "curvlinops": ("https://curvlinops.readthedocs.io/en/latest/", None),
 }
@@ -65,7 +66,7 @@ sphinx_gallery_conf = {
     "default_thumb_file": "assets/logo.png",
     "filename_pattern": "example",
     "matplotlib_animations": True,
-    "ignore_pattern": "memory_benchmark.py",
+    "ignore_pattern": "memory_benchmark.py|benchmark_utils.py|nanogpt_model.py",
 }
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ["_templates"]
