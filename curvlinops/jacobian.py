@@ -186,7 +186,7 @@ class JacobianLinearOperator(CurvatureLinearOperator):
         """
         x = next(iter(self._data))[0]
         if isinstance(x, Tensor):
-            x = x.to(self._infer_device())
+            x = x.to(self.device)
 
         return [(self._N_data,) + self._model_func(x).shape[1:]]
 
@@ -300,7 +300,7 @@ class TransposedJacobianLinearOperator(CurvatureLinearOperator):
         """
         x = next(iter(self._data))[0]
         if isinstance(x, Tensor):
-            x = x.to(self._infer_device())
+            x = x.to(self.device)
 
         return [(self._N_data,) + self._model_func(x).shape[1:]]
 

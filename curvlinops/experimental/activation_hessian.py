@@ -142,7 +142,7 @@ class ActivationHessianLinearOperator(CurvatureLinearOperator):
         """
         if not hasattr(self, "_activation_shape"):
             X, _ = next(iter(self._data))
-            dev = self._infer_device()
+            dev = self.device
             if isinstance(X, Tensor):
                 X = X.to(dev)
             activation_storage = []

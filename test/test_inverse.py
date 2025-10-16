@@ -5,7 +5,7 @@ from math import sqrt
 from typing import Iterable, List, Tuple, Union
 
 from pytest import mark, raises
-from torch import Tensor, eye, float64, load, manual_seed, rand, save
+from torch import Tensor, float64, load, manual_seed, rand, save
 from torch.linalg import eigh, inv
 from torch.nn import (
     CrossEntropyLoss,
@@ -26,9 +26,9 @@ from curvlinops import (
     LSMRInverseLinearOperator,
     NeumannInverseLinearOperator,
 )
+from curvlinops.examples import IdentityLinearOperator
 from curvlinops.examples.functorch import functorch_ggn
-from curvlinops.examples.utils import report_nonclose
-from curvlinops.outer import IdentityLinearOperator
+from curvlinops.utils import allclose_report
 from test.test__torch_base import TensorLinearOperator
 from test.utils import (
     cast_input,
@@ -62,12 +62,12 @@ def test_CGInverseLinearOperator_damped_GGN(inv_case, delta_rel: float = 2e-2):
     GGN = GGNLinearOperator(
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn
     )
-    inv_GGN_naive = inv(GGN_naive + delta * eye(GGN.shape[1], dtype=dt))
+    inv_GGN_naive = inv(GGN_naive + delta * eye_like(GGN_naive))
 
-    # specify tolerance to get solution with accuracy
-    inv_GGN = CGInverseLinearOperator(GGN + damping, tolerance=1e-4)
+    # specify tolerance and turn off internal damping to get solution with accuracy
+    inv_GGN = CGInverseLinearOperator(GGN + damping, eps=0, tolerance=1e-5)
     compare_consecutive_matmats(inv_GGN, adjoint=False, is_vec=False)
-    compare_matmat(inv_GGN, inv_GGN_naive, adjoint=False, is_vec=False, rtol=1e-2)
+    compare_matmat(inv_GGN, inv_GGN_naive, adjoint=False, is_vec=False, rtol=1.5e-2)
 
 
 def test_LSMRInverseLinearOperator_damped_GGN(inv_case, delta: float = 2e-2):
@@ -86,12 +86,12 @@ def test_LSMRInverseLinearOperator_damped_GGN(inv_case, delta: float = 2e-2):
     )
     inv_GGN_naive = inv(
         functorch_ggn(model_func, loss_func, params, data, input_key="x").detach()
-        + delta * eye(GGN.shape[1], device=dev, dtype=dt)
+        + delta * eye_like(GGN)
     )
 
     compare_consecutive_matmats(inv_GGN, adjoint=False, is_vec=False)
     compare_matmat(
-        inv_GGN, inv_GGN_naive, adjoint=False, is_vec=False, rtol=1e-2, atol=1e-5
+        inv_GGN, inv_GGN_naive, adjoint=False, is_vec=False, rtol=5e-3, atol=1e-5
     )
 
 
@@ -107,7 +107,7 @@ def test_NeumannInverseLinearOperator_damped_GGN(inv_case, delta: float = 2e-2):
 
     damped_GGN_naive = functorch_ggn(
         model_func, loss_func, params, data, input_key="x"
-    ).detach() + delta * eye(GGN.shape[1], dtype=dt, device=dev)
+    ).detach() + delta * eye_like(GGN)
     inv_GGN_naive = inv(damped_GGN_naive)
 
     # set scale such that Neumann series converges
@@ -137,7 +137,7 @@ def test_NeumannInverseLinearOperator_toy():
             [3.0 / 10.0, 3.0 / 5.0, 0.0],
         ]
     ).double()
-    A += eye(A.shape[1]).double()
+    A += eye_like(A)
     # eigenvalues of A: [1.82122892 0.47963837 0.69913271]
 
     inv_A = inv(A)
@@ -212,7 +212,6 @@ def test_KFAC_inverse_damped_matmat(
     model_func = model_func.to(dtype=dtype)
     loss_func = loss_func.to(dtype=dtype)
     params = [p.to(dtype=dtype) for p in params]
-    (device,) = {p.device for p in params}
     data = [
         (
             (cast_input(x, dtype), y)
@@ -239,7 +238,7 @@ def test_KFAC_inverse_damped_matmat(
         aaT.add_(eye_like(aaT), alpha=delta)
     for ggT in KFAC._gradient_covariances.values():
         ggT.add_(eye_like(ggT), alpha=delta)
-    inv_KFAC_naive = inv(KFAC @ eye(KFAC.shape[0], device=device, dtype=dtype))
+    inv_KFAC_naive = inv(KFAC @ eye_like(KFAC))
 
     # remove damping and pass it on as an argument instead
     for aaT in KFAC._input_covariances.values():
@@ -350,7 +349,7 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901, PLR0912, PLR09
             ggT.add_(eye_like(ggT), alpha=damping_ggT)
 
     # manual heuristically damped inverse
-    inv_KFAC_naive = inv(KFAC @ eye(KFAC.shape[0], device=device, dtype=dtype))
+    inv_KFAC_naive = inv(KFAC @ eye_like(KFAC))
 
     # remove heuristic damping
     for mod_name in KFAC._mapping.keys():
@@ -459,7 +458,7 @@ def test_KFAC_inverse_exactly_damped_matmat(
     )
 
     # manual exactly damped inverse
-    KFAC_mat = KFAC @ eye(KFAC.shape[0], dtype=dtype, device=device)
+    KFAC_mat = KFAC @ eye_like(KFAC)
     inv_KFAC_naive = inv(KFAC_mat + delta * eye_like(KFAC_mat))
 
     # check that passing a tuple for exact damping will fail
@@ -553,7 +552,7 @@ def test_KFAC_inverse_save_and_load_state_dict(
         kfac, damping=1e-2, retry_double_precision=False, cache=cache, **kwargs
     )
     # trigger inverse computation and maybe caching
-    inv_kfac_as_mat = inv_kfac @ eye(kfac.shape[1])
+    inv_kfac_as_mat = inv_kfac @ eye_like(kfac)
 
     # save state dict
     state_dict = inv_kfac.state_dict()
@@ -574,7 +573,7 @@ def test_KFAC_inverse_save_and_load_state_dict(
 
     # check that the two inverse KFACs are equal
     compare_state_dicts(inv_kfac.state_dict(), inv_kfac_new.state_dict())
-    report_nonclose(inv_kfac_as_mat, inv_kfac_new @ eye(kfac.shape[1]))
+    assert allclose_report(inv_kfac_as_mat, inv_kfac_new @ eye_like(kfac))
 
 
 @mark.parametrize("use_exact_damping", [True, False], ids=["exact_damping", ""])
@@ -640,7 +639,7 @@ def test_KFAC_inverse_from_state_dict(
     # check that the two inverse KFACs are equal
     compare_state_dicts(inv_kfac.state_dict(), inv_kfac_new.state_dict())
     test_vec = rand(kfac.shape[1])
-    report_nonclose(inv_kfac @ test_vec, inv_kfac_new @ test_vec)
+    assert allclose_report(inv_kfac @ test_vec, inv_kfac_new @ test_vec)
 
 
 """KFACInverseLinearOperator with EKFACLinearOperator tests."""
@@ -701,10 +700,7 @@ def test_EKFAC_inverse_exactly_damped_matmat(
     )
 
     # manual exactly damped inverse
-    inv_EKFAC_naive = inv(
-        EKFAC @ eye(EKFAC.shape[0], dtype=dtype, device=EKFAC._device)
-        + delta * eye(EKFAC.shape[0], dtype=dtype, device=EKFAC._device)
-    )
+    inv_EKFAC_naive = inv(EKFAC @ eye_like(EKFAC) + delta * eye_like(EKFAC))
 
     # check that passing a tuple for exact damping will fail
     with raises(ValueError):
@@ -748,7 +744,7 @@ def test_EKFAC_inverse_save_and_load_state_dict():
     inv_ekfac = KFACInverseLinearOperator(
         ekfac, damping=1e-2, use_exact_damping=True, retry_double_precision=False
     )
-    _ = inv_ekfac @ eye(ekfac.shape[1])  # to trigger inverse computation
+    _ = inv_ekfac @ eye_like(ekfac)  # to trigger inverse computation
 
     # save state dict
     state_dict = inv_ekfac.state_dict()
@@ -772,7 +768,7 @@ def test_EKFAC_inverse_save_and_load_state_dict():
     # check that the two inverse KFACs are equal
     compare_state_dicts(inv_ekfac.state_dict(), inv_ekfac_new.state_dict())
     test_vec = rand(inv_ekfac.shape[1])
-    report_nonclose(inv_ekfac @ test_vec, inv_ekfac_new @ test_vec)
+    assert allclose_report(inv_ekfac @ test_vec, inv_ekfac_new @ test_vec)
 
 
 def test_EKFAC_inverse_from_state_dict():
@@ -804,4 +800,4 @@ def test_EKFAC_inverse_from_state_dict():
     # check that the two inverse KFACs are equal
     compare_state_dicts(inv_ekfac.state_dict(), inv_ekfac_new.state_dict())
     test_vec = rand(ekfac.shape[1])
-    report_nonclose(inv_ekfac @ test_vec, inv_ekfac_new @ test_vec)
+    assert allclose_report(inv_ekfac @ test_vec, inv_ekfac_new @ test_vec)

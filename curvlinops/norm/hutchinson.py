@@ -1,14 +1,18 @@
 """Hutchinson-style matrix norm estimation."""
 
-from numpy import column_stack
-from scipy.sparse.linalg import LinearOperator
+from typing import Union
 
+from torch import Tensor, column_stack
+
+from curvlinops._torch_base import PyTorchLinearOperator
 from curvlinops.sampling import random_vector
 
 
 def hutchinson_squared_fro(
-    A: LinearOperator, num_matvecs: int, distribution: str = "rademacher"
-) -> float:
+    A: Union[Tensor, PyTorchLinearOperator],
+    num_matvecs: int,
+    distribution: str = "rademacher",
+) -> Tensor:
     r"""Estimate the squared Frobenius norm of a matrix using Hutchinson's method.
 
     Let :math:`\mathbf{A} \in \mathbb{R}^{M \times N}` be some matrix. It's Frobenius
@@ -41,17 +45,17 @@ def hutchinson_squared_fro(
             atthe same cost).
 
     Example:
-        >>> from numpy.linalg import norm
-        >>> from numpy.random import rand, seed
-        >>> seed(0) # make deterministic
+        >>> from torch.linalg import matrix_norm
+        >>> from torch import rand, manual_seed
+        >>> _ = manual_seed(0) # make deterministic
         >>> A = rand(40, 40)
-        >>> fro2_A = norm(A, ord='fro')**2 # exact squared Frobenius norm as reference
+        >>> fro2_A = matrix_norm(A).item()**2 # reference: exact squared Frobenius norm
         >>> # one- and multi-sample approximations
-        >>> fro2_A_low_prec = hutchinson_squared_fro(A, num_matvecs=1)
-        >>> fro2_A_high_prec = hutchinson_squared_fro(A, num_matvecs=30)
+        >>> fro2_A_low_prec = hutchinson_squared_fro(A, num_matvecs=1).item()
+        >>> fro2_A_high_prec = hutchinson_squared_fro(A, num_matvecs=30).item()
         >>> assert abs(fro2_A - fro2_A_low_prec) > abs(fro2_A - fro2_A_high_prec)
         >>> round(fro2_A, 1), round(fro2_A_low_prec, 1), round(fro2_A_high_prec, 1)
-        (546.0, 319.7, 645.2)
+        (530.9, 156.7, 628.9)
     """
     if len(A.shape) != 2:
         raise ValueError(f"A must be a matrix. Got shape {A.shape}.")
@@ -64,6 +68,11 @@ def hutchinson_squared_fro(
     if A.shape[1] > A.shape[0]:
         A = A.T
 
-    G = column_stack([random_vector(dim, distribution) for _ in range(num_matvecs)])
+    G = column_stack(
+        [
+            random_vector(dim, distribution, A.device, A.dtype)
+            for _ in range(num_matvecs)
+        ]
+    )
     AG = A @ G
     return (AG**2 / num_matvecs).sum()

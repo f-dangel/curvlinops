@@ -1,10 +1,12 @@
 """Contains tests of ``curvlinops/papyan2020traces/spectrum``."""
 
+from math import isclose
 from pathlib import Path
 from subprocess import CalledProcessError, check_output
 
-from numpy import allclose, array, diag
+from torch import tensor
 
+from curvlinops.examples import TensorLinearOperator
 from curvlinops.papyan2020traces.spectrum import (
     approximate_boundaries,
     approximate_boundaries_abs,
@@ -33,9 +35,10 @@ def test_example_verification_spectral_density():
 
 def test_approximate_boundaries():
     """Test spectrum boundary approximation with partially supplied boundaries."""
-    A_diag = array([1.0, 2.0, 3.0, 4.0, 5.0])
-    A = diag(A_diag)
-    lambda_min, lambda_max = A_diag.min(), A_diag.max()
+    A_diag = tensor([1.0, 2.0, 3.0, 4.0, 5.0]).double()
+    A_matrix = A_diag.diag()
+    A = TensorLinearOperator(A_matrix)
+    lambda_min, lambda_max = A_diag.min().item(), A_diag.max().item()
 
     cases = [
         [(0.0, 10.0), (0.0, 10.0)],
@@ -50,14 +53,18 @@ def test_approximate_boundaries():
         assert len(output) == 2
         assert isinstance(output[0], float)
         assert isinstance(output[1], float)
-        assert allclose(output, results)
+        assert isclose(output[0], results[0]) and isclose(output[1], results[1])
 
 
 def test_approximate_boundaries_abs():
     """Test abs spectrum boundary approximation with partially supplied boundaries."""
-    A_diag = array([-2.0, -1.0, 3.0, 4.0, 5.0])
-    A = diag(A_diag)
-    lambda_abs_min, lambda_abs_max = abs(A_diag).min(), abs(A_diag).max()
+    A_diag = tensor([-2.0, -1.0, 3.0, 4.0, 5.0]).double()
+    A_matrix = A_diag.diag()
+    A = TensorLinearOperator(A_matrix)
+    lambda_abs_min, lambda_abs_max = (
+        A_diag.abs().min().item(),
+        A_diag.abs().max().item(),
+    )
 
     cases = [
         [(0.0, 10.0), (0.0, 10.0)],
@@ -72,4 +79,4 @@ def test_approximate_boundaries_abs():
         assert len(output) == 2
         assert isinstance(output[0], float)
         assert isinstance(output[1], float)
-        assert allclose(output, results)
+        assert isclose(output[0], results[0]) and isclose(output[1], results[1])

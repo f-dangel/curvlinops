@@ -1,4 +1,4 @@
-How to use CurvLinOps
+How to use Curvlinops
 =====================
 
 To get started, check out the :ref:`basic example<Matrix-vector products>`.

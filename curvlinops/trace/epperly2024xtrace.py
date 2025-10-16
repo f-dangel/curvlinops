@@ -1,9 +1,11 @@
 """Implements the XTrace algorithm from Epperly 2024."""
 
-from numpy import column_stack, dot, einsum, mean, ndarray
-from numpy.linalg import inv, qr
-from scipy.sparse.linalg import LinearOperator
+from typing import Union
 
+from torch import Tensor, column_stack, dot, einsum, mean
+from torch.linalg import inv, qr
+
+from curvlinops._torch_base import PyTorchLinearOperator
 from curvlinops.sampling import random_vector
 from curvlinops.utils import (
     assert_divisible_by,
@@ -13,8 +15,10 @@ from curvlinops.utils import (
 
 
 def xtrace(
-    A: LinearOperator, num_matvecs: int, distribution: str = "rademacher"
-) -> float:
+    A: Union[PyTorchLinearOperator, Tensor],
+    num_matvecs: int,
+    distribution: str = "rademacher",
+) -> Tensor:
     """Estimate a linear operator's trace using the XTrace algorithm.
 
     The method is presented in `this paper <https://arxiv.org/pdf/2301.07825>`_:
@@ -42,7 +46,9 @@ def xtrace(
 
     # draw random vectors and compute their matrix-vector products
     num_vecs = num_matvecs // 2
-    W = column_stack([random_vector(dim, distribution) for _ in range(num_vecs)])
+    W = column_stack(
+        [random_vector(dim, distribution, A.device, A.dtype) for _ in range(num_vecs)]
+    )
     A_W = A @ W
 
     # compute the orthogonal basis for all test vectors, and its associated trace
@@ -55,14 +61,14 @@ def xtrace(
     RT_inv = inv(R.T)
     D = 1 / (RT_inv**2).sum(0) ** 0.5
     S = einsum("ij,j->ij", RT_inv, D)
-    tr_QT_i_A_Q_i = einsum("ij,ki,kl,lj->j", S, Q, A_Q, S, optimize="optimal")
+    tr_QT_i_A_Q_i = einsum("ij,ki,kl,lj->j", S, Q, A_Q, S)
 
     # Traces in the bases {Q_i}. This follows by writing Tr(QT_i A Q_i) = Tr(A Q_i QT_i)
     # then using the relation that Q_i QT_i = Q (I - s_i sT_i) QT. Further
     # simplification then leads to
     traces = tr_QT_A_Q - tr_QT_i_A_Q_i
 
-    def deflate(v: ndarray, s: ndarray) -> ndarray:
+    def deflate(v: Tensor, s: Tensor) -> Tensor:
         """Apply (I - s sT) to a vector.
 
         Args:
