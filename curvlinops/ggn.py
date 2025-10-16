@@ -1,12 +1,117 @@
 """Contains LinearOperator implementation of the GGN."""
 
 from collections.abc import MutableMapping
-from typing import List, Union
+from functools import cached_property
+from typing import Callable, List, Tuple, Union
 
-from backpack.hessianfree.ggnvp import ggn_vector_product_from_plist
-from torch import Tensor, zeros_like
+from torch import Tensor, no_grad, vmap
+from torch.func import jacrev, jvp, vjp
+from torch.nn import Module, Parameter
 
 from curvlinops._torch_base import CurvatureLinearOperator
+from curvlinops.utils import make_functional_model_and_loss
+
+
+def make_ggn_vector_product(
+    f: Callable[..., Tensor], c: Callable[[Tensor, Tensor], Tensor]
+) -> Callable[
+    [Tuple[Tensor, ...], Tensor, Tensor, Tuple[Tensor, ...]], Tuple[Tensor, ...]
+]:
+    """Create a function that computes GGN-vector products for given f and c functions.
+
+    Args:
+        f: Function that takes parameters and input, returns prediction.
+            Signature: (*params, X) -> prediction
+        c: Function that takes prediction and target, returns loss.
+            Signature: (prediction, y) -> loss
+
+    Returns:
+        A function that computes GGN-vector products.
+        Signature: (params, X, y, *v) -> GGN @ v
+    """
+
+    @no_grad()
+    def ggn_vector_product(
+        params: Tuple[Tensor, ...], X: Tensor, y: Tensor, *v: Tuple[Tensor, ...]
+    ) -> Tuple[Tensor, ...]:
+        """Multiply the GGN on a vector in list format.
+
+        Args:
+            params: Parameters of the model.
+            X: Input to the DNN.
+            y: Ground truth.
+            *v: Vector to be multiplied with in tensor list format.
+
+        Returns:
+            Result of GGN multiplication in list format. Has the same shape as
+            ``v``, i.e. each tensor in the list has the shape of a parameter.
+        """
+        # Apply the Jacobian of f onto v: v → Jv
+        f_val, f_jvp = jvp(lambda *params_inner: f(*params_inner, X), params, v)
+
+        # Apply the criterion's Hessian onto Jv: Jv → HJv
+        c_grad_func = jacrev(lambda pred: c(pred, y))
+        _, c_hvp = jvp(c_grad_func, (f_val,), (f_jvp,))
+
+        # Apply the transposed Jacobian of f onto HJv: HJv → JᵀHJv
+        # NOTE This re-evaluates the net's forward pass. [Unverified] It should be op-
+        # timized away by common sub-expression elimination if you compile the function.
+        _, f_vjp_func = vjp(lambda *params_inner: f(*params_inner, X), *params)
+        return f_vjp_func(c_hvp)
+
+    return ggn_vector_product
+
+
+def make_batch_ggn_matrix_product(
+    model_func: Module, loss_func: Module, params: Tuple[Parameter, ...]
+) -> Callable[
+    [Union[Tensor, MutableMapping], Tensor, Tuple[Tensor, ...]], Tuple[Tensor, ...]
+]:
+    r"""Set up function that multiplies the mini-batch GGN onto a matrix in list format.
+
+    Args:
+        model_func: The neural network :math:`f_{\mathbf{\theta}}`.
+        loss_func: The loss function :math:`\ell`.
+        params: A tuple of parameters w.r.t. which the GGN is computed.
+            All parameters must be part of ``model_func.parameters()``.
+
+    Returns:
+        A function that takes inputs ``X``, ``y``, and a matrix ``M`` in list
+        format, and returns the mini-batch GGN applied to ``M`` in list format.
+    """
+    # Create functional versions of the model (f: *params, X -> prediction) and
+    # criterion function (c: prediction, y -> loss)
+    f, c = make_functional_model_and_loss(model_func, loss_func, params)
+
+    # Create the functional GGN-vector product
+    ggn_vp = make_ggn_vector_product(f, c)
+
+    def ggn_vector_product(
+        X: Union[Tensor, MutableMapping], y: Tensor, *v: Tuple[Tensor, ...]
+    ) -> Tuple[Tensor, ...]:
+        """Multiply the mini-batch GGN on a vector in list format.
+
+        Args:
+            X: Input to the DNN.
+            y: Ground truth.
+            *v: Vector to be multiplied with in tensor list format.
+
+        Returns:
+            Result of GGN multiplication in list format. Has the same shape as
+            ``v``, i.e. each tensor in the list has the shape of a parameter.
+        """
+        return ggn_vp(params, X, y, *v)
+
+    # Vectorize over vectors to multiply onto a matrix in list format
+    return vmap(
+        ggn_vector_product,
+        # No vmap in X, y, last-axis vmap over vector in list format
+        in_dims=(None, None) + tuple(p.ndim for p in params),
+        # Vmapped output axis is last
+        out_dims=tuple(p.ndim for p in params),
+        # We want each vector to be multiplied with the same mini-batch GGN
+        randomness="same",
+    )
 
 
 class GGNLinearOperator(CurvatureLinearOperator):
@@ -44,6 +149,13 @@ class GGNLinearOperator(CurvatureLinearOperator):
 
     SELF_ADJOINT: bool = True
 
+    @cached_property
+    def _ggnmp(self):
+        """Lazy initialization of GGN matrix product function."""
+        return make_batch_ggn_matrix_product(
+            self._model_func, self._loss_func, tuple(self._params)
+        )
+
     def _matmat_batch(
         self, X: Union[Tensor, MutableMapping], y: Tensor, M: List[Tensor]
     ) -> List[Tensor]:
@@ -61,18 +173,4 @@ class GGNLinearOperator(CurvatureLinearOperator):
             ``M``, i.e. each tensor in the list has the shape of a parameter and a
             trailing dimension of matrix columns.
         """
-        output = self._model_func(X)
-        loss = self._loss_func(output, y)
-
-        # collect matrix-matrix products per parameter
-        (num_vecs,) = {m.shape[-1] for m in M}
-        GM = [zeros_like(m) for m in M]
-
-        for n in range(num_vecs):
-            col_n = ggn_vector_product_from_plist(
-                loss, output, self._params, [m[..., n] for m in M]
-            )
-            for GM_p, col_n_p in zip(GM, col_n):
-                GM_p[..., n].add_(col_n_p)
-
-        return GM
+        return list(self._ggnmp(X, y, *M))
