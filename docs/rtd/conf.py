@@ -36,6 +36,11 @@ extensions = [
     "sphinx.ext.viewcode",  # show source code links
 ]
 
+# -- Autodoc configuration --------------------------------------------------
+
+# Set maximum line length for signatures before wrapping to multiple lines
+maximum_signature_line_length = 200
+
 # -- Intersphinx config -----------------------------------------------------
 
 intersphinx_mapping = {
