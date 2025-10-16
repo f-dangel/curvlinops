@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added/New
 
+### Fixed/Removed
+
+### Internal
+
+## [3.0.0] - 2025-10-16
+
+This new major release realizes all features described in our [position paper](https://arxiv.org/abs/2501.19183).
+Most importantly, **all linear operators are purely PyTorch by default now**.
+If you prefer working with SciPy linear operators (as was the default in `2.x`), you can simply call `.to_scipy()` on a linear operator.
+
+### Added/New
+
 - Add warning about overwriting model parameters when loading state dict in (E)KFAC ([PR](https://github.com/f-dangel/curvlinops/pull/196))
 
 - **Backward-incompatible:** Refactor class-based trace and diagonal estimators
@@ -420,7 +432,8 @@ Adds various new features:
 
 Initial release
 
-[Unreleased]: https://github.com/f-dangel/curvlinops/compare/2.0.1...HEAD
+[Unreleased]: https://github.com/f-dangel/curvlinops/compare/3.0.0...HEAD
+[3.0.0]: https://github.com/f-dangel/curvlinops/releases/tag/3.0.0
 [2.0.1]: https://github.com/f-dangel/curvlinops/releases/tag/2.0.1
 [2.0.0]: https://github.com/f-dangel/curvlinops/releases/tag/2.0.0
 [1.2.0]: https://github.com/f-dangel/curvlinops/releases/tag/1.2.0
