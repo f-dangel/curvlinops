@@ -61,7 +61,7 @@ sphinx_gallery_conf = {
     "default_thumb_file": "assets/logo.png",
     "filename_pattern": "example",
     "matplotlib_animations": True,
-    "ignore_pattern": "memory_benchmark.py|benchmark_utils.py",
+    "ignore_pattern": "memory_benchmark.py|benchmark_utils.py|nanogpt_model.py",
 }
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ["_templates"]
