@@ -76,7 +76,7 @@ makedirs(RESULTDIR, exist_ok=True)
 # Linear operators that use JVPs need to handle attention differently because PyTorch's
 # efficient attention does not implement double-backward yet. See
 # https://github.com/pytorch/pytorch/issues/116350
-HAS_DOUBLE_BACKWARD = (
+HAS_JVP = (
     HessianLinearOperator,
     GGNLinearOperator,
     FisherMCLinearOperator,
@@ -282,9 +282,7 @@ def setup_linop(
 
     # Double-backward through efficient attention is unsupported, disable fused kernels
     # (https://github.com/pytorch/pytorch/issues/116350#issuecomment-1954667011)
-    attention_double_backward = linop_cls in HAS_DOUBLE_BACKWARD and isinstance(
-        model, GPTWrapper
-    )
+    attention_double_backward = linop_cls in HAS_JVP and isinstance(model, GPTWrapper)
     with sdpa_kernel(SDPBackend.MATH) if attention_double_backward else nullcontext():
         linop = linop_cls(*args, **kwargs)
 
@@ -397,9 +395,9 @@ def run_time_benchmark(  # noqa: C901
     def f_matvec():
         # Double-backward through efficient attention is unsupported, disable fused kernels
         # (https://github.com/pytorch/pytorch/issues/116350#issuecomment-1954667011)
-        attention_double_backward = isinstance(
-            linop, HAS_DOUBLE_BACKWARD
-        ) and isinstance(model, GPTWrapper)
+        attention_double_backward = isinstance(linop, HAS_JVP) and isinstance(
+            model, GPTWrapper
+        )
         with (
             sdpa_kernel(SDPBackend.MATH) if attention_double_backward else nullcontext()
         ):
