@@ -76,7 +76,12 @@ makedirs(RESULTDIR, exist_ok=True)
 # Linear operators that use JVPs need to handle attention differently because PyTorch's
 # efficient attention does not implement double-backward yet. See
 # https://github.com/pytorch/pytorch/issues/116350
-HAS_DOUBLE_BACKWARD = (HessianLinearOperator, FisherMCLinearOperator, EFLinearOperator)
+HAS_DOUBLE_BACKWARD = (
+    HessianLinearOperator,
+    GGNLinearOperator,
+    FisherMCLinearOperator,
+    EFLinearOperator,
+)
 
 # When running on RTD, we only want to execute the small example and also
 # take into account that there is no LaTeX installation
