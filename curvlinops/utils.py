@@ -1,11 +1,11 @@
 """General utility functions."""
 
-from typing import List, Tuple, Union, Callable
+from typing import Callable, List, Tuple, Union
 
 from numpy import cumsum, ndarray
 from torch import Tensor, as_tensor
-from torch.nn import Module, Parameter
 from torch.func import functional_call
+from torch.nn import Module, Parameter
 
 
 def split_list(x: Union[List, Tuple], sizes: List[int]) -> List[List]:
@@ -123,6 +123,7 @@ def assert_divisible_by(num: int, divisor: int, name: str):
     if num % divisor != 0:
         raise ValueError(f"{name} ({num}) must be divisible by {divisor}.")
 
+
 def make_functional_call(
     module: Module, free_param_names: List[str]
 ) -> Callable[..., Tensor]:
@@ -144,12 +145,13 @@ def make_functional_call(
     frozen_buffers = dict(module.named_buffers())
     num_free_params = len(free_param_names)
 
-    def functional_module(*args) -> Tensor:
+    def functional_module(*args: Tuple[Parameter]) -> Tensor:
         """Call the module functionally with free parameters and module inputs.
 
         Args:
             *args: First len(free_param_names) arguments are free parameters,
-                   remaining arguments are inputs to the module.
+                remaining arguments are inputs to the module.
+
         Returns:
             Module output.
         """

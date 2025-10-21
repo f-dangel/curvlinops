@@ -150,8 +150,19 @@ class GGNLinearOperator(CurvatureLinearOperator):
     SELF_ADJOINT: bool = True
 
     @cached_property
-    def _ggnmp(self):
-        """Lazy initialization of GGN matrix product function."""
+    def _mp(
+        self,
+    ) -> Callable[
+        [Union[Tensor, MutableMapping], Tensor, Tuple[Tensor, ...]], Tuple[Tensor, ...]
+    ]:
+        """Lazy initialization of batch-GGN matrix product function.
+
+        Returns:
+            Function that computes mini-batch GGN-vector products, given inputs ``X``,
+            labels ``y``, and the entries ``v1, v2, ...`` of the vector in list format.
+            Produces a list of tensors with the same shape as the input vector that re-
+            presents the result of the batch-GGN multiplication.
+        """
         return make_batch_ggn_matrix_product(
             self._model_func, self._loss_func, tuple(self._params)
         )
@@ -173,4 +184,4 @@ class GGNLinearOperator(CurvatureLinearOperator):
             ``M``, i.e. each tensor in the list has the shape of a parameter and a
             trailing dimension of matrix columns.
         """
-        return list(self._ggnmp(X, y, *M))
+        return list(self._mp(X, y, *M))
