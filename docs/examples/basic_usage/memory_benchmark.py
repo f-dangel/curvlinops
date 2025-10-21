@@ -5,7 +5,7 @@ from os import path
 
 from benchmark_utils import GPTWrapper
 from example_benchmark import (
-    HAS_JVP,
+    HAS_DOUBLE_BACKWARD,
     LINOP_STRS,
     OP_STRS,
     PROBLEM_STRS,
@@ -102,9 +102,9 @@ def run_peakmem_benchmark(  # noqa: C901, PLR0915
 
         # Double-backward through efficient attention is unsupported, disable fused kernels
         # (https://github.com/pytorch/pytorch/issues/116350#issuecomment-1954667011)
-        attention_double_backward = isinstance(linop, HAS_JVP) and isinstance(
-            model, GPTWrapper
-        )
+        attention_double_backward = isinstance(
+            linop, HAS_DOUBLE_BACKWARD
+        ) and isinstance(model, GPTWrapper)
         with (
             sdpa_kernel(SDPBackend.MATH) if attention_double_backward else nullcontext()
         ):
