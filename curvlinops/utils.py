@@ -126,7 +126,7 @@ def assert_divisible_by(num: int, divisor: int, name: str):
 
 def make_functional_call(
     module: Module, free_param_names: List[str]
-) -> Callable[..., Tensor]:
+) -> Callable[[Tuple[Parameter, ...]], Tensor]:
     """Create a function that calls a module with given free parameters.
 
     Args:
@@ -145,7 +145,7 @@ def make_functional_call(
     frozen_buffers = dict(module.named_buffers())
     num_free_params = len(free_param_names)
 
-    def functional_module(*args: Tuple[Parameter]) -> Tensor:
+    def functional_module(*args: Tuple[Parameter, ...]) -> Tensor:
         """Call the module functionally with free parameters and module inputs.
 
         Args:
@@ -169,7 +169,7 @@ def make_functional_call(
 
 def make_functional_model_and_loss(
     model_func: Module, loss_func: Module, params: Tuple[Parameter, ...]
-) -> Tuple[Callable[..., Tensor], Callable[[Tensor, Tensor], Tensor]]:
+) -> Tuple[Callable[[Tuple[Tensor, ...]], Tensor], Callable[[Tensor, Tensor], Tensor]]:
     """Create functional versions of model and loss functions.
 
     Args:
