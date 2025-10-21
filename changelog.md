@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Use A6000 GPU instead of A40 to benchmark linear operators
   ([PR](https://github.com/f-dangel/curvlinops/pull/199))
 
+- Use `torch.func` instead of BackPACK (`torch.autograd`) for GGN-vector products
+  ([PR](https://github.com/f-dangel/curvlinops/pull/200))
+
 ## [3.0.0] - 2025-10-16
 
 This new major release realizes all features described in our [position paper](https://arxiv.org/abs/2501.19183).
