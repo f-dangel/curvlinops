@@ -84,13 +84,13 @@ def make_batch_ggn_matrix_product(
     f, c = make_functional_model_and_loss(model_func, loss_func, params)
 
     # Create the functional GGN-vector product
-    ggn_vp = make_ggn_vector_product(f, c) # params, X, y, *v -> *Gv
+    ggn_vp = make_ggn_vector_product(f, c)  # params, X, y, *v -> *Gv
 
     # Fix the parameters
-    ggnvp = partial(ggn_vp, params) # X, y, *v -> *Gv
+    ggnvp = partial(ggn_vp, params)  # X, y, *v -> *Gv
 
     # Parallelize over vectors to multiply onto a matrix in list format
-    list_format_vmap_dims = tuple(p.ndim for p in params) # last axis
+    list_format_vmap_dims = tuple(p.ndim for p in params)  # last axis
     return vmap(
         ggnvp,
         # No vmap in X, y, last-axis vmap over vector in list format
