@@ -1,7 +1,7 @@
 """Contains LinearOperator implementation of the GGN."""
 
 from collections.abc import MutableMapping
-from functools import cached_property
+from functools import cached_property, partial
 from typing import Callable, List, Tuple, Union
 
 from torch import Tensor, no_grad, vmap
@@ -84,31 +84,19 @@ def make_batch_ggn_matrix_product(
     f, c = make_functional_model_and_loss(model_func, loss_func, params)
 
     # Create the functional GGN-vector product
-    ggn_vp = make_ggn_vector_product(f, c)
+    ggn_vp = make_ggn_vector_product(f, c)  # params, X, y, *v -> *Gv
 
-    def ggn_vector_product(
-        X: Union[Tensor, MutableMapping], y: Tensor, *v: Tuple[Tensor, ...]
-    ) -> Tuple[Tensor, ...]:
-        """Multiply the mini-batch GGN on a vector in list format.
+    # Fix the parameters
+    ggnvp = partial(ggn_vp, params)  # X, y, *v -> *Gv
 
-        Args:
-            X: Input to the DNN.
-            y: Ground truth.
-            *v: Vector to be multiplied with in tensor list format.
-
-        Returns:
-            Result of GGN multiplication in list format. Has the same shape as
-            ``v``, i.e. each tensor in the list has the shape of a parameter.
-        """
-        return ggn_vp(params, X, y, *v)
-
-    # Vectorize over vectors to multiply onto a matrix in list format
+    # Parallelize over vectors to multiply onto a matrix in list format
+    list_format_vmap_dims = tuple(p.ndim for p in params)  # last axis
     return vmap(
-        ggn_vector_product,
+        ggnvp,
         # No vmap in X, y, last-axis vmap over vector in list format
-        in_dims=(None, None) + tuple(p.ndim for p in params),
+        in_dims=(None, None, *list_format_vmap_dims),
         # Vmapped output axis is last
-        out_dims=tuple(p.ndim for p in params),
+        out_dims=list_format_vmap_dims,
         # We want each vector to be multiplied with the same mini-batch GGN
         randomness="same",
     )
