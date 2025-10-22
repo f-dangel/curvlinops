@@ -94,13 +94,14 @@ def make_batch_hessian_matrix_product(
 
         return tuple(hvps)
 
-    # Vectorize over vectors to multiply onto a matrix in list format
+    # Parallelize over vectors to multiply onto a matrix in list format
+    list_format_vmap_dims = tuple(p.ndim for p in params)  # last axis
     return vmap(
         hessian_vector_product,
-        # No vmap in X, y, assume last axis is vmapped in the matrix list
-        in_dims=(None, None) + tuple(p.ndim for p in params),
+        # No vmap in X, y, last-axis vmap over vector in list format
+        in_dims=(None, None, *list_format_vmap_dims),
         # Vmapped output axis is last
-        out_dims=tuple(p.ndim for p in params),
+        out_dims=list_format_vmap_dims,
         # We want each vector to be multiplied with the same mini-batch Hessian
         randomness="same",
     )
