@@ -222,21 +222,34 @@ def make_functional_flattened_model_and_loss(
     # Create functional versions of model and loss
     f, c = make_functional_model_and_loss(model_func, loss_func, params)
 
+    # Determine how to flatten
+    output_flattening = (
+        "batch c ... -> (batch ...) c"
+        if isinstance(loss_func, CrossEntropyLoss)
+        else "batch ... c -> (batch ...) c",
+    )
+    label_flattening = (
+        "batch ... -> (batch ...)"
+        if isinstance(loss_func, CrossEntropyLoss)
+        else "batch ... c -> (batch ...) c",
+    )
+
+    # Set up functions that operate on flattened quantities
     def f_flat(*params_and_X: Union[Tensor, MutableMapping]) -> Tensor:
         """Execute model and flatten batch and shared axes.
 
         If >2d output we convert to an equivalent 2d output for loss computation.
         For CrossEntropyLoss: (batch, c, ...) -> (batch*..., c)
         For other losses: (batch, ..., c) -> (batch*..., c)
+
+        Args:
+            params_and_X: Parameters and input data X.
+
+        Returns:
+            Flattened model output.
         """
-        *params_inner, X = params_and_X
-        output = f(*params_inner, X)
-        return rearrange(
-            output,
-            "batch c ... -> (batch ...) c"
-            if isinstance(loss_func, CrossEntropyLoss)
-            else "batch ... c -> (batch ...) c",
-        )
+        output = f(*params_and_X)
+        return rearrange(output, output_flattening)
 
     def c_flat(output_flat: Tensor, y: Tensor) -> Tensor:
         """Execute loss with flattened labels.
@@ -244,13 +257,15 @@ def make_functional_flattened_model_and_loss(
         Flattens the labels to match the flattened output format:
         For CrossEntropyLoss: (batch, ...) -> (batch*...)
         For other losses: (batch, ..., c) -> (batch*..., c)
+
+        Args:
+            output_flat: Flattened model_output.
+            y: Un-flattened labels
+
+        Returns:
+            The loss.
         """
-        y_flat = rearrange(
-            y,
-            "batch ... -> (batch ...)"
-            if isinstance(loss_func, CrossEntropyLoss)
-            else "batch ... c -> (batch ...) c",
-        )
+        y_flat = rearrange(y, label_flattening)
         return c(output_flat, y_flat)
 
     return f_flat, c_flat
