@@ -210,7 +210,7 @@ def make_functional_flattened_model_and_loss(
     Args:
         model_func: The neural network module.
         loss_func: The loss function module.
-        free_param_names: Names of parameters that will be passed as arguments.
+        params: Free parameters of the model.
 
     Returns:
         Tuple of (f_flat, c_flat) where:

@@ -56,6 +56,13 @@ def make_batch_ef_matrix_product(
         We can thus multiply with the EF by computing the GGN-vector products of L'.
 
         The reduction factor adjusts the scale depending on the loss reduction used.
+
+        Args:
+            output_flat: Flattened model outputs for the mini-batch.
+            y: Un-flattened labels for the mini-batch.
+
+        Returns:
+            The pseudo-loss whose GGN is the empirical Fisher on the batch.
         """
         # Compute ∂ℓₙ/∂fₙ without reduction factor of L (detached)
         grad_output_flat = c_flat_grad(output_flat.detach(), y)
