@@ -226,12 +226,12 @@ def make_functional_flattened_model_and_loss(
     output_flattening = (
         "batch c ... -> (batch ...) c"
         if isinstance(loss_func, CrossEntropyLoss)
-        else "batch ... c -> (batch ...) c",
+        else "batch ... c -> (batch ...) c"
     )
     label_flattening = (
         "batch ... -> (batch ...)"
         if isinstance(loss_func, CrossEntropyLoss)
-        else "batch ... c -> (batch ...) c",
+        else "batch ... c -> (batch ...) c"
     )
 
     # Set up functions that operate on flattened quantities
