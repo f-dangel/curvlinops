@@ -2,11 +2,11 @@
 
 from typing import Callable, List, MutableMapping, Tuple, Union
 
+from einops import rearrange
 from numpy import cumsum, ndarray
 from torch import Tensor, as_tensor
 from torch.func import functional_call
-from torch.nn import Module, Parameter, CrossEntropyLoss
-from einops import rearrange
+from torch.nn import CrossEntropyLoss, Module, Parameter
 
 
 def split_list(x: Union[List, Tuple], sizes: List[int]) -> List[List]:
@@ -196,8 +196,12 @@ def make_functional_model_and_loss(
 
     return f, c
 
+
 def make_functional_flattened_model_and_loss(
-    model_func: Module, loss_func: Module, params: Tuple[Parameter, ...]) -> Tuple[Callable[[Tuple[Tensor, ...], Tensor], Tensor], Callable[[Tensor, Tensor], Tensor]]:
+    model_func: Module, loss_func: Module, params: Tuple[Parameter, ...]
+) -> Tuple[
+    Callable[[Tuple[Tensor, ...], Tensor], Tensor], Callable[[Tensor, Tensor], Tensor]
+]:
     """Create flattened versions of model and loss functions.
 
     This is required for the (empirical) Fisher, for which we don't know how to handle
