@@ -1,6 +1,6 @@
 """General utility functions."""
 
-from typing import Callable, List, Tuple, Union
+from typing import Callable, List, MutableMapping, Tuple, Union
 
 from numpy import cumsum, ndarray
 from torch import Tensor, as_tensor
@@ -134,30 +134,30 @@ def make_functional_call(
         free_param_names: Names of parameters that will be passed as arguments.
 
     Returns:
-        A function that takes free parameters and module inputs, returning the
-        module's output. For model functions, inputs are typically (X,). For loss
-        functions, inputs are typically (predictions, targets).
+        A function that takes free parameters as a tuple and module inputs,
+        returning the module's output. For model functions, inputs are typically (X,).
+        For loss functions, inputs are typically (predictions, targets).
     """
     # Detect frozen parameters and buffers not in free_param_names
     frozen_params = {
         n: p for n, p in module.named_parameters() if n not in free_param_names
     }
     frozen_buffers = dict(module.named_buffers())
-    num_free_params = len(free_param_names)
 
-    def functional_module(*args: Tuple[Parameter, ...]) -> Tensor:
+    def functional_module(
+        free_param_tuple: Tuple[Parameter, ...], *module_inputs
+    ) -> Tensor:
         """Call the module functionally with free parameters and module inputs.
 
         Args:
-            *args: First len(free_param_names) arguments are free parameters,
-                remaining arguments are inputs to the module.
+            free_param_tuple: Tuple of free parameters.
+            *module_inputs: Inputs to the module.
 
         Returns:
             Module output.
         """
-        # Separate free parameters and module inputs
-        free_params = dict(zip(free_param_names, args[:num_free_params]))
-        module_inputs = args[num_free_params:]
+        # Create parameter dictionary from tuple
+        free_params = dict(zip(free_param_names, free_param_tuple))
 
         # Call module with all parameters and buffers
         return functional_call(
@@ -169,7 +169,10 @@ def make_functional_call(
 
 def make_functional_model_and_loss(
     model_func: Module, loss_func: Module, params: Tuple[Parameter, ...]
-) -> Tuple[Callable[[Tuple[Tensor, ...]], Tensor], Callable[[Tensor, Tensor], Tensor]]:
+) -> Tuple[
+    Callable[[Tuple[Parameter, ...], Union[MutableMapping, Tensor]], Tensor],
+    Callable[[Tensor, Tensor], Tensor],
+]:
     """Create functional versions of model and loss functions.
 
     Args:
@@ -180,7 +183,7 @@ def make_functional_model_and_loss(
 
     Returns:
         A tuple containing:
-        - f: Functional model with signature (*params, X) -> prediction
+        - f: Functional model with signature (params, X) -> prediction
         - c: Functional loss with signature (prediction, y) -> loss
     """
     # detect the parameters w.r.t. which the functions are made functional
@@ -190,7 +193,7 @@ def make_functional_model_and_loss(
         free_param_names.append(name)
 
     # Create functional versions of model and loss
-    f = make_functional_call(model_func, free_param_names)  # *params, X -> prediction
+    f = make_functional_call(model_func, free_param_names)  # params, X -> prediction
     c = make_functional_call(loss_func, [])  # prediction, y -> loss
 
     return f, c

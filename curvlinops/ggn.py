@@ -21,18 +21,18 @@ def make_ggn_vector_product(
 
     Args:
         f: Function that takes parameters and input, returns prediction.
-            Signature: (*params, X) -> prediction
+            Signature: (params, X) -> prediction
         c: Function that takes prediction and target, returns loss.
             Signature: (prediction, y) -> loss
 
     Returns:
         A function that computes GGN-vector products.
-        Signature: (params, X, y, *v) -> GGN @ v
+        Signature: (params, X, y, v) -> GGN @ v
     """
 
     @no_grad()
     def ggn_vector_product(
-        params: Tuple[Tensor, ...], X: Tensor, y: Tensor, *v: Tuple[Tensor, ...]
+        params: Tuple[Tensor, ...], X: Tensor, y: Tensor, v: Tuple[Tensor, ...]
     ) -> Tuple[Tensor, ...]:
         """Multiply the GGN on a vector in list format.
 
@@ -40,24 +40,25 @@ def make_ggn_vector_product(
             params: Parameters of the model.
             X: Input to the DNN.
             y: Ground truth.
-            *v: Vector to be multiplied with in tensor list format.
+            v: Vector to be multiplied with in tensor list format.
 
         Returns:
             Result of GGN multiplication in list format. Has the same shape as
             ``v``, i.e. each tensor in the list has the shape of a parameter.
         """
         # Apply the Jacobian of f onto v: v → Jv
-        f_val, f_jvp = jvp(lambda *params_inner: f(*params_inner, X), params, v)
+        f_val, f_jvp = jvp(lambda params_inner: f(params_inner, X), (params,), (v,))
 
         # Apply the criterion's Hessian onto Jv: Jv → HJv
-        c_grad_func = jacrev(lambda pred: c(pred, y))
+        c_grad_func = jacrev(lambda pred: c([], pred, y))
         _, c_hvp = jvp(c_grad_func, (f_val,), (f_jvp,))
 
         # Apply the transposed Jacobian of f onto HJv: HJv → JᵀHJv
         # NOTE This re-evaluates the net's forward pass. [Unverified] It should be op-
         # timized away by common sub-expression elimination if you compile the function.
-        _, f_vjp_func = vjp(lambda *params_inner: f(*params_inner, X), *params)
-        return f_vjp_func(c_hvp)
+        _, f_vjp_func = vjp(lambda params_inner: f(params_inner, X), params)
+        (result,) = f_vjp_func(c_hvp)
+        return result
 
     return ggn_vector_product
 
@@ -79,24 +80,23 @@ def make_batch_ggn_matrix_product(
         A function that takes inputs ``X``, ``y``, and a matrix ``M`` in list
         format, and returns the mini-batch GGN applied to ``M`` in list format.
     """
-    # Create functional versions of the model (f: *params, X -> prediction) and
+    # Create functional versions of the model (f: params, X -> prediction) and
     # criterion function (c: prediction, y -> loss)
     f, c = make_functional_model_and_loss(model_func, loss_func, params)
 
     # Create the functional GGN-vector product
-    ggn_vp = make_ggn_vector_product(f, c)  # params, X, y, *v -> *Gv
+    ggn_vp = make_ggn_vector_product(f, c)  # params, X, y, v -> Gv
 
     # Fix the parameters
-    ggnvp = partial(ggn_vp, params)  # X, y, *v -> *Gv
+    ggnvp = partial(ggn_vp, params)  # X, y, v -> Gv
 
     # Parallelize over vectors to multiply onto a matrix in list format
-    list_format_vmap_dims = tuple(p.ndim for p in params)  # last axis
     return vmap(
         ggnvp,
-        # No vmap in X, y, last-axis vmap over vector in list format
-        in_dims=(None, None, *list_format_vmap_dims),
+        # No vmap in X, y, last-axis vmap over vector tuple
+        in_dims=(None, None, -1),
         # Vmapped output axis is last
-        out_dims=list_format_vmap_dims,
+        out_dims=-1,
         # We want each vector to be multiplied with the same mini-batch GGN
         randomness="same",
     )
@@ -172,4 +172,4 @@ class GGNLinearOperator(CurvatureLinearOperator):
             ``M``, i.e. each tensor in the list has the shape of a parameter and a
             trailing dimension of matrix columns.
         """
-        return list(self._mp(X, y, *M))
+        return list(self._mp(X, y, tuple(M)))
