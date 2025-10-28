@@ -1,7 +1,7 @@
 """Contains linear operator implementation of gradient moment matrices."""
 
 from collections.abc import MutableMapping
-from functools import cached_property
+from functools import cached_property, partial
 from typing import Callable, List, Tuple, Union
 
 from einops import einsum
@@ -86,10 +86,13 @@ def make_batch_ef_matrix_product(
     # Create the functional EF-vector product using GGN of pseudo-loss
     ef_vp = make_ggn_vector_product(f_flat, c_pseudo_flat)
 
+    # Freeze parameter values
+    efvp = partial(ef_vp, params)  # X, y, *v -> *EFv
+
     # Parallelize over vectors to multiply onto a matrix in list format
     list_format_vmap_dims = tuple(p.ndim for p in params)  # last axis
     return vmap(
-        ef_vp,
+        efvp,
         # No vmap in X, y, assume last axis is vmapped in the matrix list
         in_dims=(None, None, *list_format_vmap_dims),
         # Vmapped output axis is last
