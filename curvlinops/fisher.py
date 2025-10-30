@@ -170,7 +170,7 @@ def make_batch_fmc_matrix_product(
         """
         # Sample gradients w.r.t. output using the provided generator
         grad_output_samples = sample_grad_output_flat(
-            output_flat, mc_samples, y, generator
+            output_flat.detach(), mc_samples, y, generator
         )
 
         # Adjust the scale depending on the loss reduction used
