@@ -1,6 +1,7 @@
 """General utility functions."""
 
-from typing import Callable, List, MutableMapping, Tuple, Union
+from functools import partial
+from typing import Any, Callable, List, MutableMapping, Tuple, Union
 
 from einops import rearrange
 from numpy import cumsum, ndarray
@@ -127,7 +128,7 @@ def assert_divisible_by(num: int, divisor: int, name: str):
 
 def make_functional_call(
     module: Module, free_param_names: List[str]
-) -> Callable[[Tuple[Parameter, ...]], Tensor]:
+) -> Callable[[Tuple[Tensor, ...], Any], Tensor]:
     """Create a function that calls a module with given free parameters.
 
     Args:
@@ -146,19 +147,19 @@ def make_functional_call(
     frozen_buffers = dict(module.named_buffers())
 
     def functional_module(
-        free_param_tuple: Tuple[Parameter, ...], *module_inputs
+        free_param_values: Tuple[Tensor, ...], *module_inputs: Any
     ) -> Tensor:
         """Call the module functionally with free parameters and module inputs.
 
         Args:
-            free_param_tuple: Tuple of free parameters.
+            free_param_values: Tuple of values for the free parameters.
             *module_inputs: Inputs to the module.
 
         Returns:
             Module output.
         """
         # Create parameter dictionary from tuple
-        free_params = dict(zip(free_param_names, free_param_tuple))
+        free_params = dict(zip(free_param_names, free_param_values))
 
         # Call module with all parameters and buffers
         return functional_call(
@@ -171,8 +172,8 @@ def make_functional_call(
 def make_functional_model_and_loss(
     model_func: Module, loss_func: Module, params: Tuple[Parameter, ...]
 ) -> Tuple[
-    Callable[[Tuple[Parameter, ...], Union[MutableMapping, Tensor]], Tensor],
-    Callable[[Tensor, Tensor], Tensor],
+    Callable[[Tuple[Tensor, ...], Any], Tensor],
+    Callable[[Tensor, Any], Tensor],
 ]:
     """Create functional versions of model and loss functions.
 
@@ -184,8 +185,8 @@ def make_functional_model_and_loss(
 
     Returns:
         A tuple containing:
-        - f: Functional model with signature (params, X) -> prediction
-        - c: Functional loss with signature (prediction, y) -> loss
+        - f: Functional model with signature (params, *module_args) -> prediction
+        - c: Functional loss with signature (prediction, *loss_args) -> loss
     """
     # detect the parameters w.r.t. which the functions are made functional
     free_param_names = []
@@ -194,8 +195,13 @@ def make_functional_model_and_loss(
         free_param_names.append(name)
 
     # Create functional versions of model and loss
-    f = make_functional_call(model_func, free_param_names)  # params, X -> prediction
-    c = make_functional_call(loss_func, [])  # prediction, y -> loss
+    f = make_functional_call(
+        model_func, free_param_names
+    )  # module_params, *module_args -> prediction
+    c = make_functional_call(
+        loss_func, []
+    )  # loss_params, prediction, loss_args -> loss
+    c = partial(c, tuple())  # loss function has empty parameters
 
     return f, c
 
@@ -203,7 +209,8 @@ def make_functional_model_and_loss(
 def make_functional_flattened_model_and_loss(
     model_func: Module, loss_func: Module, params: Tuple[Parameter, ...]
 ) -> Tuple[
-    Callable[[Tuple[Tensor, ...], Tensor], Tensor], Callable[[Tensor, Tensor], Tensor]
+    Callable[[Tuple[Tensor, ...], Union[Tensor, MutableMapping]], Tensor],
+    Callable[[Tensor, Tensor], Tensor],
 ]:
     """Create flattened versions of model and loss functions.
 
