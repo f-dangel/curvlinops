@@ -1,16 +1,212 @@
 """Contains LinearOperator implementation of the approximate Fisher."""
 
 from collections.abc import MutableMapping
+from functools import cached_property, partial
 from math import sqrt
 from typing import Callable, Iterable, List, Optional, Tuple, Union
 
-from backpack.hessianfree.ggnvp import ggn_vector_product_from_plist
 from einops import einsum, rearrange
-from torch import Generator, Tensor, as_tensor, normal, softmax, zeros, zeros_like
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss, Parameter
+from torch import Generator, Tensor, as_tensor, normal, softmax, vmap, zeros
+from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, Module, MSELoss, Parameter
 from torch.nn.functional import one_hot
 
 from curvlinops._torch_base import CurvatureLinearOperator
+from curvlinops.ggn import make_ggn_vector_product
+from curvlinops.utils import make_functional_flattened_model_and_loss
+
+
+def make_grad_output_sampler(
+    loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
+) -> Callable[[Tensor, int, Tensor, Generator], Tensor]:
+    """Create a function that samples gradients w.r.t. network outputs.
+
+    Args:
+        loss_func: The loss function to create the sampler for.
+
+    Returns:
+        A function that samples gradients w.r.t. the model prediction.
+        Signature: (output, num_samples, y, generator) -> grad_samples
+    """
+
+    def sample_grad_output(
+        output: Tensor, num_samples: int, y: Tensor, generator: Generator
+    ) -> Tensor:
+        """Draw would-be gradients ``∇_f log p(·|f)`` with explicit generator.
+
+        For a single data point, the would-be gradient's outer product equals the
+        Hessian ``∇²_f log p(·|f)`` in expectation.
+
+        Currently only supports ``MSELoss``, ``CrossEntropyLoss``, and
+        ``BCEWithLogitsLoss``.
+
+        The returned gradient does not account for the scaling of the loss function by
+        the output dimension ``C`` that ``MSELoss`` and ``BCEWithLogitsLoss`` apply when
+        ``reduction='mean'``.
+
+        Args:
+            output: model prediction ``f`` for multiple data with batch axis as
+                0th dimension.
+            num_samples: Number of samples to draw.
+            y: Labels of the data on which output was produced.
+            generator: Random generator for sampling.
+
+        Returns:
+            Samples of the gradient w.r.t. the model prediction.
+            Has shape ``[num_samples, *output.shape]``.
+
+        Raises:
+            NotImplementedError: For unsupported loss functions.
+            NotImplementedError: If the prediction does not have two dimensions.
+            NotImplementedError: If binary classification labels are not binary.
+        """
+        if output.ndim != 2:
+            raise NotImplementedError(f"Only 2d outputs supported. Got {output.shape}")
+
+        _, C = output.shape
+
+        if isinstance(loss_func, MSELoss):
+            std = as_tensor(sqrt(0.5), device=output.device)
+            mean = zeros(
+                num_samples, *output.shape, device=output.device, dtype=output.dtype
+            )
+            return 2 * normal(mean, std, generator=generator)
+
+        elif isinstance(loss_func, CrossEntropyLoss):
+            prob = softmax(output, dim=1)
+            sample = prob.multinomial(
+                num_samples=num_samples, replacement=True, generator=generator
+            )
+            sample = rearrange(sample, "batch s -> s batch")
+            onehot_sample = one_hot(sample, num_classes=C)
+            # repeat ``num_sample`` times along a new leading axis to avoid broadcasting
+            prob = prob.unsqueeze(0).expand_as(onehot_sample)
+            return prob - onehot_sample
+
+        elif isinstance(loss_func, BCEWithLogitsLoss):
+            # Check if targets are binary by ensuring all values are 0 or 1
+            is_binary = (y == 0).logical_or(y == 1).all()
+            if not is_binary:
+                raise NotImplementedError(
+                    "Only binary targets (0, 1) are currently supported with"
+                    + f" BCEWithLogitsLoss. Got non-binary values {y.unique()}."
+                )
+            prob = output.sigmoid()
+            # repeat ``num_sample`` times along a new leading axis
+            prob = prob.unsqueeze(0).expand(num_samples, -1, -1)
+            sample = prob.bernoulli(generator=generator)
+            return prob - sample
+
+        else:
+            raise NotImplementedError(
+                f"Supported losses: {(MSELoss, CrossEntropyLoss, BCEWithLogitsLoss)}"
+            )
+
+    return sample_grad_output
+
+
+def make_batch_fmc_matrix_product(
+    model_func: Module, loss_func: Module, params: Tuple[Parameter, ...]
+) -> Callable[
+    [Union[Tensor, MutableMapping], Tensor, Tuple[Tensor, ...], int, Generator],
+    Tuple[Tensor, ...],
+]:
+    r"""Set up function that multiplies the mini-batch MC Fisher onto a matrix.
+
+    The MC Fisher approximates the Fisher information matrix by sampling from the
+    model's predictive distribution and computing the expected outer product of
+    gradients w.r.t. the sampled targets.
+
+    The implementation works by:
+    1. Computing model predictions :math:`f_n = f_{\mathbf{\theta}}(\mathbf{x}_n)`
+    2. Flattening outputs to 2D format for loss computation:
+       - CrossEntropyLoss: ``(batch, c, ...) -> (batch*..., c)``
+       - Other losses: ``(batch, ..., c) -> (batch*..., c)``
+    3. Sampling gradients :math:`g_{nm} = \nabla_{f_n} \ell(f_n, \tilde{y}_{nm})`
+       where :math:`\tilde{y}_{nm} \sim q(\cdot | f_n)` are sampled targets
+    4. Computing a pseudo-loss :math:`L' = \frac{1}{2Mc} \sum_n \sum_m \langle f_n, g_{nm} \rangle^2`
+       where :math:`M` is the number of MC samples and :math:`c` is the reduction factor
+    5. Using the GGN of this pseudo-loss to approximate the MC Fisher matrix-vector products
+
+    The reduction factor :math:`c` adjusts for the loss function's reduction:
+    - ``'mean'``: :math:`c = N` (CrossEntropyLoss) or :math:`c = N \times C` (others)
+    - ``'sum'``: :math:`c = 1`
+
+    Args:
+        model_func: The neural network :math:`f_{\mathbf{\theta}}`.
+        loss_func: The loss function :math:`\ell`.
+        params: A tuple of parameters w.r.t. which the MC Fisher is computed.
+            All parameters must be part of ``model_func.parameters()``.
+
+    Returns:
+        A function that takes inputs ``X``, ``y``, a matrix ``M`` in list format,
+        ``mc_samples``, and ``generator``, and returns the mini-batch MC Fisher
+        applied to ``M`` in list format.
+    """
+    f_flat, _ = make_functional_flattened_model_and_loss(model_func, loss_func, params)
+
+    # Create the gradient output sampler for this loss function
+    sample_grad_output_flat = make_grad_output_sampler(loss_func)
+
+    def c_pseudo_flat(
+        output_flat: Tensor, y: Tensor, mc_samples: int, generator: Generator
+    ) -> Tensor:
+        """Compute MC-Fisher pseudo-loss: L' = 0.5 / (M * c) * sum_n sum_m <f_n, g_nm>^2.
+
+        This pseudo-loss L' := 0.5 / (M * c) ∑ₙ ∑ₘ fₙᵀ (gₙₘ gₙₘᵀ) fₙ where
+        gₙₘ = ∂ℓₙ(yₙₘ)/∂fₙ (detached) and M is the number of MC samples.
+        The GGN of L' linearized at fₙ is the MC Fisher.
+        We can thus multiply with the MC Fisher by computing the GGN-vector products of L'.
+
+        The reduction factor adjusts the scale depending on the loss reduction used.
+
+        Args:
+            output_flat: The flattened model predictions.
+            y: The un-flattened labels.
+            mc_samples: Number of MC samples to use.
+            generator: Random generator for sampling.
+
+        Returns:
+            The pseudo-loss whose GGN is the MC-Fisher.
+        """
+        # Sample gradients w.r.t. output using the provided generator
+        grad_output_samples = sample_grad_output_flat(
+            output_flat.detach(), mc_samples, y, generator
+        )
+
+        # Adjust the scale depending on the loss reduction used
+        num_loss_terms, C = output_flat.shape
+        reduction_factor = {
+            "mean": (
+                num_loss_terms
+                if isinstance(loss_func, CrossEntropyLoss)
+                else num_loss_terms * C
+            ),
+            "sum": 1.0,
+        }[loss_func.reduction]
+
+        # Compute the pseudo-loss: 0.5 / (M * c) * sum_n sum_m <f_n, g_nm>^2
+        inner_products = einsum(
+            output_flat, grad_output_samples, "n ..., m n ... -> m n"
+        )
+        return 0.5 / (mc_samples * reduction_factor) * (inner_products**2).sum()
+
+    # Create the functional MC Fisher-vector product using GGN of pseudo-loss
+    fmc_vp = make_ggn_vector_product(f_flat, c_pseudo_flat, num_c_extra_args=2)
+
+    # Fix the parameters: X, y, mc_samples, generator, *v -> *Fv
+    fmcvp = partial(fmc_vp, params)
+
+    # Parallelize over vectors to multiply onto a matrix in list format
+    list_format_vmap_dims = tuple(p.ndim for p in params)  # last axis
+    return vmap(
+        fmcvp,
+        # X, y, mc_samples, generator are not vmapped, matrix columns are vmapped
+        in_dims=(None, None, None, None, *list_format_vmap_dims),
+        # Vmapped output axis is last
+        out_dims=list_format_vmap_dims,
+        # We want each vector to be multiplied with the same mini-batch MC Fisher
+        randomness="same",
+    )
 
 
 class FisherMCLinearOperator(CurvatureLinearOperator):
@@ -199,6 +395,26 @@ class FisherMCLinearOperator(CurvatureLinearOperator):
 
         return super()._matmat(M)
 
+    @cached_property
+    def _mp(
+        self,
+    ) -> Callable[
+        [Union[Tensor, MutableMapping], Tensor, int, Generator, Tuple[Tensor, ...]],
+        Tuple[Tensor, ...],
+    ]:
+        """Lazy initialization of batch MC-Fisher matrix product function.
+
+        Returns:
+            Function that computes mini-batch MC-Fisher-vector products, given inputs
+            ``X``, labels ``y``, number of MC samples, a random generator, and the
+            entries ``v1, v2, ...`` of the vector in list format. Produces a list of
+            tensors with the same shape as the input vector that represents the result
+            of the mini-batch MC-Fisher multiplication.
+        """
+        return make_batch_fmc_matrix_product(
+            self._model_func, self._loss_func, tuple(self._params)
+        )
+
     def _matmat_batch(
         self, X: Union[Tensor, MutableMapping], y: Tensor, M: List[Tensor]
     ) -> List[Tensor]:
@@ -216,117 +432,4 @@ class FisherMCLinearOperator(CurvatureLinearOperator):
             as ``M``, i.e. each tensor in the list has the shape of a parameter and a
             trailing dimension of matrix columns.
         """
-        # compute ∂ℓₙ(yₙₘ)/∂fₙ where fₙ is the prediction for datum n and
-        # yₙₘ is the m-th sampled label for datum n
-        output = self._model_func(X)
-        # If >2d output we convert to an equivalent 2d output
-        if isinstance(self._loss_func, CrossEntropyLoss):
-            output = rearrange(output, "batch c ... -> (batch ...) c")
-            y = rearrange(y, "batch ... -> (batch ...)")
-        else:
-            output = rearrange(output, "batch ... c -> (batch ...) c")
-            y = rearrange(y, "batch ... c -> (batch ...) c")
-
-        grad_output = self.sample_grad_output(output, self._mc_samples, y)
-
-        # Adjust the scale depending on the loss function and reduction used
-        num_loss_terms, C = output.shape
-        reduction_factor = {
-            "mean": (
-                num_loss_terms
-                if isinstance(self._loss_func, CrossEntropyLoss)
-                else num_loss_terms * C
-            ),
-            "sum": 1.0,
-        }[self._loss_func.reduction]
-
-        # Compute the pseudo-loss L' := 0.5 / (M * c) ∑ₙ ∑ₘ fₙᵀ (gₙₘ gₙₘᵀ) fₙ where
-        # gₙₘ = ∂ℓₙ(yₙₘ)/∂fₙ (detached) and M is the number of MC samples.
-        # The GGN of L' linearized at fₙ is the MC Fisher.
-        # We can thus multiply with it by computing the GGN-vector products of L'.
-        loss = (
-            0.5
-            / reduction_factor
-            / self._mc_samples
-            * (einsum(output, grad_output, "n ..., m n ... -> m n") ** 2).sum()
-        )
-
-        # Multiply the MC Fisher onto each vector in the input matrix
-        FM = [zeros_like(m) for m in M]
-        (num_vectors,) = {m.shape[-1] for m in M}
-        for v in range(num_vectors):
-            for idx, Fm in enumerate(
-                ggn_vector_product_from_plist(
-                    loss, output, self._params, [m[..., v] for m in M]
-                )
-            ):
-                FM[idx][..., v].add_(Fm.detach())
-
-        return FM
-
-    def sample_grad_output(self, output: Tensor, num_samples: int, y: Tensor) -> Tensor:
-        """Draw would-be gradients ``∇_f log p(·|f)``.
-
-        For a single data point, the would-be gradient's outer product equals the
-        Hessian ``∇²_f log p(·|f)`` in expectation.
-
-        Currently only supports ``MSELoss``, ``CrossEntropyLoss``, and
-        ``BCEWithLogitsLoss``.
-
-        The returned gradient does not account for the scaling of the loss function by
-        the output dimension ``C`` that ``MSELoss`` and ``BCEWithLogitsLoss`` apply when
-        ``reduction='mean'``.
-
-        Args:
-            output: model prediction ``f`` for multiple data with batch axis as
-                0th dimension.
-            num_samples: Number of samples to draw.
-            y: Labels of the data on which output was produced.
-
-        Returns:
-            Samples of the gradient w.r.t. the model prediction.
-            Has shape ``[num_samples, *output.shape]``.
-
-        Raises:
-            NotImplementedError: For unsupported loss functions.
-            NotImplementedError: If the prediction does not have two dimensions.
-            NotImplementedError: If binary classification labels are not binary.
-        """
-        if output.ndim != 2:
-            raise NotImplementedError(f"Only 2d outputs supported. Got {output.shape}")
-
-        C = output.shape[1]
-
-        if isinstance(self._loss_func, MSELoss):
-            std = as_tensor(sqrt(0.5), device=output.device)
-            mean = zeros(
-                num_samples, *output.shape, device=output.device, dtype=output.dtype
-            )
-            return 2 * normal(mean, std, generator=self._generator)
-
-        elif isinstance(self._loss_func, CrossEntropyLoss):
-            prob = softmax(output, dim=1)
-            sample = prob.multinomial(
-                num_samples=num_samples, replacement=True, generator=self._generator
-            )
-            sample = rearrange(sample, "batch s -> s batch")
-            onehot_sample = one_hot(sample, num_classes=C)
-            # repeat ``num_sample`` times along a new leading axis to avoid broadcasting
-            prob = prob.unsqueeze(0).expand_as(onehot_sample)
-            return prob - onehot_sample
-
-        elif isinstance(self._loss_func, BCEWithLogitsLoss):
-            unique = set(y.unique().flatten().tolist())
-            if not unique.issubset({0, 1}):
-                raise NotImplementedError(
-                    "Only binary targets (0, 1) are currently supported with"
-                    + f" BCEWithLogitsLoss. Got {unique}."
-                )
-            prob = output.sigmoid()
-            # repeat ``num_sample`` times along a new leading axis
-            prob = prob.unsqueeze(0).expand(num_samples, -1, -1)
-            sample = prob.bernoulli(generator=self._generator)
-            return prob - sample
-
-        else:
-            raise NotImplementedError(f"Supported losses: {self.supported_losses}")
+        return list(self._mp(X, y, self._mc_samples, self._generator, *M))

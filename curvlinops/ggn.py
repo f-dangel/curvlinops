@@ -2,7 +2,7 @@
 
 from collections.abc import MutableMapping
 from functools import cached_property, partial
-from typing import Callable, List, Tuple, Union
+from typing import Any, Callable, List, Tuple, Union
 
 from torch import Tensor, no_grad, vmap
 from torch.func import jacrev, jvp, vjp
@@ -13,26 +13,32 @@ from curvlinops.utils import make_functional_model_and_loss
 
 
 def make_ggn_vector_product(
-    f: Callable[..., Tensor], c: Callable[[Tensor, Tensor], Tensor]
-) -> Callable[
-    [Tuple[Tensor, ...], Tensor, Tensor, Tuple[Tensor, ...]], Tuple[Tensor, ...]
-]:
+    f: Callable[..., Tensor], c: Callable[..., Tensor], num_c_extra_args: int = 0
+) -> Callable[..., Tuple[Tensor, ...]]:
     """Create a function that computes GGN-vector products for given f and c functions.
 
     Args:
         f: Function that takes parameters and input, returns prediction.
             Signature: (params, X) -> prediction
-        c: Function that takes prediction and target, returns loss.
-            Signature: (prediction, y) -> loss
+        c: Function that takes prediction, target, and optional additional args.
+            Signature: (prediction, y, *c_args) -> loss
+        num_c_extra_args: Number of additional arguments that the loss function c expects
+            beyond prediction and target. Used to correctly split the input arguments
+            between the vector to multiply and the additional loss function arguments.
 
     Returns:
         A function that computes GGN-vector products.
-        Signature: (params, X, y, v) -> GGN @ v
+        Signature: (params, X, y, v, *c_args) -> GGN @ v
+        where c_args are additional arguments passed to the loss function c.
     """
 
     @no_grad()
     def ggn_vector_product(
-        params: Tuple[Tensor, ...], X: Tensor, y: Tensor, v: Tuple[Tensor, ...]
+        params: Tuple[Tensor, ...],
+        X: Tensor,
+        y: Tensor,
+        v: Tuple[Tensor, ...],
+        *args: Any,
     ) -> Tuple[Tensor, ...]:
         """Multiply the GGN on a vector in list format.
 
@@ -41,16 +47,17 @@ def make_ggn_vector_product(
             X: Input to the DNN.
             y: Ground truth.
             v: Vector to be multiplied with in tensor list format.
+            *args: Additional arguments for the loss function c.
 
         Returns:
             Result of GGN multiplication in list format. Has the same shape as
-            ``v``, i.e. each tensor in the list has the shape of a parameter.
+            the vector part of args_and_v.
         """
         # Apply the Jacobian of f onto v: v → Jv
         f_val, f_jvp = jvp(lambda params_inner: f(params_inner, X), (params,), (v,))
 
         # Apply the criterion's Hessian onto Jv: Jv → HJv
-        c_grad_func = jacrev(lambda pred: c([], pred, y))
+        c_grad_func = jacrev(lambda pred: c([], pred, y, *args))
         _, c_hvp = jvp(c_grad_func, (f_val,), (f_jvp,))
 
         # Apply the transposed Jacobian of f onto HJv: HJv → JᵀHJv
