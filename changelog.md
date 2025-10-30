@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     ([PR](https://github.com/f-dangel/curvlinops/pull/201))
   - Empirical Fisher-vector products
     ([PR](https://github.com/f-dangel/curvlinops/pull/202))
+  - MC-Fisher-vector products
+    ([PR](https://github.com/f-dangel/curvlinops/pull/204))
 
 ## [3.0.0] - 2025-10-16
 
