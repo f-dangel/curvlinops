@@ -225,7 +225,7 @@ def make_functional_flattened_model_and_loss(
     Returns:
         Tuple of (f_flat, c_flat) where:
         - f_flat: Function that executes model and flattens batch and shared axes:
-          (*params, X) -> output_flat
+          (params, X) -> output_flat
         - c_flat: Function that executes loss with flattened labels:
           (output_flat, y) -> loss
     """
@@ -245,7 +245,7 @@ def make_functional_flattened_model_and_loss(
     )
 
     # Set up functions that operate on flattened quantities
-    def f_flat(*params_and_X: Union[Tensor, MutableMapping]) -> Tensor:
+    def f_flat(params: Tuple[Tensor, ...], X: Union[Tensor, MutableMapping]) -> Tensor:
         """Execute model and flatten batch and shared axes.
 
         If >2d output we convert to an equivalent 2d output for loss computation.
@@ -258,7 +258,7 @@ def make_functional_flattened_model_and_loss(
         Returns:
             Flattened model output.
         """
-        output = f(*params_and_X)
+        output = f(params, X)
         return rearrange(output, output_flattening)
 
     def c_flat(output_flat: Tensor, y: Tensor) -> Tensor:
