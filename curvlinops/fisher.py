@@ -404,7 +404,7 @@ class FisherMCLinearOperator(CurvatureLinearOperator):
     ]:
         """Lazy initialization of batch MC-Fisher matrix product function.
 
-        Args:
+        Returns:
             Function that computes mini-batch MC-Fisher-vector products, given inputs
             ``X``, labels ``y``, number of MC samples, a random generator, and the
             entries ``v1, v2, ...`` of the vector in list format. Produces a list of
