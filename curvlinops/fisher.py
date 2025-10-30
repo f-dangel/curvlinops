@@ -107,7 +107,7 @@ def make_grad_output_sampler(
 def make_batch_fmc_matrix_product(
     model_func: Module, loss_func: Module, params: Tuple[Parameter, ...]
 ) -> Callable[
-    [Union[Tensor, MutableMapping], Tensor, Tuple[Tensor, ...], int, Generator],
+    [Tuple[Tensor, ...], Union[Tensor, MutableMapping], Tensor, int, Generator],
     Tuple[Tensor, ...],
 ]:
     r"""Set up function that multiplies the mini-batch MC Fisher onto a matrix.
@@ -138,7 +138,7 @@ def make_batch_fmc_matrix_product(
             All parameters must be part of ``model_func.parameters()``.
 
     Returns:
-        A function that takes inputs ``X``, ``y``, a matrix ``M`` in list format,
+        A function that takes a matrix ``M`` in list format, inputs ``X``, ``y``,
         ``mc_samples``, and ``generator``, and returns the mini-batch MC Fisher
         applied to ``M`` in list format.
     """
@@ -191,19 +191,18 @@ def make_batch_fmc_matrix_product(
         return 0.5 / (mc_samples * reduction_factor) * (inner_products**2).sum()
 
     # Create the functional MC Fisher-vector product using GGN of pseudo-loss
-    fmc_vp = make_ggn_vector_product(f_flat, c_pseudo_flat, num_c_extra_args=2)
+    fmc_vp = make_ggn_vector_product(f_flat, c_pseudo_flat)
 
-    # Fix the parameters: X, y, mc_samples, generator, *v -> *Fv
+    # Fix the parameters: v, X, y, mc_samples, generator -> *Fv
     fmcvp = partial(fmc_vp, params)
 
     # Parallelize over vectors to multiply onto a matrix in list format
-    list_format_vmap_dims = tuple(p.ndim for p in params)  # last axis
     return vmap(
         fmcvp,
-        # X, y, mc_samples, generator are not vmapped, matrix columns are vmapped
-        in_dims=(None, None, None, None, *list_format_vmap_dims),
+        # Vmap over vectors, no vmap over X, y, mc_samples, and generator
+        in_dims=(-1, None, None, None, None),
         # Vmapped output axis is last
-        out_dims=list_format_vmap_dims,
+        out_dims=-1,
         # We want each vector to be multiplied with the same mini-batch MC Fisher
         randomness="same",
     )
@@ -399,17 +398,17 @@ class FisherMCLinearOperator(CurvatureLinearOperator):
     def _mp(
         self,
     ) -> Callable[
-        [Union[Tensor, MutableMapping], Tensor, int, Generator, Tuple[Tensor, ...]],
+        [Tuple[Tensor, ...], Union[Tensor, MutableMapping], Tensor, int, Generator],
         Tuple[Tensor, ...],
     ]:
         """Lazy initialization of batch MC-Fisher matrix product function.
 
         Returns:
-            Function that computes mini-batch MC-Fisher-vector products, given inputs
-            ``X``, labels ``y``, number of MC samples, a random generator, and the
-            entries ``v1, v2, ...`` of the vector in list format. Produces a list of
-            tensors with the same shape as the input vector that represents the result
-            of the mini-batch MC-Fisher multiplication.
+            Function that computes mini-batch MC-Fisher-vector products, given a matrix
+            ``(M1, M2, ...)`` in list format, inputs ``X``, labels ``y``, number of MC
+            samples, and a random generator. Produces a list of tensors with the same
+            shape as the input vector that represents the result of the mini-batch
+            MC-Fisher multiplication.
         """
         return make_batch_fmc_matrix_product(
             self._model_func, self._loss_func, tuple(self._params)
@@ -432,4 +431,4 @@ class FisherMCLinearOperator(CurvatureLinearOperator):
             as ``M``, i.e. each tensor in the list has the shape of a parameter and a
             trailing dimension of matrix columns.
         """
-        return list(self._mp(X, y, self._mc_samples, self._generator, *M))
+        return list(self._mp(tuple(M), X, y, self._mc_samples, self._generator))
