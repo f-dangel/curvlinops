@@ -26,9 +26,6 @@ def make_grad_output_sampler(
     Returns:
         A function that samples gradients w.r.t. the model prediction.
         Signature: (output, num_samples, y, generator) -> grad_samples
-
-    Raises:
-        NotImplementedError: For unsupported loss functions.
     """
 
     def sample_grad_output(
@@ -161,6 +158,15 @@ def make_batch_fmc_matrix_product(
         We can thus multiply with the MC Fisher by computing the GGN-vector products of L'.
 
         The reduction factor adjusts the scale depending on the loss reduction used.
+
+        Args:
+            output_flat: The flattened model predictions.
+            y: The un-flattened labels.
+            mc_samples: Number of MC samples to use.
+            generator: Random generator for sampling.
+
+        Returns:
+            The pseudo-loss whose GGN is the MC-Fisher.
         """
         # Sample gradients w.r.t. output using the provided generator
         grad_output_samples = sample_grad_output_flat(
@@ -390,8 +396,21 @@ class FisherMCLinearOperator(CurvatureLinearOperator):
         return super()._matmat(M)
 
     @cached_property
-    def _fmcmp(self):
-        """Lazy initialization of MC Fisher matrix product function."""
+    def _mp(
+        self,
+    ) -> Callable[
+        [Union[Tensor, MutableMapping], Tensor, int, Generator, Tuple[Tensor, ...]],
+        Tuple[Tensor, ...],
+    ]:
+        """Lazy initialization of batch MC-Fisher matrix product function.
+
+        Args:
+            Function that computes mini-batch MC-Fisher-vector products, given inputs
+            ``X``, labels ``y``, number of MC samples, a random generator, and the
+            entries ``v1, v2, ...`` of the vector in list format. Produces a list of
+            tensors with the same shape as the input vector that represents the result
+            of the mini-batch MC-Fisher multiplication.
+        """
         return make_batch_fmc_matrix_product(
             self._model_func, self._loss_func, tuple(self._params)
         )
@@ -413,4 +432,4 @@ class FisherMCLinearOperator(CurvatureLinearOperator):
             as ``M``, i.e. each tensor in the list has the shape of a parameter and a
             trailing dimension of matrix columns.
         """
-        return list(self._fmcmp(X, y, self._mc_samples, self._generator, *M))
+        return list(self._mp(X, y, self._mc_samples, self._generator, *M))

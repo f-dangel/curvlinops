@@ -102,9 +102,8 @@ def make_batch_ggn_matrix_product(
     list_format_vmap_dims = tuple(p.ndim for p in params)  # last axis
     return vmap(
         ggnvp,
-        # No vmap in X, y, additional loss args are not vmapped (None for each)
-        # last-axis vmap over vector in list format
-        in_dims=(None, None, *(None,) * c_extra_args, *list_format_vmap_dims),
+        # No vmap in X, y, last-axis vmap over vector in list format
+        in_dims=(None, None, *list_format_vmap_dims),
         # Vmapped output axis is last
         out_dims=list_format_vmap_dims,
         # We want each vector to be multiplied with the same mini-batch GGN
