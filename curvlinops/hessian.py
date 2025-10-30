@@ -2,7 +2,7 @@
 
 from collections.abc import MutableMapping
 from functools import cached_property, partial
-from typing import Callable, List, Optional, Tuple, Union
+from typing import Any, Callable, List, Optional, Tuple, Union
 
 from torch import Tensor, no_grad, vmap
 from torch.func import jacrev, jvp
@@ -17,7 +17,9 @@ def make_batch_hessian_matrix_product(
     loss_func: Module,
     params: Tuple[Parameter, ...],
     block_sizes: Optional[List[int]] = None,
-) -> Callable[[Tensor, Tensor, Tuple[Tensor, ...]], Tuple[Tensor, ...]]:
+) -> Callable[
+    [Tuple[Tensor, ...], Union[MutableMapping, Tensor], Tensor], Tuple[Tensor, ...]
+]:
     r"""Set up function that multiplies the mini-batch Hessian onto a matrix in list format.
 
     Args:
@@ -29,8 +31,8 @@ def make_batch_hessian_matrix_product(
             If ``None``, the full Hessian is used.
 
     Returns:
-        A function that takes inputs ``X``, ``y``, and a matrix ``M`` in list
-        format, and returns the mini-batch Hessian applied to ``M`` in list format.
+        A function that takes a matrix ``M`` in list format, inputs ``X``, and ``y``,
+        and returns the mini-batch Hessian applied to ``M`` in list format.
     """
     # Determine block structure
     block_sizes = [len(params)] if block_sizes is None else block_sizes
@@ -46,14 +48,15 @@ def make_batch_hessian_matrix_product(
 
     @no_grad()
     def hessian_vector_product(
-        X: Tensor, y: Tensor, v: Tuple[Tensor, ...]
+        v: Tuple[Tensor, ...], X: Union[Tensor, MutableMapping], *c_args: Any
     ) -> Tuple[Tensor, ...]:
         """Multiply the mini-batch Hessian on a vector in list format.
 
         Args:
-            X: Input to the DNN.
-            y: Ground truth.
             v: Vector to be multiplied with in tensor list format.
+            X: Input to the DNN.
+            *c_args: Additional arguments for the criterion function other than the
+                neural network prediction (e.g., labels).
 
         Returns:
             Result of Hessian multiplication in list format. Has the same shape as
@@ -78,7 +81,7 @@ def make_batch_hessian_matrix_product(
             Returns:
                 Mini-batch loss.
             """
-            return c([], f(params, X), y)
+            return c(f(params, X), *c_args)
 
         for f_block, ps in zip(block_functionals, block_params):
             # Define the loss function composition for this block
@@ -97,8 +100,8 @@ def make_batch_hessian_matrix_product(
     # Parallelize over vectors to multiply onto a matrix in list format
     return vmap(
         hessian_vector_product,
-        # No vmap in X, y, last-axis vmap over vector tuple
-        in_dims=(None, None, -1),
+        # Last-axis vmap over vector tuple, no vmap in X, y
+        in_dims=(-1, None, None),  # NOTE Currently assumes len(c_args) == 1 (labels)
         # Vmapped output axis is last
         out_dims=-1,
         # We want each vector to be multiplied with the same mini-batch Hessian
@@ -168,15 +171,16 @@ class HessianLinearOperator(CurvatureLinearOperator):
     def _mp(
         self,
     ) -> Callable[
-        [Union[Tensor, MutableMapping], Tensor, Tuple[Tensor, ...]], Tuple[Tensor, ...]
+        [Tuple[Tensor, ...], Union[Tensor, MutableMapping], Any], Tuple[Tensor, ...]
     ]:
         """Lazy initialization of batch-Hessian matrix product function.
 
         Returns:
-            Function that computes mini-batch Hessian-vector products, given inputs
-            ``X``, labels ``y``, and the entries ``v1, v2, ...`` of the vector in list
-            format. Produces a list of tensors with the same shape as the input vector
-            that represents the result of the batch-Hessian multiplication.
+            Function that computes mini-batch Hessian-vector products, given the matrix
+            ``(M1, M2, ...)`` in list format, the inputs ``X``, and additional arguments
+            for the criterion function (usually labels ``y``). Produces a list of
+            tensors with the same shape as the input vector that represents the result
+            of the batch-Hessian multiplication.
         """
         return make_batch_hessian_matrix_product(
             self._model_func, self._loss_func, tuple(self._params), self._block_sizes
@@ -199,4 +203,4 @@ class HessianLinearOperator(CurvatureLinearOperator):
             ``M``, i.e. each tensor in the list has the shape of a parameter and a
             trailing dimension of matrix columns.
         """
-        return list(self._mp(X, y, tuple(M)))
+        return list(self._mp(tuple(M), X, y))
