@@ -13,7 +13,7 @@ from curvlinops.utils import make_functional_model_and_loss
 
 
 def make_ggn_vector_product(
-    f: Callable[..., Tensor], c: Callable[..., Tensor], c_extra_args: int = 0
+    f: Callable[..., Tensor], c: Callable[..., Tensor], num_c_extra_args: int = 0
 ) -> Callable[..., Tuple[Tensor, ...]]:
     """Create a function that computes GGN-vector products for given f and c functions.
 
@@ -22,7 +22,7 @@ def make_ggn_vector_product(
             Signature: (*params, X) -> prediction
         c: Function that takes prediction, target, and optional additional args.
             Signature: (prediction, y, *args) -> loss
-        c_extra_args: Number of additional arguments that the loss function c expects
+        num_c_extra_args: Number of additional arguments that the loss function c expects
             beyond prediction and target. Used to correctly split the input arguments
             between the vector to multiply and the additional loss function arguments.
 
@@ -53,7 +53,7 @@ def make_ggn_vector_product(
             the vector part of args_and_v.
         """
         # Split args_and_v into additional loss function arguments and vector v
-        c_args, v = args_and_v[:c_extra_args], args_and_v[c_extra_args:]
+        c_args, v = args_and_v[:num_c_extra_args], args_and_v[num_c_extra_args:]
 
         # Apply the Jacobian of f onto v: v → Jv
         f_val, f_jvp = jvp(lambda *params_inner: f(*params_inner, X), params, v)
@@ -93,7 +93,7 @@ def make_batch_ggn_matrix_product(
     f, c = make_functional_model_and_loss(model_func, loss_func, params)
 
     # Create the functional GGN-vector product
-    ggn_vp = make_ggn_vector_product(f, c, c_extra_args=0)  # params, X, y, *v -> *Gv
+    ggn_vp = make_ggn_vector_product(f, c)  # params, X, y, *v -> *Gv
 
     # Fix the parameters
     ggnvp = partial(ggn_vp, params)  # X, y, *c_args, *v -> *Gv

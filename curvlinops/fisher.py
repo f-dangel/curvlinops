@@ -191,7 +191,7 @@ def make_batch_fmc_matrix_product(
         return 0.5 / (mc_samples * reduction_factor) * (inner_products**2).sum()
 
     # Create the functional MC Fisher-vector product using GGN of pseudo-loss
-    fmc_vp = make_ggn_vector_product(f_flat, c_pseudo_flat, c_extra_args=2)
+    fmc_vp = make_ggn_vector_product(f_flat, c_pseudo_flat, num_c_extra_args=2)
 
     # Fix the parameters: X, y, mc_samples, generator, *v -> *Fv
     fmcvp = partial(fmc_vp, params)
