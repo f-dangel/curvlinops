@@ -808,6 +808,9 @@ def test_forward_only_fisher_type(
     # Manually set all gradient covariances to the identity to simulate FOOF
     for name, block in foof_simulated._gradient_covariances.items():
         foof_simulated._gradient_covariances[name] = eye_like(block)
+    foof_simulated._block_diagonal_operator = (
+        foof_simulated._create_block_diagonal_operator()
+    )
     simulated_foof_mat = foof_simulated @ eye_like(foof_simulated)
 
     # Compute KFAC with `fisher_type=FisherType.FORWARD_ONLY`
