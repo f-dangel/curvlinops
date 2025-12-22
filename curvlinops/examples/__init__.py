@@ -65,6 +65,42 @@ class TensorLinearOperator(PyTorchLinearOperator):
         (M0,) = M
         return [self._A @ M0]
 
+    @property
+    def trace(self) -> Tensor:
+        """Trace of the matrix.
+
+        Returns:
+            Trace of the underlying tensor matrix.
+        """
+        return self._A.trace()
+
+    @property
+    def det(self) -> Tensor:
+        """Determinant of the matrix.
+
+        Returns:
+            Determinant of the underlying tensor matrix.
+        """
+        return self._A.det()
+
+    @property
+    def logdet(self) -> Tensor:
+        """Log determinant of the matrix.
+
+        Returns:
+            Log determinant of the underlying tensor matrix.
+        """
+        return self._A.logdet()
+
+    @property
+    def frobenius_norm(self) -> Tensor:
+        """Frobenius norm of the matrix.
+
+        Returns:
+            Frobenius norm of the underlying tensor matrix.
+        """
+        return self._A.norm(p="fro")
+
 
 class OuterProductLinearOperator(PyTorchLinearOperator):
     """Linear operator for low-rank matrices of the form ``∑ᵢ cᵢ aᵢ aᵢᵀ``.
@@ -129,6 +165,59 @@ class OuterProductLinearOperator(PyTorchLinearOperator):
         """
         return self._A.device
 
+    @property
+    def trace(self) -> Tensor:
+        """Trace of the low-rank matrix ∑ᵢ cᵢ aᵢ aᵢᵀ.
+
+        For outer product matrices, tr(∑ᵢ cᵢ aᵢ aᵢᵀ) = ∑ᵢ cᵢ (aᵢᵀ aᵢ).
+
+        Returns:
+            Trace of the low-rank matrix.
+        """
+        return (self._c * (self._A**2).sum(dim=0)).sum()
+
+    @property
+    def det(self) -> Tensor:
+        """Determinant of the low-rank matrix ∑ᵢ cᵢ aᵢ aᵢᵀ.
+
+        Note: Computing the determinant of a low-rank matrix requires
+        constructing the full matrix, which may be computationally expensive
+        for large dimensions.
+
+        Returns:
+            Determinant of the low-rank matrix.
+        """
+        full_matrix = einsum("ik,k,jk->ij", self._A, self._c, self._A)
+        return full_matrix.det()
+
+    @property
+    def logdet(self) -> Tensor:
+        """Log determinant of the low-rank matrix ∑ᵢ cᵢ aᵢ aᵢᵀ.
+
+        Note: Computing the log determinant of a low-rank matrix requires
+        constructing the full matrix, which may be computationally expensive
+        for large dimensions.
+
+        Returns:
+            Log determinant of the low-rank matrix.
+        """
+        full_matrix = einsum("ik,k,jk->ij", self._A, self._c, self._A)
+        return full_matrix.logdet()
+
+    @property
+    def frobenius_norm(self) -> Tensor:
+        """Frobenius norm of the low-rank matrix ∑ᵢ cᵢ aᵢ aᵢᵀ.
+
+        For outer product matrices, ||∑ᵢ cᵢ aᵢ aᵢᵀ||_F² = ∑ᵢⱼ cᵢ cⱼ (aᵢᵀ aⱼ)².
+
+        Returns:
+            Frobenius norm of the low-rank matrix.
+        """
+        inner_products = self._A.T @ self._A
+        weighted = self._c.unsqueeze(0) * inner_products * self._c.unsqueeze(1)
+        frobenius_norm_squared = (inner_products * weighted).sum()
+        return frobenius_norm_squared.sqrt()
+
 
 class IdentityLinearOperator(PyTorchLinearOperator):
     """Linear operator representing the identity matrix."""
@@ -175,3 +264,59 @@ class IdentityLinearOperator(PyTorchLinearOperator):
             The device on which the linear operator is defined.
         """
         return self._device
+
+    @property
+    def trace(self) -> Tensor:
+        """Trace of the identity matrix.
+
+        For an identity matrix, tr(I) = dimension.
+
+        Returns:
+            Trace of the identity matrix.
+        """
+        from torch import tensor
+
+        total_dim = sum(self._in_shape_flat)
+        return tensor(float(total_dim), device=self.device, dtype=self.dtype)
+
+    @property
+    def det(self) -> Tensor:
+        """Determinant of the identity matrix.
+
+        For an identity matrix, det(I) = 1.
+
+        Returns:
+            Determinant of the identity matrix.
+        """
+        from torch import tensor
+
+        return tensor(1.0, device=self.device, dtype=self.dtype)
+
+    @property
+    def logdet(self) -> Tensor:
+        """Log determinant of the identity matrix.
+
+        For an identity matrix, logdet(I) = log(1) = 0.
+
+        Returns:
+            Log determinant of the identity matrix.
+        """
+        from torch import tensor
+
+        return tensor(0.0, device=self.device, dtype=self.dtype)
+
+    @property
+    def frobenius_norm(self) -> Tensor:
+        """Frobenius norm of the identity matrix.
+
+        For an identity matrix, ||I||_F = sqrt(dimension).
+
+        Returns:
+            Frobenius norm of the identity matrix.
+        """
+        from torch import tensor
+
+        total_dim = sum(self._in_shape_flat)
+        return tensor(
+            float(total_dim), device=self.device, dtype=self.dtype
+        ).sqrt()
