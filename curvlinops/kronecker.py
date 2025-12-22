@@ -1,13 +1,27 @@
 """PyTorch linear operator implementation of Kronecker product S_1 ⊗ S_2 ⊗ ... ."""
 
 from math import prod
-from typing import List
+from typing import List, Union
 
 from einops import einsum
 from torch import Tensor, device, dtype, stack
 from torch.linalg import matrix_norm
 
 from curvlinops._torch_base import PyTorchLinearOperator
+
+
+def ensure_all_square(*factors: Union[Tensor, PyTorchLinearOperator]):
+    """Check that all provided tensors/linear operators are square.
+
+    Args:
+        *factors: Variable number of tensors/operators to check.
+
+    Raises:
+        RuntimeError: If any factor is not square.
+    """
+    for i, factor in enumerate(factors):
+        if len(factor.shape) != 2 or factor.shape[0] != factor.shape[1]:
+            raise RuntimeError(f"Factor {i} is not square: {factor.shape}.")
 
 
 class KroneckerProductLinearOperator(PyTorchLinearOperator):
@@ -110,19 +124,6 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
         return dtypes.pop()
 
     @staticmethod
-    def ensure_all_square(*factors: Tensor):
-        """Check that all provided tensor factors are square matrices.
-
-        Args:
-            *factors: Variable number of 2D tensors to check for squareness.
-
-        Raises:
-            RuntimeError: If any factor is not square.
-        """
-        for i, factor in enumerate(factors):
-            if factor.shape[0] != factor.shape[1]:
-                raise RuntimeError(f"Factor {i} is not square: {factor.shape}.")
-
     @property
     def trace(self) -> Tensor:
         """Trace of the Kronecker product.
@@ -135,7 +136,7 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
         Raises:
             RuntimeError: If any factor is not square.
         """
-        self.ensure_all_square(*self._factors)
+        ensure_all_square(*self._factors)
         return stack([S.trace() for S in self._factors]).prod()
 
     @property
@@ -149,7 +150,7 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
             Determinant of the Kronecker product.
 
         """
-        self.ensure_all_square(*self._factors)
+        ensure_all_square(*self._factors)
         dim = prod(S.shape[0] for S in self._factors)
         return stack([S.det() ** (dim // S.shape[0]) for S in self._factors]).prod()
 
@@ -164,7 +165,7 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
         Returns:
             Log determinant of the Kronecker product.
         """
-        self.ensure_all_square(*self._factors)
+        ensure_all_square(*self._factors)
         dim = prod(S.shape[0] for S in self._factors)
         return stack([(dim // S.shape[0]) * S.logdet() for S in self._factors]).sum()
 

@@ -1,7 +1,7 @@
 """Test linear operator of a Kronecker product."""
 
 from pytest import raises
-from torch import float64, isclose, kron, rand
+from torch import float64, isclose, kron, manual_seed, rand
 from torch.linalg import matrix_norm
 
 from curvlinops.kronecker import KroneckerProductLinearOperator
@@ -10,6 +10,7 @@ from test.utils import compare_matmat
 
 def test_KroneckerProductLinearOperator(adjoint: bool, is_vec: bool):
     """Test matrix multiplication with rectangular Kronecker factors."""
+    manual_seed(0)
     # Create rectangular factors: 3x2, 4x3, 2x5
     S1, S2, S3 = rand(3, 2), rand(4, 3), rand(2, 5)
 
@@ -27,6 +28,7 @@ def test_KroneckerProductLinearOperator(adjoint: bool, is_vec: bool):
 
 def test_KroneckerProductLinearOperator_square(adjoint: bool, is_vec: bool):
     """Test matrix multiplication with square Kronecker factors."""
+    manual_seed(0)
     # Use double-precision because we are testing logdet below
     kwargs = {"dtype": float64}
     S1, S2, S3 = rand(2, 2, **kwargs), rand(4, 4, **kwargs), rand(3, 3, **kwargs)
