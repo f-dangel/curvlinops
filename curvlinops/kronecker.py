@@ -123,7 +123,6 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
             raise RuntimeError(f"Factors have different dtypes: {dtypes}")
         return dtypes.pop()
 
-    @staticmethod
     @property
     def trace(self) -> Tensor:
         """Trace of the Kronecker product.
