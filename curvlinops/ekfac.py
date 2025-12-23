@@ -19,12 +19,15 @@ from torch.nn import (
 )
 from torch.utils.hooks import RemovableHandle
 
+from curvlinops.blockdiagonal import BlockDiagonalLinearOperator
+from curvlinops.eigh import EighDecomposedLinearOperator
 from curvlinops.kfac import (
     FisherType,
     KFACLinearOperator,
     KFACType,
 )
 from curvlinops.kfac_utils import extract_patches
+from curvlinops.kronecker import KroneckerProductLinearOperator
 
 
 class EKFACLinearOperator(KFACLinearOperator):
@@ -200,9 +203,7 @@ class EKFACLinearOperator(KFACLinearOperator):
     def _matmat(self, M: List[Tensor]) -> List[Tensor]:
         """Apply EKFAC to a matrix (multiple vectors) in tensor list format.
 
-        This allows for matrix-matrix products with the EKFAC approximation in PyTorch
-        without converting tensors to numpy arrays, which avoids unnecessary
-        device transfers when working with GPUs and flattening/concatenating.
+        This method now uses the block-diagonal structure internally.
 
         Args:
             M: Matrix for multiplication in tensor list format. Each entry has the
@@ -210,56 +211,63 @@ class EKFACLinearOperator(KFACLinearOperator):
                 ``K`` for the columns, i.e. ``[(*p1.shape, K), (*p2.shape, K), ...]``.
 
         Returns:
-            Matrix-multiplication result ``EKFAC @ M`` in tensor list format. Has the same
-            shapes as the input.
+            Matrix-multiplication result ``EKFAC @ M`` in tensor list format. Has the
+            same shapes as the input.
+        """
+        # Create the block diagonal operator if not cached
+        if not hasattr(self, "_block_diagonal_operator"):
+            self._block_diagonal_operator = self._create_block_diagonal_operator()
+
+        # Convert to canonical form
+        canonical_M = self._to_canonical_form(M)
+
+        # Apply block diagonal operator
+        canonical_result = self._block_diagonal_operator @ canonical_M
+
+        # Convert back from canonical form
+        return self._from_canonical_form(canonical_result)
+
+    def _create_block_diagonal_operator(self) -> BlockDiagonalLinearOperator:
+        """Create block-diagonal linear operator from EKFAC factors.
+
+        Each block corresponds to a layer and is an EighDecomposedLinearOperator with
+        Kronecker-factored eigenvectors.
+
+        Returns:
+            Block-diagonal linear operator with eigendecomposition blocks.
         """
         self._maybe_compute_ekfac()
 
-        KM: List[Tensor | None] = [None] * len(M)
+        # Gather Kronecker factors of the per-block bases and their corrections
+        blocks = []
 
         for mod_name, param_pos in self._mapping.items():
-            # cache the weight shape to ensure correct shapes are returned
-            if "weight" in param_pos:
-                weight_shape = M[param_pos["weight"]].shape
+            Q_a = self._input_covariances_eigenvectors.get(mod_name)
+            Q_g = self._gradient_covariances_eigenvectors[mod_name]
+            lam = self._corrected_eigenvalues[mod_name]
 
-            # Get the EKFAC approximation components for the current module
-            # aaT_eigenvectors does not exist if the weight matrix is excluded
-            aaT_eigenvectors = self._input_covariances_eigenvectors.get(mod_name)
-            # ggT_eigenvectors and corrected_eigenvalues always exists
-            ggT_eigenvectors = self._gradient_covariances_eigenvectors[mod_name]
-            corrected_eigenvalues = self._corrected_eigenvalues[mod_name]
-
-            # bias and weights are treated jointly
+            # Handle joint weight+bias case
             if (
                 not self._separate_weight_and_bias
-                and "weight" in param_pos.keys()
-                and "bias" in param_pos.keys()
+                and "weight" in param_pos
+                and "bias" in param_pos
             ):
-                w_pos, b_pos = param_pos["weight"], param_pos["bias"]
-                # v denotes the free dimension for treating multiple vectors in parallel
-                M_w = rearrange(M[w_pos], "c_out ... v -> c_out (...) v")
-                M_joint = cat([M_w, M[b_pos].unsqueeze(-2)], dim=-2)
-                M_joint = self._left_and_right_multiply(
-                    M_joint, aaT_eigenvectors, ggT_eigenvectors, corrected_eigenvalues
-                )
-                w_cols = M_w.shape[1]
-                KM[w_pos], KM[b_pos] = M_joint.split([w_cols, 1], dim=-2)
-                KM[b_pos].squeeze_(1)
+                basis, eigvals = [Q_g, Q_a], lam
+                blocks.append([basis, eigvals.flatten()])
             else:
-                self._separate_left_and_right_multiply(
-                    KM,
-                    M,
-                    param_pos,
-                    aaT_eigenvectors,
-                    ggT_eigenvectors,
-                    corrected_eigenvalues,
-                )
+                # Separate blocks for weight and bias
+                for p_name, p_pos in param_pos.items():
+                    basis = [Q_g, Q_a] if p_name == "weight" else [Q_g]
+                    eigvals = lam[p_pos]
+                    blocks.append([basis, eigvals.flatten()])
 
-            # restore original shapes
-            if "weight" in param_pos:
-                KM[param_pos["weight"]] = KM[param_pos["weight"]].view(weight_shape)
+        # Convert each block to a linear operator
+        blocks = [
+            EighDecomposedLinearOperator(lam, KroneckerProductLinearOperator(*Qs))
+            for (Qs, lam) in blocks
+        ]
 
-        return KM
+        return BlockDiagonalLinearOperator(blocks)
 
     def _compute_eigenvectors(self):
         """Compute the eigenvectors of the KFAC approximation."""
