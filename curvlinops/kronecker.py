@@ -1,13 +1,24 @@
 """PyTorch linear operator implementation of Kronecker product S_1 ⊗ S_2 ⊗ ... ."""
 
-from math import prod
-from typing import List, Union
+from math import prod, sqrt
+from typing import List, Tuple, Union
+from warnings import warn
 
 from einops import einsum
-from torch import Tensor, device, dtype, stack
-from torch.linalg import matrix_norm
+from torch import (
+    Tensor,
+    cholesky_inverse,
+    device,
+    diagonal_scatter,
+    dtype,
+    float64,
+    kron,
+    stack,
+)
+from torch.linalg import cholesky, eigh, matrix_norm
 
 from curvlinops._torch_base import PyTorchLinearOperator
+from curvlinops.eigh import EighDecomposedLinearOperator
 
 
 def ensure_all_square(*factors: Union[Tensor, PyTorchLinearOperator]):
@@ -178,3 +189,91 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
             Frobenius norm of the Kronecker product.
         """
         return stack([matrix_norm(S) for S in self._factors]).prod()
+
+    def inverse(
+        self,
+        damping: Union[float, Tuple[float, ...]] = 0.0,
+        use_heuristic_damping: bool = False,
+        min_damping: float = 1e-8,
+        use_exact_damping: bool = False,
+        retry_double_precision: bool = True,
+    ):
+        ensure_all_square(*self._factors)
+
+        if use_heuristic_damping and use_exact_damping:
+            raise ValueError("Either use heuristic damping or exact damping, not both.")
+        if (use_heuristic_damping or use_exact_damping) and isinstance(damping, tuple):
+            raise ValueError(
+                "Heuristic and exact damping require a single damping value."
+            )
+        if isinstance(damping, tuple) and len(damping) != len(self._factors):
+            raise ValueError(
+                f"Damping tuple length {len(damping)} does not match number of factors {len(self._factors)}."
+            )
+
+        if use_heuristic_damping and len(self._factors) != 2:
+            raise ValueError(
+                f"Heuristic damping only implemented for two factors. Got {len(self._factors)}"
+            )
+
+        if use_exact_damping:
+            # NOTE We assume all Kronecker factors are symmetric
+            eigvals, eigvecs = zip(*[eigh(S) for S in self._factors])
+            eigvals_expanded = eigvals[0]
+            for eigval in eigvals[1]:
+                eigvals_expanded = kron(eigvals_expanded, eigval)
+            return EighDecomposedLinearOperator(
+                eigvals_expanded, KroneckerProductLinearOperator(*eigvecs)
+            ).inverse(damping=damping)
+
+        else:
+            # Martens and Grosse, 2015 (https://arxiv.org/abs/1503.05671) (Section 6.3)
+            if use_heuristic_damping:
+                S1, S2 = self._factors
+                mean_eig1, mean_eig2 = S1.diag().mean(), S2.diag().mean()
+                if any(mean_eig < 0 for mean_eig in [mean_eig1, mean_eig2]):
+                    raise RuntimeError("Negative mean eigenvalue detected")
+
+                sqrt_eig_mean_ratio = (mean_eig2 / mean_eig1).sqrt()
+                sqrt_damping = sqrt(damping)
+                damping1 = max(sqrt_damping / sqrt_eig_mean_ratio, min_damping)
+                damping2 = max(sqrt_damping * sqrt_eig_mean_ratio, min_damping)
+                damping = (damping1, damping2)
+
+            else:
+                damping = (
+                    damping
+                    if isinstance(damping, tuple)
+                    else tuple(len(self._factors) * [damping])
+                )
+
+            factors_inv = [
+                self._damped_cholesky_inverse(S_i, damping_i, retry_double_precision)
+                for S_i, damping_i in zip(self._factors, damping)
+            ]
+            return KroneckerProductLinearOperator(*factors_inv)
+
+    @staticmethod
+    def _damped_cholesky_inverse(
+        A: Tensor, damping: float, retry_double_precision: bool
+    ) -> Tensor:
+        def _damped_cholesky(A: Tensor, damping: float) -> Tensor:
+            A_damped = diagonal_scatter(A, A.diag() + damping)
+            return cholesky(A_damped)
+
+        try:
+            L = _damped_cholesky(A, damping)
+        except RuntimeError as error:
+            if not retry_double_precision or A.dtype == float64:
+                raise error
+
+            warn(
+                f"Failed to compute Cholesky decomposition in {A.dtype} "
+                f"precision with error {error}. Retrying in double precision...",
+                stacklevel=2,
+            )
+            # Retry in double precision
+            original_dt = A.dtype
+            L = _damped_cholesky(A.to(float64), damping).to(original_dt)
+
+        return cholesky_inverse(L)
