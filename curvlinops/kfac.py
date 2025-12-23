@@ -275,12 +275,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
         self._fisher_type = fisher_type
         self._mc_samples = mc_samples
         self._kfac_approx = kfac_approx
-        self._input_covariances: Dict[str, Tensor] = {}
-        self._gradient_covariances: Dict[str, Tensor] = {}
         self._mapping = self.compute_parameter_mapping(params, model_func)
-
-        # Properties of the full matrix KFAC approximation are initialized to `None`
-        self._reset_matrix_properties()
 
         super().__init__(
             model_func,
@@ -294,6 +289,9 @@ class KFACLinearOperator(CurvatureLinearOperator):
         )
 
         self._set_num_per_example_loss_terms(num_per_example_loss_terms)
+
+        # Create the block diagonal operator
+        self._block_diagonal_operator = self._create_block_diagonal_operator()
 
         if check_deterministic:
             self._check_deterministic()
@@ -331,16 +329,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
         else:
             self._num_per_example_loss_terms = num_per_example_loss_terms
 
-    def _reset_matrix_properties(self):
-        """Reset matrix properties and cached operators."""
-        self._trace = None
-        self._det = None
-        self._logdet = None
-        self._frobenius_norm = None
-        # Reset cached block diagonal operator
-        if hasattr(self, "_block_diagonal_operator"):
-            delattr(self, "_block_diagonal_operator")
-
     def _matmat(self, M: List[Tensor]) -> List[Tensor]:
         """Apply KFAC to a matrix (multiple vectors) in tensor list format.
 
@@ -355,10 +343,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
             Matrix-multiplication result ``KFAC @ M`` in tensor list format. Has the
             same shapes as the input.
         """
-        # Create the block diagonal operator if not cached
-        if not hasattr(self, "_block_diagonal_operator"):
-            self._block_diagonal_operator = self._create_block_diagonal_operator()
-
         # Convert to canonical form
         canonical_M = self._to_canonical_form(M)
 
@@ -377,14 +361,13 @@ class KFACLinearOperator(CurvatureLinearOperator):
         Returns:
             Block-diagonal linear operator with Kronecker product blocks.
         """
-        if not (self._input_covariances or self._gradient_covariances):
-            self.compute_kronecker_factors()
+        input_covariances, gradient_covariances = self._compute_kronecker_factors()
 
         factors = []
 
         for mod_name, param_pos in self._mapping.items():
-            aaT = self._input_covariances.get(mod_name)
-            ggT = self._gradient_covariances[mod_name]
+            aaT = input_covariances.pop(mod_name, None)
+            ggT = gradient_covariances.pop(mod_name)
 
             # Handle joint weight+bias case
             if (
@@ -486,9 +469,16 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
         return original_M
 
-    def compute_kronecker_factors(self):
-        """Compute and cache KFAC's Kronecker factors for future ``matmat``s."""
-        self._reset_matrix_properties()
+    def _compute_kronecker_factors(
+        self,
+    ) -> Tuple[Dict[str, Tensor], Dict[str, Tensor]]:
+        """Compute and return KFAC's Kronecker factors.
+
+        Returns:
+            Tuple of (input_covariances, gradient_covariances) dictionaries.
+        """
+        input_covariances: Dict[str, Tensor] = {}
+        gradient_covariances: Dict[str, Tensor] = {}
 
         # install forward and backward hooks
         hook_handles: List[RemovableHandle] = []
@@ -501,7 +491,9 @@ class KFACLinearOperator(CurvatureLinearOperator):
                 hook_handles.append(
                     module.register_forward_pre_hook(
                         partial(
-                            self._hook_accumulate_input_covariance, module_name=mod_name
+                            self._hook_accumulate_input_covariance,
+                            module_name=mod_name,
+                            covariances_dict=input_covariances,
                         )
                     )
                 )
@@ -512,6 +504,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
                     partial(
                         self._register_tensor_hook_on_output_to_accumulate_gradient_covariance,
                         module_name=mod_name,
+                        covariances_dict=gradient_covariances,
                     )
                 )
             )
@@ -524,11 +517,13 @@ class KFACLinearOperator(CurvatureLinearOperator):
         for X, y in self._loop_over_data(desc="KFAC matrices"):
             output = self._model_func(X)
             output, y = self._rearrange_for_larger_than_2d_output(output, y)
-            self._compute_loss_and_backward(output, y)
+            self._compute_loss_and_backward(output, y, gradient_covariances)
 
         # clean up
         for handle in hook_handles:
             handle.remove()
+
+        return input_covariances, gradient_covariances
 
     def _rearrange_for_larger_than_2d_output(
         self, output: Tensor, y: Tensor
@@ -577,13 +572,16 @@ class KFACLinearOperator(CurvatureLinearOperator):
             loss *= sqrt(C)
         return loss
 
-    def _compute_loss_and_backward(self, output: Tensor, y: Tensor):
+    def _compute_loss_and_backward(
+        self, output: Tensor, y: Tensor, gradient_covariances: Dict[str, Tensor]
+    ):
         r"""Compute the loss and the backward pass(es) required for KFAC.
 
         Args:
             output: The model's prediction
                 :math:`\{f_\mathbf{\theta}(\mathbf{x}_n)\}_{n=1}^N`.
             y: The labels :math:`\{\mathbf{y}_n\}_{n=1}^N`.
+            gradient_covariances: Dictionary to store computed gradient covariances.
 
         Raises:
             ValueError: If the output is not 2d and y is not 1d/2d.
@@ -649,7 +647,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
                 # don't know whether the parameter is a weight or bias; therefore, we
                 # just call `next(iter(param_pos.values()))` to get the first parameter.
                 param = self._params[next(iter(param_pos.values()))]
-                self._gradient_covariances[mod_name] = eye(
+                gradient_covariances[mod_name] = eye(
                     param.shape[0], dtype=param.dtype, device=self.device
                 )
 
@@ -710,7 +708,12 @@ class KFACLinearOperator(CurvatureLinearOperator):
             raise NotImplementedError
 
     def _register_tensor_hook_on_output_to_accumulate_gradient_covariance(
-        self, module: Module, inputs: Tuple[Tensor], output: Tensor, module_name: str
+        self,
+        module: Module,
+        inputs: Tuple[Tensor],
+        output: Tensor,
+        module_name: str,
+        covariances_dict: Dict[str, Tensor],
     ):
         """Register tensor hook on layer's output to accumulate the grad. covariance.
 
@@ -731,23 +734,30 @@ class KFACLinearOperator(CurvatureLinearOperator):
             inputs: The layer's input tensors.
             output: The layer's output tensor.
             module_name: The name of the layer in the neural network.
+            covariances_dict: Dictionary to store computed covariances.
         """
         tensor_hook = partial(
-            self._accumulate_gradient_covariance, module=module, module_name=module_name
+            self._accumulate_gradient_covariance,
+            module=module,
+            module_name=module_name,
+            covariances_dict=covariances_dict,
         )
         output.register_hook(tensor_hook)
 
     def _accumulate_gradient_covariance(
-        self, grad_output: Tensor, module: Module, module_name: str
+        self,
+        grad_output: Tensor,
+        module: Module,
+        module_name: str,
+        covariances_dict: Dict[str, Tensor],
     ):
         """Accumulate the gradient covariance for a layer's output.
-
-        Updates ``self._gradient_covariances``.
 
         Args:
             grad_output: The gradient w.r.t. the output.
             module: The layer whose output's gradient covariance will be accumulated.
             module_name: The name of the layer in the neural network.
+            covariances_dict: Dictionary to store computed covariances.
         """
         g = grad_output.data.detach()
         batch_size = g.shape[0]
@@ -771,21 +781,22 @@ class KFACLinearOperator(CurvatureLinearOperator):
         }[self._loss_func.reduction]
 
         covariance = einsum(g, g, "b i,b j->i j").mul_(correction)
-        self._gradient_covariances = self._set_or_add_(
-            self._gradient_covariances, module_name, covariance
-        )
+        self._set_or_add_(covariances_dict, module_name, covariance)
 
     def _hook_accumulate_input_covariance(
-        self, module: Module, inputs: Tuple[Tensor], module_name: str
+        self,
+        module: Module,
+        inputs: Tuple[Tensor],
+        module_name: str,
+        covariances_dict: Dict[str, Tensor],
     ):
         """Pre-forward hook that accumulates the input covariance of a layer.
-
-        Updates ``self._input_covariances``.
 
         Args:
             module: Module on which the hook is called.
             inputs: Inputs to the module.
             module_name: Name of the module in the neural network.
+            covariances_dict: Dictionary to store computed covariances.
 
         Raises:
             ValueError: If the module has multiple inputs.
@@ -826,9 +837,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
             x = cat([x, x.new_ones(x.shape[0], 1)], dim=1)
 
         covariance = einsum(x, x, "b i,b j -> i j").div_(self._N_data * scale)
-        self._input_covariances = self._set_or_add_(
-            self._input_covariances, module_name, covariance
-        )
+        self._set_or_add_(covariances_dict, module_name, covariance)
 
     @staticmethod
     def _set_or_add_(
@@ -900,87 +909,39 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
         return positions
 
-    @property
     def trace(self) -> Tensor:
         r"""Trace of the KFAC approximation.
-
-        Will call ``compute_kronecker_factors`` if it has not been called before and
-        will cache the trace until ``compute_kronecker_factors`` is called again.
 
         Returns:
             Trace of the KFAC approximation.
         """
-        if self._trace is not None:
-            return self._trace
+        return self._block_diagonal_operator.trace
 
-        # Create the block diagonal operator if not cached
-        if not hasattr(self, "_block_diagonal_operator"):
-            self._block_diagonal_operator = self._create_block_diagonal_operator()
-
-        self._trace = self._block_diagonal_operator.trace
-        return self._trace
-
-    @property
     def det(self) -> Tensor:
         r"""Determinant of the KFAC approximation.
-
-        Will call ``compute_kronecker_factors`` if it has not been called before and
-        will cache the determinant until ``compute_kronecker_factors`` is called again.
 
         Returns:
             Determinant of the KFAC approximation.
         """
-        if self._det is not None:
-            return self._det
+        return self._block_diagonal_operator.det
 
-        # Create the block diagonal operator if not cached
-        if not hasattr(self, "_block_diagonal_operator"):
-            self._block_diagonal_operator = self._create_block_diagonal_operator()
-
-        self._det = self._block_diagonal_operator.det
-        return self._det
-
-    @property
     def logdet(self) -> Tensor:
         r"""Log determinant of the KFAC approximation.
 
         More numerically stable than the ``det`` property.
-        Will call ``compute_kronecker_factors`` if it has not been called before and
-        will cache the log determinant until ``compute_kronecker_factors`` is called
-        again.
 
         Returns:
             Log determinant of the KFAC approximation.
         """
-        if self._logdet is not None:
-            return self._logdet
+        return self._block_diagonal_operator.logdet
 
-        # Create the block diagonal operator if not cached
-        if not hasattr(self, "_block_diagonal_operator"):
-            self._block_diagonal_operator = self._create_block_diagonal_operator()
-
-        self._logdet = self._block_diagonal_operator.logdet
-        return self._logdet
-
-    @property
     def frobenius_norm(self) -> Tensor:
         r"""Frobenius norm of the KFAC approximation.
-
-        Will call ``compute_kronecker_factors`` if it has not been called before and
-        will cache the Frobenius norm until ``compute_kronecker_factors`` is called again.
 
         Returns:
             Frobenius norm of the KFAC approximation.
         """
-        if self._frobenius_norm is not None:
-            return self._frobenius_norm
-
-        # Create the block diagonal operator if not cached
-        if not hasattr(self, "_block_diagonal_operator"):
-            self._block_diagonal_operator = self._create_block_diagonal_operator()
-
-        self._frobenius_norm = self._block_diagonal_operator.frobenius_norm
-        return self._frobenius_norm
+        return self._block_diagonal_operator.frobenius_norm
 
     def state_dict(self) -> Dict[str, Any]:
         """Return the state of the KFAC linear operator.
@@ -1007,32 +968,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
             "num_per_example_loss_terms": self._num_per_example_loss_terms,
             "separate_weight_and_bias": self._separate_weight_and_bias,
             "num_data": self._N_data,
-            # Kronecker factors (if computed)
-            "input_covariances": self._input_covariances,
-            "gradient_covariances": self._gradient_covariances,
-            # Properties (not necessarily computed)
-            "trace": self._trace,
-            "det": self._det,
-            "logdet": self._logdet,
-            "frobenius_norm": self._frobenius_norm,
+            # Note: Kronecker factors are computed on-demand, not stored
         }
-
-    def _check_if_keys_match_mapping_keys(self, dictionary: dict):
-        """Check if the keys of a dictionary match the mapping keys of the linear operator.
-
-        Args:
-            dictionary: Dictionary to check.
-
-        Raises:
-            ValueError: If the keys do not match the mapping keys.
-        """
-        dictionary_keys = set(dictionary.keys())
-        mapping_keys = set(self._mapping.keys())
-        if dictionary_keys and dictionary_keys != mapping_keys:
-            raise ValueError(
-                "Keys in dictionary do not match mapping keys of linear operator. "
-                f"Difference: {dictionary_keys - mapping_keys}."
-            )
 
     def load_state_dict(self, state_dict: Dict[str, Any]):
         """Load the state of the KFAC linear operator.
@@ -1079,17 +1016,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
         self._separate_weight_and_bias = state_dict["separate_weight_and_bias"]
         self._N_data = state_dict["num_data"]
 
-        # Set Kronecker factors (if computed)
-        self._check_if_keys_match_mapping_keys(state_dict["input_covariances"])
-        self._check_if_keys_match_mapping_keys(state_dict["gradient_covariances"])
-        self._input_covariances = state_dict["input_covariances"]
-        self._gradient_covariances = state_dict["gradient_covariances"]
-
-        # Set properties (not necessarily computed)
-        self._trace = state_dict["trace"]
-        self._det = state_dict["det"]
-        self._logdet = state_dict["logdet"]
-        self._frobenius_norm = state_dict["frobenius_norm"]
+        # Note: Kronecker factors will be computed on-demand
 
     @classmethod
     def from_state_dict(

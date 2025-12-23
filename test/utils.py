@@ -12,6 +12,7 @@ from numpy import ndarray
 from pytest import raises, warns
 from torch import (
     Tensor,
+    diagonal_scatter,
     allclose,
     as_tensor,
     cat,
@@ -824,13 +825,9 @@ def _test_property(  # noqa: C901
     if property_name == "logdet":
         DELTA = 1e-3
         if type(linop) is KFACLinearOperator:
-            if not check_deterministic:
-                linop.compute_kronecker_factors()
-            assert linop._input_covariances or linop._gradient_covariances
-            for aaT in linop._input_covariances.values():
-                aaT.add_(eye_like(aaT), alpha=DELTA)
-            for ggT in linop._gradient_covariances.values():
-                ggT.add_(eye_like(ggT), alpha=DELTA)
+            for block in linop._block_diagonal_operator._blocks:
+                for i, S in enumerate(block._factors):
+                    block._factors[i] = diagonal_scatter(S, S.diag() + DELTA)
         elif type(linop) is EKFACLinearOperator:
             if not check_deterministic:
                 linop.compute_kronecker_factors()
@@ -852,15 +849,10 @@ def _test_property(  # noqa: C901
     }[property_name]
 
     # Check for equivalence of property and naive computation
-    quantity = getattr(linop, property_name)
+    quantity = getattr(linop, property_name)()
     linop_mat = linop @ eye_like(linop)
     quantity_naive = torch_fn(linop_mat)
     assert allclose_report(quantity, quantity_naive, rtol=rtol, atol=atol)
-
-    # Check that the property is properly cached and reset
-    assert getattr(linop, "_" + property_name) == quantity
-    linop.compute_kronecker_factors()
-    assert getattr(linop, "_" + property_name) is None
 
 
 def _test_save_and_load_state_dict(
