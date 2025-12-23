@@ -41,12 +41,12 @@ from torch.utils.hooks import RemovableHandle
 
 from curvlinops._torch_base import CurvatureLinearOperator
 from curvlinops.blockdiagonal import BlockDiagonalLinearOperator
-from curvlinops.kronecker import KroneckerProductLinearOperator
 from curvlinops.kfac_utils import (
     extract_averaged_patches,
     extract_patches,
     loss_hessian_matrix_sqrt,
 )
+from curvlinops.kronecker import KroneckerProductLinearOperator
 
 FactorType = TypeVar(
     "FactorType", Optional[Tensor], Tuple[Optional[Tensor], Optional[Tensor]]
@@ -990,8 +990,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
         Will call ``compute_kronecker_factors`` if it has not been called before and
         will cache the trace until ``compute_kronecker_factors`` is called again.
-        Uses the property of the Kronecker product that
-        :math:`\text{tr}(A \otimes B) = \text{tr}(A) \text{tr}(B)`.
 
         Returns:
             Trace of the KFAC approximation.
@@ -999,25 +997,11 @@ class KFACLinearOperator(CurvatureLinearOperator):
         if self._trace is not None:
             return self._trace
 
-        if not (self._input_covariances or self._gradient_covariances):
-            self.compute_kronecker_factors()
+        # Create the block diagonal operator if not cached
+        if not hasattr(self, "_block_diagonal_operator"):
+            self._block_diagonal_operator = self._create_block_diagonal_operator()
 
-        self._trace = 0.0
-        for mod_name, param_pos in self._mapping.items():
-            tr_ggT = self._gradient_covariances[mod_name].trace()
-            if (
-                not self._separate_weight_and_bias
-                and "weight" in param_pos.keys()
-                and "bias" in param_pos.keys()
-            ):
-                self._trace += self._input_covariances[mod_name].trace() * tr_ggT
-            else:
-                for p_name in param_pos.keys():
-                    self._trace += tr_ggT * (
-                        self._input_covariances[mod_name].trace()
-                        if p_name == "weight"
-                        else 1
-                    )
+        self._trace = self._block_diagonal_operator.trace
         return self._trace
 
     @property
@@ -1026,10 +1010,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
         Will call ``compute_kronecker_factors`` if it has not been called before and
         will cache the determinant until ``compute_kronecker_factors`` is called again.
-        Uses the property of the Kronecker product that
-        :math:`\det(A \otimes B) = \det(A)^{m} \det(B)^{n}`,
-        where
-        :math:`A \in \mathbb{R}^{n \times n}` and :math:`B \in \mathbb{R}^{m \times m}`.
 
         Returns:
             Determinant of the KFAC approximation.
@@ -1037,33 +1017,11 @@ class KFACLinearOperator(CurvatureLinearOperator):
         if self._det is not None:
             return self._det
 
-        if not (self._input_covariances or self._gradient_covariances):
-            self.compute_kronecker_factors()
+        # Create the block diagonal operator if not cached
+        if not hasattr(self, "_block_diagonal_operator"):
+            self._block_diagonal_operator = self._create_block_diagonal_operator()
 
-        self._det = 1.0
-        for mod_name, param_pos in self._mapping.items():
-            m = self._gradient_covariances[mod_name].shape[0]
-            det_ggT = self._gradient_covariances[mod_name].det()
-            if (
-                not self._separate_weight_and_bias
-                and "weight" in param_pos.keys()
-                and "bias" in param_pos.keys()
-            ):
-                n = self._input_covariances[mod_name].shape[0]
-                det_aaT = self._input_covariances[mod_name].det()
-                self._det *= det_aaT.pow(m) * det_ggT.pow(n)
-            else:
-                for p_name in param_pos.keys():
-                    n = (
-                        self._input_covariances[mod_name].shape[0]
-                        if p_name == "weight"
-                        else 1
-                    )
-                    self._det *= det_ggT.pow(n) * (
-                        self._input_covariances[mod_name].det().pow(m)
-                        if p_name == "weight"
-                        else 1
-                    )
+        self._det = self._block_diagonal_operator.det
         return self._det
 
     @property
@@ -1073,9 +1031,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
         More numerically stable than the ``det`` property.
         Will call ``compute_kronecker_factors`` if it has not been called before and
         will cache the log determinant until ``compute_kronecker_factors`` is called
-        again. Uses the property of the Kronecker product that
-        :math:`\log \det(A \otimes B) = m \log \det(A) + n \log \det(B)`, where
-        :math:`A \in \mathbb{R}^{n \times n}` and :math:`B \in \mathbb{R}^{m \times m}`.
+        again.
 
         Returns:
             Log determinant of the KFAC approximation.
@@ -1083,33 +1039,11 @@ class KFACLinearOperator(CurvatureLinearOperator):
         if self._logdet is not None:
             return self._logdet
 
-        if not (self._input_covariances or self._gradient_covariances):
-            self.compute_kronecker_factors()
+        # Create the block diagonal operator if not cached
+        if not hasattr(self, "_block_diagonal_operator"):
+            self._block_diagonal_operator = self._create_block_diagonal_operator()
 
-        self._logdet = 0.0
-        for mod_name, param_pos in self._mapping.items():
-            m = self._gradient_covariances[mod_name].shape[0]
-            logdet_ggT = self._gradient_covariances[mod_name].logdet()
-            if (
-                not self._separate_weight_and_bias
-                and "weight" in param_pos.keys()
-                and "bias" in param_pos.keys()
-            ):
-                n = self._input_covariances[mod_name].shape[0]
-                logdet_aaT = self._input_covariances[mod_name].logdet()
-                self._logdet += m * logdet_aaT + n * logdet_ggT
-            else:
-                for p_name in param_pos.keys():
-                    n = (
-                        self._input_covariances[mod_name].shape[0]
-                        if p_name == "weight"
-                        else 1
-                    )
-                    self._logdet += n * logdet_ggT + (
-                        m * self._input_covariances[mod_name].logdet()
-                        if p_name == "weight"
-                        else 0
-                    )
+        self._logdet = self._block_diagonal_operator.logdet
         return self._logdet
 
     @property
@@ -1118,8 +1052,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
         Will call ``compute_kronecker_factors`` if it has not been called before and
         will cache the Frobenius norm until ``compute_kronecker_factors`` is called again.
-        Uses the property of the Kronecker product that
-        :math:`\|A \otimes B\|_F = \|A\|_F \|B\|_F`.
 
         Returns:
             Frobenius norm of the KFAC approximation.
@@ -1127,27 +1059,11 @@ class KFACLinearOperator(CurvatureLinearOperator):
         if self._frobenius_norm is not None:
             return self._frobenius_norm
 
-        if not (self._input_covariances or self._gradient_covariances):
-            self.compute_kronecker_factors()
+        # Create the block diagonal operator if not cached
+        if not hasattr(self, "_block_diagonal_operator"):
+            self._block_diagonal_operator = self._create_block_diagonal_operator()
 
-        self._frobenius_norm = 0.0
-        for mod_name, param_pos in self._mapping.items():
-            squared_frob_ggT = self._gradient_covariances[mod_name].square().sum()
-            if (
-                not self._separate_weight_and_bias
-                and "weight" in param_pos.keys()
-                and "bias" in param_pos.keys()
-            ):
-                squared_frob_aaT = self._input_covariances[mod_name].square().sum()
-                self._frobenius_norm += squared_frob_aaT * squared_frob_ggT
-            else:
-                for p_name in param_pos.keys():
-                    self._frobenius_norm += squared_frob_ggT * (
-                        self._input_covariances[mod_name].square().sum()
-                        if p_name == "weight"
-                        else 1
-                    )
-        self._frobenius_norm.sqrt_()
+        self._frobenius_norm = self._block_diagonal_operator.frobenius_norm
         return self._frobenius_norm
 
     def state_dict(self) -> Dict[str, Any]:
