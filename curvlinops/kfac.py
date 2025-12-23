@@ -341,88 +341,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
         if hasattr(self, "_block_diagonal_operator"):
             delattr(self, "_block_diagonal_operator")
 
-    @staticmethod
-    def _left_and_right_multiply(
-        M: Tensor,
-        aaT: FactorType,
-        ggT: FactorType,
-        eigenvalues: Optional[Tensor] = None,
-    ) -> Tensor:
-        """Left and right multiply matrix with Kronecker factors.
-
-        Args:
-            M: (Batched) Matrix for multiplication. Shape will be
-                (ggT.shape[0], aaT.shape[0], K), where K is the number of vectors/the
-                batch dimension of the batched matrix product.
-            aaT: Input covariance Kronecker factor or its eigenvectors. ``None`` for
-                biases.
-            ggT: Gradient covariance Kronecker factor or its eigenvectors.
-            eigenvalues: Eigenvalues of the (E)KFAC approximation when multiplying with
-                the eigendecomposition of the KFAC approximation. ``None`` for the
-                non-decomposed KFAC approximation. Defaults to ``None``.
-
-        Returns:
-            Matrix-multiplication result.
-        """
-        if eigenvalues is None:
-            M = einsum(ggT, M, aaT, "i j, j k v, k l -> i l v")
-        else:
-            # Perform preconditioning in KFE, e.g. see equation (21) in
-            # https://arxiv.org/abs/2308.03296.
-            aaT_eigvecs = aaT
-            ggT_eigvecs = ggT
-            # Transform in eigenbasis.
-            M = einsum(ggT_eigvecs, M, aaT_eigvecs, "i j, i k v, k l -> j l v")
-            # Multiply (broadcasted) by eigenvalues.
-            M.mul_(eigenvalues.unsqueeze(-1))
-            # Transform back to standard basis.
-            M = einsum(ggT_eigvecs, M, aaT_eigvecs, "i j, j k v, l k -> i l v")
-        return M
-
-    @staticmethod
-    def _separate_left_and_right_multiply(
-        KM: List[Tensor],
-        M: List[Tensor],
-        param_pos: Dict[str, int],
-        aaT: FactorType,
-        ggT: FactorType,
-        eigenvalues: Optional[List[Tensor]] = None,
-    ) -> Tensor:
-        """Multiply matrix with Kronecker factors for separated weight and bias.
-
-        Args:
-            KM: List to write the matrix-multiplication result to.
-            M: List of matrices for multiplication.
-            param_pos: Dictionary with positions of the weight and bias parameters.
-            aaT: Input covariance Kronecker factor or its eigenvectors. ``None`` for
-                biases.
-            ggT: Gradient covariance Kronecker factor or its eigenvectors.
-            eigenvalues: Eigenvalues of the (E)KFAC approximation when multiplying with
-                the eigendecomposition of the KFAC approximation. ``None`` for the
-                non-decomposed KFAC approximation. Defaults to ``None``.
-        """
-        for p_name, pos in param_pos.items():
-            # for weights we need to multiply from the right with aaT
-            # for weights and biases we need to multiply from the left with ggT
-            if p_name == "weight":
-                M_w = rearrange(M[pos], "c_out ... v -> c_out (...) v")
-                # If `eigenvalues` is not `None`, we transform to eigenbasis here
-                KM[pos] = einsum(M_w, aaT, "c_out j v, j k -> c_out k v")
-            else:
-                KM[pos] = M[pos]
-
-            # If `eigenvalues` is not `None`, we convert to eigenbasis here
-            KM[pos] = einsum(
-                ggT.T if eigenvalues else ggT, KM[pos], "j k, k ... v -> j ... v"
-            )
-
-            if eigenvalues is not None:
-                # Multiply (broadcasted) by eigenvalues, convert back to original basis
-                KM[pos].mul_(eigenvalues[pos].unsqueeze(-1))
-                if p_name == "weight":
-                    KM[pos] = einsum(KM[pos], aaT, "c_out j v, k j -> c_out k v")
-                KM[pos] = einsum(ggT, KM[pos], "j k, k ... v -> j ... v")
-
     def _matmat(self, M: List[Tensor]) -> List[Tensor]:
         """Apply KFAC to a matrix (multiple vectors) in tensor list format.
 
@@ -446,11 +364,9 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
         # Apply block diagonal operator
         canonical_result = self._block_diagonal_operator @ canonical_M
-        print([r.shape for r in canonical_result])
 
         # Convert back from canonical form
         out = self._from_canonical_form(canonical_result)
-        print([o.shape for o in out])
         return out
 
     def _create_block_diagonal_operator(self) -> BlockDiagonalLinearOperator:
