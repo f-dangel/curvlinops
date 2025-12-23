@@ -150,3 +150,17 @@ class EighDecomposedLinearOperator(PyTorchLinearOperator):
             Frobenius norm.
         """
         return self._eigenvalues.norm(p="fro")
+
+    def inverse(self, damping: float = 0.0) -> "EighDecomposedLinearOperator":
+        """Return the inverse of the eigendecomposition operator.
+
+        The inverse is given by Q diag(1 / (λ + damping)) Q^T.
+
+        Args:
+            damping: Damping term added to eigenvalues before inversion.
+
+        Returns:
+            Inverse eigendecomposition operator.
+        """
+        inv_eigenvalues = 1.0 / (self._eigenvalues + damping)
+        return EighDecomposedLinearOperator(inv_eigenvalues, self._eigenvectors)
