@@ -321,9 +321,7 @@ class EKFACLinearOperator(KFACLinearOperator):
                 )
             )
 
-        if self._generator is None or self._generator.device != self.device:
-            self._generator = Generator(device=self.device)
-        self._generator.manual_seed(self._seed)
+        self._setup_generator()
 
         # loop over data set, computing the corrected eigenvalues
         for X, y in self._loop_over_data(desc="Eigenvalue correction"):

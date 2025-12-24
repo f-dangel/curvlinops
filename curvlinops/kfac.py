@@ -469,6 +469,17 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
         return original_M
 
+    def _setup_generator(self):
+        """Initialize and seed the random number generator if needed.
+
+        Creates a new generator on the correct device if one doesn't exist or if
+        the existing generator is on the wrong device. Always seeds the generator
+        with the stored seed value.
+        """
+        if self._generator is None or self._generator.device != self.device:
+            self._generator = Generator(device=self.device)
+        self._generator.manual_seed(self._seed)
+
     def _compute_kronecker_factors(
         self,
     ) -> Tuple[Dict[str, Tensor], Dict[str, Tensor]]:
@@ -510,9 +521,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
             )
 
         # loop over data set, computing the Kronecker factors
-        if self._generator is None or self._generator.device != self.device:
-            self._generator = Generator(device=self.device)
-        self._generator.manual_seed(self._seed)
+        self._setup_generator()
 
         for X, y in self._loop_over_data(desc="KFAC matrices"):
             output = self._model_func(X)
