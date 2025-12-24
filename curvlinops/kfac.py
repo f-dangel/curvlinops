@@ -372,8 +372,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
             # Handle joint weight+bias case
             if (
                 not self._separate_weight_and_bias
-                and "weight" in param_pos
-                and "bias" in param_pos
+                and {"weight", "bias"} == set(param_pos.keys())
             ):
                 # Single Kronecker product block for weight+bias
                 factors.append([ggT, aaT])
@@ -405,8 +404,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
             # Handle joint weight+bias case
             if (
                 not self._separate_weight_and_bias
-                and "weight" in param_pos
-                and "bias" in param_pos
+                and {"weight", "bias"} == set(param_pos.keys())
             ):
                 w_pos, b_pos = param_pos["weight"], param_pos["bias"]
                 # Flatten weight tensor into matrix and concatenate bias
@@ -440,8 +438,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
             # Handle joint weight+bias case
             if (
                 not self._separate_weight_and_bias
-                and "weight" in param_pos
-                and "bias" in param_pos
+                and {"weight", "bias"} == set(param_pos.keys())
             ):
                 w_pos, b_pos = param_pos["weight"], param_pos["bias"]
                 combined = M[processed]
@@ -839,9 +836,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
         params = self._mapping[module_name]
         if (
-            "weight" in params
-            and "bias" in params
-            and not self._separate_weight_and_bias
+            not self._separate_weight_and_bias
+            and {"weight", "bias"} == set(params.keys())
         ):
             x = cat([x, x.new_ones(x.shape[0], 1)], dim=1)
 
