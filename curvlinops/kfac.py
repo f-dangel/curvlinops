@@ -379,7 +379,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
                 factors.append([ggT, aaT])
             else:
                 # Separate blocks for weight and bias
-                for p_name in param_pos.keys():
+                for p_name in param_pos:
                     factors.append([ggT, aaT] if p_name == "weight" else [ggT])
 
         # Create Kronecker product linear operators for each block
@@ -417,7 +417,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
                 canonical_M.append(combined.flatten(end_dim=-2))
             else:
                 # Handle separate weight and bias
-                for p_name in param_pos.keys():
+                for p_name in param_pos:
                     pos = param_pos[p_name]
                     canonical_M.append(M[pos].flatten(end_dim=-2))
 
@@ -460,7 +460,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
                 processed += 1
             else:
                 # Handle separate weight and bias
-                for p_name in param_pos.keys():
+                for p_name in param_pos:
                     pos = param_pos[p_name]
                     original_M[pos] = M[processed].reshape(
                         *self._params[pos].shape, num_columns
@@ -498,7 +498,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
             module = self._model_func.get_submodule(mod_name)
 
             # input covariance only required for weights
-            if "weight" in param_pos.keys():
+            if "weight" in param_pos:
                 hook_handles.append(
                     module.register_forward_pre_hook(
                         partial(
@@ -839,8 +839,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
         params = self._mapping[module_name]
         if (
-            "weight" in params.keys()
-            and "bias" in params.keys()
+            "weight" in params
+            and "bias" in params
             and not self._separate_weight_and_bias
         ):
             x = cat([x, x.new_ones(x.shape[0], 1)], dim=1)
