@@ -735,16 +735,7 @@ def test_ekfac_does_not_affect_grad():
     grads_before = [p.grad.clone() for p in params]
 
     # create and compute EKFAC
-    ekfac = EKFACLinearOperator(
-        model,
-        MSELoss(),
-        params,
-        [(X, y)],
-        # suppress computation of EKFAC matrices
-        check_deterministic=False,
-    )
-    ekfac.compute_kronecker_factors()
-    ekfac.compute_eigenvalue_correction()
+    _ = EKFACLinearOperator(model, MSELoss(), params, [(X, y)])
 
     # make sure gradients are unchanged
     for grad_before, p in zip(grads_before, params):
