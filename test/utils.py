@@ -829,16 +829,8 @@ def _test_property(  # noqa: C901
                 for i, S in enumerate(block._factors):
                     block._factors[i] = diagonal_scatter(S, S.diag() + DELTA)
         elif type(linop) is EKFACLinearOperator:
-            if not check_deterministic:
-                linop.compute_kronecker_factors()
-                linop.compute_eigenvalue_correction()
-            assert linop._corrected_eigenvalues
-            for eigenvalues in linop._corrected_eigenvalues.values():
-                if isinstance(eigenvalues, dict):
-                    for eigenvals in eigenvalues.values():
-                        eigenvals.add_(DELTA)
-                else:
-                    eigenvalues.add_(DELTA)
+            for block in linop._block_diagonal_operator._blocks:
+                block._eigenvalues = block._eigenvalues + DELTA
 
     # Mapping from the property name to the corresponding torch function
     torch_fn = {

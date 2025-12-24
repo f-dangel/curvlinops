@@ -23,7 +23,8 @@ from torch.nn import (
 )
 
 from curvlinops import EFLinearOperator, GGNLinearOperator
-from curvlinops.ekfac import EKFACLinearOperator, FisherType, KFACType
+from curvlinops.ekfac import EKFACLinearOperator, FisherType
+from curvlinops.kfac import KFACType
 from curvlinops.utils import allclose_report
 from test.cases import DEVICES, DEVICES_IDS
 from test.utils import (
@@ -95,10 +96,6 @@ def test_ekfac_type2(
 
     assert allclose_report(ggn, ekfac_mat, atol=3e-6)
 
-    # Check that input covariances were not computed
-    if exclude == "weight":
-        assert len(ekfac._input_covariances_eigenvectors) == 0
-
 
 @mark.parametrize("setting", [KFACType.EXPAND, KFACType.REDUCE])
 @mark.parametrize(
@@ -169,10 +166,6 @@ def test_ekfac_type2_weight_sharing(
     ekfac_mat = ekfac @ eye_like(ekfac)
 
     assert allclose_report(ggn, ekfac_mat, rtol=1e-4)
-
-    # Check that input covariances were not computed
-    if exclude == "weight":
-        assert len(ekfac._input_covariances_eigenvectors) == 0
 
 
 @mark.parametrize(
@@ -584,12 +577,8 @@ def test_expand_setting_scaling(
         # MSE loss averages over number of output channels
         loss_term_factor *= output_random_variable_size
     correction = ekfac_sum._N_data * loss_term_factor
-    for eigenvalues in ekfac_sum._corrected_eigenvalues.values():
-        if isinstance(eigenvalues, dict):
-            for eigenvals in eigenvalues.values():
-                eigenvals /= correction
-        else:
-            eigenvalues /= correction
+    for block in ekfac_sum._block_diagonal_operator._blocks:
+        block._eigenvalues = block._eigenvalues / correction
     ekfac_simulated_mean_mat = ekfac_sum @ eye_like(ekfac_sum)
 
     # EKFAC with mean reduction

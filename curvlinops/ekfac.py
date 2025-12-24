@@ -2,20 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import MutableMapping
 from functools import partial
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Dict, List, Tuple, Union
 
 from einops import einsum, rearrange
-from torch import Generator, Tensor, cat
+from torch import Tensor, cat
 from torch.linalg import eigh
 from torch.nn import (
-    BCEWithLogitsLoss,
     Conv2d,
-    CrossEntropyLoss,
     Module,
-    MSELoss,
-    Parameter,
 )
 from torch.utils.hooks import RemovableHandle
 
@@ -24,7 +19,6 @@ from curvlinops.eigh import EighDecomposedLinearOperator
 from curvlinops.kfac import (
     FisherType,
     KFACLinearOperator,
-    KFACType,
 )
 from curvlinops.kfac_utils import extract_patches
 from curvlinops.kronecker import KroneckerProductLinearOperator
@@ -55,116 +49,6 @@ class EKFACLinearOperator(KFACLinearOperator):
         FisherType.EMPIRICAL,
     )
 
-    def __init__(
-        self,
-        model_func: Module,
-        loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
-        params: List[Parameter],
-        data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
-        progressbar: bool = False,
-        check_deterministic: bool = True,
-        seed: int = 2147483647,
-        fisher_type: str = FisherType.MC,
-        mc_samples: int = 1,
-        kfac_approx: str = KFACType.EXPAND,
-        num_per_example_loss_terms: Optional[int] = None,
-        separate_weight_and_bias: bool = True,
-        num_data: Optional[int] = None,
-        batch_size_fn: Optional[Callable[[MutableMapping], int]] = None,
-    ):
-        """Eigenvalue-corrected KFAC (EKFAC) proxy of the Fisher/GGN.
-
-        Warning:
-            If the model's parameters change, e.g. during training, you need to
-            create a fresh instance of this object. This is because, for performance
-            reasons, the Kronecker factors are computed once and cached during the
-            first matrix-vector product. They will thus become outdated if the model
-            changes.
-
-        Warning:
-            This is an early proto-type with limitations:
-                - Only Linear and Conv2d modules are supported.
-                - Only models with 2d output are supported.
-
-        Args:
-            model_func: The neural network. Must consist of modules.
-            loss_func: The loss function.
-            params: The parameters defining the Fisher/GGN that will be approximated
-                through EKFAC.
-            data: A data loader containing the data of the Fisher/GGN.
-            progressbar: Whether to show a progress bar when computing the Kronecker
-                factors. Defaults to ``False``.
-            check_deterministic: Whether to check that the linear operator is
-                deterministic. Defaults to ``True``.
-            seed: The seed for the random number generator used to draw labels
-                from the model's predictive distribution. Defaults to ``2147483647``.
-            fisher_type: The type of Fisher/GGN to approximate.
-                If ``FisherType.TYPE2``, the exact Hessian of the loss w.r.t. the model
-                outputs is used. This requires as many backward passes as the output
-                dimension, i.e. the number of classes for classification. This is
-                sometimes also called type-2 Fisher.
-                If ``FisherType.MC``, the expectation is approximated by sampling
-                ``mc_samples`` labels from the model's predictive distribution.
-                If ``FisherType.EMPIRICAL``, the empirical gradients are used which
-                corresponds to the uncentered gradient covariance/empirical Fisher.
-                Defaults to ``FisherType.MC``.
-            mc_samples: The number of Monte-Carlo samples to use per data point.
-                Has to be set to ``1`` when ``fisher_type != FisherType.MC``.
-                Defaults to ``1``.
-            kfac_approx: A string specifying the KFAC approximation that should
-                be used for linear weight-sharing layers, e.g. ``Conv2d`` modules
-                or ``Linear`` modules that process matrix- or higher-dimensional
-                features.
-                Possible values are ``KFACType.EXPAND`` and ``KFACType.REDUCE``.
-                See `Eschenhagen et al., 2023 <https://arxiv.org/abs/2311.00636>`_
-                for an explanation of the two approximations.
-                Defaults to ``KFACType.EXPAND``.
-            num_per_example_loss_terms: Number of per-example loss terms, e.g., the
-                number of tokens in a sequence. The model outputs will have
-                ``num_data * num_per_example_loss_terms * C`` entries, where ``C`` is
-                the dimension of the random variable we define the likelihood over --
-                for the ``CrossEntropyLoss`` it will be the number of classes, for the
-                ``MSELoss`` and ``BCEWithLogitsLoss`` it will be the size of the last
-                dimension of the the model outputs/targets (our convention here).
-                If ``None``, ``num_per_example_loss_terms`` is inferred from the data at
-                the cost of one traversal through the data loader. It is expected to be
-                the same for all examples. Defaults to ``None``.
-            separate_weight_and_bias: Whether to treat weights and biases separately.
-                Defaults to ``True``.
-            num_data: Number of data points. If ``None``, it is inferred from the data
-                at the cost of one traversal through the data loader.
-            batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
-                needs to be specified. The intended behavior is to consume the first
-                entry of the iterates from ``data`` and return their batch size.
-        """
-        super().__init__(
-            model_func=model_func,
-            loss_func=loss_func,
-            params=params,
-            data=data,
-            progressbar=progressbar,
-            check_deterministic=False,
-            seed=seed,
-            fisher_type=fisher_type,
-            mc_samples=mc_samples,
-            kfac_approx=kfac_approx,
-            num_per_example_loss_terms=num_per_example_loss_terms,
-            separate_weight_and_bias=separate_weight_and_bias,
-            num_data=num_data,
-            batch_size_fn=batch_size_fn,
-        )
-
-        # Initialize the eigenvectors of the Kronecker factors
-        self._input_covariances_eigenvectors: Dict[str, Tensor] = {}
-        self._gradient_covariances_eigenvectors: Dict[str, Tensor] = {}
-        # Initialize the cache for activations
-        self._cached_activations: Dict[str, Tensor] = {}
-        # Initialize the corrected eigenvalues for EKFAC
-        self._corrected_eigenvalues: Dict[str, Union[Tensor, Dict[str, Tensor]]] = {}
-
-        if check_deterministic:
-            self._check_deterministic()
-
     def _rearrange_for_larger_than_2d_output(
         self, output: Tensor, y: Tensor
     ) -> Tuple[Tensor, Tensor]:
@@ -193,40 +77,6 @@ class EKFACLinearOperator(KFACLinearOperator):
             )
         return output, y
 
-    def _maybe_compute_ekfac(self):
-        """Compute the EKFAC approximation when necessary."""
-        if not self._corrected_eigenvalues:
-            if not (self._input_covariances or self._gradient_covariances):
-                self.compute_kronecker_factors()
-            self.compute_eigenvalue_correction()
-
-    def _matmat(self, M: List[Tensor]) -> List[Tensor]:
-        """Apply EKFAC to a matrix (multiple vectors) in tensor list format.
-
-        This method now uses the block-diagonal structure internally.
-
-        Args:
-            M: Matrix for multiplication in tensor list format. Each entry has the
-                same shape as a parameter with an additional trailing dimension of size
-                ``K`` for the columns, i.e. ``[(*p1.shape, K), (*p2.shape, K), ...]``.
-
-        Returns:
-            Matrix-multiplication result ``EKFAC @ M`` in tensor list format. Has the
-            same shapes as the input.
-        """
-        # Create the block diagonal operator if not cached
-        if not hasattr(self, "_block_diagonal_operator"):
-            self._block_diagonal_operator = self._create_block_diagonal_operator()
-
-        # Convert to canonical form
-        canonical_M = self._to_canonical_form(M)
-
-        # Apply block diagonal operator
-        canonical_result = self._block_diagonal_operator @ canonical_M
-
-        # Convert back from canonical form
-        return self._from_canonical_form(canonical_result)
-
     def _create_block_diagonal_operator(self) -> BlockDiagonalLinearOperator:
         """Create block-diagonal linear operator from EKFAC factors.
 
@@ -236,132 +86,170 @@ class EKFACLinearOperator(KFACLinearOperator):
         Returns:
             Block-diagonal linear operator with eigendecomposition blocks.
         """
-        self._maybe_compute_ekfac()
+        # Compute the Kronecker-factored bases
+        Qs = self._compute_bases()
 
-        # Gather Kronecker factors of the per-block bases and their corrections
+        # Compute the correction terms in the above bases
+        lambdas = self._compute_basis_correction(Qs)
+
+        # Build up block-diagonal operator with eigen-decomposed Kronecker products
         blocks = []
 
         for mod_name, param_pos in self._mapping.items():
-            Q_a = self._input_covariances_eigenvectors.get(mod_name)
-            Q_g = self._gradient_covariances_eigenvectors[mod_name]
-            lam = self._corrected_eigenvalues[mod_name]
+            lam = lambdas.pop(mod_name)
 
             # Handle joint weight+bias case
-            if (
-                not self._separate_weight_and_bias
-                and "weight" in param_pos
-                and "bias" in param_pos
+            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+                param_pos.keys()
             ):
-                basis, eigvals = [Q_g, Q_a], lam
-                blocks.append([basis, eigvals.flatten()])
+                Q = Qs[mod_name]
+                blocks.append([lam, Q])
             else:
                 # Separate blocks for weight and bias
-                for p_name, p_pos in param_pos.items():
-                    basis = [Q_g, Q_a] if p_name == "weight" else [Q_g]
-                    eigvals = lam[p_pos]
-                    blocks.append([basis, eigvals.flatten()])
+                for p_name in param_pos:
+                    Q, correction = Qs[mod_name][p_name], lam[p_name]
+                    blocks.append([correction, Q])
 
-        # Convert each block to a linear operator
-        blocks = [
-            EighDecomposedLinearOperator(lam, KroneckerProductLinearOperator(*Qs))
-            for (Qs, lam) in blocks
-        ]
+        # Convert them into EighDecomposedLinearOperator's
+        blocks = [EighDecomposedLinearOperator(*block) for block in blocks]
 
         return BlockDiagonalLinearOperator(blocks)
 
-    def _compute_eigenvectors(self):
-        """Compute the eigenvectors of the KFAC approximation."""
-        if not (self._input_covariances or self._gradient_covariances):
-            self.compute_kronecker_factors()
+    @staticmethod
+    def _eigenbasis(covariances: Dict[str, Tensor]) -> None:
+        """Helper method to compute eigenvectors from a single covariance dictionary.
 
-        for mod_name in self._mapping.keys():
-            for source, destination in zip(
-                (self._input_covariances, self._gradient_covariances),
-                (
-                    self._input_covariances_eigenvectors,
-                    self._gradient_covariances_eigenvectors,
-                ),
-            ):
-                factor = source.pop(mod_name, None)
-                if factor is not None:
-                    destination[mod_name] = eigh(factor).eigenvectors
+        Modifies the input dictionary in-place, replacing covariance matrices with
+        their corresponding eigenvectors.
 
-    def compute_eigenvalue_correction(self):
-        """Compute and cache the corrected eigenvalues for EKFAC."""
-        self._reset_matrix_properties()
+        Args:
+            covariances: Dictionary of covariance matrices. Will be modified in-place
+                to contain eigenvectors instead of covariance matrices.
+        """
+        for name in list(covariances.keys()):
+            _, eigenvectors = eigh(covariances[name])
+            covariances[name] = eigenvectors
 
-        # Compute the eigenvectors of the KFAC approximation
-        if not (
-            self._input_covariances_eigenvectors
-            or self._gradient_covariances_eigenvectors
-        ):
-            self._compute_eigenvectors()
+    def _compute_bases(
+        self,
+    ) -> Dict[
+        str,
+        Union[
+            KroneckerProductLinearOperator,
+            Dict[str, KroneckerProductLinearOperator],
+        ],
+    ]:
+        """Compute the rotation operators (bases) for EKFAC eigenvalue correction.
 
-        # install forward and backward hooks
-        hook_handles: List[RemovableHandle] = []
+        Returns:
+            Dictionary of KroneckerProductLinearOperator rotation operators.
+        """
+        # Always compute Kronecker factors
+        input_covariances, gradient_covariances = self._compute_kronecker_factors()
+
+        # Compute eigenvectors from the factors (modifies dictionaries in-place)
+        self._eigenbasis(input_covariances)
+        self._eigenbasis(gradient_covariances)
+
+        # Build up KroneckerProductLinearOperators for the bases
+        Qs: Dict[
+            str,
+            Union[
+                KroneckerProductLinearOperator,
+                Dict[str, KroneckerProductLinearOperator],
+            ],
+        ] = {}
 
         for mod_name, param_pos in self._mapping.items():
+            Q_a = input_covariances.pop(mod_name, None)
+            Q_g = gradient_covariances.pop(mod_name)
+
+            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+                param_pos.keys()
+            ):
+                # Single operator for joint weight+bias
+                Qs[mod_name] = KroneckerProductLinearOperator(Q_g, Q_a)
+            else:
+                # Separate operators for weight and bias
+                Qs[mod_name] = {}
+                for p_name in param_pos:
+                    factors = [Q_g, Q_a] if p_name == "weight" else [Q_g]
+                    Qs[mod_name][p_name] = KroneckerProductLinearOperator(*factors)
+
+        return Qs
+
+    def _compute_basis_correction(
+        self,
+        bases: Dict[
+            str,
+            Union[
+                KroneckerProductLinearOperator,
+                Dict[str, KroneckerProductLinearOperator],
+            ],
+        ],
+    ) -> Dict[str, Union[Tensor, Dict[str, Tensor]]]:
+        """Compute and return the corrections for EKFAC.
+
+        Args:
+            bases: Dictionary of KroneckerProductLinearOperator's for
+                basis transformation, pre-built from eigenvectors.
+
+        Returns:
+            Dictionary of corrections.
+        """
+        corrections: Dict[str, Union[Tensor, Dict[str, Tensor]]] = {}
+
+        # install forward hooks
+        hook_handles: List[RemovableHandle] = []
+
+        for mod_name in self._mapping:
             module = self._model_func.get_submodule(mod_name)
 
-            # cache activations for computing per-example gradients
-            if "weight" in param_pos.keys():
-                hook_handles.append(
-                    module.register_forward_pre_hook(
-                        partial(self._hook_cache_inputs, module_name=mod_name)
-                    )
-                )
-
-            # compute the corrected eigenvalues using the per-example gradients
+            # compute the corrections using the per-example gradients
             hook_handles.append(
                 module.register_forward_hook(
                     partial(
-                        self._register_tensor_hook_on_output_to_accumulate_corrected_eigenvalues,
+                        self._register_tensor_hook_on_output_to_accumulate_corrections,
                         module_name=mod_name,
+                        bases=bases,
+                        corrections=corrections,
                     )
                 )
             )
 
         self._setup_generator()
 
-        # loop over data set, computing the corrected eigenvalues
-        for X, y in self._loop_over_data(desc="Eigenvalue correction"):
+        # loop over data set, computing the corrected basis values
+        for X, y in self._loop_over_data(desc="Basis correction"):
             output = self._model_func(X)
             output, y = self._rearrange_for_larger_than_2d_output(output, y)
-            self._compute_loss_and_backward(output, y)
-
-        # Clear the cached activations
-        self._cached_activations.clear()
+            self._compute_loss_and_backward(output, y, {})
 
         # clean up
         for handle in hook_handles:
             handle.remove()
 
-    def _hook_cache_inputs(
-        self, module: Module, inputs: Tuple[Tensor], module_name: str
+        return corrections
+
+    def _register_tensor_hook_on_output_to_accumulate_corrections(
+        self,
+        module: Module,
+        inputs: Tuple[Tensor],
+        output: Tensor,
+        module_name: str,
+        bases: Dict[
+            str,
+            Union[
+                KroneckerProductLinearOperator,
+                Dict[str, KroneckerProductLinearOperator],
+            ],
+        ],
+        corrections: Dict[str, Union[Tensor, Dict[str, Tensor]]],
     ):
-        """Pre-forward hook that caches the inputs of a layer.
-
-        Updates ``self._cached_activations``.
-
-        Args:
-            module: Module on which the hook is called.
-            inputs: Inputs to the module.
-            module_name: Name of the module in the neural network.
-
-        Raises:
-            ValueError: If the module has multiple inputs.
-        """
-        if len(inputs) != 1:
-            raise ValueError("Modules with multiple inputs are not supported.")
-        self._cached_activations[module_name] = inputs[0].data.detach()
-
-    def _register_tensor_hook_on_output_to_accumulate_corrected_eigenvalues(
-        self, module: Module, inputs: Tuple[Tensor], output: Tensor, module_name: str
-    ):
-        """Register tensor hook on layer's output to accumulate the corrected eigenvalues.
+        """Register tensor hook on layer's output to accumulate the corrections.
 
         Note:
-            The easier way to compute the corrected eigenvalues would be via a full
+            The easier way to compute the corrections would be via a full
             backward hook on the module itself which performs the computation.
             However, this approach breaks down if the output of a layer feeds into an
             activation with `inplace=True` (see
@@ -372,37 +260,63 @@ class EKFACLinearOperator(KFACLinearOperator):
             tensor, which performs the accumulation of the gradient covariance.
 
         Args:
-            module: Layer onto whose output a tensor hook to accumulate the corrected
-                eigenvalues will be installed.
+            module: Layer onto whose output a tensor hook to accumulate the
+                corrections will be installed.
             inputs: The layer's input tensors.
             output: The layer's output tensor.
             module_name: The name of the layer in the neural network.
+            rotation_operators: Dictionary of KroneckerProductLinearOperator's for
+                gradient rotation.
+            corrections: Dictionary to store corrections.
+
+        Raises:
+            ValueError: If the module has multiple inputs.
         """
+        if len(inputs) != 1:
+            raise ValueError("Modules with multiple inputs are not supported.")
+
+        # Capture the input tensor for the backward hook
+        layer_input = inputs[0].data.detach()
+
         tensor_hook = partial(
-            self._accumulate_corrected_eigenvalues,
+            self._accumulate_corrected_basis_values,
             module=module,
             module_name=module_name,
+            layer_input=layer_input,
+            bases=bases,
+            corrections=corrections,
         )
         output.register_hook(tensor_hook)
 
-    def _accumulate_corrected_eigenvalues(
-        self, grad_output: Tensor, module: Module, module_name: str
+    def _accumulate_corrected_basis_values(
+        self,
+        grad_output: Tensor,
+        module: Module,
+        module_name: str,
+        layer_input: Tensor,
+        bases: Dict[
+            str,
+            Union[
+                KroneckerProductLinearOperator,
+                Dict[str, KroneckerProductLinearOperator],
+            ],
+        ],
+        corrections: Dict[str, Union[Tensor, Dict[str, Tensor]]],
     ):
-        r"""Accumulate the corrected eigenvalues.
+        r"""Accumulate the corrections.
 
-        The corrected eigenvalues are computed as
-        :math:`\lambda_{\text{corrected}} = (Q_g^T G Q_a)^2`, where
-        :math:`Q_a` and :math:`Q_g` are the eigenvectors of the input and gradient
-        covariances, respectively, and ``G`` is the gradient matrix. The corrected
-        eigenvalues are used to correct the eigenvalues of the KFAC approximation
-        (EKFAC).
-
-        Updates ``self._corrected_eigenvalues``.
+        The corrections are computed by transforming per-example gradients to
+        the basis using KroneckerProductLinearOperator's, then squaring and
+        summing.
 
         Args:
             grad_output: The gradient w.r.t. the output.
-            module: The layer for which corrected eigenvalues will be accumulated.
+            module: The layer for which corrections will be accumulated.
             module_name: The name of the layer in the neural network.
+            layer_input: The input tensor to the layer.
+            bases: Dictionary of KroneckerProductLinearOperator's for
+                basis transformation.
+            corrections: Dictionary to store corrections.
         """
         g = grad_output.data.detach()
         batch_size = g.shape[0]
@@ -419,15 +333,11 @@ class EKFACLinearOperator(KFACLinearOperator):
             / (self._N_data * self._mc_samples * self._num_per_example_loss_terms),
         }[self._loss_func.reduction]
 
-        # Compute the corrected eigenvalues for the EKFAC approximation
+        # Compute the corrections for the EKFAC approximation
         param_pos = self._mapping[module_name]
-        # aaT_eigenvectors does not exist if the weight matrix of the module is excluded
-        aaT_eigenvectors = self._input_covariances_eigenvectors.get(module_name)
-        # ggT_eigenvectors always exists
-        ggT_eigenvectors = self._gradient_covariances_eigenvectors[module_name]
 
-        # Rearrange the activations for computing per-example gradients
-        activations = self._cached_activations.get(module_name)
+        # Process the layer input for computing per-example gradients
+        activations = layer_input
         if activations is not None:
             if isinstance(module, Conv2d):
                 activations = extract_patches(
@@ -440,106 +350,51 @@ class EKFACLinearOperator(KFACLinearOperator):
                 )
             activations = rearrange(activations, "batch ... d_in -> batch (...) d_in")
 
-        if (
-            not self._separate_weight_and_bias
-            and "weight" in param_pos.keys()
-            and "bias" in param_pos.keys()
+        if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+            param_pos.keys()
         ):
             activations = cat(
                 [activations, activations.new_ones(*activations.shape[:-1], 1)], dim=-1
             )
-            # Compute per-example gradient using the cached activations
+            # Compute per-example gradient using the layer input
             per_example_gradient = einsum(
                 g,
                 activations,
-                "batch shared d_out, batch shared d_in -> batch d_out d_in",
-            )
-            # Transform the per-example gradient to the eigenbasis and square it
-            self._corrected_eigenvalues = self._set_or_add_(
-                self._corrected_eigenvalues,
+                "batch shared d_out, batch shared d_in -> d_out d_in batch",
+            ).flatten(end_dim=-2)
+
+            # Apply basis transformation
+            Q = bases[module_name]
+            per_example_gradient = Q.adjoint() @ per_example_gradient
+
+            # Compute corrections
+            self._set_or_add_(
+                corrections,
                 module_name,
-                einsum(
-                    ggT_eigenvectors,
-                    per_example_gradient,
-                    aaT_eigenvectors,
-                    "d_out1 d_out2, batch d_out1 d_in1, d_in1 d_in2 -> batch d_out2 d_in2",
-                )
-                .square_()
-                .sum(dim=0)
-                .mul_(correction),
+                per_example_gradient.square_().sum(dim=1).mul_(correction),
             )
         else:
-            if module_name not in self._corrected_eigenvalues:
-                self._corrected_eigenvalues[module_name] = {}
-            for p_name, pos in param_pos.items():
-                # Compute per-example gradient using the cached activations
+            if module_name not in corrections:
+                corrections[module_name] = {}
+            for p_name in param_pos:
+                # Compute per-example gradient using the layer input
                 per_example_gradient = (
                     einsum(
                         g,
                         activations,
-                        "batch shared d_out, batch shared d_in -> batch d_out d_in",
-                    )
+                        "batch shared d_out, batch shared d_in -> d_out d_in batch",
+                    ).flatten(end_dim=-2)
                     if p_name == "weight"
-                    else einsum(g, "batch shared d_out -> batch d_out")
-                )
-                # Transform the per-example gradient to the eigenbasis and square it
-                if p_name == "weight":
-                    per_example_gradient = einsum(
-                        per_example_gradient,
-                        aaT_eigenvectors,
-                        "batch d_out d_in1, d_in1 d_in2 -> batch d_out d_in2",
-                    )
-                self._corrected_eigenvalues[module_name] = self._set_or_add_(
-                    self._corrected_eigenvalues[module_name],
-                    pos,
-                    einsum(
-                        ggT_eigenvectors,
-                        per_example_gradient,
-                        "d_out1 d_out2, batch d_out1 ... -> batch d_out2 ...",
-                    )
-                    .square_()
-                    .sum(dim=0)
-                    .mul_(correction),
+                    else einsum(g, "batch shared d_out -> d_out batch")
                 )
 
-    def state_dict(self) -> Dict[str, Any]:
-        """Return the state of the EKFAC linear operator.
+                # Apply basis transformation
+                Q = bases[module_name][p_name]
+                per_example_gradient = Q.adjoint() @ per_example_gradient
 
-        Returns:
-            State dictionary.
-        """
-        state_dict = super().state_dict()
-        # Add quantities specifically for EKFAC (if computed)
-        state_dict.update(
-            {
-                "input_covariances_eigenvectors": self._input_covariances_eigenvectors,
-                "gradient_covariances_eigenvectors": self._gradient_covariances_eigenvectors,
-                "cached_activations": self._cached_activations,
-                "corrected_eigenvalues": self._corrected_eigenvalues,
-            }
-        )
-        return state_dict
-
-    def load_state_dict(self, state_dict: Dict[str, Any]):
-        """Load the state of the EKFAC linear operator.
-
-        Args:
-            state_dict: State dictionary.
-        """
-        super().load_state_dict(state_dict)
-
-        # Set EKFAC-specific quantities
-        self._check_if_keys_match_mapping_keys(
-            state_dict["input_covariances_eigenvectors"]
-        )
-        self._check_if_keys_match_mapping_keys(
-            state_dict["gradient_covariances_eigenvectors"]
-        )
-        self._input_covariances_eigenvectors = state_dict[
-            "input_covariances_eigenvectors"
-        ]
-        self._gradient_covariances_eigenvectors = state_dict[
-            "gradient_covariances_eigenvectors"
-        ]
-        self._cached_activations = state_dict["cached_activations"]
-        self._corrected_eigenvalues = state_dict["corrected_eigenvalues"]
+                # Compute corrections
+                self._set_or_add_(
+                    corrections[module_name],
+                    p_name,
+                    per_example_gradient.square_().sum(dim=1).mul_(correction),
+                )
