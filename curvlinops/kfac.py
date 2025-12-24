@@ -39,7 +39,7 @@ from torch.nn import (
 )
 from torch.utils.hooks import RemovableHandle
 
-from curvlinops._torch_base import CurvatureLinearOperator
+from curvlinops._torch_base import CurvatureLinearOperator, PyTorchLinearOperator
 from curvlinops.blockdiagonal import BlockDiagonalLinearOperator
 from curvlinops.kfac_utils import (
     extract_averaged_patches,
@@ -293,6 +293,17 @@ class KFACLinearOperator(CurvatureLinearOperator):
         # Create the block diagonal operator
         self._block_diagonal_operator = self._create_block_diagonal_operator()
 
+        # Create canonical form transformation operators
+        self._to_canonical = _ToCanonicalLinearOperator(
+            self._params, self._mapping, self._separate_weight_and_bias
+        )
+        self._from_canonical = self._to_canonical.adjoint()
+
+        # Build the operator that represents KFAC
+        self._operator = (
+            self._from_canonical @ self._block_diagonal_operator @ self._to_canonical
+        )
+
         if check_deterministic:
             self._check_deterministic()
 
@@ -343,15 +354,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
             Matrix-multiplication result ``KFAC @ M`` in tensor list format. Has the
             same shapes as the input.
         """
-        # Convert to canonical form
-        canonical_M = self._to_canonical_form(M)
-
-        # Apply block diagonal operator
-        canonical_result = self._block_diagonal_operator @ canonical_M
-
-        # Convert back from canonical form
-        out = self._from_canonical_form(canonical_result)
-        return out
+        return self._operator._matmat(M)
 
     def _create_block_diagonal_operator(self) -> BlockDiagonalLinearOperator:
         """Create block-diagonal linear operator from Kronecker factors.
@@ -370,9 +373,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
             ggT = gradient_covariances.pop(mod_name)
 
             # Handle joint weight+bias case
-            if (
-                not self._separate_weight_and_bias
-                and {"weight", "bias"} == set(param_pos.keys())
+            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+                param_pos.keys()
             ):
                 # Single Kronecker product block for weight+bias
                 factors.append([ggT, aaT])
@@ -385,86 +387,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
         blocks = [KroneckerProductLinearOperator(*fs) for fs in factors]
 
         return BlockDiagonalLinearOperator(blocks)
-
-    def _to_canonical_form(self, M: List[Tensor]) -> List[Tensor]:
-        """Convert parameter tensors from original order to canonical form.
-
-        Canonical form orders parameters by layer, with proper grouping and
-        flattening.
-
-        Args:
-            M: Parameter tensors in original order.
-
-        Returns:
-            Parameter tensors in canonical form (flattened and reordered).
-        """
-        canonical_M = []
-
-        for param_pos in self._mapping.values():
-            # Handle joint weight+bias case
-            if (
-                not self._separate_weight_and_bias
-                and {"weight", "bias"} == set(param_pos.keys())
-            ):
-                w_pos, b_pos = param_pos["weight"], param_pos["bias"]
-                # Flatten weight tensor into matrix and concatenate bias
-                w_flat = M[w_pos].flatten(start_dim=1, end_dim=-2)
-                # Add bias as additional row
-                combined = cat([w_flat, M[b_pos].unsqueeze(1)], dim=1)
-                # Flatten parameter space dimension
-                canonical_M.append(combined.flatten(end_dim=-2))
-            else:
-                # Handle separate weight and bias
-                for p_name in param_pos:
-                    pos = param_pos[p_name]
-                    canonical_M.append(M[pos].flatten(end_dim=-2))
-
-        return canonical_M
-
-    def _from_canonical_form(self, M: List[Tensor]) -> List[Tensor]:
-        """Convert parameter tensors from canonical form back to original order.
-
-        Args:
-            M: Parameter tensors in canonical form.
-
-        Returns:
-            Parameter tensors in original order with proper shapes.
-        """
-        original_M = [None] * len(self._params)
-        (num_columns,) = {m.shape[-1] for m in M}
-        processed = 0
-
-        for param_pos in self._mapping.values():
-            # Handle joint weight+bias case
-            if (
-                not self._separate_weight_and_bias
-                and {"weight", "bias"} == set(param_pos.keys())
-            ):
-                w_pos, b_pos = param_pos["weight"], param_pos["bias"]
-                combined = M[processed]
-
-                # Get original weight shape
-                w = self._params[w_pos]
-                w_rows, w_cols = w.shape[0], w.shape[1:].numel()
-
-                # Reshape combined tensor back to (weight + bias) matrix
-                combined = combined.reshape(w_rows, w_cols + 1, num_columns)
-                w_part, b_part = combined.split([w_cols, 1], dim=1)
-
-                # Reshape into parameter shape
-                original_M[w_pos] = w_part.reshape(*w.shape, num_columns)
-                original_M[b_pos] = b_part.reshape(w_rows, num_columns)
-                processed += 1
-            else:
-                # Handle separate weight and bias
-                for p_name in param_pos:
-                    pos = param_pos[p_name]
-                    original_M[pos] = M[processed].reshape(
-                        *self._params[pos].shape, num_columns
-                    )
-                    processed += 1
-
-        return original_M
 
     def _setup_generator(self):
         """Initialize and seed the random number generator if needed.
@@ -835,9 +757,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
             x = reduce(x, "batch ... d_in -> batch d_in", "mean")
 
         params = self._mapping[module_name]
-        if (
-            not self._separate_weight_and_bias
-            and {"weight", "bias"} == set(params.keys())
+        if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+            params.keys()
         ):
             x = cat([x, x.new_ones(x.shape[0], 1)], dim=1)
 
@@ -1077,3 +998,272 @@ class KFACLinearOperator(CurvatureLinearOperator):
             kfac._check_deterministic()
 
         return kfac
+
+
+class _ToCanonicalLinearOperator(PyTorchLinearOperator):
+    """Linear operator that transforms parameters from original to canonical form.
+
+    Canonical form orders parameters by layer, with proper grouping and flattening.
+    This is the adjoint of _FromCanonicalLinearOperator.
+    """
+
+    def __init__(
+        self,
+        params: List[Parameter],
+        mapping: Dict[str, Dict[str, int]],
+        separate_weight_and_bias: bool,
+    ):
+        """Initialize the canonical form transformation operator.
+
+        Args:
+            params: List of model parameters in original order.
+            mapping: Parameter mapping from layer names to parameter positions.
+            separate_weight_and_bias: Whether to treat weights and biases separately.
+        """
+        self._params = params
+        self._mapping = mapping
+        self._separate_weight_and_bias = separate_weight_and_bias
+
+        in_shape = [tuple(p.shape) for p in params]
+        out_shape = self._compute_canonical_shapes()
+
+        super().__init__(in_shape, out_shape)
+
+    def _compute_canonical_shapes(self) -> List[Tuple[int, ...]]:
+        """Compute the shapes in canonical form.
+
+        Returns:
+            List of shapes after canonical transformation.
+        """
+        canonical_shapes = []
+
+        for param_pos in self._mapping.values():
+            # Handle joint weight+bias case
+            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+                param_pos.keys()
+            ):
+                w_pos = param_pos["weight"]
+                w = self._params[w_pos]
+                # Combined weight+bias gets flattened to 1D
+                total_params = w.numel() + w.shape[0]  # weight + bias
+                canonical_shapes.append((total_params,))
+            else:
+                # Handle separate weight and bias
+                for p_name in param_pos:
+                    pos = param_pos[p_name]
+                    # Each parameter gets flattened to 1D
+                    canonical_shapes.append((self._params[pos].numel(),))
+
+        return canonical_shapes
+
+    def _matmat(self, M: List[Tensor]) -> List[Tensor]:
+        """Transform parameter tensors to canonical form.
+
+        Args:
+            M: Parameter tensors in original order.
+
+        Returns:
+            Parameter tensors in canonical form (flattened and reordered).
+        """
+        canonical_M = []
+
+        for param_pos in self._mapping.values():
+            # Handle joint weight+bias case
+            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+                param_pos.keys()
+            ):
+                w_pos, b_pos = param_pos["weight"], param_pos["bias"]
+                # Flatten weight tensor into matrix and concatenate bias
+                w_flat = M[w_pos].flatten(start_dim=1, end_dim=-2)
+                # Add bias as additional row
+                combined = cat([w_flat, M[b_pos].unsqueeze(1)], dim=1)
+                # Flatten parameter space dimension
+                canonical_M.append(combined.flatten(end_dim=-2))
+            else:
+                # Handle separate weight and bias
+                for p_name in param_pos:
+                    pos = param_pos[p_name]
+                    canonical_M.append(M[pos].flatten(end_dim=-2))
+
+        return canonical_M
+
+    def _adjoint(self) -> _FromCanonicalLinearOperator:
+        """Return the adjoint transformation operator.
+
+        Returns:
+            Linear operator that transforms from canonical to parameter form.
+        """
+        return _FromCanonicalLinearOperator(
+            self._params, self._mapping, self._separate_weight_and_bias
+        )
+
+    @property
+    def device(self):
+        """Infer device from parameters.
+
+        Returns:
+            The device of the parameters.
+
+        Raises:
+            RuntimeError: If parameters are on different devices.
+        """
+        devices = {p.device for p in self._params}
+        if len(devices) != 1:
+            raise RuntimeError(f"Could not infer device. Parameters live on {devices}.")
+        return devices.pop()
+
+    @property
+    def dtype(self):
+        """Infer dtype from parameters.
+
+        Returns:
+            The dtype of the parameters.
+
+        Raises:
+            RuntimeError: If parameters have different dtypes.
+        """
+        dtypes = {p.dtype for p in self._params}
+        if len(dtypes) != 1:
+            raise RuntimeError(f"Could not infer dtype. Parameters have {dtypes}.")
+        return dtypes.pop()
+
+
+class _FromCanonicalLinearOperator(PyTorchLinearOperator):
+    """Linear operator that transforms parameters from canonical to original form.
+
+    This is the adjoint of _ToCanonicalLinearOperator.
+    """
+
+    def __init__(
+        self,
+        params: List[Parameter],
+        mapping: Dict[str, Dict[str, int]],
+        separate_weight_and_bias: bool,
+    ):
+        """Initialize the canonical form reverse transformation operator.
+
+        Args:
+            params: List of model parameters in original order.
+            mapping: Parameter mapping from layer names to parameter positions.
+            separate_weight_and_bias: Whether to treat weights and biases separately.
+        """
+        self._params = params
+        self._mapping = mapping
+        self._separate_weight_and_bias = separate_weight_and_bias
+
+        # Input and output shapes are swapped compared to ToCanonical
+        out_shape = [tuple(p.shape) for p in params]
+        in_shape = self._compute_canonical_shapes()
+
+        super().__init__(in_shape, out_shape)
+
+    def _compute_canonical_shapes(self) -> List[Tuple[int, ...]]:
+        """Compute the shapes in canonical form.
+
+        Returns:
+            List of shapes after canonical transformation.
+        """
+        canonical_shapes = []
+
+        for param_pos in self._mapping.values():
+            # Handle joint weight+bias case
+            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+                param_pos.keys()
+            ):
+                w_pos = param_pos["weight"]
+                w = self._params[w_pos]
+                # Combined weight+bias gets flattened to 1D
+                total_params = w.numel() + w.shape[0]  # weight + bias
+                canonical_shapes.append((total_params,))
+            else:
+                # Handle separate weight and bias
+                for p_name in param_pos:
+                    pos = param_pos[p_name]
+                    # Each parameter gets flattened to 1D
+                    canonical_shapes.append((self._params[pos].numel(),))
+
+        return canonical_shapes
+
+    def _matmat(self, M: List[Tensor]) -> List[Tensor]:
+        """Transform parameter tensors from canonical form back to original order.
+
+        Args:
+            M: Parameter tensors in canonical form.
+
+        Returns:
+            Parameter tensors in original order with proper shapes.
+        """
+        original_M = [None] * len(self._params)
+        (num_columns,) = {m.shape[-1] for m in M}
+        processed = 0
+
+        for param_pos in self._mapping.values():
+            # Handle joint weight+bias case
+            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+                param_pos.keys()
+            ):
+                w_pos, b_pos = param_pos["weight"], param_pos["bias"]
+                combined = M[processed]
+
+                # Get original weight shape
+                w = self._params[w_pos]
+                w_rows, w_cols = w.shape[0], w.shape[1:].numel()
+
+                # Reshape combined tensor back to (weight + bias) matrix
+                combined = combined.reshape(w_rows, w_cols + 1, num_columns)
+                w_part, b_part = combined.split([w_cols, 1], dim=1)
+
+                # Reshape into parameter shape
+                original_M[w_pos] = w_part.reshape(*w.shape, num_columns)
+                original_M[b_pos] = b_part.reshape(w_rows, num_columns)
+                processed += 1
+            else:
+                # Handle separate weight and bias
+                for p_name in param_pos:
+                    pos = param_pos[p_name]
+                    original_M[pos] = M[processed].reshape(
+                        *self._params[pos].shape, num_columns
+                    )
+                    processed += 1
+
+        return original_M
+
+    def _adjoint(self) -> _ToCanonicalLinearOperator:
+        """Return the adjoint transformation operator.
+
+        Returns:
+            Linear operator that transforms from parameter to canonical form.
+        """
+        return _ToCanonicalLinearOperator(
+            self._params, self._mapping, self._separate_weight_and_bias
+        )
+
+    @property
+    def device(self):
+        """Infer device from parameters.
+
+        Returns:
+            The device of the parameters.
+
+        Raises:
+            RuntimeError: If parameters are on different devices.
+        """
+        devices = {p.device for p in self._params}
+        if len(devices) != 1:
+            raise RuntimeError(f"Could not infer device. Parameters live on {devices}.")
+        return devices.pop()
+
+    @property
+    def dtype(self):
+        """Infer dtype from parameters.
+
+        Returns:
+            The dtype of the parameters.
+
+        Raises:
+            RuntimeError: If parameters have different dtypes.
+        """
+        dtypes = {p.dtype for p in self._params}
+        if len(dtypes) != 1:
+            raise RuntimeError(f"Could not infer dtype. Parameters have {dtypes}.")
+        return dtypes.pop()
