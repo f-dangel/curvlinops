@@ -33,7 +33,6 @@ from test.utils import (
     cast_input,
     compare_consecutive_matmats,
     compare_matmat,
-    compare_state_dicts,
     eye_like,
     maybe_exclude_or_shuffle_parameters,
 )
@@ -415,14 +414,14 @@ def test_KFAC_inverse_exactly_damped_matmat(
     "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
 )
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
-def test_KFAC_inverse_save_and_load_state_dict(
+def test_KFAC_inverse_save_and_load(
     use_exact_damping: bool,
     use_heuristic_damping: bool,
     exclude: str,
     separate_weight_and_bias: bool,
     shuffle: bool,
 ):
-    """Test that KFACInverseLinearOperator can be saved and loaded from state dict."""
+    """Test that KFACInverseLinearOperator can be saved and loaded."""
     manual_seed(0)
     batch_size, D_in, D_hidden, D_out = 4, 3, 5, 2
     X = rand(batch_size, D_in)
@@ -451,107 +450,30 @@ def test_KFAC_inverse_save_and_load_state_dict(
     kwargs = {
         "use_exact_damping": use_exact_damping,
         "use_heuristic_damping": use_heuristic_damping,
+        "retry_double_precision": False,
     }
     if use_exact_damping and use_heuristic_damping:
         return
-    inv_kfac = KFACInverseLinearOperator(
-        kfac, damping=1e-2, retry_double_precision=False, **kwargs
-    )
-    # trigger inverse computation and maybe caching
+    inv_kfac = kfac.inverse(damping=1e-2, **kwargs)
     inv_kfac_as_mat = inv_kfac @ eye_like(kfac)
 
     # save state dict
-    state_dict = inv_kfac.state_dict()
     INV_KFAC_PATH = "inv_kfac_state_dict.pt"
-    save(state_dict, INV_KFAC_PATH)
-
-    # create new inverse KFAC with different linop input and try to load state dict
-    wrong_kfac = KFACLinearOperator(model, CrossEntropyLoss(), params, [(X, y)])
-    inv_kfac_wrong = KFACInverseLinearOperator(wrong_kfac)
-    with raises(ValueError, match="mismatch"):
-        inv_kfac_wrong.load_state_dict(load(INV_KFAC_PATH, weights_only=False))
+    save(inv_kfac, INV_KFAC_PATH)
+    del inv_kfac
 
     # create new inverse KFAC and load state dict
-    inv_kfac_new = KFACInverseLinearOperator(kfac)
-    inv_kfac_new.load_state_dict(load(INV_KFAC_PATH, weights_only=False))
+    inv_kfac_loaded = load(INV_KFAC_PATH, weights_only=False)
     # clean up
     os.remove(INV_KFAC_PATH)
 
     # check that the two inverse KFACs are equal
-    compare_state_dicts(inv_kfac.state_dict(), inv_kfac_new.state_dict())
-    assert allclose_report(inv_kfac_as_mat, inv_kfac_new @ eye_like(kfac))
-
-
-@mark.parametrize("use_exact_damping", [True, False], ids=["exact_damping", ""])
-@mark.parametrize("use_heuristic_damping", [True, False], ids=["heuristic_damping", ""])
-@mark.parametrize("cache", [True, False], ids=["cached", "uncached"])
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
-def test_KFAC_inverse_from_state_dict(
-    use_exact_damping: bool,
-    use_heuristic_damping: bool,
-    cache: bool,
-    exclude: str,
-    separate_weight_and_bias: bool,
-    shuffle: bool,
-):
-    """Test that KFACInverseLinearOperator can be created from state dict."""
-    manual_seed(0)
-    batch_size, D_in, D_hidden, D_out = 4, 3, 5, 2
-    X = rand(batch_size, D_in)
-    y = rand(batch_size, D_out)
-    model = Sequential(
-        Linear(D_in, D_hidden),
-        ReLU(),
-        Linear(D_hidden, D_hidden, bias=False),
-        ReLU(),
-        Linear(D_hidden, D_out),
-    )
-
-    params = list(model.parameters())
-    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
-
-    # create and compute KFAC
-    kfac = KFACLinearOperator(
-        model,
-        MSELoss(reduction="sum"),
-        params,
-        [(X, y)],
-        separate_weight_and_bias=separate_weight_and_bias,
-    )
-
-    # create inverse KFAC and save state dict
-    kwargs = {
-        "use_exact_damping": use_exact_damping,
-        "use_heuristic_damping": use_heuristic_damping,
-    }
-    if use_exact_damping and use_heuristic_damping:
-        return
-    inv_kfac = KFACInverseLinearOperator(
-        kfac, damping=1e-2, retry_double_precision=False, cache=cache, **kwargs
-    )
-    test_vec = rand(kfac.shape[1])
-    inv_kfac @ test_vec  # triggers inverse computation and maybe caching
-    state_dict = inv_kfac.state_dict()
-
-    # create new KFAC from state dict
-    inv_kfac_new = KFACInverseLinearOperator.from_state_dict(state_dict, kfac)
-
-    # check that the two inverse KFACs are equal
-    compare_state_dicts(inv_kfac.state_dict(), inv_kfac_new.state_dict())
-    test_vec = rand(kfac.shape[1])
-    assert allclose_report(inv_kfac @ test_vec, inv_kfac_new @ test_vec)
+    assert allclose_report(inv_kfac_as_mat, inv_kfac_loaded @ eye_like(kfac))
 
 
 """KFACInverseLinearOperator with EKFACLinearOperator tests."""
 
 
-@mark.parametrize("cache", [True, False], ids=["cached", "uncached"])
 @mark.parametrize(
     "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
 )
@@ -613,8 +535,8 @@ def test_EKFAC_inverse_matmat(
     compare_matmat(inv_EKFAC, inv_EKFAC_naive, adjoint, is_vec)
 
 
-def test_EKFAC_inverse_save_and_load_state_dict():
-    """Test that KFACInverseLinearOperator can be saved and loaded from state dict."""
+def test_EKFAC_inverse_save_and_load():
+    """Test that KFACInverseLinearOperator can be saved and loaded."""
     manual_seed(0)
     batch_size, D_in, D_out = 4, 3, 2
     X = rand(batch_size, D_in)
@@ -632,63 +554,18 @@ def test_EKFAC_inverse_save_and_load_state_dict():
     )
 
     # create inverse KFAC
-    inv_ekfac = KFACInverseLinearOperator(
-        ekfac, damping=1e-2, use_exact_damping=True, retry_double_precision=False
-    )
-    _ = inv_ekfac @ eye_like(ekfac)  # to trigger inverse computation
+    inv_ekfac = ekfac.inverse(damping=1e-2)
+    inv_ekfac_as_mat = inv_ekfac @ eye_like(ekfac)  # to trigger inverse computation
 
     # save state dict
-    state_dict = inv_ekfac.state_dict()
     INV_EKFAC_PATH = "inv_ekfac_state_dict.pt"
-    save(state_dict, INV_EKFAC_PATH)
-
-    # create new inverse EKFAC with different linop input and try to load state dict
-    wrong_ekfac = EKFACLinearOperator(model, CrossEntropyLoss(), params, [(X, y)])
-    inv_ekfac_wrong = KFACInverseLinearOperator(
-        wrong_ekfac, damping=1e-2, use_exact_damping=True
-    )
-    with raises(ValueError, match="mismatch"):
-        inv_ekfac_wrong.load_state_dict(load(INV_EKFAC_PATH, weights_only=False))
+    save(inv_ekfac, INV_EKFAC_PATH)
+    del inv_ekfac
 
     # create new inverse KFAC and load state dict
-    inv_ekfac_new = KFACInverseLinearOperator(ekfac, use_exact_damping=True)
-    inv_ekfac_new.load_state_dict(load(INV_EKFAC_PATH, weights_only=False))
+    inv_ekfac_loaded = load(INV_EKFAC_PATH, weights_only=False)
     # clean up
     os.remove(INV_EKFAC_PATH)
 
     # check that the two inverse KFACs are equal
-    compare_state_dicts(inv_ekfac.state_dict(), inv_ekfac_new.state_dict())
-    test_vec = rand(inv_ekfac.shape[1])
-    assert allclose_report(inv_ekfac @ test_vec, inv_ekfac_new @ test_vec)
-
-
-def test_EKFAC_inverse_from_state_dict():
-    """Test that KFACInverseLinearOperator can be created from state dict."""
-    manual_seed(0)
-    batch_size, D_in, D_out = 4, 3, 2
-    X = rand(batch_size, D_in)
-    y = rand(batch_size, D_out)
-    model = Linear(D_in, D_out)
-
-    params = list(model.parameters())
-    # create and compute EKFAC
-    ekfac = EKFACLinearOperator(
-        model,
-        MSELoss(reduction="sum"),
-        params,
-        [(X, y)],
-    )
-
-    # create inverse KFAC and save state dict
-    inv_ekfac = KFACInverseLinearOperator(
-        ekfac, damping=1e-2, use_exact_damping=True, retry_double_precision=False
-    )
-    state_dict = inv_ekfac.state_dict()
-
-    # create new KFAC from state dict
-    inv_ekfac_new = KFACInverseLinearOperator.from_state_dict(state_dict, ekfac)
-
-    # check that the two inverse KFACs are equal
-    compare_state_dicts(inv_ekfac.state_dict(), inv_ekfac_new.state_dict())
-    test_vec = rand(ekfac.shape[1])
-    assert allclose_report(inv_ekfac @ test_vec, inv_ekfac_new @ test_vec)
+    assert allclose_report(inv_ekfac_as_mat, inv_ekfac_loaded @ eye_like(ekfac))
