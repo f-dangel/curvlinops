@@ -192,35 +192,51 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
 
     def inverse(
         self,
-        damping: Union[float, Tuple[float, ...]] = 0.0,
+        damping: float = 0.0,
         use_heuristic_damping: bool = False,
         min_damping: float = 1e-8,
         use_exact_damping: bool = False,
         retry_double_precision: bool = True,
     ):
+        """Return the inverse of the Kronecker product linear operator.
+
+        Args:
+            damping: Damping value applied to all Kronecker factors. Default: ``0.0``.
+            use_heuristic_damping: Whether to use a heuristic damping strategy by
+                `Martens and Grosse, 2015 <https://arxiv.org/abs/1503.05671>`_
+                (Section 6.3). Only supported for exactly two factors.
+            min_damping: Minimum damping value. Only used if
+                ``use_heuristic_damping`` is ``True``.
+            use_exact_damping: Whether to use exact damping, i.e. to invert
+                :math:`(A \\otimes B) + \\text{damping}\\; \\mathbf{I}`.
+            retry_double_precision: Whether to retry Cholesky decomposition used for
+                inversion in double precision.
+
+        Returns:
+            Inverse of the Kronecker product as a linear operator.
+
+        Raises:
+            ValueError: If both heuristic and exact damping are selected.
+            ValueError: If heuristic damping is used with number of factors != 2.
+            RuntimeError: If negative mean eigenvalues are detected during
+                heuristic damping.
+        """
         ensure_all_square(*self._factors)
 
         if use_heuristic_damping and use_exact_damping:
             raise ValueError("Either use heuristic damping or exact damping, not both.")
-        if (use_heuristic_damping or use_exact_damping) and isinstance(damping, tuple):
-            raise ValueError(
-                "Heuristic and exact damping require a single damping value."
-            )
-        if isinstance(damping, tuple) and len(damping) != len(self._factors):
-            raise ValueError(
-                f"Damping tuple length {len(damping)} does not match number of factors {len(self._factors)}."
-            )
 
-        if use_heuristic_damping and len(self._factors) != 2:
+        if use_heuristic_damping and len(self._factors) > 2:
             raise ValueError(
-                f"Heuristic damping only implemented for two factors. Got {len(self._factors)}"
+                f"Heuristic damping only implemented for two factors. "
+                f"Got {len(self._factors)}"
             )
 
         if use_exact_damping:
             # NOTE We assume all Kronecker factors are symmetric
             eigvals, eigvecs = zip(*[eigh(S) for S in self._factors])
             eigvals_expanded = eigvals[0]
-            for eigval in eigvals[1]:
+            for eigval in eigvals[1:]:
                 eigvals_expanded = kron(eigvals_expanded, eigval)
             return EighDecomposedLinearOperator(
                 eigvals_expanded, KroneckerProductLinearOperator(*eigvecs)
@@ -228,7 +244,7 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
 
         else:
             # Martens and Grosse, 2015 (https://arxiv.org/abs/1503.05671) (Section 6.3)
-            if use_heuristic_damping:
+            if use_heuristic_damping and len(self._factors) == 2:
                 S1, S2 = self._factors
                 mean_eig1, mean_eig2 = S1.diag().mean(), S2.diag().mean()
                 if any(mean_eig < 0 for mean_eig in [mean_eig1, mean_eig2]):
@@ -238,18 +254,13 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
                 sqrt_damping = sqrt(damping)
                 damping1 = max(sqrt_damping / sqrt_eig_mean_ratio, min_damping)
                 damping2 = max(sqrt_damping * sqrt_eig_mean_ratio, min_damping)
-                damping = (damping1, damping2)
-
+                individual_damping = (damping1, damping2)
             else:
-                damping = (
-                    damping
-                    if isinstance(damping, tuple)
-                    else tuple(len(self._factors) * [damping])
-                )
+                individual_damping = tuple(len(self._factors) * [damping])
 
             factors_inv = [
                 self._damped_cholesky_inverse(S_i, damping_i, retry_double_precision)
-                for S_i, damping_i in zip(self._factors, damping)
+                for S_i, damping_i in zip(self._factors, individual_damping)
             ]
             return KroneckerProductLinearOperator(*factors_inv)
 

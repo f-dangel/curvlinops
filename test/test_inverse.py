@@ -21,7 +21,6 @@ from curvlinops import (
     CGInverseLinearOperator,
     EKFACLinearOperator,
     GGNLinearOperator,
-    KFACInverseLinearOperator,
     KFACLinearOperator,
     LSMRInverseLinearOperator,
     NeumannInverseLinearOperator,
@@ -176,7 +175,6 @@ def test_NeumannInverseLinearOperator_toy():
 
 
 @mark.parametrize("fisher_type", KFACLinearOperator._SUPPORTED_FISHER_TYPE)
-@mark.parametrize("cache", [True, False], ids=["cached", "uncached"])
 @mark.parametrize(
     "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
 )
@@ -192,7 +190,6 @@ def test_KFAC_inverse_damped_matmat(
         Iterable[Tuple[Tensor, Tensor]],
     ],
     fisher_type: str,
-    cache: bool,
     exclude: str,
     separate_weight_and_bias: bool,
     adjoint: bool,
@@ -229,46 +226,23 @@ def test_KFAC_inverse_damped_matmat(
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
         fisher_type=fisher_type,
-        check_deterministic=False,
     )
-    KFAC.compute_kronecker_factors()
-
-    # add damping manually
-    for aaT in KFAC._input_covariances.values():
-        aaT.add_(eye_like(aaT), alpha=delta)
-    for ggT in KFAC._gradient_covariances.values():
-        ggT.add_(eye_like(ggT), alpha=delta)
+    # Add damping manually
+    for block in KFAC._block_diagonal_operator._blocks:
+        for i, S in enumerate(block._factors):
+            block._factors[i] = S + delta * eye_like(S)
     inv_KFAC_naive = inv(KFAC @ eye_like(KFAC))
 
-    # remove damping and pass it on as an argument instead
-    for aaT in KFAC._input_covariances.values():
-        aaT.sub_(eye_like(aaT), alpha=delta)
-    for ggT in KFAC._gradient_covariances.values():
-        ggT.sub_(eye_like(ggT), alpha=delta)
-    # as a single scalar
-    inv_KFAC = KFACInverseLinearOperator(KFAC, damping=delta, cache=cache)
-    # and as a tuple
-    inv_KFAC_tuple = KFACInverseLinearOperator(
-        KFAC, damping=(delta, delta), cache=cache
-    )
+    # Remove damping and pass it on as an argument instead
+    for block in KFAC._block_diagonal_operator._blocks:
+        for i, S in enumerate(block._factors):
+            block._factors[i] = S - delta * eye_like(S)
 
+    inv_KFAC = KFAC.inverse(damping=delta)
     compare_consecutive_matmats(inv_KFAC, adjoint, is_vec)
     compare_matmat(inv_KFAC, inv_KFAC_naive, adjoint, is_vec)
-    compare_consecutive_matmats(inv_KFAC_tuple, adjoint, is_vec)
-    compare_matmat(inv_KFAC_tuple, inv_KFAC_naive, adjoint, is_vec)
-
-    assert inv_KFAC._cache == cache
-    if cache:
-        # test that the cache is not empty
-        assert len(inv_KFAC._inverse_input_covariances) > 0
-        assert len(inv_KFAC._inverse_gradient_covariances) > 0
-    else:
-        # test that the cache is empty
-        assert len(inv_KFAC._inverse_input_covariances) == 0
-        assert len(inv_KFAC._inverse_gradient_covariances) == 0
 
 
-@mark.parametrize("cache", [True, False], ids=["cached", "uncached"])
 @mark.parametrize(
     "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
 )
@@ -283,7 +257,6 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901, PLR0912, PLR09
         List[Parameter],
         Iterable[Tuple[Tensor, Tensor]],
     ],
-    cache: bool,
     exclude: str,
     separate_weight_and_bias: bool,
     adjoint: bool,
@@ -304,7 +277,6 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901, PLR0912, PLR09
     model_func = model_func.to(dtype=dtype)
     loss_func = loss_func.to(dtype=dtype)
     params = [p.to(dtype=dtype) for p in params]
-    (device,) = {p.device for p in params}
     data = [
         (
             (cast_input(x, dtype), y)
@@ -321,16 +293,15 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901, PLR0912, PLR09
         data,
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
-        check_deterministic=False,
     )
-    KFAC.compute_kronecker_factors()
 
-    # add heuristic damping manually
-    heuristic_damping = {}
-    for mod_name in KFAC._mapping.keys():
-        aaT = KFAC._input_covariances.get(mod_name)
-        ggT = KFAC._gradient_covariances.get(mod_name)
-        if aaT is not None and ggT is not None:
+    # Compute heuristic damping values
+    heuristic_damping = []
+    for block in KFAC._block_diagonal_operator._blocks:
+        if len(block._factors) == 1:
+            block_damping = (delta,)
+        else:
+            ggT, aaT = block._factors
             aaT_eig_mean = aaT.trace() / aaT.shape[0]
             ggT_eig_mean = ggT.trace() / ggT.shape[0]
             if aaT_eig_mean >= 0.0 and ggT_eig_mean > 0.0:
@@ -338,71 +309,36 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901, PLR0912, PLR09
                 sqrt_damping = sqrt(delta)
                 damping_aaT = max(sqrt_damping * sqrt_eig_mean_ratio, KFAC_MIN_DAMPING)
                 damping_ggT = max(sqrt_damping / sqrt_eig_mean_ratio, KFAC_MIN_DAMPING)
-                heuristic_damping[mod_name] = (damping_aaT, damping_ggT)
-            else:
-                damping_aaT, damping_ggT = delta, delta
-        else:
-            damping_aaT, damping_ggT = delta, delta
-        if aaT is not None:
-            aaT.add_(eye_like(aaT), alpha=damping_aaT)
-        if ggT is not None:
-            ggT.add_(eye_like(ggT), alpha=damping_ggT)
+                block_damping = (damping_ggT, damping_aaT)
+
+        heuristic_damping.append(block_damping)
+
+    # Add heuristic damping manually
+    for damping, block in zip(heuristic_damping, KFAC._block_diagonal_operator._blocks):
+        for i, (damping_i, S_i) in enumerate(zip(damping, block._factors)):
+            block._factors[i] = S_i + damping_i * eye_like(S_i)
 
     # manual heuristically damped inverse
     inv_KFAC_naive = inv(KFAC @ eye_like(KFAC))
 
-    # remove heuristic damping
-    for mod_name in KFAC._mapping.keys():
-        aaT = KFAC._input_covariances.get(mod_name)
-        ggT = KFAC._gradient_covariances.get(mod_name)
-        damping_aaT, damping_ggT = heuristic_damping.get(mod_name, (delta, delta))
-        if aaT is not None:
-            aaT.sub_(eye_like(aaT), alpha=damping_aaT)
-        if ggT is not None:
-            ggT.sub_(eye_like(ggT), alpha=damping_ggT)
+    # Remove heuristic damping manually
+    for damping, block in zip(heuristic_damping, KFAC._block_diagonal_operator._blocks):
+        for i, (damping_i, S_i) in enumerate(zip(damping, block._factors)):
+            block._factors[i] = S_i - damping_i * eye_like(S_i)
 
-    # check that passing a tuple for heuristic damping will fail
-    with raises(
-        ValueError, match="Heuristic and exact damping require a single damping value."
-    ):
-        inv_KFAC = KFACInverseLinearOperator(
-            KFAC, damping=(delta, delta), use_heuristic_damping=True
-        )
-
-    # check that using exact and heuristic damping at the same time fails
+    # Check that using exact and heuristic damping at the same time fails
     with raises(ValueError, match="Either use heuristic damping or exact damping"):
-        KFACInverseLinearOperator(
-            KFAC,
-            damping=delta,
-            cache=cache,
-            use_exact_damping=True,
-            use_heuristic_damping=True,
-        )
+        KFAC.inverse(use_exact_damping=True, use_heuristic_damping=True)
 
     # use heuristic damping with KFACInverseLinearOperator
-    inv_KFAC = KFACInverseLinearOperator(
-        KFAC,
-        damping=delta,
-        cache=cache,
-        use_heuristic_damping=True,
-        min_damping=KFAC_MIN_DAMPING,
+    inv_KFAC = KFAC.inverse(
+        damping=delta, use_heuristic_damping=True, min_damping=KFAC_MIN_DAMPING
     )
 
     compare_consecutive_matmats(inv_KFAC, adjoint, is_vec)
     compare_matmat(inv_KFAC, inv_KFAC_naive, adjoint, is_vec)
 
-    assert inv_KFAC._cache == cache
-    if cache:
-        # test that the cache is not empty
-        assert len(inv_KFAC._inverse_input_covariances) > 0
-        assert len(inv_KFAC._inverse_gradient_covariances) > 0
-    else:
-        # test that the cache is empty
-        assert len(inv_KFAC._inverse_input_covariances) == 0
-        assert len(inv_KFAC._inverse_gradient_covariances) == 0
 
-
-@mark.parametrize("cache", [True, False], ids=["cached", "uncached"])
 @mark.parametrize(
     "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
 )
@@ -417,7 +353,6 @@ def test_KFAC_inverse_exactly_damped_matmat(
         List[Parameter],
         Iterable[Tuple[Tensor, Tensor]],
     ],
-    cache: bool,
     exclude: str,
     separate_weight_and_bias: bool,
     adjoint: bool,
@@ -437,7 +372,6 @@ def test_KFAC_inverse_exactly_damped_matmat(
     model_func = model_func.to(dtype=dtype)
     loss_func = loss_func.to(dtype=dtype)
     params = [p.to(dtype=dtype) for p in params]
-    (device,) = {p.device for p in params}
     data = [
         (
             (cast_input(x, dtype), y)
@@ -461,46 +395,19 @@ def test_KFAC_inverse_exactly_damped_matmat(
     KFAC_mat = KFAC @ eye_like(KFAC)
     inv_KFAC_naive = inv(KFAC_mat + delta * eye_like(KFAC_mat))
 
-    # check that passing a tuple for exact damping will fail
-    with raises(
-        ValueError, match="Heuristic and exact damping require a single damping value."
-    ):
-        inv_KFAC = KFACInverseLinearOperator(
-            KFAC, damping=(delta, delta), use_exact_damping=True
-        )
-
     # check that using exact and heuristic damping at the same time fails
     with raises(ValueError, match="Either use heuristic damping or exact damping"):
-        KFACInverseLinearOperator(
-            KFAC,
-            damping=delta,
-            cache=cache,
-            use_exact_damping=True,
-            use_heuristic_damping=True,
-        )
+        KFAC.inverse(use_exact_damping=True, use_heuristic_damping=True)
 
-    # use exact damping with KFACInverseLinearOperator
-    inv_KFAC = KFACInverseLinearOperator(
-        KFAC, damping=delta, cache=cache, use_exact_damping=True
-    )
+    # use exact damping
+    inv_KFAC = KFAC.inverse(damping=delta, use_exact_damping=True)
 
     compare_consecutive_matmats(inv_KFAC, adjoint, is_vec)
     compare_matmat(inv_KFAC, inv_KFAC_naive, adjoint, is_vec)
 
-    assert inv_KFAC._cache == cache
-    if cache:
-        # test that the cache is not empty
-        assert len(inv_KFAC._inverse_input_covariances) > 0
-        assert len(inv_KFAC._inverse_gradient_covariances) > 0
-    else:
-        # test that the cache is empty
-        assert len(inv_KFAC._inverse_input_covariances) == 0
-        assert len(inv_KFAC._inverse_gradient_covariances) == 0
-
 
 @mark.parametrize("use_exact_damping", [True, False], ids=["exact_damping", ""])
 @mark.parametrize("use_heuristic_damping", [True, False], ids=["heuristic_damping", ""])
-@mark.parametrize("cache", [True, False], ids=["cached", "uncached"])
 @mark.parametrize(
     "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
 )
@@ -511,7 +418,6 @@ def test_KFAC_inverse_exactly_damped_matmat(
 def test_KFAC_inverse_save_and_load_state_dict(
     use_exact_damping: bool,
     use_heuristic_damping: bool,
-    cache: bool,
     exclude: str,
     separate_weight_and_bias: bool,
     shuffle: bool,
@@ -549,7 +455,7 @@ def test_KFAC_inverse_save_and_load_state_dict(
     if use_exact_damping and use_heuristic_damping:
         return
     inv_kfac = KFACInverseLinearOperator(
-        kfac, damping=1e-2, retry_double_precision=False, cache=cache, **kwargs
+        kfac, damping=1e-2, retry_double_precision=False, **kwargs
     )
     # trigger inverse computation and maybe caching
     inv_kfac_as_mat = inv_kfac @ eye_like(kfac)

@@ -39,7 +39,11 @@ from torch.nn import (
 )
 from torch.utils.hooks import RemovableHandle
 
-from curvlinops._torch_base import CurvatureLinearOperator, PyTorchLinearOperator
+from curvlinops._torch_base import (
+    CurvatureLinearOperator,
+    PyTorchLinearOperator,
+    _ChainPyTorchLinearOperator,
+)
 from curvlinops.blockdiagonal import BlockDiagonalLinearOperator
 from curvlinops.kfac_utils import (
     extract_averaged_patches,
@@ -300,7 +304,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
         self._from_canonical = self._to_canonical.adjoint()
 
         # Build the operator that represents KFAC
-        self._operator = (
+        self._operator: _ChainPyTorchLinearOperator = (
             self._from_canonical @ self._block_diagonal_operator @ self._to_canonical
         )
 
@@ -998,6 +1002,55 @@ class KFACLinearOperator(CurvatureLinearOperator):
             kfac._check_deterministic()
 
         return kfac
+
+    def inverse(
+        self,
+        damping: float = 0.0,
+        use_heuristic_damping: bool = False,
+        min_damping: float = 1e-8,
+        use_exact_damping: bool = False,
+        retry_double_precision: bool = True,
+    ) -> _ChainPyTorchLinearOperator:
+        """Return the inverse of the KFAC linear operator.
+
+        Args:
+            damping: Damping value for all input and gradient covariances.
+                Default: ``0.0``.
+            use_heuristic_damping: Whether to use a heuristic damping strategy by
+                `Martens and Grosse, 2015 <https://arxiv.org/abs/1503.05671>`_
+                (Section 6.3). Default: ``False``.
+            min_damping: Minimum damping value. Only used if
+                ``use_heuristic_damping`` is ``True``. Default: ``1e-8``.
+            use_exact_damping: Whether to use exact damping, i.e. to invert
+                :math:`(A \\otimes B) + \\text{damping}\\; \\mathbf{I}`.
+                Default: ``False``.
+            retry_double_precision: Whether to retry Cholesky decomposition used for
+                inversion in double precision. Default: ``True``.
+
+        Returns:
+            Linear operator representing the inverse of KFAC.
+
+        Raises:
+            ValueError: If both heuristic and exact damping are selected.
+            ValueError: If heuristic or exact damping is used and the damping value
+                is a tuple.
+        """
+        # Invert the blocks of self._block_diagonal_operator
+        inverse_blocks = [
+            block.inverse(
+                damping=damping,
+                use_heuristic_damping=use_heuristic_damping,
+                min_damping=min_damping,
+                use_exact_damping=use_exact_damping,
+                retry_double_precision=retry_double_precision,
+            )
+            for block in self._block_diagonal_operator._blocks
+        ]
+
+        # Create the inverse block diagonal operator
+        inverse_block_diagonal = BlockDiagonalLinearOperator(inverse_blocks)
+
+        return self._from_canonical @ inverse_block_diagonal @ self._to_canonical
 
 
 class _ToCanonicalLinearOperator(PyTorchLinearOperator):
