@@ -559,14 +559,13 @@ def test_KFAC_inverse_from_state_dict(
     "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
 )
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
-def test_EKFAC_inverse_exactly_damped_matmat(
+def test_EKFAC_inverse_matmat(
     inv_case: Tuple[
         Module,
         Union[MSELoss, CrossEntropyLoss],
         List[Parameter],
         Iterable[Tuple[Tensor, Tensor]],
     ],
-    cache: bool,
     exclude: str,
     separate_weight_and_bias: bool,
     adjoint: bool,
@@ -602,30 +601,16 @@ def test_EKFAC_inverse_exactly_damped_matmat(
         data,
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
-        check_deterministic=False,
     )
 
     # manual exactly damped inverse
     inv_EKFAC_naive = inv(EKFAC @ eye_like(EKFAC) + delta * eye_like(EKFAC))
 
-    # check that passing a tuple for exact damping will fail
-    with raises(ValueError):
-        inv_EKFAC = KFACInverseLinearOperator(
-            EKFAC, damping=(delta, delta), use_exact_damping=True
-        )
-
     # use exact damping with KFACInverseLinearOperator
-    inv_EKFAC = KFACInverseLinearOperator(
-        EKFAC, damping=delta, cache=cache, use_exact_damping=True
-    )
+    inv_EKFAC = EKFAC.inverse(damping=delta)
 
     compare_consecutive_matmats(inv_EKFAC, adjoint, is_vec)
     compare_matmat(inv_EKFAC, inv_EKFAC_naive, adjoint, is_vec)
-
-    assert inv_EKFAC._cache == cache
-    # test that the cache is empty
-    assert len(inv_EKFAC._inverse_input_covariances) == 0
-    assert len(inv_EKFAC._inverse_gradient_covariances) == 0
 
 
 def test_EKFAC_inverse_save_and_load_state_dict():

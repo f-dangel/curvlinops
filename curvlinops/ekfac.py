@@ -14,6 +14,7 @@ from torch.nn import (
 )
 from torch.utils.hooks import RemovableHandle
 
+from curvlinops._torch_base import _ChainPyTorchLinearOperator
 from curvlinops.blockdiagonal import BlockDiagonalLinearOperator
 from curvlinops.eigh import EighDecomposedLinearOperator
 from curvlinops.kfac import (
@@ -398,3 +399,27 @@ class EKFACLinearOperator(KFACLinearOperator):
                     p_name,
                     per_example_gradient.square_().sum(dim=1).mul_(correction),
                 )
+
+    def inverse(
+        self,
+        damping: float = 0.0,
+    ) -> _ChainPyTorchLinearOperator:
+        """Return the inverse of the EKFAC linear operator.
+
+        Args:
+            damping: Damping value added to eigenvalues before inversion.
+                Default: ``0.0``.
+
+        Returns:
+            Linear operator representing the inverse of EKFAC.
+        """
+        # Invert the blocks of self._block_diagonal_operator
+        inverse_blocks = [
+            block.inverse(damping=damping)
+            for block in self._block_diagonal_operator._blocks
+        ]
+
+        # Create the inverse block diagonal operator
+        inverse_block_diagonal = BlockDiagonalLinearOperator(inverse_blocks)
+
+        return self._from_canonical @ inverse_block_diagonal @ self._to_canonical
