@@ -32,10 +32,9 @@ from test.utils import (
     UnetModel,
     WeightShareModel,
     _test_ekfac_closer_to_exact_than_kfac,
-    _test_from_state_dict,
     _test_inplace_activations,
     _test_property,
-    _test_save_and_load_state_dict,
+    _test_save_and_load,
     binary_classification_targets,
     block_diagonal,
     classification_targets,
@@ -744,12 +743,7 @@ def test_ekfac_does_not_affect_grad():
 
 def test_save_and_load_state_dict():
     """Test that EKFACLinearOperator can be saved and loaded from state dict."""
-    _test_save_and_load_state_dict(EKFACLinearOperator)
-
-
-def test_from_state_dict():
-    """Test that EKFACLinearOperator can be created from state dict."""
-    _test_from_state_dict(EKFACLinearOperator)
+    _test_save_and_load(EKFACLinearOperator)
 
 
 # TODO: Add test for FisherType.MC once tests are in float64.

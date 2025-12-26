@@ -22,8 +22,7 @@ from collections.abc import MutableMapping
 from enum import Enum, EnumMeta
 from functools import partial
 from math import sqrt
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, TypeVar, Union
-from warnings import warn
+from typing import Callable, Dict, Iterable, List, Optional, Tuple, TypeVar, Union
 
 from einops import einsum, rearrange, reduce
 from torch import Generator, Tensor, cat, eye, randn, stack
@@ -872,136 +871,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
             Frobenius norm of the KFAC approximation.
         """
         return self._block_diagonal_operator.frobenius_norm
-
-    def state_dict(self) -> Dict[str, Any]:
-        """Return the state of the KFAC linear operator.
-
-        Returns:
-            State dictionary.
-        """
-        loss_type = {
-            MSELoss: "MSELoss",
-            CrossEntropyLoss: "CrossEntropyLoss",
-            BCEWithLogitsLoss: "BCEWithLogitsLoss",
-        }[type(self._loss_func)]
-        return {
-            # Model and loss function
-            "model_func_state_dict": self._model_func.state_dict(),
-            "loss_type": loss_type,
-            "loss_reduction": self._loss_func.reduction,
-            # Attributes
-            "progressbar": self._progressbar,
-            "seed": self._seed,
-            "fisher_type": self._fisher_type,
-            "mc_samples": self._mc_samples,
-            "kfac_approx": self._kfac_approx,
-            "num_per_example_loss_terms": self._num_per_example_loss_terms,
-            "separate_weight_and_bias": self._separate_weight_and_bias,
-            "num_data": self._N_data,
-            # Note: Kronecker factors are computed on-demand, not stored
-        }
-
-    def load_state_dict(self, state_dict: Dict[str, Any]):
-        """Load the state of the KFAC linear operator.
-
-        Warning:
-            Loading a state dict will overwrite the parameters of the model underlying
-            the linear operator!
-
-        Args:
-            state_dict: State dictionary.
-
-        Raises:
-            ValueError: If the loss function does not match the state dict.
-            ValueError: If the loss function reduction does not match the state dict.
-        """
-        warn(
-            "Loading a state dict will overwrite the parameters of the model underlying the linear operator!",
-            stacklevel=2,
-        )
-        self._model_func.load_state_dict(state_dict["model_func_state_dict"])
-        # Verify that the loss function and its reduction match the state dict
-        loss_func_type = {
-            "MSELoss": MSELoss,
-            "CrossEntropyLoss": CrossEntropyLoss,
-            "BCEWithLogitsLoss": BCEWithLogitsLoss,
-        }[state_dict["loss_type"]]
-        if not isinstance(self._loss_func, loss_func_type):
-            raise ValueError(
-                f"Loss function mismatch: {loss_func_type} != {type(self._loss_func)}."
-            )
-        if state_dict["loss_reduction"] != self._loss_func.reduction:
-            raise ValueError(
-                "Loss function reduction mismatch: "
-                f"{state_dict['loss_reduction']} != {self._loss_func.reduction}."
-            )
-
-        # Set attributes
-        self._progressbar = state_dict["progressbar"]
-        self._seed = state_dict["seed"]
-        self._fisher_type = state_dict["fisher_type"]
-        self._mc_samples = state_dict["mc_samples"]
-        self._kfac_approx = state_dict["kfac_approx"]
-        self._num_per_example_loss_terms = state_dict["num_per_example_loss_terms"]
-        self._separate_weight_and_bias = state_dict["separate_weight_and_bias"]
-        self._N_data = state_dict["num_data"]
-
-        # Note: Kronecker factors will be computed on-demand
-
-    @classmethod
-    def from_state_dict(
-        cls,
-        state_dict: Dict[str, Any],
-        model_func: Module,
-        params: List[Parameter],
-        data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
-        check_deterministic: bool = True,
-        batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
-    ) -> KFACLinearOperator:
-        """Load a KFAC linear operator from a state dictionary.
-
-        Args:
-            state_dict: State dictionary.
-            model_func: The model function.
-            params: The model's parameters that KFAC is computed for.
-            data: A data loader containing the data of the Fisher/GGN.
-            check_deterministic: Whether to check that the linear operator is
-                deterministic. Defaults to ``True``.
-            batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
-                needs to be specified. The intended behavior is to consume the first
-                entry of the iterates from ``data`` and return their batch size.
-
-        Returns:
-            Linear operator of KFAC approximation.
-        """
-        loss_func = {
-            "MSELoss": MSELoss,
-            "CrossEntropyLoss": CrossEntropyLoss,
-            "BCEWithLogitsLoss": BCEWithLogitsLoss,
-        }[state_dict["loss_type"]](reduction=state_dict["loss_reduction"])
-        kfac = cls(
-            model_func,
-            loss_func,
-            params,
-            data,
-            batch_size_fn=batch_size_fn,
-            check_deterministic=False,
-            progressbar=state_dict["progressbar"],
-            seed=state_dict["seed"],
-            fisher_type=state_dict["fisher_type"],
-            mc_samples=state_dict["mc_samples"],
-            kfac_approx=state_dict["kfac_approx"],
-            num_per_example_loss_terms=state_dict["num_per_example_loss_terms"],
-            separate_weight_and_bias=state_dict["separate_weight_and_bias"],
-            num_data=state_dict["num_data"],
-        )
-        kfac.load_state_dict(state_dict)
-
-        # Potentially call `check_deterministic` after the state dict is loaded
-        if check_deterministic:
-            kfac._check_deterministic()
-
-        return kfac
 
     def inverse(
         self,

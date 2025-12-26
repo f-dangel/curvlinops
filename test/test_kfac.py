@@ -32,10 +32,9 @@ from test.utils import (
     Conv2dModel,
     UnetModel,
     WeightShareModel,
-    _test_from_state_dict,
     _test_inplace_activations,
     _test_property,
-    _test_save_and_load_state_dict,
+    _test_save_and_load,
     binary_classification_targets,
     block_diagonal,
     classification_targets,
@@ -1045,12 +1044,7 @@ def test_kfac_does_not_affect_grad():
 
 def test_save_and_load_state_dict():
     """Test that KFACLinearOperator can be saved and loaded from state dict."""
-    _test_save_and_load_state_dict(KFACLinearOperator)
-
-
-def test_from_state_dict():
-    """Test that KFACLinearOperator can be created from state dict."""
-    _test_from_state_dict(KFACLinearOperator)
+    _test_save_and_load(KFACLinearOperator)
 
 
 @mark.parametrize("fisher_type", ["type-2", "mc", "empirical", "forward-only"])
