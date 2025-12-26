@@ -421,7 +421,7 @@ def test_KFAC_inverse_save_and_load(
     separate_weight_and_bias: bool,
     shuffle: bool,
 ):
-    """Test that KFACInverseLinearOperator can be saved and loaded."""
+    """Test that KFAC inverse linear operator can be saved and loaded."""
     manual_seed(0)
     batch_size, D_in, D_hidden, D_out = 4, 3, 5, 2
     X = rand(batch_size, D_in)
@@ -467,7 +467,7 @@ def test_KFAC_inverse_save_and_load(
     # clean up
     os.remove(INV_KFAC_PATH)
 
-    # check that the two inverse KFACs are equal
+    # check that the two inverse KFAC operators are equal
     assert allclose_report(inv_kfac_as_mat, inv_kfac_loaded @ eye_like(kfac))
 
 
@@ -536,7 +536,7 @@ def test_EKFAC_inverse_matmat(
 
 
 def test_EKFAC_inverse_save_and_load():
-    """Test that KFACInverseLinearOperator can be saved and loaded."""
+    """Test that EKFAC inverse linear operator can be saved and loaded."""
     manual_seed(0)
     batch_size, D_in, D_out = 4, 3, 2
     X = rand(batch_size, D_in)
@@ -553,7 +553,7 @@ def test_EKFAC_inverse_save_and_load():
         [(X, y)],
     )
 
-    # create inverse KFAC
+    # create inverse EKFAC
     inv_ekfac = ekfac.inverse(damping=1e-2)
     inv_ekfac_as_mat = inv_ekfac @ eye_like(ekfac)  # to trigger inverse computation
 
@@ -562,10 +562,10 @@ def test_EKFAC_inverse_save_and_load():
     save(inv_ekfac, INV_EKFAC_PATH)
     del inv_ekfac
 
-    # create new inverse KFAC and load state dict
+    # create new inverse EKFAC and load state dict
     inv_ekfac_loaded = load(INV_EKFAC_PATH, weights_only=False)
     # clean up
     os.remove(INV_EKFAC_PATH)
 
-    # check that the two inverse KFACs are equal
+    # check that the two inverse EKFAC operators are equal
     assert allclose_report(inv_ekfac_as_mat, inv_ekfac_loaded @ eye_like(ekfac))
