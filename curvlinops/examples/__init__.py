@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import List, Tuple
 
-from torch import Tensor, device, dtype, einsum
+from torch import Tensor, device, dtype, einsum, tensor
 
 from curvlinops._torch_base import PyTorchLinearOperator
 
@@ -274,8 +274,6 @@ class IdentityLinearOperator(PyTorchLinearOperator):
         Returns:
             Trace of the identity matrix.
         """
-        from torch import tensor
-
         total_dim = sum(self._in_shape_flat)
         return tensor(float(total_dim), device=self.device, dtype=self.dtype)
 
@@ -288,8 +286,6 @@ class IdentityLinearOperator(PyTorchLinearOperator):
         Returns:
             Determinant of the identity matrix.
         """
-        from torch import tensor
-
         return tensor(1.0, device=self.device, dtype=self.dtype)
 
     @property
@@ -301,8 +297,6 @@ class IdentityLinearOperator(PyTorchLinearOperator):
         Returns:
             Log determinant of the identity matrix.
         """
-        from torch import tensor
-
         return tensor(0.0, device=self.device, dtype=self.dtype)
 
     @property
@@ -314,9 +308,6 @@ class IdentityLinearOperator(PyTorchLinearOperator):
         Returns:
             Frobenius norm of the identity matrix.
         """
-        from torch import tensor
 
         total_dim = sum(self._in_shape_flat)
-        return tensor(
-            float(total_dim), device=self.device, dtype=self.dtype
-        ).sqrt()
+        return tensor(float(total_dim), device=self.device, dtype=self.dtype).sqrt()
