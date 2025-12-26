@@ -1,7 +1,7 @@
 """Test linear operator of a block-diagonal matrix."""
 
 from pytest import raises
-from torch import block_diag, float64, isclose, kron, manual_seed, rand
+from torch import block_diag, float64, isclose, manual_seed, rand
 from torch.linalg import matrix_norm
 
 from curvlinops.blockdiagonal import BlockDiagonalLinearOperator

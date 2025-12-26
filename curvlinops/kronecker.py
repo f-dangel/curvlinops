@@ -1,7 +1,7 @@
 """PyTorch linear operator implementation of Kronecker product S_1 ⊗ S_2 ⊗ ... ."""
 
 from math import prod, sqrt
-from typing import List, Tuple, Union
+from typing import List, Union
 from warnings import warn
 
 from einops import einsum
