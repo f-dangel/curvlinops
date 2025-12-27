@@ -12,12 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
-
-- Add linear operator `KroneckerProductLinearOperator` for matrices `S_1 ⊗ S_2 ⊗ ...`
-  ([PR](https://github.com/f-dangel/curvlinops/pull/211))
-
-- Add linear operator `EighDecomposedLinearOperator` for `eigh`-decomposed matrices `Q diag(λ) Q^T` with orthogonal `Q`
-  ([PR](https://github.com/f-dangel/curvlinops/pull/210))
+- Add linear operators for basic mathematical structures
+  - `BlockDiagonalLinearOperator` for matrices `block_diag(B_1, B_2, ...)`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/212))
+  - `KroneckerProductLinearOperator` for matrices `S_1 ⊗ S_2 ⊗ ...`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/211))
+  - `EighDecomposedLinearOperator` for `eigh`-decomposed matrices `Q diag(λ) Q^T` with orthogonal `Q`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/210))
 
 - Use A6000 GPU instead of A40 to benchmark linear operators
   ([PR](https://github.com/f-dangel/curvlinops/pull/199))
