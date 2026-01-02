@@ -53,7 +53,6 @@ from curvlinops import (
     FisherMCLinearOperator,
     GGNLinearOperator,
     HessianLinearOperator,
-    KFACInverseLinearOperator,
     KFACLinearOperator,
 )
 from curvlinops._torch_base import PyTorchLinearOperator
@@ -210,9 +209,11 @@ LINOP_STRS = [
     "Empirical Fisher",
     "Monte-Carlo Fisher",
     "KFAC",
-    "KFAC inverse",
+    # NOTE Currently disabling inverses because pre-computation happens in constructor
+    # "KFAC inverse",
     "EKFAC",
-    "EKFAC inverse",
+    # NOTE Currently disabling inverses because pre-computation happens in constructor
+    # "EKFAC inverse",
 ]
 
 # %%
@@ -391,23 +392,11 @@ def run_time_benchmark(  # noqa: C901
 
     # Select function that will be profiled
     def f_gradient_and_loss():
-        if isinstance(linop, KFACInverseLinearOperator):
-            _ = linop._A.gradient_and_loss()
-        else:
-            _ = linop.gradient_and_loss()
+        _ = linop.gradient_and_loss()
 
     def f_precompute():
         if isinstance(linop, (KFACLinearOperator, EKFACLinearOperator)):
-            linop.compute_kronecker_factors()
-        if isinstance(linop, EKFACLinearOperator):
-            linop.compute_eigenvalue_correction()
-        if isinstance(linop, KFACInverseLinearOperator):
-            linop._A.compute_kronecker_factors()
-            if isinstance(linop._A, EKFACLinearOperator):
-                linop._A.compute_eigenvalue_correction()
-            # damp and invert the Kronecker matrices
-            for mod_name in linop._A._mapping:
-                linop._compute_or_get_cached_inverse(mod_name)
+            _ = linop._operator  # trigger internal state computation
 
     def f_matvec():
         # Double-backward through efficient attention is unsupported, disable fused kernels
