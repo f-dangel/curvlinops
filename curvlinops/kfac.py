@@ -293,8 +293,9 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
         self._set_num_per_example_loss_terms(num_per_example_loss_terms)
 
-        # Create the block diagonal operator
-        self._block_diagonal_operator = self._create_block_diagonal_operator()
+        # Initialize cache variables for lazy loading
+        self.__block_diagonal_operator: Optional[BlockDiagonalLinearOperator] = None
+        self.__operator: Optional[_ChainPyTorchLinearOperator] = None
 
         # Create canonical form transformation operators
         self._to_canonical = _ToCanonicalLinearOperator(
@@ -302,13 +303,34 @@ class KFACLinearOperator(CurvatureLinearOperator):
         )
         self._from_canonical = self._to_canonical.adjoint()
 
-        # Build the operator that represents KFAC
-        self._operator: _ChainPyTorchLinearOperator = (
-            self._from_canonical @ self._block_diagonal_operator @ self._to_canonical
-        )
-
         if check_deterministic:
             self._check_deterministic()
+
+    @property
+    def _block_diagonal_operator(self) -> BlockDiagonalLinearOperator:
+        """Get the cached block diagonal operator, computing it if necessary.
+
+        Returns:
+            The block diagonal linear operator with Kronecker product blocks.
+        """
+        if self.__block_diagonal_operator is None:
+            self.__block_diagonal_operator = self._create_block_diagonal_operator()
+        return self.__block_diagonal_operator
+
+    @property
+    def _operator(self) -> _ChainPyTorchLinearOperator:
+        """Get the cached KFAC operator, computing it if necessary.
+
+        Returns:
+            The complete KFAC linear operator.
+        """
+        if self.__operator is None:
+            self.__operator = (
+                self._from_canonical
+                @ self._block_diagonal_operator
+                @ self._to_canonical
+            )
+        return self.__operator
 
     def _set_num_per_example_loss_terms(
         self, num_per_example_loss_terms: Optional[int]
