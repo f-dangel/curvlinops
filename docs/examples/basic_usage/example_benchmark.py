@@ -398,7 +398,7 @@ def run_time_benchmark(  # noqa: C901
         if isinstance(linop, (KFACLinearOperator, EKFACLinearOperator)):
             linop.__operator = None
             linop.__block_diagonal_operator = None
-            _ = linop._operator  # trigger internal state computation
+            _ = linop._block_diagonal_operator  # trigger internal state computation
 
     def f_matvec():
         # Double-backward through efficient attention is unsupported, disable fused kernels

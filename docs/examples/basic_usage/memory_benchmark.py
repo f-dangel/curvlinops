@@ -69,7 +69,7 @@ def run_peakmem_benchmark(  # noqa: C901, PLR0915
         if isinstance(linop, (KFACLinearOperator, EKFACLinearOperator)):
             linop.__operator = None
             linop.__block_diagonal_operator = None
-            _ = linop._operator  # trigger internal state computation
+            _ = linop._block_diagonal_operator  # trigger internal state computation
 
         if is_cuda:
             cuda.synchronize()
