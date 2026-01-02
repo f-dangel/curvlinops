@@ -396,6 +396,8 @@ def run_time_benchmark(  # noqa: C901
 
     def f_precompute():
         if isinstance(linop, (KFACLinearOperator, EKFACLinearOperator)):
+            linop.__operator = None
+            linop.__block_diagonal_operator = None
             _ = linop._operator  # trigger internal state computation
 
     def f_matvec():
