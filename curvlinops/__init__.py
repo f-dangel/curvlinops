@@ -9,7 +9,6 @@ from curvlinops.gradient_moments import EFLinearOperator
 from curvlinops.hessian import HessianLinearOperator
 from curvlinops.inverse import (
     CGInverseLinearOperator,
-    KFACInverseLinearOperator,
     LSMRInverseLinearOperator,
     NeumannInverseLinearOperator,
 )
@@ -44,7 +43,6 @@ __all__ = [
     "CGInverseLinearOperator",
     "LSMRInverseLinearOperator",
     "NeumannInverseLinearOperator",
-    "KFACInverseLinearOperator",
     # slicing
     "SubmatrixLinearOperator",
     # spectral properties

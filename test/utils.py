@@ -9,14 +9,12 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Type, U
 from einops import rearrange, reduce
 from einops.layers.torch import Rearrange
 from numpy import ndarray
-from pytest import raises, warns
 from torch import (
     Tensor,
-    allclose,
-    as_tensor,
     cat,
     cuda,
     device,
+    diagonal_scatter,
     dtype,
     eye,
     from_numpy,
@@ -454,34 +452,6 @@ def batch_size_fn(X: MutableMapping) -> int:
     return X["x"].shape[0]
 
 
-def compare_state_dicts(state_dict: dict, state_dict_new: dict):
-    """Compare two state dicts recursively.
-
-    Args:
-        state_dict (dict): The first state dict to compare.
-        state_dict_new (dict): The second state dict to compare.
-
-    Raises:
-        AssertionError: If the state dicts are not equal.
-    """
-    assert len(state_dict) == len(state_dict_new)
-    for value, value_new in zip(state_dict.values(), state_dict_new.values()):
-        if isinstance(value, Tensor):
-            assert allclose(value, value_new)
-        elif isinstance(value, dict):
-            compare_state_dicts(value, value_new)
-        elif isinstance(value, tuple):
-            assert len(value) == len(value_new)
-            assert all(isinstance(v, type(v2)) for v, v2 in zip(value, value_new))
-            for v, v2 in zip(value, value_new):
-                if v is None:
-                    assert v2 is None
-                else:
-                    assert allclose(as_tensor(v), as_tensor(v2))
-        else:
-            assert value == value_new
-
-
 def rand_accepted_formats(
     shapes: List[Tuple[int, ...]],
     is_vec: bool,
@@ -824,24 +794,12 @@ def _test_property(  # noqa: C901
     if property_name == "logdet":
         DELTA = 1e-3
         if type(linop) is KFACLinearOperator:
-            if not check_deterministic:
-                linop.compute_kronecker_factors()
-            assert linop._input_covariances or linop._gradient_covariances
-            for aaT in linop._input_covariances.values():
-                aaT.add_(eye_like(aaT), alpha=DELTA)
-            for ggT in linop._gradient_covariances.values():
-                ggT.add_(eye_like(ggT), alpha=DELTA)
+            for block in linop._block_diagonal_operator._blocks:
+                for i, S in enumerate(block._factors):
+                    block._factors[i] = diagonal_scatter(S, S.diag() + DELTA)
         elif type(linop) is EKFACLinearOperator:
-            if not check_deterministic:
-                linop.compute_kronecker_factors()
-                linop.compute_eigenvalue_correction()
-            assert linop._corrected_eigenvalues
-            for eigenvalues in linop._corrected_eigenvalues.values():
-                if isinstance(eigenvalues, dict):
-                    for eigenvals in eigenvalues.values():
-                        eigenvals.add_(DELTA)
-                else:
-                    eigenvalues.add_(DELTA)
+            for block in linop._block_diagonal_operator._blocks:
+                block._eigenvalues = block._eigenvalues + DELTA
 
     # Mapping from the property name to the corresponding torch function
     torch_fn = {
@@ -852,18 +810,13 @@ def _test_property(  # noqa: C901
     }[property_name]
 
     # Check for equivalence of property and naive computation
-    quantity = getattr(linop, property_name)
+    quantity = getattr(linop, property_name)()
     linop_mat = linop @ eye_like(linop)
     quantity_naive = torch_fn(linop_mat)
     assert allclose_report(quantity, quantity_naive, rtol=rtol, atol=atol)
 
-    # Check that the property is properly cached and reset
-    assert getattr(linop, "_" + property_name) == quantity
-    linop.compute_kronecker_factors()
-    assert getattr(linop, "_" + property_name) is None
 
-
-def _test_save_and_load_state_dict(
+def _test_save_and_load(
     linop_cls: Type[Union[KFACLinearOperator, EKFACLinearOperator]],
 ):
     """Test saving and loading state dict of (E)KFAC.
@@ -885,92 +838,20 @@ def _test_save_and_load_state_dict(
         params,
         [(X, y)],
     )
+    linop_as_mat = linop @ eye_like(linop)
 
     # save state dict
-    state_dict = linop.state_dict()
     PATH = "linop_state_dict.pt"
-    save(state_dict, PATH)
-
-    # create new linop with different loss function and try to load state dict
-    linop_new = linop_cls(
-        model,
-        CrossEntropyLoss(),
-        params,
-        [(X, y)],
-    )
-    with raises(ValueError, match="loss"):
-        linop_new.load_state_dict(load(PATH, weights_only=False))
-
-    # create new linop with different loss reduction and try to load state dict
-    linop_new = linop_cls(
-        model,
-        MSELoss(),
-        params,
-        [(X, y)],
-    )
-    with raises(ValueError, match="reduction"):
-        linop_new.load_state_dict(load(PATH, weights_only=False))
-
-    # create new linop with different model and try to load state dict
-    wrong_model = Sequential(Linear(D_in, 10), ReLU(), Linear(10, D_out))
-    wrong_params = list(wrong_model.parameters())
-    linop_new = linop_cls(
-        wrong_model,
-        MSELoss(reduction="sum"),
-        wrong_params,
-        [(X, y)],
-    )
-    with raises(RuntimeError, match="loading state_dict"):
-        linop_new.load_state_dict(load(PATH, weights_only=False))
+    save(linop._operator, PATH)
+    del linop
 
     # create new linop and load state dict
-    linop_new = linop_cls(
-        model,
-        MSELoss(reduction="sum"),
-        params,
-        [(X, y)],
-        check_deterministic=False,  # turn off to avoid computing linop again
-    )
-    with warns(UserWarning, match="will overwrite the parameters"):
-        linop_new.load_state_dict(load(PATH, weights_only=False))
+    linop_loaded = load(PATH, weights_only=False)
     # clean up
     os.remove(PATH)
 
     # check that the two linops are equal
-    compare_state_dicts(linop.state_dict(), linop_new.state_dict())
-    test_vec = rand(linop.shape[1])
-    assert allclose_report(linop @ test_vec, linop_new @ test_vec)
-
-
-def _test_from_state_dict(
-    linop_cls: Type[Union[KFACLinearOperator, EKFACLinearOperator]],
-):
-    """Test that (E)KFACLinearOperator can be created from state dict."""
-    manual_seed(0)
-    batch_size, D_in, D_out = 4, 3, 2
-    X = rand(batch_size, D_in)
-    y = rand(batch_size, D_out)
-    model = Linear(D_in, D_out)
-
-    params = list(model.parameters())
-    # create and compute (E)KFAC
-    linop = linop_cls(
-        model,
-        MSELoss(reduction="sum"),
-        params,
-        [(X, y)],
-    )
-
-    # save state dict
-    state_dict = linop.state_dict()
-
-    # create new linop from state dict
-    linop_new = linop_cls.from_state_dict(state_dict, model, params, [(X, y)])
-
-    # check that the two linops are equal
-    compare_state_dicts(linop.state_dict(), linop_new.state_dict())
-    test_vec = rand(linop.shape[1])
-    assert allclose_report(linop @ test_vec, linop_new @ test_vec)
+    assert allclose_report(linop_as_mat, linop_loaded @ eye_like(linop_loaded))
 
 
 def _test_ekfac_closer_to_exact_than_kfac(
