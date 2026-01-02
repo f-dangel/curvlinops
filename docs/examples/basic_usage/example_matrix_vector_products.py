@@ -9,7 +9,7 @@ First, the imports.
 """
 
 import matplotlib.pyplot as plt
-from torch import cuda, device, eye, manual_seed, nn, rand
+from torch import cat, cuda, device, eye, manual_seed, nn, rand
 
 from curvlinops import GGNLinearOperator, HessianLinearOperator
 from curvlinops.examples.functorch import functorch_ggn, functorch_hessian
@@ -106,6 +106,66 @@ plt.imshow(H_mat)
 plt.colorbar()
 
 # %%
+# Accepted vector/matrix formats
+# ------------------------------
+#
+# Curvature matrices are usually defined w.r.t. parameters of a neural net. In PyTorch,
+# these parameters are split into multiple tensors (e.g. per layer). It is often more
+# convenient to think and work with vectors/matrices defined in this list format, rather
+# than in the flattened-and-concatenated parameter space.
+#
+# So far, we have only used vectors/matrices in the flattened-and-concatenated format.
+# To account for the often more convenient list format, all linear operators in
+# ``curvlinops`` can also handle vectors/matrices specified in tensor list format.
+# In that format, a matrix is a list of tensors, each of which has the same shape as
+# its corresponding parameter plus an additional trailing dimension for the matrix's
+# column dimension.
+#
+# ``curvlinops`` preserves the format when performing matrix multiplies: If the input
+# lived in the flattened-and-concatenated parameter space, the result will be as well.
+# If the input lived in the tensor list parameter space, the result will be a tensor
+# list as well.
+#
+# Let's make this concrete. First, set up the same matrix in flattened and list format:
+
+num_columns = 3
+
+print(f"Total network parameters: {D}")
+print(f"Parameter shapes: {[p.shape for p in params]}")
+print(f"Number of columns: {num_columns}")
+
+# Matrix in tensor list format
+M_list = [rand(*p.shape, num_columns, device=DEVICE) for p in params]
+print(f"[Tensor list format] Matrix: {[m.shape for m in M_list]}")
+
+# Matrix in flattened format (what we have been using before)
+M_flat = cat([m.flatten(end_dim=-2) for m in M_list])
+print(f"[Flat format] Matrix: {M_flat.shape}")
+
+# %%
+#
+# Next, let's carry out the Hessian-matrix product and inspect the result's format:
+
+HM_list = H @ M_list
+print(f"[Tensor list format] Hessian-matrix product: {[hm.shape for hm in HM_list]}")
+
+HM_flat = H @ M_flat
+print(f"[Flat format] Hessian-matrix product: {HM_flat.shape}")
+
+# %%
+#
+# As expected, this produces the same result:
+
+HM_list_flattened = cat([hm.flatten(end_dim=-2) for hm in HM_list])
+
+print("Comparing Hessian-matrix products across formats.")
+assert allclose_report(HM_flat, HM_list_flattened)
+
+# %%
+#
+# **Note:** Like in the early part of the tutorial, the column dimension is not
+# necessary if we just want to multiply the Hessian onto a single vector.
+#
 # GGN-vector products
 # -------------------
 #
@@ -114,6 +174,9 @@ plt.colorbar()
 GGN = GGNLinearOperator(model, loss_function, params, data)
 
 # %%
+#
+# This is one of ``curvlinops``'s design features: All linear operators share the same
+# interface, making it easy to switch between curvature matrices.
 #
 # Let's compute a GGN-vector product.
 

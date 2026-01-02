@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Type, U
 from einops import rearrange, reduce
 from einops.layers.torch import Rearrange
 from numpy import ndarray
-from pytest import raises
+from pytest import raises, warns
 from torch import (
     Tensor,
     allclose,
@@ -601,8 +601,7 @@ def compare_consecutive_matmats(
     tol = {"atol": atol, "rtol": rtol}
 
     # Generate the vector using rand_accepted_formats
-    dt = op.dtype
-    dev = op.device
+    dt, dev = op.dtype, op.device
     _, X, _ = rand_accepted_formats(
         [tuple(s) for s in op._in_shape],
         is_vec=is_vec,
@@ -687,11 +686,7 @@ def eye_like(A: Union[Tensor, PyTorchLinearOperator]) -> Tensor:
     """
     dim1, dim_2 = A.shape
     (dim,) = {dim1, dim_2}
-    return eye(
-        dim,
-        dtype=A.dtype if isinstance(A, PyTorchLinearOperator) else A.dtype,
-        device=A.device if isinstance(A, PyTorchLinearOperator) else A.device,
-    )
+    return eye(dim, dtype=A.dtype, device=A.device)
 
 
 def check_estimator_convergence(
@@ -936,7 +931,8 @@ def _test_save_and_load_state_dict(
         [(X, y)],
         check_deterministic=False,  # turn off to avoid computing linop again
     )
-    linop_new.load_state_dict(load(PATH, weights_only=False))
+    with warns(UserWarning, match="will overwrite the parameters"):
+        linop_new.load_state_dict(load(PATH, weights_only=False))
     # clean up
     os.remove(PATH)
 

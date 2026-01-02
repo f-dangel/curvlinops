@@ -23,6 +23,7 @@ from enum import Enum, EnumMeta
 from functools import partial
 from math import sqrt
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, TypeVar, Union
+from warnings import warn
 
 from einops import einsum, rearrange, reduce
 from torch import Generator, Tensor, cat, eye, randn, stack
@@ -65,15 +66,17 @@ class FisherType(str, Enum, metaclass=MetaEnum):
     """Enum for the Fisher type.
 
     Attributes:
-        TYPE2: Type-2 Fisher, i.e. the exact Hessian of the loss w.r.t. the model
-            outputs is used. This requires as many backward passes as the output
-            dimension, i.e. the number of classes for classification.
-        MC: Monte-Carlo approximation of the expectation by sampling `mc_samples`
-            labels from the model's predictive distribution.
-        EMPIRICAL: Empirical gradients are used which corresponds to the uncentered
-            gradient covariance, or the empirical Fisher.
-        FORWARD_ONLY: The gradient covariances will be identity matrices, see the FOOF
-            method in `Benzing, 2022 <https://arxiv.org/abs/2201.12250>`_ or ISAAC in
+        TYPE2 (str): ``'type-2'`` - Type-2 Fisher, i.e. the exact Hessian of the
+            loss w.r.t. the model outputs is used. This requires as many backward
+            passes as the output dimension, i.e. the number of classes for
+            classification.
+        MC (str): ``'mc'`` - Monte-Carlo approximation of the expectation by sampling
+            ``mc_samples`` labels from the model's predictive distribution.
+        EMPIRICAL (str): ``'empirical'`` - Empirical gradients are used which
+            corresponds to the uncentered gradient covariance, or the empirical Fisher.
+        FORWARD_ONLY (str): ``'forward-only'`` - The gradient covariances will be
+            identity matrices, see the FOOF method in
+            `Benzing, 2022 <https://arxiv.org/abs/2201.12250>`_ or ISAAC in
             `Petersen et al., 2023 <https://arxiv.org/abs/2305.00604>`_.
     """
 
@@ -90,8 +93,8 @@ class KFACType(str, Enum, metaclass=MetaEnum):
     `Eschenhagen et al., 2023 <https://arxiv.org/abs/2311.00636>`_.
 
     Attributes:
-        EXPAND: KFAC-expand approximation.
-        REDUCE: KFAC-reduce approximation.
+        EXPAND (str): ``'expand'`` - KFAC-expand approximation.
+        REDUCE (str): ``'reduce'`` - KFAC-reduce approximation.
     """
 
     EXPAND = "expand"
@@ -1105,6 +1108,10 @@ class KFACLinearOperator(CurvatureLinearOperator):
     def load_state_dict(self, state_dict: Dict[str, Any]):
         """Load the state of the KFAC linear operator.
 
+        Warning:
+            Loading a state dict will overwrite the parameters of the model underlying
+            the linear operator!
+
         Args:
             state_dict: State dictionary.
 
@@ -1112,6 +1119,10 @@ class KFACLinearOperator(CurvatureLinearOperator):
             ValueError: If the loss function does not match the state dict.
             ValueError: If the loss function reduction does not match the state dict.
         """
+        warn(
+            "Loading a state dict will overwrite the parameters of the model underlying the linear operator!",
+            stacklevel=2,
+        )
         self._model_func.load_state_dict(state_dict["model_func_state_dict"])
         # Verify that the loss function and its reduction match the state dict
         loss_func_type = {

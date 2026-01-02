@@ -42,7 +42,7 @@ from torch.optim import SGD
 from torch.utils.data import DataLoader, TensorDataset
 
 from curvlinops import CGInverseLinearOperator, GGNLinearOperator
-from curvlinops.outer import IdentityLinearOperator
+from curvlinops.examples import IdentityLinearOperator
 
 # make deterministic
 manual_seed(0)

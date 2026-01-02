@@ -5,19 +5,10 @@ from __future__ import annotations
 from typing import Iterable, Iterator, List, MutableMapping, Tuple, Union
 
 from pytest import raises
-from torch import (
-    Tensor,
-    device,
-    dtype,
-    linspace,
-    manual_seed,
-    rand,
-    rand_like,
-    randperm,
-    zeros,
-)
+from torch import Tensor, linspace, manual_seed, rand, rand_like, randperm, zeros
 
 from curvlinops._torch_base import CurvatureLinearOperator, PyTorchLinearOperator
+from curvlinops.examples import TensorLinearOperator
 from curvlinops.examples.functorch import functorch_gradient_and_loss
 from curvlinops.utils import allclose_report
 from test.utils import compare_matmat
@@ -194,39 +185,6 @@ def test_gradient_and_loss(case):
         assert allclose_report(g, g_functorch)
 
 
-class TensorLinearOperator(PyTorchLinearOperator):
-    """Linear operator wrapping a single tensor as a linear operator."""
-
-    def __init__(self, A: Tensor):
-        """Initialize linear operator from a 2D tensor.
-
-        Args:
-            A: A 2D tensor representing the matrix.
-
-        Raises:
-            ValueError: If ``A`` is not a 2D tensor.
-        """
-        if A.ndim != 2:
-            raise ValueError(f"Input tensor must be 2D. Got {A.ndim}D.")
-        super().__init__([(A.shape[1],)], [(A.shape[0],)])
-        self._A = A
-        self.SELF_ADJOINT = A.shape == A.T.shape and A.allclose(A.T)
-
-    @property
-    def device(self) -> device:
-        return self._A.device
-
-    @property
-    def dtype(self) -> dtype:
-        return self._A.dtype
-
-    def _adjoint(self) -> TensorLinearOperator:
-        return TensorLinearOperator(self._A.conj().T)
-
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
-        return [self._A @ X[0]]
-
-
 def test_SumPyTorchLinearOperator(adjoint: bool, is_vec: bool):
     """Test adding two PyTorch linear operators.
 
@@ -280,7 +238,10 @@ def test_ChainPyTorchLinearOperator(adjoint: bool, is_vec: bool):
     manual_seed(0)
     A = linspace(1, 10, steps=20).reshape(5, 4)
     B = rand(4, 3)
+    C = rand(3, 2)
 
-    AB = A @ B
-    AB_linop = TensorLinearOperator(A) @ TensorLinearOperator(B)
-    compare_matmat(AB_linop, AB, adjoint, is_vec)
+    ABC = A @ B @ C
+    ABC_linop = (
+        TensorLinearOperator(A) @ TensorLinearOperator(B) @ TensorLinearOperator(C)
+    )
+    compare_matmat(ABC_linop, ABC, adjoint, is_vec)

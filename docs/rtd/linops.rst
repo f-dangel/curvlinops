@@ -26,6 +26,10 @@ Fisher (approximate)
 .. autoclass:: curvlinops.EKFACLinearOperator
    :members: __init__, trace, det, logdet, frobenius_norm, state_dict, load_state_dict, from_state_dict
 
+.. autoclass:: curvlinops.FisherType
+
+.. autoclass:: curvlinops.KFACType
+
 Uncentered gradient covariance (empirical Fisher)
 -------------------------------------------------
 
@@ -99,8 +103,7 @@ Frobenius norm approximation
 Experimental
 ============
 
-The API of experimental features may be subject to changes, or they might become
-deprecated.
+Experimental features may be subject to changes or become deprecated.
 
 .. autoclass:: curvlinops.experimental.ActivationHessianLinearOperator
    :members: __init__

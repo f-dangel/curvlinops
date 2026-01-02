@@ -1,13 +1,12 @@
 """Hutchinson-style matrix diagonal estimation."""
 
-from torch import column_stack, einsum, Tensor
-from scipy.sparse.linalg import LinearOperator
+from typing import Union
 
+from torch import Tensor, column_stack, einsum
+
+from curvlinops._torch_base import PyTorchLinearOperator
 from curvlinops.sampling import random_vector
 from curvlinops.utils import assert_is_square, assert_matvecs_subseed_dim
-from curvlinops._torch_base import PyTorchLinearOperator
-
-from typing import Union
 
 
 def hutchinson_diag(

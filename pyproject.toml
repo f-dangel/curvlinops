@@ -36,13 +36,14 @@ classifiers = [
 dynamic = ["version"]
 # Dependencies of the project:
 dependencies = [
-    "backpack-for-pytorch>=1.6.0,<2.0.0",
-    "torch>=2.0",
-    "scipy>=1.7.1,<2.0.0",
-    "numpy<2.0.0",
-    "tqdm>=4.61.0,<5.0.0",
-    "einops",
-    "einconv",
+    "backpack-for-pytorch>=1.6.0",
+    "torch>=2.0", # introduces torch.func
+    "scipy>=1.0.0", # introduces LSMR
+    "numpy>=1.21.0", # compatible with modern Python versions
+    "tqdm>=4.0.0", # compatible with modern Python versions
+    "einops>=0.3.0", # introduces einsum
+    "einconv>=0.1.0", # first release
+    "linear_operator>=0.2.0", # matvec-based CG implementation in pure PyTorch
 ]
 # Require a specific Python version, e.g. Python 2.7 or >= 3.4
 requires-python = ">=3.9"
