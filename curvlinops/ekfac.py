@@ -378,27 +378,47 @@ class EKFACLinearOperator(KFACLinearOperator):
             if module_name not in corrections:
                 corrections[module_name] = {}
             for p_name in param_pos:
-                # Compute per-example gradient using the layer input
-                per_example_gradient = (
-                    einsum(
-                        g,
-                        activations,
-                        "batch shared d_out, batch shared d_in -> d_out d_in batch",
-                    ).flatten(end_dim=-2)
-                    if p_name == "weight"
-                    else einsum(g, "batch shared d_out -> d_out batch")
-                )
+                from torch.nn import Linear
 
-                # Apply basis transformation
-                Q = bases[module_name][p_name]
-                per_example_gradient = Q.adjoint() @ per_example_gradient
+                if (
+                    isinstance(module, Linear)
+                    and g.shape[0] == batch_size
+                    and p_name == "weight"
+                ):
+                    Q = bases[module_name][p_name]
+                    Q1, Q2 = Q._factors
+                    Q1Tg = einsum(Q1, g.squeeze(1), "i j, n i -> n j")
+                    Q2Ta = einsum(Q2, activations.squeeze(1), "i j, n i -> n j")
 
-                # Compute corrections
-                self._set_or_add_(
-                    corrections[module_name],
-                    p_name,
-                    per_example_gradient.square_().sum(dim=1).mul_(correction),
-                )
+                    # Compute corrections
+                    self._set_or_add_(
+                        corrections[module_name],
+                        p_name,
+                        einsum(Q1Tg**2, Q2Ta**2, "n i, n j -> i j").flatten(),
+                    )
+
+                else:
+                    # Compute per-example gradient using the layer input
+                    per_example_gradient = (
+                        einsum(
+                            g,
+                            activations,
+                            "batch shared d_out, batch shared d_in -> d_out d_in batch",
+                        ).flatten(end_dim=-2)
+                        if p_name == "weight"
+                        else einsum(g, "batch shared d_out -> d_out batch")
+                    )
+
+                    # Apply basis transformation
+                    Q = bases[module_name][p_name]
+                    per_example_gradient = Q.adjoint() @ per_example_gradient
+
+                    # Compute corrections
+                    self._set_or_add_(
+                        corrections[module_name],
+                        p_name,
+                        per_example_gradient.square_().sum(dim=1).mul_(correction),
+                    )
 
     def inverse(
         self,
