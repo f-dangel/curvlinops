@@ -1,7 +1,6 @@
 # <img alt="Logo" src="./docs/rtd/assets/logo.svg" height="90"> Linear Operators for Curvature Matrices in PyTorch
 
-[![Python
-3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/release/python-390/)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/release/python-3100/)
 ![tests](https://github.com/f-dangel/curvature-linear-operators/actions/workflows/test.yaml/badge.svg)
 [![Coveralls](https://coveralls.io/repos/github/f-dangel/curvlinops/badge.svg?branch=main)](https://coveralls.io/github/f-dangel/curvlinops)
 
