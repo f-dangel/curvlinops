@@ -22,8 +22,7 @@ from collections.abc import MutableMapping
 from enum import Enum, EnumMeta
 from functools import partial
 from math import sqrt
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, TypeVar, Union
-from warnings import warn
+from typing import Callable, Dict, Iterable, List, Optional, Tuple, TypeVar, Union
 
 from einops import einsum, rearrange, reduce
 from torch import Generator, Tensor, cat, eye, randn, stack
@@ -39,12 +38,18 @@ from torch.nn import (
 )
 from torch.utils.hooks import RemovableHandle
 
-from curvlinops._torch_base import CurvatureLinearOperator
+from curvlinops._torch_base import (
+    CurvatureLinearOperator,
+    PyTorchLinearOperator,
+    _ChainPyTorchLinearOperator,
+)
+from curvlinops.blockdiagonal import BlockDiagonalLinearOperator
 from curvlinops.kfac_utils import (
     extract_averaged_patches,
     extract_patches,
     loss_hessian_matrix_sqrt,
 )
+from curvlinops.kronecker import KroneckerProductLinearOperator
 
 FactorType = TypeVar(
     "FactorType", Optional[Tensor], Tuple[Optional[Tensor], Optional[Tensor]]
@@ -273,12 +278,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
         self._fisher_type = fisher_type
         self._mc_samples = mc_samples
         self._kfac_approx = kfac_approx
-        self._input_covariances: Dict[str, Tensor] = {}
-        self._gradient_covariances: Dict[str, Tensor] = {}
         self._mapping = self.compute_parameter_mapping(params, model_func)
-
-        # Properties of the full matrix KFAC approximation are initialized to `None`
-        self._reset_matrix_properties()
 
         super().__init__(
             model_func,
@@ -292,6 +292,20 @@ class KFACLinearOperator(CurvatureLinearOperator):
         )
 
         self._set_num_per_example_loss_terms(num_per_example_loss_terms)
+
+        # Create the block diagonal operator
+        self._block_diagonal_operator = self._create_block_diagonal_operator()
+
+        # Create canonical form transformation operators
+        self._to_canonical = _ToCanonicalLinearOperator(
+            self._params, self._mapping, self._separate_weight_and_bias
+        )
+        self._from_canonical = self._to_canonical.adjoint()
+
+        # Build the operator that represents KFAC
+        self._operator: _ChainPyTorchLinearOperator = (
+            self._from_canonical @ self._block_diagonal_operator @ self._to_canonical
+        )
 
         if check_deterministic:
             self._check_deterministic()
@@ -329,101 +343,10 @@ class KFACLinearOperator(CurvatureLinearOperator):
         else:
             self._num_per_example_loss_terms = num_per_example_loss_terms
 
-    def _reset_matrix_properties(self):
-        """Reset matrix properties."""
-        self._trace = None
-        self._det = None
-        self._logdet = None
-        self._frobenius_norm = None
-
-    @staticmethod
-    def _left_and_right_multiply(
-        M: Tensor,
-        aaT: FactorType,
-        ggT: FactorType,
-        eigenvalues: Optional[Tensor] = None,
-    ) -> Tensor:
-        """Left and right multiply matrix with Kronecker factors.
-
-        Args:
-            M: (Batched) Matrix for multiplication. Shape will be
-                (ggT.shape[0], aaT.shape[0], K), where K is the number of vectors/the
-                batch dimension of the batched matrix product.
-            aaT: Input covariance Kronecker factor or its eigenvectors. ``None`` for
-                biases.
-            ggT: Gradient covariance Kronecker factor or its eigenvectors.
-            eigenvalues: Eigenvalues of the (E)KFAC approximation when multiplying with
-                the eigendecomposition of the KFAC approximation. ``None`` for the
-                non-decomposed KFAC approximation. Defaults to ``None``.
-
-        Returns:
-            Matrix-multiplication result.
-        """
-        if eigenvalues is None:
-            M = einsum(ggT, M, aaT, "i j, j k v, k l -> i l v")
-        else:
-            # Perform preconditioning in KFE, e.g. see equation (21) in
-            # https://arxiv.org/abs/2308.03296.
-            aaT_eigvecs = aaT
-            ggT_eigvecs = ggT
-            # Transform in eigenbasis.
-            M = einsum(ggT_eigvecs, M, aaT_eigvecs, "i j, i k v, k l -> j l v")
-            # Multiply (broadcasted) by eigenvalues.
-            M.mul_(eigenvalues.unsqueeze(-1))
-            # Transform back to standard basis.
-            M = einsum(ggT_eigvecs, M, aaT_eigvecs, "i j, j k v, l k -> i l v")
-        return M
-
-    @staticmethod
-    def _separate_left_and_right_multiply(
-        KM: List[Tensor],
-        M: List[Tensor],
-        param_pos: Dict[str, int],
-        aaT: FactorType,
-        ggT: FactorType,
-        eigenvalues: Optional[List[Tensor]] = None,
-    ) -> Tensor:
-        """Multiply matrix with Kronecker factors for separated weight and bias.
-
-        Args:
-            KM: List to write the matrix-multiplication result to.
-            M: List of matrices for multiplication.
-            param_pos: Dictionary with positions of the weight and bias parameters.
-            aaT: Input covariance Kronecker factor or its eigenvectors. ``None`` for
-                biases.
-            ggT: Gradient covariance Kronecker factor or its eigenvectors.
-            eigenvalues: Eigenvalues of the (E)KFAC approximation when multiplying with
-                the eigendecomposition of the KFAC approximation. ``None`` for the
-                non-decomposed KFAC approximation. Defaults to ``None``.
-        """
-        for p_name, pos in param_pos.items():
-            # for weights we need to multiply from the right with aaT
-            # for weights and biases we need to multiply from the left with ggT
-            if p_name == "weight":
-                M_w = rearrange(M[pos], "c_out ... v -> c_out (...) v")
-                # If `eigenvalues` is not `None`, we transform to eigenbasis here
-                KM[pos] = einsum(M_w, aaT, "c_out j v, j k -> c_out k v")
-            else:
-                KM[pos] = M[pos]
-
-            # If `eigenvalues` is not `None`, we convert to eigenbasis here
-            KM[pos] = einsum(
-                ggT.T if eigenvalues else ggT, KM[pos], "j k, k ... v -> j ... v"
-            )
-
-            if eigenvalues is not None:
-                # Multiply (broadcasted) by eigenvalues, convert back to original basis
-                KM[pos].mul_(eigenvalues[pos].unsqueeze(-1))
-                if p_name == "weight":
-                    KM[pos] = einsum(KM[pos], aaT, "c_out j v, k j -> c_out k v")
-                KM[pos] = einsum(ggT, KM[pos], "j k, k ... v -> j ... v")
-
     def _matmat(self, M: List[Tensor]) -> List[Tensor]:
         """Apply KFAC to a matrix (multiple vectors) in tensor list format.
 
-        This allows for matrix-matrix products with the KFAC approximation in PyTorch
-        without converting tensors to numpy arrays, which avoids unnecessary
-        device transfers when working with GPUs and flattening/concatenating.
+        This method now uses the block-diagonal structure internally.
 
         Args:
             M: Matrix for multiplication in tensor list format. Each entry has the
@@ -431,51 +354,64 @@ class KFACLinearOperator(CurvatureLinearOperator):
                 ``K`` for the columns, i.e. ``[(*p1.shape, K), (*p2.shape, K), ...]``.
 
         Returns:
-            Matrix-multiplication result ``KFAC @ M`` in tensor list format. Has the same
-            shapes as the input.
+            Matrix-multiplication result ``KFAC @ M`` in tensor list format. Has the
+            same shapes as the input.
         """
-        if not (self._input_covariances or self._gradient_covariances):
-            self.compute_kronecker_factors()
+        return self._operator._matmat(M)
 
-        KM: List[Tensor | None] = [None] * len(M)
+    def _create_block_diagonal_operator(self) -> BlockDiagonalLinearOperator:
+        """Create block-diagonal linear operator from Kronecker factors.
+
+        Each block corresponds to a layer and is a KroneckerProductLinearOperator.
+
+        Returns:
+            Block-diagonal linear operator with Kronecker product blocks.
+        """
+        input_covariances, gradient_covariances = self._compute_kronecker_factors()
+
+        factors = []
 
         for mod_name, param_pos in self._mapping.items():
-            # cache the weight shape to ensure correct shapes are returned
-            if "weight" in param_pos:
-                weight_shape = M[param_pos["weight"]].shape
+            aaT = input_covariances.pop(mod_name, None)
+            ggT = gradient_covariances.pop(mod_name)
 
-            # get the Kronecker factors for the current module
-            # aaT does not exist when weight matrix is excluded
-            aaT = self._input_covariances.get(mod_name)
-            # ggT always exists
-            ggT = self._gradient_covariances[mod_name]
-
-            # bias and weights are treated jointly
-            if (
-                not self._separate_weight_and_bias
-                and "weight" in param_pos.keys()
-                and "bias" in param_pos.keys()
+            # Handle joint weight+bias case
+            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+                param_pos.keys()
             ):
-                w_pos, b_pos = param_pos["weight"], param_pos["bias"]
-                # v denotes the free dimension for treating multiple vectors in parallel
-                M_w = rearrange(M[w_pos], "c_out ... v -> c_out (...) v")
-                M_joint = cat([M_w, M[b_pos].unsqueeze(-2)], dim=-2)
-                M_joint = self._left_and_right_multiply(M_joint, aaT, ggT)
-                w_cols = M_w.shape[1]
-                KM[w_pos], KM[b_pos] = M_joint.split([w_cols, 1], dim=-2)
-                KM[b_pos].squeeze_(1)
+                # Single Kronecker product block for weight+bias
+                factors.append([ggT, aaT])
             else:
-                self._separate_left_and_right_multiply(KM, M, param_pos, aaT, ggT)
+                # Separate blocks for weight and bias
+                for p_name in param_pos:
+                    factors.append([ggT, aaT] if p_name == "weight" else [ggT])
 
-            # restore original shapes
-            if "weight" in param_pos:
-                KM[param_pos["weight"]] = KM[param_pos["weight"]].view(weight_shape)
+        # Create Kronecker product linear operators for each block
+        blocks = [KroneckerProductLinearOperator(*fs) for fs in factors]
 
-        return KM
+        return BlockDiagonalLinearOperator(blocks)
 
-    def compute_kronecker_factors(self):
-        """Compute and cache KFAC's Kronecker factors for future ``matmat``s."""
-        self._reset_matrix_properties()
+    def _setup_generator(self):
+        """Initialize and seed the random number generator if needed.
+
+        Creates a new generator on the correct device if one doesn't exist or if
+        the existing generator is on the wrong device. Always seeds the generator
+        with the stored seed value.
+        """
+        if self._generator is None or self._generator.device != self.device:
+            self._generator = Generator(device=self.device)
+        self._generator.manual_seed(self._seed)
+
+    def _compute_kronecker_factors(
+        self,
+    ) -> Tuple[Dict[str, Tensor], Dict[str, Tensor]]:
+        """Compute and return KFAC's Kronecker factors.
+
+        Returns:
+            Tuple of (input_covariances, gradient_covariances) dictionaries.
+        """
+        input_covariances: Dict[str, Tensor] = {}
+        gradient_covariances: Dict[str, Tensor] = {}
 
         # install forward and backward hooks
         hook_handles: List[RemovableHandle] = []
@@ -484,11 +420,13 @@ class KFACLinearOperator(CurvatureLinearOperator):
             module = self._model_func.get_submodule(mod_name)
 
             # input covariance only required for weights
-            if "weight" in param_pos.keys():
+            if "weight" in param_pos:
                 hook_handles.append(
                     module.register_forward_pre_hook(
                         partial(
-                            self._hook_accumulate_input_covariance, module_name=mod_name
+                            self._hook_accumulate_input_covariance,
+                            module_name=mod_name,
+                            covariances_dict=input_covariances,
                         )
                     )
                 )
@@ -499,23 +437,24 @@ class KFACLinearOperator(CurvatureLinearOperator):
                     partial(
                         self._register_tensor_hook_on_output_to_accumulate_gradient_covariance,
                         module_name=mod_name,
+                        covariances_dict=gradient_covariances,
                     )
                 )
             )
 
         # loop over data set, computing the Kronecker factors
-        if self._generator is None or self._generator.device != self.device:
-            self._generator = Generator(device=self.device)
-        self._generator.manual_seed(self._seed)
+        self._setup_generator()
 
         for X, y in self._loop_over_data(desc="KFAC matrices"):
             output = self._model_func(X)
             output, y = self._rearrange_for_larger_than_2d_output(output, y)
-            self._compute_loss_and_backward(output, y)
+            self._compute_loss_and_backward(output, y, gradient_covariances)
 
         # clean up
         for handle in hook_handles:
             handle.remove()
+
+        return input_covariances, gradient_covariances
 
     def _rearrange_for_larger_than_2d_output(
         self, output: Tensor, y: Tensor
@@ -564,13 +503,16 @@ class KFACLinearOperator(CurvatureLinearOperator):
             loss *= sqrt(C)
         return loss
 
-    def _compute_loss_and_backward(self, output: Tensor, y: Tensor):
+    def _compute_loss_and_backward(
+        self, output: Tensor, y: Tensor, gradient_covariances: Dict[str, Tensor]
+    ):
         r"""Compute the loss and the backward pass(es) required for KFAC.
 
         Args:
             output: The model's prediction
                 :math:`\{f_\mathbf{\theta}(\mathbf{x}_n)\}_{n=1}^N`.
             y: The labels :math:`\{\mathbf{y}_n\}_{n=1}^N`.
+            gradient_covariances: Dictionary to store computed gradient covariances.
 
         Raises:
             ValueError: If the output is not 2d and y is not 1d/2d.
@@ -636,7 +578,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
                 # don't know whether the parameter is a weight or bias; therefore, we
                 # just call `next(iter(param_pos.values()))` to get the first parameter.
                 param = self._params[next(iter(param_pos.values()))]
-                self._gradient_covariances[mod_name] = eye(
+                gradient_covariances[mod_name] = eye(
                     param.shape[0], dtype=param.dtype, device=self.device
                 )
 
@@ -697,7 +639,12 @@ class KFACLinearOperator(CurvatureLinearOperator):
             raise NotImplementedError
 
     def _register_tensor_hook_on_output_to_accumulate_gradient_covariance(
-        self, module: Module, inputs: Tuple[Tensor], output: Tensor, module_name: str
+        self,
+        module: Module,
+        inputs: Tuple[Tensor],
+        output: Tensor,
+        module_name: str,
+        covariances_dict: Dict[str, Tensor],
     ):
         """Register tensor hook on layer's output to accumulate the grad. covariance.
 
@@ -718,23 +665,30 @@ class KFACLinearOperator(CurvatureLinearOperator):
             inputs: The layer's input tensors.
             output: The layer's output tensor.
             module_name: The name of the layer in the neural network.
+            covariances_dict: Dictionary to store computed covariances.
         """
         tensor_hook = partial(
-            self._accumulate_gradient_covariance, module=module, module_name=module_name
+            self._accumulate_gradient_covariance,
+            module=module,
+            module_name=module_name,
+            covariances_dict=covariances_dict,
         )
         output.register_hook(tensor_hook)
 
     def _accumulate_gradient_covariance(
-        self, grad_output: Tensor, module: Module, module_name: str
+        self,
+        grad_output: Tensor,
+        module: Module,
+        module_name: str,
+        covariances_dict: Dict[str, Tensor],
     ):
         """Accumulate the gradient covariance for a layer's output.
-
-        Updates ``self._gradient_covariances``.
 
         Args:
             grad_output: The gradient w.r.t. the output.
             module: The layer whose output's gradient covariance will be accumulated.
             module_name: The name of the layer in the neural network.
+            covariances_dict: Dictionary to store computed covariances.
         """
         g = grad_output.data.detach()
         batch_size = g.shape[0]
@@ -758,21 +712,22 @@ class KFACLinearOperator(CurvatureLinearOperator):
         }[self._loss_func.reduction]
 
         covariance = einsum(g, g, "b i,b j->i j").mul_(correction)
-        self._gradient_covariances = self._set_or_add_(
-            self._gradient_covariances, module_name, covariance
-        )
+        self._set_or_add_(covariances_dict, module_name, covariance)
 
     def _hook_accumulate_input_covariance(
-        self, module: Module, inputs: Tuple[Tensor], module_name: str
+        self,
+        module: Module,
+        inputs: Tuple[Tensor],
+        module_name: str,
+        covariances_dict: Dict[str, Tensor],
     ):
         """Pre-forward hook that accumulates the input covariance of a layer.
-
-        Updates ``self._input_covariances``.
 
         Args:
             module: Module on which the hook is called.
             inputs: Inputs to the module.
             module_name: Name of the module in the neural network.
+            covariances_dict: Dictionary to store computed covariances.
 
         Raises:
             ValueError: If the module has multiple inputs.
@@ -805,17 +760,13 @@ class KFACLinearOperator(CurvatureLinearOperator):
             x = reduce(x, "batch ... d_in -> batch d_in", "mean")
 
         params = self._mapping[module_name]
-        if (
-            "weight" in params.keys()
-            and "bias" in params.keys()
-            and not self._separate_weight_and_bias
+        if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+            params.keys()
         ):
             x = cat([x, x.new_ones(x.shape[0], 1)], dim=1)
 
         covariance = einsum(x, x, "b i,b j -> i j").div_(self._N_data * scale)
-        self._input_covariances = self._set_or_add_(
-            self._input_covariances, module_name, covariance
-        )
+        self._set_or_add_(covariances_dict, module_name, covariance)
 
     @staticmethod
     def _set_or_add_(
@@ -887,332 +838,354 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
         return positions
 
-    @property
     def trace(self) -> Tensor:
         r"""Trace of the KFAC approximation.
-
-        Will call ``compute_kronecker_factors`` if it has not been called before and
-        will cache the trace until ``compute_kronecker_factors`` is called again.
-        Uses the property of the Kronecker product that
-        :math:`\text{tr}(A \otimes B) = \text{tr}(A) \text{tr}(B)`.
 
         Returns:
             Trace of the KFAC approximation.
         """
-        if self._trace is not None:
-            return self._trace
+        return self._block_diagonal_operator.trace
 
-        if not (self._input_covariances or self._gradient_covariances):
-            self.compute_kronecker_factors()
-
-        self._trace = 0.0
-        for mod_name, param_pos in self._mapping.items():
-            tr_ggT = self._gradient_covariances[mod_name].trace()
-            if (
-                not self._separate_weight_and_bias
-                and "weight" in param_pos.keys()
-                and "bias" in param_pos.keys()
-            ):
-                self._trace += self._input_covariances[mod_name].trace() * tr_ggT
-            else:
-                for p_name in param_pos.keys():
-                    self._trace += tr_ggT * (
-                        self._input_covariances[mod_name].trace()
-                        if p_name == "weight"
-                        else 1
-                    )
-        return self._trace
-
-    @property
     def det(self) -> Tensor:
         r"""Determinant of the KFAC approximation.
-
-        Will call ``compute_kronecker_factors`` if it has not been called before and
-        will cache the determinant until ``compute_kronecker_factors`` is called again.
-        Uses the property of the Kronecker product that
-        :math:`\det(A \otimes B) = \det(A)^{m} \det(B)^{n}`,
-        where
-        :math:`A \in \mathbb{R}^{n \times n}` and :math:`B \in \mathbb{R}^{m \times m}`.
 
         Returns:
             Determinant of the KFAC approximation.
         """
-        if self._det is not None:
-            return self._det
+        return self._block_diagonal_operator.det
 
-        if not (self._input_covariances or self._gradient_covariances):
-            self.compute_kronecker_factors()
-
-        self._det = 1.0
-        for mod_name, param_pos in self._mapping.items():
-            m = self._gradient_covariances[mod_name].shape[0]
-            det_ggT = self._gradient_covariances[mod_name].det()
-            if (
-                not self._separate_weight_and_bias
-                and "weight" in param_pos.keys()
-                and "bias" in param_pos.keys()
-            ):
-                n = self._input_covariances[mod_name].shape[0]
-                det_aaT = self._input_covariances[mod_name].det()
-                self._det *= det_aaT.pow(m) * det_ggT.pow(n)
-            else:
-                for p_name in param_pos.keys():
-                    n = (
-                        self._input_covariances[mod_name].shape[0]
-                        if p_name == "weight"
-                        else 1
-                    )
-                    self._det *= det_ggT.pow(n) * (
-                        self._input_covariances[mod_name].det().pow(m)
-                        if p_name == "weight"
-                        else 1
-                    )
-        return self._det
-
-    @property
     def logdet(self) -> Tensor:
         r"""Log determinant of the KFAC approximation.
 
         More numerically stable than the ``det`` property.
-        Will call ``compute_kronecker_factors`` if it has not been called before and
-        will cache the log determinant until ``compute_kronecker_factors`` is called
-        again. Uses the property of the Kronecker product that
-        :math:`\log \det(A \otimes B) = m \log \det(A) + n \log \det(B)`, where
-        :math:`A \in \mathbb{R}^{n \times n}` and :math:`B \in \mathbb{R}^{m \times m}`.
 
         Returns:
             Log determinant of the KFAC approximation.
         """
-        if self._logdet is not None:
-            return self._logdet
+        return self._block_diagonal_operator.logdet
 
-        if not (self._input_covariances or self._gradient_covariances):
-            self.compute_kronecker_factors()
-
-        self._logdet = 0.0
-        for mod_name, param_pos in self._mapping.items():
-            m = self._gradient_covariances[mod_name].shape[0]
-            logdet_ggT = self._gradient_covariances[mod_name].logdet()
-            if (
-                not self._separate_weight_and_bias
-                and "weight" in param_pos.keys()
-                and "bias" in param_pos.keys()
-            ):
-                n = self._input_covariances[mod_name].shape[0]
-                logdet_aaT = self._input_covariances[mod_name].logdet()
-                self._logdet += m * logdet_aaT + n * logdet_ggT
-            else:
-                for p_name in param_pos.keys():
-                    n = (
-                        self._input_covariances[mod_name].shape[0]
-                        if p_name == "weight"
-                        else 1
-                    )
-                    self._logdet += n * logdet_ggT + (
-                        m * self._input_covariances[mod_name].logdet()
-                        if p_name == "weight"
-                        else 0
-                    )
-        return self._logdet
-
-    @property
     def frobenius_norm(self) -> Tensor:
         r"""Frobenius norm of the KFAC approximation.
-
-        Will call ``compute_kronecker_factors`` if it has not been called before and
-        will cache the Frobenius norm until ``compute_kronecker_factors`` is called again.
-        Uses the property of the Kronecker product that
-        :math:`\|A \otimes B\|_F = \|A\|_F \|B\|_F`.
 
         Returns:
             Frobenius norm of the KFAC approximation.
         """
-        if self._frobenius_norm is not None:
-            return self._frobenius_norm
+        return self._block_diagonal_operator.frobenius_norm
 
-        if not (self._input_covariances or self._gradient_covariances):
-            self.compute_kronecker_factors()
+    def inverse(
+        self,
+        damping: float = 0.0,
+        use_heuristic_damping: bool = False,
+        min_damping: float = 1e-8,
+        use_exact_damping: bool = False,
+        retry_double_precision: bool = True,
+    ) -> _ChainPyTorchLinearOperator:
+        """Return the inverse of the KFAC linear operator.
 
-        self._frobenius_norm = 0.0
-        for mod_name, param_pos in self._mapping.items():
-            squared_frob_ggT = self._gradient_covariances[mod_name].square().sum()
-            if (
-                not self._separate_weight_and_bias
-                and "weight" in param_pos.keys()
-                and "bias" in param_pos.keys()
-            ):
-                squared_frob_aaT = self._input_covariances[mod_name].square().sum()
-                self._frobenius_norm += squared_frob_aaT * squared_frob_ggT
-            else:
-                for p_name in param_pos.keys():
-                    self._frobenius_norm += squared_frob_ggT * (
-                        self._input_covariances[mod_name].square().sum()
-                        if p_name == "weight"
-                        else 1
-                    )
-        self._frobenius_norm.sqrt_()
-        return self._frobenius_norm
-
-    def state_dict(self) -> Dict[str, Any]:
-        """Return the state of the KFAC linear operator.
+        Args:
+            damping: Damping value for all input and gradient covariances.
+                Default: ``0.0``.
+            use_heuristic_damping: Whether to use a heuristic damping strategy by
+                `Martens and Grosse, 2015 <https://arxiv.org/abs/1503.05671>`_
+                (Section 6.3). Default: ``False``.
+            min_damping: Minimum damping value. Only used if
+                ``use_heuristic_damping`` is ``True``. Default: ``1e-8``.
+            use_exact_damping: Whether to use exact damping, i.e. to invert
+                :math:`(A \\otimes B) + \\text{damping}\\; \\mathbf{I}`.
+                Default: ``False``.
+            retry_double_precision: Whether to retry Cholesky decomposition used for
+                inversion in double precision. Default: ``True``.
 
         Returns:
-            State dictionary.
-        """
-        loss_type = {
-            MSELoss: "MSELoss",
-            CrossEntropyLoss: "CrossEntropyLoss",
-            BCEWithLogitsLoss: "BCEWithLogitsLoss",
-        }[type(self._loss_func)]
-        return {
-            # Model and loss function
-            "model_func_state_dict": self._model_func.state_dict(),
-            "loss_type": loss_type,
-            "loss_reduction": self._loss_func.reduction,
-            # Attributes
-            "progressbar": self._progressbar,
-            "seed": self._seed,
-            "fisher_type": self._fisher_type,
-            "mc_samples": self._mc_samples,
-            "kfac_approx": self._kfac_approx,
-            "num_per_example_loss_terms": self._num_per_example_loss_terms,
-            "separate_weight_and_bias": self._separate_weight_and_bias,
-            "num_data": self._N_data,
-            # Kronecker factors (if computed)
-            "input_covariances": self._input_covariances,
-            "gradient_covariances": self._gradient_covariances,
-            # Properties (not necessarily computed)
-            "trace": self._trace,
-            "det": self._det,
-            "logdet": self._logdet,
-            "frobenius_norm": self._frobenius_norm,
-        }
-
-    def _check_if_keys_match_mapping_keys(self, dictionary: dict):
-        """Check if the keys of a dictionary match the mapping keys of the linear operator.
-
-        Args:
-            dictionary: Dictionary to check.
+            Linear operator representing the inverse of KFAC.
 
         Raises:
-            ValueError: If the keys do not match the mapping keys.
+            ValueError: If both heuristic and exact damping are selected.
+            ValueError: If heuristic or exact damping is used and the damping value
+                is a tuple.
         """
-        dictionary_keys = set(dictionary.keys())
-        mapping_keys = set(self._mapping.keys())
-        if dictionary_keys and dictionary_keys != mapping_keys:
-            raise ValueError(
-                "Keys in dictionary do not match mapping keys of linear operator. "
-                f"Difference: {dictionary_keys - mapping_keys}."
+        # Invert the blocks of self._block_diagonal_operator
+        inverse_blocks = [
+            block.inverse(
+                damping=damping,
+                use_heuristic_damping=use_heuristic_damping,
+                min_damping=min_damping,
+                use_exact_damping=use_exact_damping,
+                retry_double_precision=retry_double_precision,
             )
+            for block in self._block_diagonal_operator._blocks
+        ]
 
-    def load_state_dict(self, state_dict: Dict[str, Any]):
-        """Load the state of the KFAC linear operator.
+        # Create the inverse block diagonal operator
+        inverse_block_diagonal = BlockDiagonalLinearOperator(inverse_blocks)
 
-        Warning:
-            Loading a state dict will overwrite the parameters of the model underlying
-            the linear operator!
+        return self._from_canonical @ inverse_block_diagonal @ self._to_canonical
 
-        Args:
-            state_dict: State dictionary.
 
-        Raises:
-            ValueError: If the loss function does not match the state dict.
-            ValueError: If the loss function reduction does not match the state dict.
-        """
-        warn(
-            "Loading a state dict will overwrite the parameters of the model underlying the linear operator!",
-            stacklevel=2,
-        )
-        self._model_func.load_state_dict(state_dict["model_func_state_dict"])
-        # Verify that the loss function and its reduction match the state dict
-        loss_func_type = {
-            "MSELoss": MSELoss,
-            "CrossEntropyLoss": CrossEntropyLoss,
-            "BCEWithLogitsLoss": BCEWithLogitsLoss,
-        }[state_dict["loss_type"]]
-        if not isinstance(self._loss_func, loss_func_type):
-            raise ValueError(
-                f"Loss function mismatch: {loss_func_type} != {type(self._loss_func)}."
-            )
-        if state_dict["loss_reduction"] != self._loss_func.reduction:
-            raise ValueError(
-                "Loss function reduction mismatch: "
-                f"{state_dict['loss_reduction']} != {self._loss_func.reduction}."
-            )
+class _ToCanonicalLinearOperator(PyTorchLinearOperator):
+    """Linear operator that transforms parameters from original to canonical form.
 
-        # Set attributes
-        self._progressbar = state_dict["progressbar"]
-        self._seed = state_dict["seed"]
-        self._fisher_type = state_dict["fisher_type"]
-        self._mc_samples = state_dict["mc_samples"]
-        self._kfac_approx = state_dict["kfac_approx"]
-        self._num_per_example_loss_terms = state_dict["num_per_example_loss_terms"]
-        self._separate_weight_and_bias = state_dict["separate_weight_and_bias"]
-        self._N_data = state_dict["num_data"]
+    Canonical form orders parameters by layer, with proper grouping and flattening.
+    This is the adjoint of _FromCanonicalLinearOperator.
+    """
 
-        # Set Kronecker factors (if computed)
-        self._check_if_keys_match_mapping_keys(state_dict["input_covariances"])
-        self._check_if_keys_match_mapping_keys(state_dict["gradient_covariances"])
-        self._input_covariances = state_dict["input_covariances"]
-        self._gradient_covariances = state_dict["gradient_covariances"]
-
-        # Set properties (not necessarily computed)
-        self._trace = state_dict["trace"]
-        self._det = state_dict["det"]
-        self._logdet = state_dict["logdet"]
-        self._frobenius_norm = state_dict["frobenius_norm"]
-
-    @classmethod
-    def from_state_dict(
-        cls,
-        state_dict: Dict[str, Any],
-        model_func: Module,
+    def __init__(
+        self,
         params: List[Parameter],
-        data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
-        check_deterministic: bool = True,
-        batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
-    ) -> KFACLinearOperator:
-        """Load a KFAC linear operator from a state dictionary.
+        mapping: Dict[str, Dict[str, int]],
+        separate_weight_and_bias: bool,
+    ):
+        """Initialize the canonical form transformation operator.
 
         Args:
-            state_dict: State dictionary.
-            model_func: The model function.
-            params: The model's parameters that KFAC is computed for.
-            data: A data loader containing the data of the Fisher/GGN.
-            check_deterministic: Whether to check that the linear operator is
-                deterministic. Defaults to ``True``.
-            batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
-                needs to be specified. The intended behavior is to consume the first
-                entry of the iterates from ``data`` and return their batch size.
+            params: List of model parameters in original order.
+            mapping: Parameter mapping from layer names to parameter positions.
+            separate_weight_and_bias: Whether to treat weights and biases separately.
+        """
+        self._params = params
+        self._mapping = mapping
+        self._separate_weight_and_bias = separate_weight_and_bias
+
+        in_shape = [tuple(p.shape) for p in params]
+        out_shape = self._compute_canonical_shapes()
+
+        super().__init__(in_shape, out_shape)
+
+    def _compute_canonical_shapes(self) -> List[Tuple[int, ...]]:
+        """Compute the shapes in canonical form.
 
         Returns:
-            Linear operator of KFAC approximation.
+            List of shapes after canonical transformation.
         """
-        loss_func = {
-            "MSELoss": MSELoss,
-            "CrossEntropyLoss": CrossEntropyLoss,
-            "BCEWithLogitsLoss": BCEWithLogitsLoss,
-        }[state_dict["loss_type"]](reduction=state_dict["loss_reduction"])
-        kfac = cls(
-            model_func,
-            loss_func,
-            params,
-            data,
-            batch_size_fn=batch_size_fn,
-            check_deterministic=False,
-            progressbar=state_dict["progressbar"],
-            seed=state_dict["seed"],
-            fisher_type=state_dict["fisher_type"],
-            mc_samples=state_dict["mc_samples"],
-            kfac_approx=state_dict["kfac_approx"],
-            num_per_example_loss_terms=state_dict["num_per_example_loss_terms"],
-            separate_weight_and_bias=state_dict["separate_weight_and_bias"],
-            num_data=state_dict["num_data"],
+        canonical_shapes = []
+
+        for param_pos in self._mapping.values():
+            # Handle joint weight+bias case
+            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+                param_pos.keys()
+            ):
+                w_pos = param_pos["weight"]
+                w = self._params[w_pos]
+                # Combined weight+bias gets flattened to 1D
+                total_params = w.numel() + w.shape[0]  # weight + bias
+                canonical_shapes.append((total_params,))
+            else:
+                # Handle separate weight and bias
+                for p_name in param_pos:
+                    pos = param_pos[p_name]
+                    # Each parameter gets flattened to 1D
+                    canonical_shapes.append((self._params[pos].numel(),))
+
+        return canonical_shapes
+
+    def _matmat(self, M: List[Tensor]) -> List[Tensor]:
+        """Transform parameter tensors to canonical form.
+
+        Args:
+            M: Parameter tensors in original order.
+
+        Returns:
+            Parameter tensors in canonical form (flattened and reordered).
+        """
+        canonical_M = []
+
+        for param_pos in self._mapping.values():
+            # Handle joint weight+bias case
+            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+                param_pos.keys()
+            ):
+                w_pos, b_pos = param_pos["weight"], param_pos["bias"]
+                # Flatten weight tensor into matrix and concatenate bias
+                w_flat = M[w_pos].flatten(start_dim=1, end_dim=-2)
+                # Add bias as additional row
+                combined = cat([w_flat, M[b_pos].unsqueeze(1)], dim=1)
+                # Flatten parameter space dimension
+                canonical_M.append(combined.flatten(end_dim=-2))
+            else:
+                # Handle separate weight and bias
+                for p_name in param_pos:
+                    pos = param_pos[p_name]
+                    canonical_M.append(M[pos].flatten(end_dim=-2))
+
+        return canonical_M
+
+    def _adjoint(self) -> _FromCanonicalLinearOperator:
+        """Return the adjoint transformation operator.
+
+        Returns:
+            Linear operator that transforms from canonical to parameter form.
+        """
+        return _FromCanonicalLinearOperator(
+            self._params, self._mapping, self._separate_weight_and_bias
         )
-        kfac.load_state_dict(state_dict)
 
-        # Potentially call `check_deterministic` after the state dict is loaded
-        if check_deterministic:
-            kfac._check_deterministic()
+    @property
+    def device(self):
+        """Infer device from parameters.
 
-        return kfac
+        Returns:
+            The device of the parameters.
+
+        Raises:
+            RuntimeError: If parameters are on different devices.
+        """
+        devices = {p.device for p in self._params}
+        if len(devices) != 1:
+            raise RuntimeError(f"Could not infer device. Parameters live on {devices}.")
+        return devices.pop()
+
+    @property
+    def dtype(self):
+        """Infer dtype from parameters.
+
+        Returns:
+            The dtype of the parameters.
+
+        Raises:
+            RuntimeError: If parameters have different dtypes.
+        """
+        dtypes = {p.dtype for p in self._params}
+        if len(dtypes) != 1:
+            raise RuntimeError(f"Could not infer dtype. Parameters have {dtypes}.")
+        return dtypes.pop()
+
+
+class _FromCanonicalLinearOperator(PyTorchLinearOperator):
+    """Linear operator that transforms parameters from canonical to original form.
+
+    This is the adjoint of _ToCanonicalLinearOperator.
+    """
+
+    def __init__(
+        self,
+        params: List[Parameter],
+        mapping: Dict[str, Dict[str, int]],
+        separate_weight_and_bias: bool,
+    ):
+        """Initialize the canonical form reverse transformation operator.
+
+        Args:
+            params: List of model parameters in original order.
+            mapping: Parameter mapping from layer names to parameter positions.
+            separate_weight_and_bias: Whether to treat weights and biases separately.
+        """
+        self._params = params
+        self._mapping = mapping
+        self._separate_weight_and_bias = separate_weight_and_bias
+
+        # Input and output shapes are swapped compared to ToCanonical
+        out_shape = [tuple(p.shape) for p in params]
+        in_shape = self._compute_canonical_shapes()
+
+        super().__init__(in_shape, out_shape)
+
+    def _compute_canonical_shapes(self) -> List[Tuple[int, ...]]:
+        """Compute the shapes in canonical form.
+
+        Returns:
+            List of shapes after canonical transformation.
+        """
+        canonical_shapes = []
+
+        for param_pos in self._mapping.values():
+            # Handle joint weight+bias case
+            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+                param_pos.keys()
+            ):
+                w_pos = param_pos["weight"]
+                w = self._params[w_pos]
+                # Combined weight+bias gets flattened to 1D
+                total_params = w.numel() + w.shape[0]  # weight + bias
+                canonical_shapes.append((total_params,))
+            else:
+                # Handle separate weight and bias
+                for p_name in param_pos:
+                    pos = param_pos[p_name]
+                    # Each parameter gets flattened to 1D
+                    canonical_shapes.append((self._params[pos].numel(),))
+
+        return canonical_shapes
+
+    def _matmat(self, M: List[Tensor]) -> List[Tensor]:
+        """Transform parameter tensors from canonical form back to original order.
+
+        Args:
+            M: Parameter tensors in canonical form.
+
+        Returns:
+            Parameter tensors in original order with proper shapes.
+        """
+        original_M = [None] * len(self._params)
+        (num_columns,) = {m.shape[-1] for m in M}
+        processed = 0
+
+        for param_pos in self._mapping.values():
+            # Handle joint weight+bias case
+            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+                param_pos.keys()
+            ):
+                w_pos, b_pos = param_pos["weight"], param_pos["bias"]
+                combined = M[processed]
+
+                # Get original weight shape
+                w = self._params[w_pos]
+                w_rows, w_cols = w.shape[0], w.shape[1:].numel()
+
+                # Reshape combined tensor back to (weight + bias) matrix
+                combined = combined.reshape(w_rows, w_cols + 1, num_columns)
+                w_part, b_part = combined.split([w_cols, 1], dim=1)
+
+                # Reshape into parameter shape
+                original_M[w_pos] = w_part.reshape(*w.shape, num_columns)
+                original_M[b_pos] = b_part.reshape(w_rows, num_columns)
+                processed += 1
+            else:
+                # Handle separate weight and bias
+                for p_name in param_pos:
+                    pos = param_pos[p_name]
+                    original_M[pos] = M[processed].reshape(
+                        *self._params[pos].shape, num_columns
+                    )
+                    processed += 1
+
+        return original_M
+
+    def _adjoint(self) -> _ToCanonicalLinearOperator:
+        """Return the adjoint transformation operator.
+
+        Returns:
+            Linear operator that transforms from parameter to canonical form.
+        """
+        return _ToCanonicalLinearOperator(
+            self._params, self._mapping, self._separate_weight_and_bias
+        )
+
+    @property
+    def device(self):
+        """Infer device from parameters.
+
+        Returns:
+            The device of the parameters.
+
+        Raises:
+            RuntimeError: If parameters are on different devices.
+        """
+        devices = {p.device for p in self._params}
+        if len(devices) != 1:
+            raise RuntimeError(f"Could not infer device. Parameters live on {devices}.")
+        return devices.pop()
+
+    @property
+    def dtype(self):
+        """Infer dtype from parameters.
+
+        Returns:
+            The dtype of the parameters.
+
+        Raises:
+            RuntimeError: If parameters have different dtypes.
+        """
+        dtypes = {p.dtype for p in self._params}
+        if len(dtypes) != 1:
+            raise RuntimeError(f"Could not infer dtype. Parameters have {dtypes}.")
+        return dtypes.pop()

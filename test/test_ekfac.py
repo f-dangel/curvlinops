@@ -23,7 +23,8 @@ from torch.nn import (
 )
 
 from curvlinops import EFLinearOperator, GGNLinearOperator
-from curvlinops.ekfac import EKFACLinearOperator, FisherType, KFACType
+from curvlinops.ekfac import EKFACLinearOperator, FisherType
+from curvlinops.kfac import KFACType
 from curvlinops.utils import allclose_report
 from test.cases import DEVICES, DEVICES_IDS
 from test.utils import (
@@ -31,10 +32,9 @@ from test.utils import (
     UnetModel,
     WeightShareModel,
     _test_ekfac_closer_to_exact_than_kfac,
-    _test_from_state_dict,
     _test_inplace_activations,
     _test_property,
-    _test_save_and_load_state_dict,
+    _test_save_and_load,
     binary_classification_targets,
     block_diagonal,
     classification_targets,
@@ -94,10 +94,6 @@ def test_ekfac_type2(
     ekfac_mat = ekfac @ eye_like(ekfac)
 
     assert allclose_report(ggn, ekfac_mat, atol=3e-6)
-
-    # Check that input covariances were not computed
-    if exclude == "weight":
-        assert len(ekfac._input_covariances_eigenvectors) == 0
 
 
 @mark.parametrize("setting", [KFACType.EXPAND, KFACType.REDUCE])
@@ -169,10 +165,6 @@ def test_ekfac_type2_weight_sharing(
     ekfac_mat = ekfac @ eye_like(ekfac)
 
     assert allclose_report(ggn, ekfac_mat, rtol=1e-4)
-
-    # Check that input covariances were not computed
-    if exclude == "weight":
-        assert len(ekfac._input_covariances_eigenvectors) == 0
 
 
 @mark.parametrize(
@@ -584,12 +576,8 @@ def test_expand_setting_scaling(
         # MSE loss averages over number of output channels
         loss_term_factor *= output_random_variable_size
     correction = ekfac_sum._N_data * loss_term_factor
-    for eigenvalues in ekfac_sum._corrected_eigenvalues.values():
-        if isinstance(eigenvalues, dict):
-            for eigenvals in eigenvalues.values():
-                eigenvals /= correction
-        else:
-            eigenvalues /= correction
+    for block in ekfac_sum._block_diagonal_operator._blocks:
+        block._eigenvalues = block._eigenvalues / correction
     ekfac_simulated_mean_mat = ekfac_sum @ eye_like(ekfac_sum)
 
     # EKFAC with mean reduction
@@ -746,16 +734,7 @@ def test_ekfac_does_not_affect_grad():
     grads_before = [p.grad.clone() for p in params]
 
     # create and compute EKFAC
-    ekfac = EKFACLinearOperator(
-        model,
-        MSELoss(),
-        params,
-        [(X, y)],
-        # suppress computation of EKFAC matrices
-        check_deterministic=False,
-    )
-    ekfac.compute_kronecker_factors()
-    ekfac.compute_eigenvalue_correction()
+    _ = EKFACLinearOperator(model, MSELoss(), params, [(X, y)])
 
     # make sure gradients are unchanged
     for grad_before, p in zip(grads_before, params):
@@ -764,12 +743,7 @@ def test_ekfac_does_not_affect_grad():
 
 def test_save_and_load_state_dict():
     """Test that EKFACLinearOperator can be saved and loaded from state dict."""
-    _test_save_and_load_state_dict(EKFACLinearOperator)
-
-
-def test_from_state_dict():
-    """Test that EKFACLinearOperator can be created from state dict."""
-    _test_from_state_dict(EKFACLinearOperator)
+    _test_save_and_load(EKFACLinearOperator)
 
 
 # TODO: Add test for FisherType.MC once tests are in float64.
