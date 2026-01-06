@@ -442,58 +442,43 @@ class EKFACLinearOperator(KFACLinearOperator):
             activations = cat(
                 [activations, activations.new_ones(*activations.shape[:-1], 1)], dim=-1
             )
-            # Compute per-example gradient using the cached activations
-            per_example_gradient = einsum(
+            # Compute the rotated per-example gradients
+            rotated_per_example_gradient = einsum(
+                ggT_eigenvectors,
                 g,
                 activations,
-                "batch shared d_out, batch shared d_in -> batch d_out d_in",
+                aaT_eigenvectors,
+                "i d_out, batch shared i, batch shared j, j d_in -> batch d_out d_in",
             )
-            # Transform the per-example gradient to the eigenbasis and square it
+            # Obtain the correction contributed by the current batch
             self._corrected_eigenvalues = self._set_or_add_(
                 self._corrected_eigenvalues,
                 module_name,
-                einsum(
-                    ggT_eigenvectors,
-                    per_example_gradient,
-                    aaT_eigenvectors,
-                    "d_out1 d_out2, batch d_out1 d_in1, d_in1 d_in2 -> batch d_out2 d_in2",
-                )
-                .square_()
-                .sum(dim=0)
-                .mul_(correction),
+                rotated_per_example_gradient.square_().sum(dim=0).mul_(correction),
             )
         else:
             if module_name not in self._corrected_eigenvalues:
                 self._corrected_eigenvalues[module_name] = {}
             for p_name, pos in param_pos.items():
-                # Compute per-example gradient using the cached activations
-                per_example_gradient = (
+                # Compute the rotated per-example gradients
+                rotated_per_example_gradient = (
                     einsum(
+                        ggT_eigenvectors,
                         g,
                         activations,
-                        "batch shared d_out, batch shared d_in -> batch d_out d_in",
+                        aaT_eigenvectors,
+                        "i d_out, batch shared i, batch shared j, j d_in -> batch d_out d_in",
                     )
                     if p_name == "weight"
-                    else einsum(g, "batch shared d_out -> batch d_out")
-                )
-                # Transform the per-example gradient to the eigenbasis and square it
-                if p_name == "weight":
-                    per_example_gradient = einsum(
-                        per_example_gradient,
-                        aaT_eigenvectors,
-                        "batch d_out d_in1, d_in1 d_in2 -> batch d_out d_in2",
+                    else einsum(
+                        ggT_eigenvectors, g, "j d_out, batch shared j -> batch d_out"
                     )
+                )
+                # Obtain the correction contributed by the current batch
                 self._corrected_eigenvalues[module_name] = self._set_or_add_(
                     self._corrected_eigenvalues[module_name],
                     pos,
-                    einsum(
-                        ggT_eigenvectors,
-                        per_example_gradient,
-                        "d_out1 d_out2, batch d_out1 ... -> batch d_out2 ...",
-                    )
-                    .square_()
-                    .sum(dim=0)
-                    .mul_(correction),
+                    rotated_per_example_gradient.square_().sum(dim=0).mul_(correction),
                 )
 
     @property
