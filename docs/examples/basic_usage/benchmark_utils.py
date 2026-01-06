@@ -117,6 +117,7 @@ def setup_synthetic_imagenet_resnet50(
 
     return model, loss_function, data
 
+
 def setup_synthetic_cifar10_resnet18(
     batch_size: int = 512,
 ) -> Tuple[Module, CrossEntropyLoss, List[Tuple[Tensor, Tensor]]]:
@@ -133,7 +134,7 @@ def setup_synthetic_cifar10_resnet18(
     num_classes = 10
     y = randint(0, num_classes, (batch_size,))
     data = [(X, y)]
-    model = resnet18(num_classes = num_classes)
+    model = resnet18(num_classes=num_classes)
     loss_function = CrossEntropyLoss()
 
     return model, loss_function, data
