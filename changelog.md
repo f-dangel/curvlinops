@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+- Updated supported Python version from 3.9 (deprecated) to 3.10 ([PR](https://github.com/f-dangel/curvlinops/pull/213))
+
 - Use A6000 GPU instead of A40 to benchmark linear operators
   ([PR](https://github.com/f-dangel/curvlinops/pull/199))
 
