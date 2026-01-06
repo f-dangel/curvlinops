@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   expose a run time and memory inefficiency in EKFAC
   ([issue](https://github.com/f-dangel/curvlinops/issues/193))
 
+  - Improve performance of EKFAC by merging gradient computation and basis rotation into a single `einsum`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/215))
+
 - Updated supported Python version from 3.9 (deprecated) to 3.10 ([PR](https://github.com/f-dangel/curvlinops/pull/213))
 
 - Use A6000 GPU instead of A40 to benchmark linear operators
