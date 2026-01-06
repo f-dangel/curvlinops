@@ -43,6 +43,7 @@ dependencies = [
     "einops>=0.3.0", # introduces einsum
     "einconv>=0.1.0", # first release
     "linear_operator>=0.2.0", # matvec-based CG implementation in pure PyTorch
+    "opt-einsum>=3.4.0", # we heavily rely on einsums
 ]
 # Require a specific Python version, e.g. Python 2.7 or >= 3.4
 requires-python = ">=3.10"
