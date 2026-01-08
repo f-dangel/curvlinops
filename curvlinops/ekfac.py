@@ -35,6 +35,7 @@ class EKFACLinearOperator(KFACLinearOperator):
 
     - George, T., Laurent, C., Bouthillier, X., Ballas, N., Vincent, P. (2018).
       Fast Approximate Natural Gradient Descent in a Kronecker-factored Eigenbasis (NeurIPS)
+
     and concurrently in the context of continual learning in
 
     - Liu, X., Masana, M., Herranz, L., Van de Weijer, J., Lopez, A., Bagdanov, A. (2018).
