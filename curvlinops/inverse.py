@@ -202,7 +202,7 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
 
     .. warning::
         The Neumann series can be non-convergent. In this case, the iterations
-        will become numerically unstable, leading to ``NaN``s.
+        will become numerically unstable, leading to ``NaN`` values.
 
     .. warning::
         The Neumann series can converge slowly.
@@ -273,7 +273,7 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
              Result of inverse matrix-vector multiplication, ``A⁻¹ @ x``.
 
         Raises:
-            ValueError: If ``NaN`` check is turned on and ``NaN``s are detected.
+            ValueError: If ``NaN`` check is turned on and ``NaN`` values are detected.
         """
         result_list, v_list = [x.clone() for x in X], [x.clone() for x in X]
 
@@ -567,9 +567,10 @@ class KFACInverseLinearOperator(_InversePyTorchLinearOperator):
         aaT = self._A._input_covariances.get(name)
         ggT = self._A._gradient_covariances.get(name)
         if self._use_exact_damping:
-            (aaT_eigenvalues, aaT_eigenvectors), (ggT_eigenvalues, ggT_eigenvectors) = (
-                self._compute_factors_eigendecomposition(aaT, ggT)
-            )
+            (aaT_eigenvalues, aaT_eigenvectors), (
+                ggT_eigenvalues,
+                ggT_eigenvectors,
+            ) = self._compute_factors_eigendecomposition(aaT, ggT)
             aaT_inv = (aaT_eigenvectors, aaT_eigenvalues)
             ggT_inv = (ggT_eigenvectors, ggT_eigenvalues)
             inv_damped_eigenvalues = self._compute_inv_damped_eigenvalues(
@@ -611,9 +612,11 @@ class KFACInverseLinearOperator(_InversePyTorchLinearOperator):
         for mod_name, param_pos in self._A._mapping.items():
             # retrieve the inverses of the Kronecker factors from cache or invert them.
             # aaT_inv/ggT_inv are the eigenvectors of aaT/ggT if exact damping is used.
-            aaT_inv, ggT_inv, inv_damped_eigenvalues = (
-                self._compute_or_get_cached_inverse(mod_name)
-            )
+            (
+                aaT_inv,
+                ggT_inv,
+                inv_damped_eigenvalues,
+            ) = self._compute_or_get_cached_inverse(mod_name)
             # cache the weight shape to ensure correct shapes are returned
             if "weight" in param_pos:
                 weight_shape = X[param_pos["weight"]].shape
