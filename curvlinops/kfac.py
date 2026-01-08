@@ -56,8 +56,10 @@ class MetaEnum(EnumMeta):
 
     def __contains__(cls, item):
         """Return whether ``item`` is a valid Enum value.
+
         Args:
             item: Candidate value.
+
         Returns:
             ``True`` if ``item`` is a valid Enum value.
         """
