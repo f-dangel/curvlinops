@@ -451,15 +451,18 @@ class EKFACLinearOperator(KFACLinearOperator):
                 # Memory of Gramian contraction is dominated by N * S^2 * (D1 + D2)
                 # We choose the approach that requires less memory.
                 if S**2 * (D1 + D2) < D1 * D2:  # -> Gramian approach
-                    # In the absence of weight sharing (S=1), this simply computes
                     X_rot = einsum(X, Q2, "batch shared j, j d2 -> batch shared d2")
                     Y_rot = einsum(Y, Q1, "batch shared i, i d1 -> batch shared d1")
+                    # In the absence of weight sharing (S=1), this simply computes
+                    # (Q^T X_rot)^2 and (Q^T Y_rot)^2, then computes the correction
+                    X_gram = einsum(
+                        X_rot, X_rot, "batch s d2, batch t d2 -> batch s t d2"
+                    )
+                    Y_gram = einsum(
+                        Y_rot, Y_rot, "batch s d1, batch t d1 -> batch s t d1"
+                    )
                     eigencorrection = einsum(
-                        X_rot,
-                        X_rot,
-                        Y_rot,
-                        Y_rot,
-                        "batch s d2, batch t d2, batch s d1, batch t d1 -> d1 d2",
+                        Y_gram, X_gram, "batch s t d1, batch s t d2 -> d1 d2"
                     )
 
                 else:  # -> per-example gradient approach
