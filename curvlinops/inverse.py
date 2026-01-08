@@ -567,9 +567,12 @@ class KFACInverseLinearOperator(_InversePyTorchLinearOperator):
         aaT = self._A._input_covariances.get(name)
         ggT = self._A._gradient_covariances.get(name)
         if self._use_exact_damping:
-            (aaT_eigenvalues, aaT_eigenvectors), (
-                ggT_eigenvalues,
-                ggT_eigenvectors,
+            (
+                (aaT_eigenvalues, aaT_eigenvectors),
+                (
+                    ggT_eigenvalues,
+                    ggT_eigenvectors,
+                ),
             ) = self._compute_factors_eigendecomposition(aaT, ggT)
             aaT_inv = (aaT_eigenvectors, aaT_eigenvalues)
             ggT_inv = (ggT_eigenvectors, ggT_eigenvalues)
