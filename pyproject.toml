@@ -28,7 +28,6 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -46,7 +45,7 @@ dependencies = [
     "linear_operator>=0.2.0", # matvec-based CG implementation in pure PyTorch
 ]
 # Require a specific Python version, e.g. Python 2.7 or >= 3.4
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 
 ###############################################################################
 #                           Development dependencies                          #
@@ -60,7 +59,7 @@ test = [
     "coveralls",
     "pytest",
     "pytest-cov",
-    "pytest-optional-tests",
+    "pytest-optional-tests==0.1.1",
 ]
 
 # Dependencies needed for linting.
