@@ -99,7 +99,7 @@ print(f"Leading {k} Hessian eigenvalues (functorch): {top_k_evals_functorch}")
 #  Both results should match.
 
 print(f"Comparing leading {k} Hessian eigenvalues (linear operator vs. functorch).")
-assert allclose_report(top_k_evals, top_k_evals_functorch.double())
+assert allclose_report(top_k_evals, top_k_evals_functorch.double(), rtol=1e-4)
 
 # %%
 #

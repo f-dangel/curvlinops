@@ -89,6 +89,18 @@ def lanczos_approximate_spectrum_from_iter(
     kappa: float,
     margin: float,
 ) -> Tuple[Tensor, Tensor]:
+    """Compute a spectrum approximation from a Lanczos iteration.
+
+    Args:
+        lanczos_iter: Pair ``(evals, evecs)`` from a Lanczos run.
+        boundaries: Approximate minimum and maximum eigenvalues of the operator.
+        num_points: Number of grid points.
+        kappa: Width parameter for the Gaussian bumps.
+        margin: Relative margin added around the spectral boundary.
+
+    Returns:
+        Grid points and estimated spectral density.
+    """
     eval_min, eval_max = boundaries
     _width = eval_max - eval_min
     _padding = margin * _width
@@ -224,7 +236,7 @@ def lanczos_approximate_log_spectrum(
     boundaries_tol: float = 1e-2,
     epsilon: float = 1e-5,
 ) -> Tuple[Tensor, Tensor]:
-    """Approximate the spectral density p(λ) = 1/d ∑ᵢ δ(λ - λᵢ) of log(|A| + εI) ∈ Rᵈˣᵈ.
+    """Approximate the spectral density ``p(λ) = 1/d ∑ᵢ δ(λ - λᵢ)`` of ``log(|A| + εI) ∈ Rᵈˣᵈ``.
 
     Follows the idea of Section C.7 in Papyan, 2020
     (https://jmlr.org/papers/v21/20-933.html).
@@ -244,7 +256,7 @@ def lanczos_approximate_log_spectrum(
         kappa: Width of the Gaussian used to approximate delta peaks in [-1; 1]. Must
             be greater than 1. Default: ``1.04``. Obtained by tweaking while reproducing
             Fig. 15b from papyan2020traces (not specified by the paper).
-        boundaries: Estimates of the minimum and maximum eigenvalues of ``|A|``. If left
+        boundaries: Estimates of the minimum and maximum eigenvalues of :math:`|A|`. If left
             unspecified, they will be estimated internally.
         margin: Relative margin added around the spectral boundary. Default: ``0.05``.
             Taken from papyan2020traces, Section D.2.
@@ -256,7 +268,7 @@ def lanczos_approximate_log_spectrum(
             papyan2020traces, Section D.2.
 
     Returns:
-        Grid points λ and approximated spectral density p(λ) of log(|A| + εI).
+        Grid points λ and approximated spectral density p(λ) of ``log(|A| + εI)``.
     """
     boundaries = approximate_boundaries_abs(
         A, tol=boundaries_tol, boundaries=boundaries
@@ -283,6 +295,19 @@ def lanczos_approximate_log_spectrum_from_iter(
     margin: float,
     epsilon: float,
 ) -> Tuple[Tensor, Tensor]:
+    """Compute a log-spectrum approximation from a Lanczos iteration.
+
+    Args:
+        lanczos_iter: Pair ``(evals, evecs)`` from a Lanczos run.
+        boundaries: Approximate spectral boundary of ``|A|``.
+        num_points: Number of grid points.
+        kappa: Width parameter for the Gaussian bumps.
+        margin: Relative margin added around the boundary.
+        epsilon: Positive shift for numerical stability.
+
+    Returns:
+        Grid points and estimated spectral density of ``log(|A| + εI)``.
+    """
     log_eval_min, log_eval_max = (log(boundary + epsilon) for boundary in boundaries)
     _width = log_eval_max - log_eval_min
     _padding = margin * _width
@@ -504,7 +529,7 @@ def approximate_boundaries_abs(
             which consequently won't be recomputed. Default: ``None``.
 
     Returns:
-        Estimates of λₘᵢₙ and λₘₐₓ of |A|.
+        Estimates of λₘᵢₙ and λₘₐₓ of :math:`|A|`.
     """
     eval_min, eval_max = (None, None) if boundaries is None else boundaries
 

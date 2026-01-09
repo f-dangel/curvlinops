@@ -89,7 +89,7 @@ ON_RTD = environ.get("READTHEDOCS", "False") == "True"
 USETEX = not ON_RTD
 
 # Devices to run the benchmark on
-DEVICE_STRS = ["cpu"] if ON_RTD else ["cuda"]
+DEVICE_STRS = ["cuda"] if cuda.is_available() else ["cpu"]
 
 # Whether to skip runs for which measurements already exists
 SKIP_EXISTING = True
@@ -123,7 +123,7 @@ def setup_synthetic_mnist_cnn(
     """Set up a synthetic MNIST CNN problem for the benchmark.
 
     Args:
-        batch_size: The batch size to use. Default is ``64``.
+        batch_size: The batch size to use. Default is ``512``.
 
     Returns:
         The neural net, loss function, and data.
@@ -580,12 +580,12 @@ if __name__ == "__main__":
 #
 # Measuring the memory consumption of some routines comes with some additional
 # challenges. We use the
-# :ref:`memory_profiler <https://github.com/pythonprofilers/memory_profiler>`
+# `memory_profiler <https://github.com/pythonprofilers/memory_profiler>`_
 # library on CPU, whereas we rely on :func:`torch.cuda.max_memory_allocated` on GPU.
 #
 # To avoid memory allocations from previous operations to impact the currently
 # benchmarked function, we run each benchmark in a separate Python session by executing
-# a Python script :download:`py <memory_benchmark.py>`. This script
+# a separate script (`memory_benchmark.py`). This script
 # re-uses most of the functionality developed in this tutorial, and the function that
 # is profiled looks very similar to the one we used for the run time benchmark.
 # Also, since memory consumption is more deterministic, we don't have to repeat each
@@ -640,7 +640,7 @@ if __name__ == "__main__":
     ):
         cmd = [
             "python",
-            "memory_benchmark.py",
+            path.join(path.dirname(__file__), "memory_benchmark.py"),
             f"--linop={linop_str}",
             f"--problem={problem_str}",
             f"--device={device_str}",
