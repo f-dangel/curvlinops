@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
-- Minor fixes in docs, code and examples to reduce CI pipeline errors
+- Minor fixes in docs, code and examples to reduce CI pipeline errors ([PR](https://github.com/f-dangel/curvlinops/pull/218))
 
 - Updated supported Python version from 3.9 (deprecated) to 3.10 ([PR](https://github.com/f-dangel/curvlinops/pull/213))
 

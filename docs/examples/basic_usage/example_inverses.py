@@ -226,19 +226,15 @@ except AssertionError as e:
 # visibility, we take the logarithm of the absolute value of each element
 # (blank pixels correspond to zeros).
 
-# Move to CPU once so matplotlib always receives CPU tensors.
-damped_GGN_mat_cpu = damped_GGN_mat.detach().cpu()
-inv_damped_GGN_mat_cpu = inv_damped_GGN_mat.detach().cpu()
-
 fig, ax = plt.subplots(ncols=2)
 plt.suptitle("Logarithm of absolute values")
 
 ax[0].set_title("Damped GGN/Fisher")
-image = ax[0].imshow(damped_GGN_mat_cpu.abs().log10())
+image = ax[0].imshow(damped_GGN_mat.detach().cpu().abs().log10())
 plt.colorbar(image, ax=ax[0], shrink=0.5)
 
 ax[1].set_title("Inv. damped GGN/Fisher")
-image = ax[1].imshow(inv_damped_GGN_mat_cpu.abs().log10())
+image = ax[1].imshow(inv_damped_GGN_mat.detach().cpu().abs().log10())
 plt.colorbar(image, ax=ax[1], shrink=0.5)
 
 # %%
@@ -275,9 +271,6 @@ for n in num_terms:
     inv = NeumannInverseLinearOperator(damped_GGN, scale=scale, num_terms=n)
     neumann_inverses.append(inv @ eye(inv.shape[1], device=DEVICE, dtype=DTYPE))
 
-# Move to CPU once so matplotlib always receives CPU tensors.
-neumann_inverses_cpu = [mat.detach().cpu() for mat in neumann_inverses]
-
 # %%
 #
 # Here are their visualizations:
@@ -285,15 +278,15 @@ neumann_inverses_cpu = [mat.detach().cpu() for mat in neumann_inverses]
 fig, axes = plt.subplots(ncols=len(num_terms) + 1)
 plt.suptitle("Inverse damped Fisher (logarithm of absolute values)")
 
-for i, (n, inv) in enumerate(zip(num_terms, neumann_inverses_cpu)):
+for i, (n, inv) in enumerate(zip(num_terms, neumann_inverses)):
     ax = axes.flat[i]
     ax.set_title(f"Neumann, {n} terms")
-    image = ax.imshow(inv.abs().log10())
+    image = ax.imshow(inv.detach().cpu().abs().log10())
     plt.colorbar(image, ax=ax, shrink=0.5)
 
 ax = axes.flat[-1]
 ax.set_title("Exact inverse")
-image = ax.imshow(inv_damped_GGN_mat_cpu.abs().log10())
+image = ax.imshow(inv_damped_GGN_mat.detach().cpu().abs().log10())
 plt.colorbar(image, ax=ax, shrink=0.5)
 
 # %%
