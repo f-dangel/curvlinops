@@ -2,7 +2,7 @@
 
 from collections.abc import MutableMapping
 from functools import cached_property, partial
-from typing import Callable, List, Tuple, Union, Any
+from typing import Any, Callable, List, Tuple, Union
 
 from einops import einsum
 from torch import Tensor, vmap

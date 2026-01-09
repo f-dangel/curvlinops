@@ -83,7 +83,7 @@ def make_batch_hessian_matrix_product(
             """
             return c(f(params, X), *c_args)
 
-        for f_block, ps in zip(block_functionals, block_params):
+        for f_block, _ in zip(block_functionals, block_params):
             # Define the loss function composition for this block
             block_loss_fn = partial(loss_fn, f_block)
             block_grad_fn = jacrev(block_loss_fn)
