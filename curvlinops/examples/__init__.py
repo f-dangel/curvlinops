@@ -25,7 +25,7 @@ class TensorLinearOperator(PyTorchLinearOperator):
             raise ValueError(f"Input tensor must be 2D. Got {A.ndim}D.")
         super().__init__([(A.shape[1],)], [(A.shape[0],)])
         self._A = A
-        self.SELF_ADJOINT = A.shape == A.T.shape and A.allclose(A.T)
+        self.SELF_ADJOINT = A.shape == A.T.shape and A.allclose(A.conj().T)
 
     @property
     def device(self) -> device:
@@ -64,6 +64,19 @@ class TensorLinearOperator(PyTorchLinearOperator):
         """
         (M0,) = M
         return [self._A @ M0]
+
+    def __rmatmul__(self, M: object) -> object:
+        """Left-multiplication: ``M @ self``.
+
+        Args:
+            M: Left matrix in ``M @ self``.
+
+        Returns:
+            Result of the matrix-matrix multiplication.
+
+        See :meth:`_matmat`.
+        """
+        return M @ self._A
 
 
 class OuterProductLinearOperator(PyTorchLinearOperator):
