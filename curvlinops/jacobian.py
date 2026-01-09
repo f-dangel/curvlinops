@@ -117,13 +117,7 @@ class JacobianLinearOperator(CurvatureLinearOperator):
     @cached_property
     def _mp(
         self,
-    ) -> Callable[
-        [
-            Tuple[Tensor, ...],
-            Union[Tensor, MutableMapping],
-        ],
-        Tensor,
-    ]:
+    ) -> Callable[[Tuple[Tensor, ...], Union[Tensor, MutableMapping]], Tensor]:
         """Lazy initialization of batch-Jacobian matrix product function.
 
         Returns:
