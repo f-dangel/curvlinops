@@ -253,7 +253,8 @@ def make_functional_flattened_model_and_loss(
         For other losses: (batch, ..., c) -> (batch*..., c)
 
         Args:
-            params_and_X: Parameters and input data X.
+            params: Neural network parameters.
+            X: Input data.
 
         Returns:
             Flattened model output.
