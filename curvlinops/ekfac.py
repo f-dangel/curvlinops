@@ -45,7 +45,7 @@ def compute_eigencorrection(
             ``[D2, D2]`` or ``None`` if the layer has no weights (bias only).
 
     Returns:
-     The eigencorrection with shape ``[D1, D2]`` (or ``[D1]`` for the bias case).
+        The eigencorrection with shape ``[D1, D2]`` (or ``[D1]`` for the bias case).
 
     Below we explain the mathematical details of what this function does. The mapping is
     is as follows: (``g``, :math:`\mathbf{Y}`), (``ggT_eigvecs``, :math:`\mathbf{Q}_1`),
