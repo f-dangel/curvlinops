@@ -221,7 +221,7 @@ for seed, mc in enumerate(range(mc_samples.max()), start=start_seed):
 # value (shifted by a small constant to avoid taking the logarithm of 0):
 
 residual_snapshots = [mat - GGN_mat for mat in F_snapshots]
-residual_norms = [matrix_norm(res) for res in residual_snapshots]
+residual_norms = [matrix_norm(res).item() for res in residual_snapshots]
 
 
 def transform(mat: Tensor, epsilon: float = 1e-5) -> Tensor:
@@ -268,7 +268,7 @@ ln_style = "bo"
 artists = []
 
 for frame_idx in range(len(mc_samples)):
-    snapshot = residual_snapshots[frame_idx]
+    snapshot = residual_snapshots[frame_idx].cpu()
     img = ax_img.imshow(transform(snapshot), vmin=min_img, vmax=max_img, animated=True)
 
     # workaround for animated title: https://stackoverflow.com/a/47421938
@@ -307,6 +307,8 @@ ani = animation.ArtistAnimation(
 
 img_width = 4
 rows, columns = 1, 2
+GGN_mat = GGN_mat.cpu()
+F_snapshots = [fs.cpu() for fs in F_snapshots]
 fig, axes = plt.subplots(
     nrows=rows, ncols=columns, figsize=(columns * img_width, rows * img_width)
 )
