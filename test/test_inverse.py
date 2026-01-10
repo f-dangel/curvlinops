@@ -6,7 +6,7 @@ from typing import Iterable, List, Tuple, Union
 
 from pytest import mark, raises
 from torch import Tensor, float64, load, manual_seed, rand, save
-from torch.linalg import eigh, inv
+from torch.linalg import inv
 from torch.nn import (
     CrossEntropyLoss,
     Linear,
