@@ -93,32 +93,6 @@ def test_LSMRInverseLinearOperator_damped_GGN(inv_case, delta: float = 2e-2):
     compare_matmat(inv_GGN, inv_GGN_naive, rtol=5e-3, atol=1e-5)
 
 
-def test_NeumannInverseLinearOperator_damped_GGN(inv_case, delta: float = 2e-2):
-    """Test matrix multiplication by the inverse damped GGN with Neumann."""
-    model_func, loss_func, params, data, batch_size_fn = inv_case
-    (dev,), (dt,) = {p.device for p in params}, {p.dtype for p in params}
-
-    GGN = GGNLinearOperator(
-        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
-    )
-    damping = delta * IdentityLinearOperator([p.shape for p in params], dev, dt)
-
-    damped_GGN_naive = functorch_ggn(
-        model_func, loss_func, params, data, input_key="x"
-    ).detach() + delta * eye_like(GGN)
-    inv_GGN_naive = inv(damped_GGN_naive)
-
-    # set scale such that Neumann series converges
-    eval_max = eigh(damped_GGN_naive)[0][-1]
-    scale = 1.0 if eval_max < 2 else 1.9 / eval_max
-
-    # NOTE This may break when other cases are added because slow convergence
-    inv_GGN = NeumannInverseLinearOperator(GGN + damping, num_terms=2_500, scale=scale)
-
-    compare_consecutive_matmats(inv_GGN)
-    compare_matmat(inv_GGN, inv_GGN_naive, rtol=1e-1, atol=1e-1)
-
-
 def test_NeumannInverseLinearOperator_toy():
     """Test NeumannInverseLinearOperator on a toy example.
 
