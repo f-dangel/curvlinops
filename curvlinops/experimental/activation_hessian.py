@@ -1,3 +1,5 @@
+"""Experimental linear operator for activation Hessians."""
+
 from __future__ import annotations
 
 import contextlib

@@ -70,7 +70,7 @@ Spectral density approximation
 ==============================
 
 .. note::
-   This functionality currently expects SciPy ``LinearOperator``s.
+   This functionality currently expects SciPy ``LinearOperator`` instances.
 
 .. autofunction:: curvlinops.lanczos_approximate_spectrum
 

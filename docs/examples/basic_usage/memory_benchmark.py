@@ -1,3 +1,9 @@
+"""Peak memory benchmark for linear operators.
+
+This script measures peak memory usage for selected linear operators on synthetic
+problems and stores results alongside the runtime benchmarks.
+"""
+
 import json
 from argparse import ArgumentParser
 from contextlib import nullcontext
