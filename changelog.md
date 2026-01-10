@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+- Add EKFAC and a new problem (ResNet18 on CIFAR10) to benchmark
+  ([PR](https://github.com/f-dangel/curvlinops/pull/214)),
+  expose a run time and memory inefficiency in EKFAC
+  ([issue](https://github.com/f-dangel/curvlinops/issues/193))
+
 - Minor fixes in docs, code and examples to reduce CI pipeline errors ([PR](https://github.com/f-dangel/curvlinops/pull/218))
 
 - Updated supported Python version from 3.9 (deprecated) to 3.10 ([PR](https://github.com/f-dangel/curvlinops/pull/213))

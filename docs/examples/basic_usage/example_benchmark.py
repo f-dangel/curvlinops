@@ -28,6 +28,7 @@ from typing import Iterable, List, Tuple
 import matplotlib.pyplot as plt
 from benchmark_utils import (
     GPTWrapper,
+    setup_synthetic_cifar10_resnet18,
     setup_synthetic_imagenet_resnet50,
     setup_synthetic_shakespeare_nanogpt,
 )
@@ -48,6 +49,7 @@ from tueplots import bundles
 
 from curvlinops import (
     EFLinearOperator,
+    EKFACLinearOperator,
     FisherMCLinearOperator,
     GGNLinearOperator,
     HessianLinearOperator,
@@ -112,6 +114,7 @@ if ON_RTD:
 else:
     PROBLEM_STRS = [
         "synthetic_mnist_cnn",
+        "synthetic_cifar10_resnet18",
         "synthetic_imagenet_resnet50",
         "synthetic_shakespeare_nanogpt",
     ]
@@ -166,6 +169,7 @@ def setup_problem(
     """
     setup_func = {
         "synthetic_mnist_cnn": setup_synthetic_mnist_cnn,
+        "synthetic_cifar10_resnet18": setup_synthetic_cifar10_resnet18,
         "synthetic_imagenet_resnet50": setup_synthetic_imagenet_resnet50,
         "synthetic_shakespeare_nanogpt": setup_synthetic_shakespeare_nanogpt,
     }[problem_str]
@@ -177,7 +181,7 @@ def setup_problem(
     loss_function = loss_function.to(dev)
 
     # Only use parameters of supported layers for KFAC
-    if linop_str in {"KFAC", "KFAC inverse"}:
+    if linop_str in {"KFAC", "KFAC inverse", "EKFAC", "EKFAC inverse"}:
         params = []
         supported_layers = [
             m for m in model.modules() if isinstance(m, (Linear, Conv2d))
@@ -207,6 +211,8 @@ LINOP_STRS = [
     "Monte-Carlo Fisher",
     "KFAC",
     "KFAC inverse",
+    "EKFAC",
+    "EKFAC inverse",
 ]
 
 # %%
@@ -278,6 +284,8 @@ def setup_linop(
         "Monte-Carlo Fisher": FisherMCLinearOperator,
         "KFAC": KFACLinearOperator,
         "KFAC inverse": KFACLinearOperator,
+        "EKFAC": EKFACLinearOperator,
+        "EKFAC inverse": EKFACLinearOperator,
     }[linop_str]
 
     # Double-backward through efficient attention is unsupported, disable fused kernels
@@ -286,8 +294,13 @@ def setup_linop(
     with sdpa_kernel(SDPBackend.MATH) if attention_double_backward else nullcontext():
         linop = linop_cls(*args, **kwargs)
 
-    if linop_str == "KFAC inverse":
-        linop = KFACInverseLinearOperator(linop, damping=1e-3, cache=True)
+    if linop_str in {"KFAC inverse", "EKFAC inverse"}:
+        linop = KFACInverseLinearOperator(
+            linop,
+            damping=1e-3,
+            cache=True,
+            use_exact_damping=linop_str == "EKFAC inverse",
+        )
 
     return linop
 
@@ -384,10 +397,14 @@ def run_time_benchmark(  # noqa: C901
             _ = linop.gradient_and_loss()
 
     def f_precompute():
-        if isinstance(linop, KFACLinearOperator):
+        if isinstance(linop, (KFACLinearOperator, EKFACLinearOperator)):
             linop.compute_kronecker_factors()
+        if isinstance(linop, EKFACLinearOperator):
+            linop.compute_eigenvalue_correction()
         if isinstance(linop, KFACInverseLinearOperator):
             linop._A.compute_kronecker_factors()
+            if isinstance(linop._A, EKFACLinearOperator):
+                linop._A.compute_eigenvalue_correction()
             # damp and invert the Kronecker matrices
             for mod_name in linop._A._mapping:
                 linop._compute_or_get_cached_inverse(mod_name)
@@ -485,7 +502,7 @@ def visualize_time_benchmark(
             with open(benchpath(name, problem_str, device_str, op_str), "r") as f:
                 results[op_str] = json.load(f)["time"]
 
-        if name in {"KFAC", "KFAC inverse"}:
+        if name in {"KFAC", "KFAC inverse", "EKFAC", "EKFAC inverse"}:
             ax.barh(
                 idx - 0.2,
                 width=results["precompute"],
