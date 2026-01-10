@@ -615,8 +615,6 @@ def compare_consecutive_matmats(
 def compare_matmat_expectation(
     op: FisherMCLinearOperator,
     mat: Tensor,
-    adjoint: bool,
-    is_vec: bool,
     max_repeats: int,
     check_every: int,
     num_vecs: int = 2,
@@ -628,8 +626,6 @@ def compare_matmat_expectation(
     Args:
         op: The operator to test.
         mat: The matrix representation of the linear operator.
-        adjoint: Whether to test the adjoint operator.
-        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
         max_repeats: Maximum number of matrix-vector product within which the
             expectation must converge.
         check_every: Check the expectation every ``check_every`` iterations for
@@ -640,14 +636,9 @@ def compare_matmat_expectation(
         atol: Absolute tolerance for the comparison. Will be multiplied by the maximum
             absolute value of the ground truth. Default: ``1e-8``.
     """
-    if adjoint:
-        op, mat = op.adjoint(), mat.conj().T
-
-    num_vecs = 1 if is_vec else num_vecs
-    dt = op.dtype
-    dev = op.device
+    dt, dev = op.dtype, op.device
     _, x, _ = rand_accepted_formats(
-        [tuple(s) for s in op._in_shape], is_vec, dt, dev, num_vecs=num_vecs
+        [tuple(s) for s in op._in_shape], False, dt, dev, num_vecs=num_vecs
     )
 
     op_x = zeros_like(x)
