@@ -34,13 +34,13 @@ class EKFACLinearOperator(KFACLinearOperator):
     introduced in
 
     - George, T., Laurent, C., Bouthillier, X., Ballas, N., Vincent, P. (2018).
-    Fast Approximate Natural Gradient Descent in a Kronecker-factored Eigenbasis (NeurIPS)
+      Fast Approximate Natural Gradient Descent in a Kronecker-factored Eigenbasis (NeurIPS)
 
     and concurrently in the context of continual learning in
 
-    Liu, X., Masana, M., Herranz, L., Van de Weijer, J., Lopez, A., Bagdanov, A. (2018).
-    Rotate your networks: Better weight consolidation and less catastrophic forgetting
-    (ICPR).
+    - Liu, X., Masana, M., Herranz, L., Van de Weijer, J., Lopez, A., Bagdanov, A. (2018).
+      Rotate your networks: Better weight consolidation and less catastrophic forgetting
+      (ICPR).
 
     Attributes:
         _SUPPORTED_FISHER_TYPE: Tuple with supported Fisher types.
