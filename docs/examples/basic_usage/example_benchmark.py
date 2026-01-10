@@ -213,8 +213,6 @@ LINOP_STRS = [
     "EKFAC inverse",
     "KFAC",
     "KFAC inverse",
-    "EKFAC",
-    "EKFAC inverse",
 ]
 
 # %%
