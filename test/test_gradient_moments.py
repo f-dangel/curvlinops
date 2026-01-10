@@ -20,8 +20,11 @@ def test_EFLinearOperator(case):
         model_func, loss_func, params, data, input_key="x"
     )
 
+    tols = {"atol": 5e-6, "rtol": 5e-4}
+
     compare_consecutive_matmats(E)
-    compare_matmat(E, E_mat, rtol=5e-4, atol=5e-6)
+    compare_matmat(E, E_mat, **tols)
 
     E, E_mat = E.adjoint(), E_mat.adjoint()
     compare_consecutive_matmats(E)
+    compare_matmat(E, E_mat, **tols)
