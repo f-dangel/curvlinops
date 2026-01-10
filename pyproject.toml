@@ -17,6 +17,7 @@ authors = [
     { name = "Felix Dangel" },
     { name = "Runa Eschenhagen" },
     { name = "Lukas Tatzel" },
+    { name = "Andres Fernandez"},
 ]
 urls = { Repository = "https://github.com/f-dangel/curvlinops" }
 description = "scipy Linear operators for curvature matrices in PyTorch"
@@ -89,8 +90,10 @@ docs = [
 
 [tool.pydocstyle]
 convention = "google"
-match = '.*\.py'
-match_dir = '^(?!(test|.git)).*'
+match = '.*\.py$'
+# subdirectories cannot be included or excluded
+# https://github.com/PyCQA/pydocstyle/issues/363
+match_dir = '^(?!.*(?:test|\.git|docs)).*'
 
 [tool.ruff]
 line-length = 88
