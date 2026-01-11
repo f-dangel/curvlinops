@@ -442,44 +442,98 @@ class EKFACLinearOperator(KFACLinearOperator):
             activations = cat(
                 [activations, activations.new_ones(*activations.shape[:-1], 1)], dim=-1
             )
-            # Compute the rotated per-example gradients
-            rotated_per_example_gradient = einsum(
-                ggT_eigenvectors,
-                g,
-                activations,
-                aaT_eigenvectors,
-                "i d_out, batch shared i, batch shared j, j d_in -> batch d_out d_in",
-            )
-            # Obtain the correction contributed by the current batch
-            self._corrected_eigenvalues = self._set_or_add_(
-                self._corrected_eigenvalues,
-                module_name,
-                rotated_per_example_gradient.square_().sum(dim=0).mul_(correction),
-            )
+            if g.shape[1] == 1:
+                # No weight sharing: We can take the square of the per-example gradient
+                # and sum over the batch axis more efficiently without building up the
+                # large per-example gradient tensor
+                rotated_activations = einsum(
+                    aaT_eigenvectors,
+                    activations.squeeze(1),
+                    "i d_in, batch i -> batch d_in",
+                )
+                rotated_g = einsum(
+                    ggT_eigenvectors, g.squeeze(1), "i d_out, batch i -> batch d_out"
+                )
+                eigencorrection = einsum(
+                    rotated_activations.square_(),
+                    rotated_g.square_(),
+                    "batch d_in, batch d_out -> d_out d_in",
+                )
+                self._corrected_eigenvalues = self._set_or_add_(
+                    self._corrected_eigenvalues,
+                    module_name,
+                    eigencorrection.mul_(correction),
+                )
+
+            else:
+                # Compute the rotated per-example gradients
+                rotated_per_example_gradient = einsum(
+                    ggT_eigenvectors,
+                    g,
+                    activations,
+                    aaT_eigenvectors,
+                    "i d_out, batch shared i, batch shared j, j d_in -> batch d_out d_in",
+                )
+                # Obtain the correction contributed by the current batch
+                self._corrected_eigenvalues = self._set_or_add_(
+                    self._corrected_eigenvalues,
+                    module_name,
+                    rotated_per_example_gradient.square_().sum(dim=0).mul_(correction),
+                )
         else:
             if module_name not in self._corrected_eigenvalues:
                 self._corrected_eigenvalues[module_name] = {}
             for p_name, pos in param_pos.items():
                 # Compute the rotated per-example gradients
-                rotated_per_example_gradient = (
-                    einsum(
-                        ggT_eigenvectors,
-                        g,
-                        activations,
+                if p_name == "weight" and g.shape[1] == 1:
+                    # No weight sharing: We can take the square of the per-example gradient
+                    # and sum over the batch axis more efficiently without building up the
+                    # large per-example gradient tensor
+                    rotated_activations = einsum(
                         aaT_eigenvectors,
-                        "i d_out, batch shared i, batch shared j, j d_in -> batch d_out d_in",
+                        activations.squeeze(1),
+                        "i d_in, batch i -> batch d_in",
                     )
-                    if p_name == "weight"
-                    else einsum(
-                        ggT_eigenvectors, g, "j d_out, batch shared j -> batch d_out"
+                    rotated_g = einsum(
+                        ggT_eigenvectors,
+                        g.squeeze(1),
+                        "i d_out, batch i -> batch d_out",
                     )
-                )
-                # Obtain the correction contributed by the current batch
-                self._corrected_eigenvalues[module_name] = self._set_or_add_(
-                    self._corrected_eigenvalues[module_name],
-                    pos,
-                    rotated_per_example_gradient.square_().sum(dim=0).mul_(correction),
-                )
+                    eigencorrection = einsum(
+                        rotated_activations.square_(),
+                        rotated_g.square_(),
+                        "batch d_in, batch d_out -> d_out d_in",
+                    )
+                    self._corrected_eigenvalues[module_name] = self._set_or_add_(
+                        self._corrected_eigenvalues[module_name],
+                        pos,
+                        eigencorrection.mul_(correction),
+                    )
+
+                else:
+                    rotated_per_example_gradient = (
+                        einsum(
+                            ggT_eigenvectors,
+                            g,
+                            activations,
+                            aaT_eigenvectors,
+                            "i d_out, batch shared i, batch shared j, j d_in -> batch d_out d_in",
+                        )
+                        if p_name == "weight"
+                        else einsum(
+                            ggT_eigenvectors,
+                            g,
+                            "j d_out, batch shared j -> batch d_out",
+                        )
+                    )
+                    # Obtain the correction contributed by the current batch
+                    self._corrected_eigenvalues[module_name] = self._set_or_add_(
+                        self._corrected_eigenvalues[module_name],
+                        pos,
+                        rotated_per_example_gradient.square_()
+                        .sum(dim=0)
+                        .mul_(correction),
+                    )
 
     @property
     def trace(self) -> Tensor:
