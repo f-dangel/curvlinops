@@ -218,7 +218,8 @@ class EKFACLinearOperator(KFACLinearOperator):
     and concurrently in the context of continual learning in
 
     - Liu, X., Masana, M., Herranz, L., Van de Weijer, J., Lopez, A., Bagdanov, A. (2018).
-      Rotate your networks: Better weight consolidation and less catastrophic forgetting (ICPR).
+      Rotate your networks: Better weight consolidation and less catastrophic forgetting
+      (ICPR).
 
     Attributes:
         _SUPPORTED_FISHER_TYPE: Tuple with supported Fisher types.
