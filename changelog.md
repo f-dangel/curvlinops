@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Generalize trick for no weight sharing to mild weight sharing, further improve memory performance of EKFAC
   ([PR](https://github.com/f-dangel/curvlinops/pull/219))
 
+- Minor fixes in docs, code and examples to reduce CI pipeline errors ([PR](https://github.com/f-dangel/curvlinops/pull/218))
+
 - Updated supported Python version from 3.9 (deprecated) to 3.10 ([PR](https://github.com/f-dangel/curvlinops/pull/213))
 
 - Use A6000 GPU instead of A40 to benchmark linear operators
