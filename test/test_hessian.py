@@ -36,7 +36,9 @@ def test_HessianLinearOperator(
 
     # compute the blocks with functorch and build the block diagonal matrix
     H_blocks = [
-        functorch_hessian(model_func, loss_func, params_block, data, input_key="x")
+        functorch_hessian(
+            model_func, loss_func, params_block, data, input_key="x"
+        ).detach()
         for params_block in split_list(
             params, [len(params)] if block_sizes is None else block_sizes
         )

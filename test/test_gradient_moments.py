@@ -20,7 +20,7 @@ def test_EFLinearOperator(case):
     )
     E_mat = functorch_empirical_fisher(
         model_func, loss_func, params, data, input_key="x"
-    )
+    ).detach()
 
     compare_consecutive_matmats(E)
     compare_matmat(E, E_mat)

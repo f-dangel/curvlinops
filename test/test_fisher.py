@@ -37,7 +37,7 @@ def test_FisherMCLinearOperator_expectation(case, max_repeats: int, mc_samples: 
         batch_size_fn=batch_size_fn,
         mc_samples=mc_samples,
     )
-    G_mat = functorch_ggn(model_func, loss_func, params, data, input_key="x")
+    G_mat = functorch_ggn(model_func, loss_func, params, data, input_key="x").detach()
 
     tols = {"atol": 1e-3, "rtol": 2e-1}
     compare_consecutive_matmats(F)

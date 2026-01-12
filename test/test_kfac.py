@@ -38,6 +38,7 @@ from test.utils import (
     _test_save_and_load_state_dict,
     binary_classification_targets,
     block_diagonal,
+    change_dtype,
     classification_targets,
     compare_consecutive_matmats,
     compare_matmat,
@@ -626,7 +627,7 @@ def test_KFACLinearOperator(
             the KFAC matrix.
         shuffle: Whether to shuffle the parameters before computing the KFAC matrix.
     """
-    model, loss_func, params, data, batch_size_fn = case
+    model, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
     params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     kfac = KFACLinearOperator(
@@ -639,14 +640,12 @@ def test_KFACLinearOperator(
     )
     kfac_mat = kfac @ eye_like(kfac)
 
-    tols = {"atol": 1e-7, "rtol": 1e-5}
-
     compare_consecutive_matmats(kfac)
-    compare_matmat(kfac, kfac_mat, **tols)
+    compare_matmat(kfac, kfac_mat)
 
     kfac, kfac_mat = kfac.adjoint(), kfac_mat.adjoint()
     compare_consecutive_matmats(kfac)
-    compare_matmat(kfac, kfac_mat, **tols)
+    compare_matmat(kfac, kfac_mat)
 
 
 @mark.parametrize(
@@ -663,7 +662,7 @@ def test_KFACLinearOperator(
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_trace(case, exclude, separate_weight_and_bias, check_deterministic, shuffle):
     """Test that the trace property of KFACLinearOperator works."""
-    model, loss_func, params, data, batch_size_fn = case
+    model, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
     params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
     _test_property(
         KFACLinearOperator,
@@ -694,7 +693,7 @@ def test_frobenius_norm(
     case, exclude, separate_weight_and_bias, check_deterministic, shuffle
 ):
     """Test that the Frobenius norm property of KFACLinearOperator works."""
-    model, loss_func, params, data, batch_size_fn = case
+    model, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
     params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
     _test_property(
         KFACLinearOperator,
@@ -723,7 +722,7 @@ def test_frobenius_norm(
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_det(case, exclude, separate_weight_and_bias, check_deterministic, shuffle):
     """Test that the determinant property of KFACLinearOperator works."""
-    model, loss_func, params, data, batch_size_fn = case
+    model, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
     params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
     _test_property(
         KFACLinearOperator,
@@ -735,7 +734,6 @@ def test_det(case, exclude, separate_weight_and_bias, check_deterministic, shuff
         batch_size_fn,
         separate_weight_and_bias,
         check_deterministic,
-        rtol=1e-4,
     )
 
 
@@ -753,7 +751,7 @@ def test_det(case, exclude, separate_weight_and_bias, check_deterministic, shuff
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_logdet(case, exclude, separate_weight_and_bias, check_deterministic, shuffle):
     """Test that the log determinant property of KFACLinearOperator works."""
-    model, loss_func, params, data, batch_size_fn = case
+    model, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
     params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
     _test_property(
         KFACLinearOperator,
@@ -765,7 +763,6 @@ def test_logdet(case, exclude, separate_weight_and_bias, check_deterministic, sh
         batch_size_fn,
         separate_weight_and_bias,
         check_deterministic,
-        rtol=1e-4,
     )
 
 
