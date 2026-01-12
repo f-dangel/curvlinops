@@ -1,6 +1,5 @@
 """Utility functions to test ``curvlinops``."""
 
-from collections import UserDict
 import os
 from collections.abc import MutableMapping
 from contextlib import redirect_stdout, suppress
@@ -1052,18 +1051,9 @@ def change_dtype(case: Tuple, dt: dtype) -> Tuple:
     model_func, loss_func, params, data, batch_size_fn = case
 
     model_func, loss_func = model_func.to(dt), loss_func.to(dt)
+    data = [
+        (cast_input(X, dt), y.to(dt) if isinstance(loss_func, MSELoss) else y)
+        for (X, y) in data
+    ]
 
-    new_data = []
-
-    for X, y in data:
-        if isinstance(X, UserDict):
-            new_X = UserDict({**X, "x": X["x"].to(dt)})
-        elif isinstance(X, dict):
-            new_X = {**X, "x": X["x"].to(dt)}
-        else:
-            new_X = X.to(dt)
-
-        new_y = y.to(dt) if isinstance(loss_func, MSELoss) else y
-        new_data.append((new_X, new_y))
-
-    return model_func, loss_func, params, new_data, batch_size_fn
+    return model_func, loss_func, params, data, batch_size_fn

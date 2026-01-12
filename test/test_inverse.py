@@ -31,7 +31,7 @@ from curvlinops.examples.functorch import functorch_ggn
 from curvlinops.utils import allclose_report
 from test.test__torch_base import TensorLinearOperator
 from test.utils import (
-    cast_input,
+    change_dtype,
     compare_consecutive_matmats,
     compare_matmat,
     compare_state_dicts,
@@ -50,7 +50,7 @@ def test_CGInverseLinearOperator_damped_GGN(inv_case, delta_rel: float = 2e-2):
         delta_rel: Relative damping factor that is multiplied onto the average trace
             to obtain the damping value.
     """
-    model_func, loss_func, params, data, batch_size_fn = inv_case
+    model_func, loss_func, params, data, batch_size_fn = change_dtype(inv_case, float64)
     (dev,), (dt,) = {p.device for p in params}, {p.dtype for p in params}
 
     GGN_naive = functorch_ggn(
@@ -67,12 +67,12 @@ def test_CGInverseLinearOperator_damped_GGN(inv_case, delta_rel: float = 2e-2):
     # specify tolerance and turn off internal damping to get solution with accuracy
     inv_GGN = CGInverseLinearOperator(GGN + damping, eps=0, tolerance=1e-5)
     compare_consecutive_matmats(inv_GGN)
-    compare_matmat(inv_GGN, inv_GGN_naive, rtol=1.5e-2)
+    compare_matmat(inv_GGN, inv_GGN_naive)
 
 
 def test_LSMRInverseLinearOperator_damped_GGN(inv_case, delta: float = 2e-2):
     """Test matrix multiplication with the inverse damped GGN with LSMR."""
-    model_func, loss_func, params, data, batch_size_fn = inv_case
+    model_func, loss_func, params, data, batch_size_fn = change_dtype(inv_case, float64)
     (dev,), (dt,) = {p.device for p in params}, {p.dtype for p in params}
 
     GGN = GGNLinearOperator(
@@ -90,7 +90,7 @@ def test_LSMRInverseLinearOperator_damped_GGN(inv_case, delta: float = 2e-2):
     )
 
     compare_consecutive_matmats(inv_GGN)
-    compare_matmat(inv_GGN, inv_GGN_naive, rtol=5e-3, atol=1e-5)
+    compare_matmat(inv_GGN, inv_GGN_naive)
 
 
 def test_NeumannInverseLinearOperator_toy():
@@ -115,8 +115,9 @@ def test_NeumannInverseLinearOperator_toy():
         TensorLinearOperator(A), num_terms=1_000
     )
 
+    tols = {"rtol": 1e-3, "atol": 1e-5}
     compare_consecutive_matmats(inv_A_neumann)
-    compare_matmat(inv_A_neumann, inv_A, rtol=1e-3, atol=1e-5)
+    compare_matmat(inv_A_neumann, inv_A, **tols)
 
     # If we double the matrix, the Neumann series won't converge anymore ...
     B = 2 * A
@@ -135,7 +136,7 @@ def test_NeumannInverseLinearOperator_toy():
     )
 
     compare_consecutive_matmats(inv_B_neumann)
-    compare_matmat(inv_B_neumann, inv_B, rtol=1e-3, atol=1e-5)
+    compare_matmat(inv_B_neumann, inv_B, **tols)
 
 
 """KFACInverseLinearOperator with KFACLinearOperator tests."""
@@ -165,20 +166,8 @@ def test_KFAC_inverse_damped_matmat(
     delta: float = 1e-2,
 ):
     """Test matrix-matrix multiplication by an inverse damped KFAC approximation."""
-    model_func, loss_func, params, data, batch_size_fn = case
+    model_func, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
     params = maybe_exclude_or_shuffle_parameters(params, model_func, exclude, shuffle)
-    dtype = float64  # use double precision for better numerical stability
-    model_func = model_func.to(dtype=dtype)
-    loss_func = loss_func.to(dtype=dtype)
-    params = [p.to(dtype=dtype) for p in params]
-    data = [
-        (
-            (cast_input(x, dtype), y)
-            if isinstance(loss_func, CrossEntropyLoss)
-            else (cast_input(x, dtype), y.to(dtype=dtype))
-        )
-        for x, y in data
-    ]
 
     KFAC = KFACLinearOperator(
         model_func,
@@ -261,20 +250,8 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901, PLR0912, PLR09
     """Test matrix-matrix multiplication by an inverse (heuristically) damped KFAC
     approximation.
     """
-    model_func, loss_func, params, data, batch_size_fn = case
+    model_func, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
     params = maybe_exclude_or_shuffle_parameters(params, model_func, exclude, shuffle)
-    dtype = float64  # use double precision for better numerical stability
-    model_func = model_func.to(dtype=dtype)
-    loss_func = loss_func.to(dtype=dtype)
-    params = [p.to(dtype=dtype) for p in params]
-    data = [
-        (
-            (cast_input(x, dtype), y)
-            if isinstance(loss_func, CrossEntropyLoss)
-            else (cast_input(x, dtype), y.to(dtype=dtype))
-        )
-        for x, y in data
-    ]
 
     KFAC = KFACLinearOperator(
         model_func,
@@ -390,20 +367,8 @@ def test_KFAC_inverse_exactly_damped_matmat(
     delta: float = 1e-2,
 ):
     """Test matrix-matrix multiplication by an inverse (exactly) damped KFAC approximation."""
-    model_func, loss_func, params, data, batch_size_fn = case
+    model_func, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
     params = maybe_exclude_or_shuffle_parameters(params, model_func, exclude, shuffle)
-    dtype = float64  # use double precision for better numerical stability
-    model_func = model_func.to(dtype=dtype)
-    loss_func = loss_func.to(dtype=dtype)
-    params = [p.to(dtype=dtype) for p in params]
-    data = [
-        (
-            (cast_input(x, dtype), y)
-            if isinstance(loss_func, CrossEntropyLoss)
-            else (cast_input(x, dtype), y.to(dtype=dtype))
-        )
-        for x, y in data
-    ]
 
     KFAC = KFACLinearOperator(
         model_func,
@@ -629,20 +594,8 @@ def test_EKFAC_inverse_exactly_damped_matmat(
     delta: float = 1e-2,
 ):
     """Test matrix-matrix multiplication by an inverse (exactly) damped EKFAC approximation."""
-    model_func, loss_func, params, data, batch_size_fn = inv_case
+    model_func, loss_func, params, data, batch_size_fn = change_dtype(inv_case, float64)
     params = maybe_exclude_or_shuffle_parameters(params, model_func, exclude, shuffle)
-    dtype = float64  # use double precision for better numerical stability
-    model_func = model_func.to(dtype=dtype)
-    loss_func = loss_func.to(dtype=dtype)
-    params = [p.to(dtype=dtype) for p in params]
-    data = [
-        (
-            (cast_input(x, dtype), y)
-            if isinstance(loss_func, CrossEntropyLoss)
-            else (cast_input(x, dtype), y.to(dtype=dtype))
-        )
-        for x, y in data
-    ]
 
     EKFAC = EKFACLinearOperator(
         model_func,
