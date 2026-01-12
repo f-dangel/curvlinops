@@ -1,5 +1,6 @@
 """Utility functions to test ``curvlinops``."""
 
+from collections import UserDict
 import os
 from collections.abc import MutableMapping
 from contextlib import redirect_stdout, suppress
@@ -1036,3 +1037,33 @@ def _test_ekfac_closer_to_exact_than_kfac(
         if exclude == "weight"
         else False
     )  # For no_weights the numerical error might dominate.
+
+
+def change_dtype(case: Tuple, dt: dtype) -> Tuple:
+    """Change the data type of a test case.
+
+    Args:
+        case: The test case (model, loss_func, params, data).
+        dt: The target data type.
+
+    Returns:
+        The converted test case with model, loss function, and data casted to ``dt``.
+    """
+    model_func, loss_func, params, data, batch_size_fn = case
+
+    model_func, loss_func = model_func.to(dt), loss_func.to(dt)
+
+    new_data = []
+
+    for X, y in data:
+        if isinstance(X, UserDict):
+            new_X = UserDict({**X, "x": X["x"].to(dt)})
+        elif isinstance(X, dict):
+            new_X = {**X, "x": X["x"].to(dt)}
+        else:
+            new_X = X.to(dt)
+
+        new_y = y.to(dt) if isinstance(loss_func, MSELoss) else y
+        new_data.append((new_X, new_y))
+
+    return model_func, loss_func, params, new_data, batch_size_fn
