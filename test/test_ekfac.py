@@ -8,10 +8,12 @@ from torch import (
     Tensor,
     allclose,
     device,
+    float64,
     manual_seed,
     rand,
     rand_like,
 )
+from torch.linalg import qr
 from torch.nn import (
     BCEWithLogitsLoss,
     CrossEntropyLoss,
@@ -23,7 +25,12 @@ from torch.nn import (
 )
 
 from curvlinops import EFLinearOperator, GGNLinearOperator
-from curvlinops.ekfac import EKFACLinearOperator, FisherType, KFACType
+from curvlinops.ekfac import (
+    EKFACLinearOperator,
+    FisherType,
+    KFACType,
+    compute_eigenvalue_correction_linear_weight_sharing,
+)
 from curvlinops.utils import allclose_report
 from test.cases import DEVICES, DEVICES_IDS
 from test.utils import (
@@ -840,3 +847,33 @@ def test_ekfac_closer_to_exact_than_kfac_weight_sharing(
         fisher_type,
         kfac_approx,
     )
+
+
+def test_compute_eigenvalue_correction_linear_weight_sharing():
+    """Verifies equivalence of per-example gradient and Gramian approaches."""
+    manual_seed(0)
+    N, S, D1, D2 = 2, 3, 4, 5
+    DT = float64
+
+    # Generate random layer inputs and output gradients
+    g = rand(N, S, D1, dtype=DT)
+    a = rand(N, S, D2, dtype=DT)
+
+    # Generate random bases
+    ggT_eigvecs, _ = qr(rand(D1, D1, dtype=DT))
+    aaT_eigvecs, _ = qr(rand(D2, D2, dtype=DT))
+
+    # Verify both strategies yield the same result
+    correction_via_gramian = compute_eigenvalue_correction_linear_weight_sharing(
+        g, ggT_eigvecs, a, aaT_eigvecs, _force_strategy="gramian"
+    )
+    correction_via_gradients = compute_eigenvalue_correction_linear_weight_sharing(
+        g, ggT_eigvecs, a, aaT_eigvecs, _force_strategy="per_example_gradients"
+    )
+    assert allclose_report(correction_via_gramian, correction_via_gradients)
+
+    # Test invalid _force_strategy argument raises an error
+    with raises(ValueError, match="Invalid _force_strategy"):
+        compute_eigenvalue_correction_linear_weight_sharing(
+            g, ggT_eigvecs, a, aaT_eigvecs, _force_strategy="invalid_strategy"
+        )
