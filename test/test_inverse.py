@@ -6,7 +6,7 @@ from typing import Iterable, List, Tuple, Union
 
 from pytest import mark, raises
 from torch import Tensor, float64, load, manual_seed, rand, save
-from torch.linalg import eigh, inv
+from torch.linalg import inv
 from torch.nn import (
     CrossEntropyLoss,
     Linear,
@@ -66,8 +66,8 @@ def test_CGInverseLinearOperator_damped_GGN(inv_case, delta_rel: float = 2e-2):
 
     # specify tolerance and turn off internal damping to get solution with accuracy
     inv_GGN = CGInverseLinearOperator(GGN + damping, eps=0, tolerance=1e-5)
-    compare_consecutive_matmats(inv_GGN, adjoint=False, is_vec=False)
-    compare_matmat(inv_GGN, inv_GGN_naive, adjoint=False, is_vec=False, rtol=1.5e-2)
+    compare_consecutive_matmats(inv_GGN)
+    compare_matmat(inv_GGN, inv_GGN_naive, rtol=1.5e-2)
 
 
 def test_LSMRInverseLinearOperator_damped_GGN(inv_case, delta: float = 2e-2):
@@ -89,38 +89,8 @@ def test_LSMRInverseLinearOperator_damped_GGN(inv_case, delta: float = 2e-2):
         + delta * eye_like(GGN)
     )
 
-    compare_consecutive_matmats(inv_GGN, adjoint=False, is_vec=False)
-    compare_matmat(
-        inv_GGN, inv_GGN_naive, adjoint=False, is_vec=False, rtol=5e-3, atol=1e-5
-    )
-
-
-def test_NeumannInverseLinearOperator_damped_GGN(inv_case, delta: float = 2e-2):
-    """Test matrix multiplication by the inverse damped GGN with Neumann."""
-    model_func, loss_func, params, data, batch_size_fn = inv_case
-    (dev,), (dt,) = {p.device for p in params}, {p.dtype for p in params}
-
-    GGN = GGNLinearOperator(
-        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
-    )
-    damping = delta * IdentityLinearOperator([p.shape for p in params], dev, dt)
-
-    damped_GGN_naive = functorch_ggn(
-        model_func, loss_func, params, data, input_key="x"
-    ).detach() + delta * eye_like(GGN)
-    inv_GGN_naive = inv(damped_GGN_naive)
-
-    # set scale such that Neumann series converges
-    eval_max = eigh(damped_GGN_naive)[0][-1]
-    scale = 1.0 if eval_max < 2 else 1.9 / eval_max
-
-    # NOTE This may break when other cases are added because slow convergence
-    inv_GGN = NeumannInverseLinearOperator(GGN + damping, num_terms=2_500, scale=scale)
-
-    compare_consecutive_matmats(inv_GGN, adjoint=False, is_vec=False)
-    compare_matmat(
-        inv_GGN, inv_GGN_naive, adjoint=False, is_vec=False, rtol=1e-1, atol=1e-1
-    )
+    compare_consecutive_matmats(inv_GGN)
+    compare_matmat(inv_GGN, inv_GGN_naive, rtol=5e-3, atol=1e-5)
 
 
 def test_NeumannInverseLinearOperator_toy():
@@ -145,10 +115,8 @@ def test_NeumannInverseLinearOperator_toy():
         TensorLinearOperator(A), num_terms=1_000
     )
 
-    compare_consecutive_matmats(inv_A_neumann, adjoint=False, is_vec=False)
-    compare_matmat(
-        inv_A_neumann, inv_A, adjoint=False, is_vec=False, rtol=1e-3, atol=1e-5
-    )
+    compare_consecutive_matmats(inv_A_neumann)
+    compare_matmat(inv_A_neumann, inv_A, rtol=1e-3, atol=1e-5)
 
     # If we double the matrix, the Neumann series won't converge anymore ...
     B = 2 * A
@@ -159,17 +127,15 @@ def test_NeumannInverseLinearOperator_toy():
 
     # ... therefore, we should get NaNs during the iteration
     with raises(ValueError):
-        compare_consecutive_matmats(inv_B_neumann, adjoint=False, is_vec=False)
+        compare_consecutive_matmats(inv_B_neumann)
 
     # ... but if we scale the matrix back internally, the Neumann series converges
     inv_B_neumann = NeumannInverseLinearOperator(
         TensorLinearOperator(B), num_terms=1_000, scale=0.5
     )
 
-    compare_consecutive_matmats(inv_B_neumann, adjoint=False, is_vec=False)
-    compare_matmat(
-        inv_B_neumann, inv_B, adjoint=False, is_vec=False, rtol=1e-3, atol=1e-5
-    )
+    compare_consecutive_matmats(inv_B_neumann)
+    compare_matmat(inv_B_neumann, inv_B, rtol=1e-3, atol=1e-5)
 
 
 """KFACInverseLinearOperator with KFACLinearOperator tests."""
@@ -195,17 +161,10 @@ def test_KFAC_inverse_damped_matmat(
     cache: bool,
     exclude: str,
     separate_weight_and_bias: bool,
-    adjoint: bool,
-    is_vec: bool,
     shuffle: bool,
     delta: float = 1e-2,
 ):
-    """Test matrix-matrix multiplication by an inverse damped KFAC approximation.
-
-    Args:
-        adjoint: Whether to test the adjoint operator.
-        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
-    """
+    """Test matrix-matrix multiplication by an inverse damped KFAC approximation."""
     model_func, loss_func, params, data, batch_size_fn = case
     params = maybe_exclude_or_shuffle_parameters(params, model_func, exclude, shuffle)
     dtype = float64  # use double precision for better numerical stability
@@ -252,10 +211,10 @@ def test_KFAC_inverse_damped_matmat(
         KFAC, damping=(delta, delta), cache=cache
     )
 
-    compare_consecutive_matmats(inv_KFAC, adjoint, is_vec)
-    compare_matmat(inv_KFAC, inv_KFAC_naive, adjoint, is_vec)
-    compare_consecutive_matmats(inv_KFAC_tuple, adjoint, is_vec)
-    compare_matmat(inv_KFAC_tuple, inv_KFAC_naive, adjoint, is_vec)
+    compare_consecutive_matmats(inv_KFAC)
+    compare_matmat(inv_KFAC, inv_KFAC_naive)
+    compare_consecutive_matmats(inv_KFAC_tuple)
+    compare_matmat(inv_KFAC_tuple, inv_KFAC_naive)
 
     assert inv_KFAC._cache == cache
     if cache:
@@ -266,6 +225,16 @@ def test_KFAC_inverse_damped_matmat(
         # test that the cache is empty
         assert len(inv_KFAC._inverse_input_covariances) == 0
         assert len(inv_KFAC._inverse_gradient_covariances) == 0
+
+    inv_KFAC, inv_KFAC_tuple, inv_KFAC_naive = (
+        inv_KFAC.adjoint(),
+        inv_KFAC_tuple.adjoint(),
+        inv_KFAC_naive.adjoint(),
+    )
+    compare_consecutive_matmats(inv_KFAC)
+    compare_matmat(inv_KFAC, inv_KFAC_naive)
+    compare_consecutive_matmats(inv_KFAC_tuple)
+    compare_matmat(inv_KFAC_tuple, inv_KFAC_naive)
 
 
 @mark.parametrize("cache", [True, False], ids=["cached", "uncached"])
@@ -286,17 +255,11 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901, PLR0912, PLR09
     cache: bool,
     exclude: str,
     separate_weight_and_bias: bool,
-    adjoint: bool,
-    is_vec: bool,
     shuffle: bool,
     delta: float = 1e-2,
 ):
     """Test matrix-matrix multiplication by an inverse (heuristically) damped KFAC
     approximation.
-
-    Args:
-        adjoint: Whether to test the adjoint operator.
-        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
     """
     model_func, loss_func, params, data, batch_size_fn = case
     params = maybe_exclude_or_shuffle_parameters(params, model_func, exclude, shuffle)
@@ -304,7 +267,6 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901, PLR0912, PLR09
     model_func = model_func.to(dtype=dtype)
     loss_func = loss_func.to(dtype=dtype)
     params = [p.to(dtype=dtype) for p in params]
-    (device,) = {p.device for p in params}
     data = [
         (
             (cast_input(x, dtype), y)
@@ -388,8 +350,8 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901, PLR0912, PLR09
         min_damping=KFAC_MIN_DAMPING,
     )
 
-    compare_consecutive_matmats(inv_KFAC, adjoint, is_vec)
-    compare_matmat(inv_KFAC, inv_KFAC_naive, adjoint, is_vec)
+    compare_consecutive_matmats(inv_KFAC)
+    compare_matmat(inv_KFAC, inv_KFAC_naive)
 
     assert inv_KFAC._cache == cache
     if cache:
@@ -400,6 +362,10 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901, PLR0912, PLR09
         # test that the cache is empty
         assert len(inv_KFAC._inverse_input_covariances) == 0
         assert len(inv_KFAC._inverse_gradient_covariances) == 0
+
+    inv_KFAC, inv_KFAC_naive = inv_KFAC.adjoint(), inv_KFAC_naive.adjoint()
+    compare_consecutive_matmats(inv_KFAC)
+    compare_matmat(inv_KFAC, inv_KFAC_naive)
 
 
 @mark.parametrize("cache", [True, False], ids=["cached", "uncached"])
@@ -420,24 +386,16 @@ def test_KFAC_inverse_exactly_damped_matmat(
     cache: bool,
     exclude: str,
     separate_weight_and_bias: bool,
-    adjoint: bool,
-    is_vec: bool,
     shuffle: bool,
     delta: float = 1e-2,
 ):
-    """Test matrix-matrix multiplication by an inverse (exactly) damped KFAC approximation.
-
-    Args:
-        adjoint: Whether to test the adjoint operator.
-        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
-    """
+    """Test matrix-matrix multiplication by an inverse (exactly) damped KFAC approximation."""
     model_func, loss_func, params, data, batch_size_fn = case
     params = maybe_exclude_or_shuffle_parameters(params, model_func, exclude, shuffle)
     dtype = float64  # use double precision for better numerical stability
     model_func = model_func.to(dtype=dtype)
     loss_func = loss_func.to(dtype=dtype)
     params = [p.to(dtype=dtype) for p in params]
-    (device,) = {p.device for p in params}
     data = [
         (
             (cast_input(x, dtype), y)
@@ -484,8 +442,8 @@ def test_KFAC_inverse_exactly_damped_matmat(
         KFAC, damping=delta, cache=cache, use_exact_damping=True
     )
 
-    compare_consecutive_matmats(inv_KFAC, adjoint, is_vec)
-    compare_matmat(inv_KFAC, inv_KFAC_naive, adjoint, is_vec)
+    compare_consecutive_matmats(inv_KFAC)
+    compare_matmat(inv_KFAC, inv_KFAC_naive)
 
     assert inv_KFAC._cache == cache
     if cache:
@@ -496,6 +454,10 @@ def test_KFAC_inverse_exactly_damped_matmat(
         # test that the cache is empty
         assert len(inv_KFAC._inverse_input_covariances) == 0
         assert len(inv_KFAC._inverse_gradient_covariances) == 0
+
+    inv_KFAC, inv_KFAC_naive = inv_KFAC.adjoint(), inv_KFAC_naive.adjoint()
+    compare_consecutive_matmats(inv_KFAC)
+    compare_matmat(inv_KFAC, inv_KFAC_naive)
 
 
 @mark.parametrize("use_exact_damping", [True, False], ids=["exact_damping", ""])
@@ -663,17 +625,10 @@ def test_EKFAC_inverse_exactly_damped_matmat(
     cache: bool,
     exclude: str,
     separate_weight_and_bias: bool,
-    adjoint: bool,
-    is_vec: bool,
     shuffle: bool,
     delta: float = 1e-2,
 ):
-    """Test matrix-matrix multiplication by an inverse (exactly) damped EKFAC approximation.
-
-    Args:
-        adjoint: Whether to test the adjoint operator.
-        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
-    """
+    """Test matrix-matrix multiplication by an inverse (exactly) damped EKFAC approximation."""
     model_func, loss_func, params, data, batch_size_fn = inv_case
     params = maybe_exclude_or_shuffle_parameters(params, model_func, exclude, shuffle)
     dtype = float64  # use double precision for better numerical stability
@@ -713,13 +668,17 @@ def test_EKFAC_inverse_exactly_damped_matmat(
         EKFAC, damping=delta, cache=cache, use_exact_damping=True
     )
 
-    compare_consecutive_matmats(inv_EKFAC, adjoint, is_vec)
-    compare_matmat(inv_EKFAC, inv_EKFAC_naive, adjoint, is_vec)
+    compare_consecutive_matmats(inv_EKFAC)
+    compare_matmat(inv_EKFAC, inv_EKFAC_naive)
 
     assert inv_EKFAC._cache == cache
     # test that the cache is empty
     assert len(inv_EKFAC._inverse_input_covariances) == 0
     assert len(inv_EKFAC._inverse_gradient_covariances) == 0
+
+    inv_EKFAC, inv_EKFAC_naive = inv_EKFAC.adjoint(), inv_EKFAC_naive.adjoint()
+    compare_consecutive_matmats(inv_EKFAC)
+    compare_matmat(inv_EKFAC, inv_EKFAC_naive)
 
 
 def test_EKFAC_inverse_save_and_load_state_dict():

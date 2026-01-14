@@ -75,19 +75,16 @@ def setup_submatrix_linear_operator(case, operator_case, submatrix_case):
 
 @mark.parametrize("operator_case", CURVATURE_CASES)
 @mark.parametrize("submatrix_case", SUBMATRIX_CASES)
-def test_SubmatrixLinearOperator_on_curvatures(
-    case,
-    operator_case,
-    submatrix_case,
-    adjoint: bool,
-    is_vec: bool,
-):
+def test_SubmatrixLinearOperator_on_curvatures(case, operator_case, submatrix_case):
     A_sub, A_sub_functorch, row_idxs, col_idxs = setup_submatrix_linear_operator(
         case, operator_case, submatrix_case
     )
     assert A_sub.shape == (len(row_idxs), len(col_idxs))
-    compare_consecutive_matmats(A_sub, adjoint, is_vec)
-    compare_matmat(A_sub, A_sub_functorch, adjoint, is_vec, atol=1e-6, rtol=1e-4)
+
+    tols = {"atol": 1e-6, "rtol": 1e-4}
+
+    compare_consecutive_matmats(A_sub)
+    compare_matmat(A_sub, A_sub_functorch, **tols)
 
     # try specifying the sub-matrix using invalid indices
     invalid_idxs = [
@@ -101,3 +98,7 @@ def test_SubmatrixLinearOperator_on_curvatures(
     for row_idxs, col_idxs in invalid_idxs:
         with raises(ValueError):
             A_sub.set_submatrix(row_idxs, col_idxs)
+
+    # test forming the adjoint
+    A_sub, A_sub_functorch = A_sub.adjoint(), A_sub_functorch.adjoint()
+    compare_matmat(A_sub, A_sub_functorch, **tols)

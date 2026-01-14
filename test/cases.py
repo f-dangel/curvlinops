@@ -370,12 +370,6 @@ for case in NON_DETERMINISTIC_CASES_NO_DEVICE:
         case_with_device = {**case, "device": device}
         NON_DETERMINISTIC_CASES.append(case_with_device)
 
-ADJOINT_CASES = [False, True]
-ADJOINT_IDS = ["", "adjoint"]
-
-IS_VECS = [False, True]
-IS_VEC_IDS = ["matvec", "matmat"]
-
 
 BLOCK_SIZES_FNS = {
     "full": lambda params: None,

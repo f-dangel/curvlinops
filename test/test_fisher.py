@@ -17,15 +17,11 @@ CHECK_EVERY = 100
 @mark.parametrize(
     "max_repeats,mc_samples", MAX_REPEATS_MC_SAMPLES, ids=MAX_REPEATS_MC_SAMPLES_IDS
 )
-def test_FisherMCLinearOperator_expectation(
-    case, adjoint: bool, is_vec: bool, max_repeats: int, mc_samples: int
-):
+def test_FisherMCLinearOperator_expectation(case, max_repeats: int, mc_samples: int):
     """Test matrix-matrix multiplication with the Monte-Carlo Fisher.
 
     Args:
         case: Tuple of model, loss function, parameters, data, and batch size getter.
-        adjoint: Whether to test the adjoint operator.
-        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
     """
     model_func, loss_func, params, data, batch_size_fn = case
 
@@ -39,7 +35,9 @@ def test_FisherMCLinearOperator_expectation(
     )
     G_mat = functorch_ggn(model_func, loss_func, params, data, input_key="x")
 
-    compare_consecutive_matmats(F, adjoint, is_vec)
-    compare_matmat_expectation(
-        F, G_mat, adjoint, is_vec, max_repeats, CHECK_EVERY, rtol=2e-1, atol=5e-3
-    )
+    compare_consecutive_matmats(F)
+    compare_matmat_expectation(F, G_mat, max_repeats, CHECK_EVERY, rtol=2e-1, atol=5e-3)
+
+    F, G_mat = F.adjoint(), G_mat.adjoint()
+    compare_consecutive_matmats(F)
+    compare_matmat_expectation(F, G_mat, max_repeats, CHECK_EVERY, rtol=2e-1, atol=5e-3)

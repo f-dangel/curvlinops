@@ -612,8 +612,6 @@ def test_expand_setting_scaling(
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_KFACLinearOperator(
     case,
-    adjoint: bool,
-    is_vec: bool,
     exclude: str,
     separate_weight_and_bias: bool,
     shuffle: bool,
@@ -622,8 +620,6 @@ def test_KFACLinearOperator(
 
     Args:
         case: Tuple of model, loss function, parameters, data, and batch size getter.
-        adjoint: Whether to test the adjoint operator.
-        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
         exclude: Which parameters to exclude. Can be ``'weight'``, ``'bias'``,
             or ``None``.
         separate_weight_and_bias: Whether to treat weight and bias as separate blocks in
@@ -643,8 +639,14 @@ def test_KFACLinearOperator(
     )
     kfac_mat = kfac @ eye_like(kfac)
 
-    compare_consecutive_matmats(kfac, adjoint, is_vec)
-    compare_matmat(kfac, kfac_mat, adjoint, is_vec, rtol=1e-5, atol=1e-7)
+    tols = {"atol": 1e-7, "rtol": 1e-5}
+
+    compare_consecutive_matmats(kfac)
+    compare_matmat(kfac, kfac_mat, **tols)
+
+    kfac, kfac_mat = kfac.adjoint(), kfac_mat.adjoint()
+    compare_consecutive_matmats(kfac)
+    compare_matmat(kfac, kfac_mat, **tols)
 
 
 @mark.parametrize(
