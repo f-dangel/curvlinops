@@ -79,21 +79,6 @@ Spectral density approximation
 .. autoclass:: curvlinops.LanczosApproximateSpectrumCached
    :members: __init__, approximate_spectrum
 
-Trace approximation
-===================
-
-.. autofunction:: curvlinops.hutchinson_trace
-
-.. autofunction:: curvlinops.hutchpp_trace
-
-.. autofunction:: curvlinops.xtrace
-
-Diagonal approximation
-======================
-
-.. autofunction:: curvlinops.hutchinson_diag
-
-.. autofunction:: curvlinops.xdiag
 
 Frobenius norm approximation
 ============================

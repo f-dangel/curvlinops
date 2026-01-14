@@ -83,7 +83,8 @@ docs = [
     "matplotlib",
     "sphinx-gallery",
     "sphinx-rtd-theme",
-    "tueplots"
+    "tueplots",
+    "skerch>=1.2.0"
 ]
 
 ###############################################################################
