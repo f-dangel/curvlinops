@@ -47,6 +47,10 @@ from test.utils import (
     regression_targets,
 )
 
+# Constants for MC tests
+MC_SAMPLES = 10_000
+MC_TOLS = {"rtol": 1e-2, "atol": 5e-3}
+
 
 @mark.parametrize(
     "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
@@ -223,15 +227,14 @@ def test_kfac_mc(
         data,
         batch_size_fn=batch_size_fn,
         fisher_type=FisherType.MC,
-        mc_samples=2_000,
+        mc_samples=MC_SAMPLES,
         separate_weight_and_bias=separate_weight_and_bias,
     )
     kfac_mat = kfac @ eye_like(kfac)
 
-    atol = {"sum": 5e-1, "mean": 1e-2}[loss_func.reduction]
-    rtol = {"sum": 1e-2, "mean": 1e-2}[loss_func.reduction]
-
-    assert allclose_report(ggn, kfac_mat, rtol=rtol, atol=atol)
+    # Normalize so we can share tolerances across reductions
+    scale = ggn.abs().max()
+    assert allclose_report(ggn / scale, kfac_mat / scale, **MC_TOLS)
 
 
 @mark.parametrize(
@@ -290,16 +293,15 @@ def test_kfac_mc_weight_sharing(
         data,
         batch_size_fn=batch_size_fn,
         fisher_type=FisherType.MC,
-        mc_samples=5_000,
+        mc_samples=MC_SAMPLES,
         kfac_approx=setting,  # choose KFAC approximation consistent with setting
         separate_weight_and_bias=separate_weight_and_bias,
     )
     kfac_mat = kfac @ eye_like(kfac)
 
-    atol = {"sum": 5e-1, "mean": 1e-2}[loss_func.reduction]
-    rtol = {"sum": 2e-2, "mean": 2e-2}[loss_func.reduction]
-
-    assert allclose_report(ggn, kfac_mat, rtol=rtol, atol=atol)
+    # Normalize so we can share tolerances across reductions
+    scale = ggn.abs().max()
+    assert allclose_report(ggn / scale, kfac_mat / scale, **MC_TOLS)
 
 
 @mark.parametrize(
@@ -385,12 +387,14 @@ def test_kfac_mc_one_datum(
         data,
         batch_size_fn=batch_size_fn,
         fisher_type=FisherType.MC,
-        mc_samples=9_000,
+        mc_samples=MC_SAMPLES,
         separate_weight_and_bias=separate_weight_and_bias,
     )
     kfac_mat = kfac @ eye_like(kfac)
 
-    assert allclose_report(ggn, kfac_mat, rtol=1e-2, atol=1e-3)
+    # Normalize so we can share tolerances across reductions
+    scale = ggn.abs().max()
+    assert allclose_report(ggn / scale, kfac_mat / scale, **MC_TOLS)
 
 
 @mark.parametrize(
