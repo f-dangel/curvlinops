@@ -28,7 +28,11 @@ from curvlinops.kfac_utils import extract_patches
 
 
 def compute_eigenvalue_correction_linear_weight_sharing(
-    g: Tensor, ggT_eigvecs: Tensor, a: Tensor, aaT_eigvecs: Union[Tensor, None]
+    g: Tensor,
+    ggT_eigvecs: Tensor,
+    a: Tensor,
+    aaT_eigvecs: Union[Tensor, None],
+    _force_strategy: Optional[str] = None,
 ) -> Tensor:
     r"""Computes eigenvalue corrections for a linear layer with weight sharing.
 
@@ -43,9 +47,16 @@ def compute_eigenvalue_correction_linear_weight_sharing(
         a: Layer inputs with shape ``[N, S, D2]``, where ``D2`` is the input dimension.
         aaT_eigvecs: Eigenvectors of the input covariance with shape
             ``[D2, D2]`` or ``None`` if the layer has no weights (bias only).
+        _force_strategy: If specified, forces the use of either ``'gramian'`` or
+            ``'per_example_gradients'`` strategy. If ``None``, the strategy is chosen
+            based on memory requirements. Defaults to ``None``. This flag serves mainly
+            for testing purposes.
 
     Returns:
         The eigencorrection with shape ``[D1, D2]`` (or ``[D1]`` for the bias case).
+
+    Raises:
+        ValueError: If an invalid ``_force_strategy`` is provided.
 
     Below we explain the mathematical details of what this function does. The mapping is
     is as follows: (``g``, :math:`\mathbf{Y}`), (``ggT_eigvecs``, :math:`\mathbf{Q}_1`),
@@ -165,8 +176,13 @@ def compute_eigenvalue_correction_linear_weight_sharing(
     compared to the per-example gradient approach. In terms of time, the
     Gramian contraction uses :math:`N (D_1^2 + D_2^2 + D_1 + D_2 + D_1 D_2) < N
     (3 D_1 D_2 + D_1^2 + D_2^2)` compared to the per-example gradient.
-
     """
+    strategies = {"gramian", "per_example_gradients", None}
+    if _force_strategy not in strategies:
+        raise ValueError(
+            f"Invalid _force_strategy: {_force_strategy}. Supported: {strategies}."
+        )
+
     Q1, Q2 = ggT_eigvecs, aaT_eigvecs
     Y, X = g, a
 
@@ -179,10 +195,17 @@ def compute_eigenvalue_correction_linear_weight_sharing(
         # Determine approach: Gramian contraction or per-example gradients
         (_, S, D1), (_, _, D2) = g.shape, a.shape
 
-        # Memory of per-example gradients is dominated by N * D1 * D2
-        # Memory of Gramian contraction is dominated by N * S^2 * (D1 + D2)
-        # We choose the approach that requires less memory.
-        if S**2 * (D1 + D2) < D1 * D2:  # -> Gramian approach
+        # Determine approach based on _force_strategy or memory requirements
+        use_gramian = (
+            _force_strategy == "gramian"
+            if _force_strategy is not None
+            # Memory of per-example gradients is dominated by N * D1 * D2
+            # Memory of Gramian contraction is dominated by N * S^2 * (D1 + D2)
+            # We choose the approach that requires less memory.
+            else S**2 * (D1 + D2) < D1 * D2
+        )
+
+        if use_gramian:  # -> Gramian approach
             X_rot = einsum(X, Q2, "batch shared j, j d2 -> batch shared d2")
             Y_rot = einsum(Y, Q1, "batch shared i, i d1 -> batch shared d1")
             # In the absence of weight sharing (S=1), this simply computes
