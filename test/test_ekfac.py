@@ -850,7 +850,7 @@ def test_ekfac_closer_to_exact_than_kfac_weight_sharing(
 
 
 def test_compute_eigenvalue_correction_linear_weight_sharing():
-    """Verifies equivalence of per-example and double-Gramian approaches."""
+    """Verifies equivalence of per-example gradient and Gramian approaches."""
     manual_seed(0)
     N, S, D1, D2 = 2, 3, 4, 5
     DT = float64
