@@ -27,10 +27,10 @@ from curvlinops.kfac import (
 from curvlinops.kfac_utils import extract_patches
 
 
-def compute_eigencorrection(
+def compute_eigenvalue_correction_linear_weight_sharing(
     g: Tensor, ggT_eigvecs: Tensor, a: Tensor, aaT_eigvecs: Union[Tensor, None]
 ) -> Tensor:
-    r"""Computes eigen-corrections for a linear layer with weight sharing.
+    r"""Computes eigenvalue corrections for a linear layer with weight sharing.
 
     Chooses between two computational strategies depending on memory requirements.
 
@@ -158,7 +158,7 @@ def compute_eigencorrection(
     **We select the approach with the smaller memory footprint**, i.e. Gramian
     contraction if :math:`S^2 (D_1 + D_2) < D_1 D_2`, and squaring per-example
     gradients otherwise. So generally speaking, the more weight sharing, the
-    better building up example gradients will be.
+    better building up per-example gradients will be.
 
     In the extreme case :math:`S=1` (no weight sharing), the Gramian
     contraction approach uses only :math:`N (D_1 + D_2) < N D_1 D_2` memory
@@ -621,7 +621,7 @@ class EKFACLinearOperator(KFACLinearOperator):
             a_augmented = cat(
                 [activations, activations.new_ones(*activations.shape[:-1], 1)], dim=-1
             )
-            eigencorrection = compute_eigencorrection(
+            eigencorrection = compute_eigenvalue_correction_linear_weight_sharing(
                 g, ggT_eigenvectors, a_augmented, aaT_eigenvectors
             )
             self._corrected_eigenvalues = self._set_or_add_(
@@ -634,7 +634,7 @@ class EKFACLinearOperator(KFACLinearOperator):
             if module_name not in self._corrected_eigenvalues:
                 self._corrected_eigenvalues[module_name] = {}
             for p_name, pos in param_pos.items():
-                eigencorrection = compute_eigencorrection(
+                eigencorrection = compute_eigenvalue_correction_linear_weight_sharing(
                     g,
                     ggT_eigenvectors,
                     activations,
