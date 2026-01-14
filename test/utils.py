@@ -1032,7 +1032,7 @@ def _test_ekfac_closer_to_exact_than_kfac(
     exact_kfac_dist = linalg.matrix_norm(exact - kfac_mat) / exact_norm
     exact_ekfac_dist = linalg.matrix_norm(exact - ekfac_mat) / exact_norm
     assert exact_kfac_dist > exact_ekfac_dist or (
-        allclose_report(exact_kfac_dist, exact_ekfac_dist, atol=1e-6)
+        allclose_report(exact_kfac_dist, exact_ekfac_dist)
         if exclude == "weight"
         else False
     )  # For no_weights the numerical error might dominate.

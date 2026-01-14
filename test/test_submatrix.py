@@ -101,4 +101,4 @@ def test_SubmatrixLinearOperator_on_curvatures(case, operator_case, submatrix_ca
 
     # test forming the adjoint
     A_sub, A_sub_functorch = A_sub.adjoint(), A_sub_functorch.adjoint()
-    compare_matmat(A_sub, A_sub_functorch, **tols)
+    compare_matmat(A_sub, A_sub_functorch)

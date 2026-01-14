@@ -144,6 +144,9 @@ def test_kfac_type2_weight_sharing(
         params = [p for p in model.parameters() if p.requires_grad]
     params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
     data = data[setting]
+    model, loss_func, params, data, batch_size_fn = change_dtype(
+        (model, loss_func, params, data, batch_size_fn), float64
+    )
 
     ggn = block_diagonal(
         GGNLinearOperator,
@@ -166,7 +169,7 @@ def test_kfac_type2_weight_sharing(
     )
     kfac_mat = kfac @ eye_like(kfac)
 
-    assert allclose_report(ggn, kfac_mat, rtol=1e-4)
+    assert allclose_report(ggn, kfac_mat)
 
     # Check that input covariances were not computed
     if exclude == "weight":
@@ -199,7 +202,9 @@ def test_kfac_mc(
         separate_weight_and_bias: Whether to treat weight and bias as separate blocks in
             the KFAC matrix.
     """
-    model, loss_func, params, data, batch_size_fn = kfac_exact_case
+    model, loss_func, params, data, batch_size_fn = change_dtype(
+        kfac_exact_case, float64
+    )
     params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     ggn = block_diagonal(
@@ -224,7 +229,7 @@ def test_kfac_mc(
     kfac_mat = kfac @ eye_like(kfac)
 
     atol = {"sum": 5e-1, "mean": 1e-2}[loss_func.reduction]
-    rtol = {"sum": 2e-2, "mean": 2e-2}[loss_func.reduction]
+    rtol = {"sum": 1e-2, "mean": 1e-2}[loss_func.reduction]
 
     assert allclose_report(ggn, kfac_mat, rtol=rtol, atol=atol)
 
@@ -265,6 +270,9 @@ def test_kfac_mc_weight_sharing(
         params = [p for p in model.parameters() if p.requires_grad]
     params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
     data = data[setting]
+    model, loss_func, params, data, batch_size_fn = change_dtype(
+        (model, loss_func, params, data, batch_size_fn), float64
+    )
 
     ggn = block_diagonal(
         GGNLinearOperator,
@@ -282,7 +290,7 @@ def test_kfac_mc_weight_sharing(
         data,
         batch_size_fn=batch_size_fn,
         fisher_type=FisherType.MC,
-        mc_samples=2_000,
+        mc_samples=5_000,
         kfac_approx=setting,  # choose KFAC approximation consistent with setting
         separate_weight_and_bias=separate_weight_and_bias,
     )
@@ -356,7 +364,9 @@ def test_kfac_mc_one_datum(
     exclude: str,
     shuffle: bool,
 ):
-    model, loss_func, params, data, batch_size_fn = kfac_exact_one_datum_case
+    model, loss_func, params, data, batch_size_fn = change_dtype(
+        kfac_exact_one_datum_case, float64
+    )
     params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     ggn = block_diagonal(
@@ -375,15 +385,12 @@ def test_kfac_mc_one_datum(
         data,
         batch_size_fn=batch_size_fn,
         fisher_type=FisherType.MC,
-        mc_samples=11_000,
+        mc_samples=9_000,
         separate_weight_and_bias=separate_weight_and_bias,
     )
     kfac_mat = kfac @ eye_like(kfac)
 
-    atol = {"sum": 1e-3, "mean": 1e-3}[loss_func.reduction]
-    rtol = {"sum": 3e-2, "mean": 3e-2}[loss_func.reduction]
-
-    assert allclose_report(ggn, kfac_mat, rtol=rtol, atol=atol)
+    assert allclose_report(ggn, kfac_mat, rtol=1e-2, atol=1e-3)
 
 
 @mark.parametrize(
