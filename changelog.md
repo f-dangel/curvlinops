@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+## [3.0.1] - 2026-01-14
+
+This patch provides major performance improvements for all curvature matrices (by using `torch.func`, and by improving EKFAC's eigenvalue correction) and deprecates Python 3.9 (we now require at least 3.10).
+
+### Added/New
+
+### Fixed/Removed
+
+### Internal
+
 - Add EKFAC and a new problem (ResNet18 on CIFAR10) to benchmark
   ([PR](https://github.com/f-dangel/curvlinops/pull/214)),
   expose a run time and memory inefficiency in EKFAC
@@ -466,7 +476,8 @@ Adds various new features:
 
 Initial release
 
-[Unreleased]: https://github.com/f-dangel/curvlinops/compare/3.0.0...HEAD
+[Unreleased]: https://github.com/f-dangel/curvlinops/compare/3.0.1...HEAD
+[3.0.1]: https://github.com/f-dangel/curvlinops/releases/tag/3.0.1
 [3.0.0]: https://github.com/f-dangel/curvlinops/releases/tag/3.0.0
 [2.0.1]: https://github.com/f-dangel/curvlinops/releases/tag/2.0.1
 [2.0.0]: https://github.com/f-dangel/curvlinops/releases/tag/2.0.0
