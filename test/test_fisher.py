@@ -5,12 +5,12 @@ from torch import float64
 
 from curvlinops import FisherMCLinearOperator
 from curvlinops.examples.functorch import functorch_ggn
+from test.test_kfac import MC_TOLS
 from test.utils import (
     change_dtype,
     compare_consecutive_matmats,
     compare_matmat_expectation,
 )
-from test.test_kfac import MC_TOLS
 
 MAX_REPEATS_MC_SAMPLES = [(15_000, 1), (150, 100)]
 MAX_REPEATS_MC_SAMPLES_IDS = [
