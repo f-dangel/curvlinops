@@ -10,8 +10,9 @@ from test.utils import (
     compare_consecutive_matmats,
     compare_matmat_expectation,
 )
+from test.test_kfac import MC_TOLS
 
-MAX_REPEATS_MC_SAMPLES = [(10_000, 1), (100, 100)]
+MAX_REPEATS_MC_SAMPLES = [(15_000, 1), (150, 100)]
 MAX_REPEATS_MC_SAMPLES_IDS = [
     f"max_repeats={n}-mc_samples={m}" for (n, m) in MAX_REPEATS_MC_SAMPLES
 ]
@@ -39,10 +40,9 @@ def test_FisherMCLinearOperator_expectation(case, max_repeats: int, mc_samples: 
     )
     G_mat = functorch_ggn(model_func, loss_func, params, data, input_key="x").detach()
 
-    tols = {"atol": 1e-3, "rtol": 2e-1}
     compare_consecutive_matmats(F)
-    compare_matmat_expectation(F, G_mat, max_repeats, CHECK_EVERY, **tols)
+    compare_matmat_expectation(F, G_mat, max_repeats, CHECK_EVERY, **MC_TOLS)
 
     F, G_mat = F.adjoint(), G_mat.adjoint()
     compare_consecutive_matmats(F)
-    compare_matmat_expectation(F, G_mat, max_repeats, CHECK_EVERY, **tols)
+    compare_matmat_expectation(F, G_mat, max_repeats, CHECK_EVERY, **MC_TOLS)
