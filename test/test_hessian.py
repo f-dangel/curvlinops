@@ -8,7 +8,7 @@ from torch.nn import Parameter
 from curvlinops import HessianLinearOperator
 from curvlinops.examples.functorch import functorch_hessian
 from curvlinops.utils import split_list
-from test.utils import compare_consecutive_matmats, compare_matmat, change_dtype
+from test.utils import change_dtype, compare_consecutive_matmats, compare_matmat
 
 
 def test_HessianLinearOperator(

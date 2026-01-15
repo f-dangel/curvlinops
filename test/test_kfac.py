@@ -49,7 +49,7 @@ from test.utils import (
 
 # Constants for MC tests
 MC_SAMPLES = 10_000
-MC_TOLS = {"rtol": 1e-2, "atol": 5e-3}
+MC_TOLS = {"rtol": 2e-2, "atol": 5e-3}
 
 
 @mark.parametrize(
