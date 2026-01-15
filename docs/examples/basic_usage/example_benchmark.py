@@ -210,10 +210,10 @@ LINOP_STRS = [
     "Generalized Gauss-Newton",
     "Empirical Fisher",
     "Monte-Carlo Fisher",
-    "KFAC",
-    "KFAC inverse",
     "EKFAC",
     "EKFAC inverse",
+    "KFAC",
+    "KFAC inverse",
 ]
 
 # %%
