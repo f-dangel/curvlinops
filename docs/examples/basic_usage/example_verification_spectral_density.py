@@ -1,6 +1,5 @@
-"""
-Spectral density estimation (verification)
-==========================================
+"""Spectral density estimation (verification)
+=============================================
 
 In this example we will use the spectral density estimation techniques of
 `Papyan, 2020 <https://jmlr.org/papers/v21/20-933.html>`_ to reproduce the

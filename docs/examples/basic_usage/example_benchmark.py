@@ -28,6 +28,7 @@ from typing import Iterable, List, Tuple
 import matplotlib.pyplot as plt
 from benchmark_utils import (
     GPTWrapper,
+    setup_synthetic_cifar10_resnet18,
     setup_synthetic_imagenet_resnet50,
     setup_synthetic_shakespeare_nanogpt,
 )
@@ -48,6 +49,7 @@ from tueplots import bundles
 
 from curvlinops import (
     EFLinearOperator,
+    EKFACLinearOperator,
     FisherMCLinearOperator,
     GGNLinearOperator,
     HessianLinearOperator,
@@ -89,7 +91,7 @@ ON_RTD = environ.get("READTHEDOCS", "False") == "True"
 USETEX = not ON_RTD
 
 # Devices to run the benchmark on
-DEVICE_STRS = ["cpu"] if ON_RTD else ["cuda"]
+DEVICE_STRS = ["cuda"] if cuda.is_available() else ["cpu"]
 
 # Whether to skip runs for which measurements already exists
 SKIP_EXISTING = True
@@ -112,6 +114,7 @@ if ON_RTD:
 else:
     PROBLEM_STRS = [
         "synthetic_mnist_cnn",
+        "synthetic_cifar10_resnet18",
         "synthetic_imagenet_resnet50",
         "synthetic_shakespeare_nanogpt",
     ]
@@ -123,7 +126,7 @@ def setup_synthetic_mnist_cnn(
     """Set up a synthetic MNIST CNN problem for the benchmark.
 
     Args:
-        batch_size: The batch size to use. Default is ``64``.
+        batch_size: The batch size to use. Default is ``512``.
 
     Returns:
         The neural net, loss function, and data.
@@ -166,6 +169,7 @@ def setup_problem(
     """
     setup_func = {
         "synthetic_mnist_cnn": setup_synthetic_mnist_cnn,
+        "synthetic_cifar10_resnet18": setup_synthetic_cifar10_resnet18,
         "synthetic_imagenet_resnet50": setup_synthetic_imagenet_resnet50,
         "synthetic_shakespeare_nanogpt": setup_synthetic_shakespeare_nanogpt,
     }[problem_str]
@@ -177,7 +181,7 @@ def setup_problem(
     loss_function = loss_function.to(dev)
 
     # Only use parameters of supported layers for KFAC
-    if linop_str in {"KFAC", "KFAC inverse"}:
+    if linop_str in {"KFAC", "KFAC inverse", "EKFAC", "EKFAC inverse"}:
         params = []
         supported_layers = [
             m for m in model.modules() if isinstance(m, (Linear, Conv2d))
@@ -205,6 +209,8 @@ LINOP_STRS = [
     "Generalized Gauss-Newton",
     "Empirical Fisher",
     "Monte-Carlo Fisher",
+    "EKFAC",
+    "EKFAC inverse",
     "KFAC",
     "KFAC inverse",
 ]
@@ -278,6 +284,8 @@ def setup_linop(
         "Monte-Carlo Fisher": FisherMCLinearOperator,
         "KFAC": KFACLinearOperator,
         "KFAC inverse": KFACLinearOperator,
+        "EKFAC": EKFACLinearOperator,
+        "EKFAC inverse": EKFACLinearOperator,
     }[linop_str]
 
     # Double-backward through efficient attention is unsupported, disable fused kernels
@@ -286,8 +294,13 @@ def setup_linop(
     with sdpa_kernel(SDPBackend.MATH) if attention_double_backward else nullcontext():
         linop = linop_cls(*args, **kwargs)
 
-    if linop_str == "KFAC inverse":
-        linop = KFACInverseLinearOperator(linop, damping=1e-3, cache=True)
+    if linop_str in {"KFAC inverse", "EKFAC inverse"}:
+        linop = KFACInverseLinearOperator(
+            linop,
+            damping=1e-3,
+            cache=True,
+            use_exact_damping=linop_str == "EKFAC inverse",
+        )
 
     return linop
 
@@ -384,10 +397,14 @@ def run_time_benchmark(  # noqa: C901
             _ = linop.gradient_and_loss()
 
     def f_precompute():
-        if isinstance(linop, KFACLinearOperator):
+        if isinstance(linop, (KFACLinearOperator, EKFACLinearOperator)):
             linop.compute_kronecker_factors()
+        if isinstance(linop, EKFACLinearOperator):
+            linop.compute_eigenvalue_correction()
         if isinstance(linop, KFACInverseLinearOperator):
             linop._A.compute_kronecker_factors()
+            if isinstance(linop._A, EKFACLinearOperator):
+                linop._A.compute_eigenvalue_correction()
             # damp and invert the Kronecker matrices
             for mod_name in linop._A._mapping:
                 linop._compute_or_get_cached_inverse(mod_name)
@@ -485,7 +502,7 @@ def visualize_time_benchmark(
             with open(benchpath(name, problem_str, device_str, op_str), "r") as f:
                 results[op_str] = json.load(f)["time"]
 
-        if name in {"KFAC", "KFAC inverse"}:
+        if name in {"KFAC", "KFAC inverse", "EKFAC", "EKFAC inverse"}:
             ax.barh(
                 idx - 0.2,
                 width=results["precompute"],
@@ -580,12 +597,12 @@ if __name__ == "__main__":
 #
 # Measuring the memory consumption of some routines comes with some additional
 # challenges. We use the
-# :ref:`memory_profiler <https://github.com/pythonprofilers/memory_profiler>`
+# `memory_profiler <https://github.com/pythonprofilers/memory_profiler>`_
 # library on CPU, whereas we rely on :func:`torch.cuda.max_memory_allocated` on GPU.
 #
 # To avoid memory allocations from previous operations to impact the currently
 # benchmarked function, we run each benchmark in a separate Python session by executing
-# a Python script :download:`py <memory_benchmark.py>`. This script
+# a separate script (`memory_benchmark.py`). This script
 # re-uses most of the functionality developed in this tutorial, and the function that
 # is profiled looks very similar to the one we used for the run time benchmark.
 # Also, since memory consumption is more deterministic, we don't have to repeat each
@@ -640,7 +657,7 @@ if __name__ == "__main__":
     ):
         cmd = [
             "python",
-            "memory_benchmark.py",
+            path.join(path.dirname(__file__), "memory_benchmark.py"),
             f"--linop={linop_str}",
             f"--problem={problem_str}",
             f"--device={device_str}",
