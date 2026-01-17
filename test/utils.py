@@ -852,15 +852,10 @@ def _test_property(  # noqa: C901
     }[property_name]
 
     # Check for equivalence of property and naive computation
-    quantity = getattr(linop, property_name)
+    quantity = getattr(linop, property_name)()
     linop_mat = linop @ eye_like(linop)
     quantity_naive = torch_fn(linop_mat)
     assert allclose_report(quantity, quantity_naive, rtol=rtol, atol=atol)
-
-    # Check that the property is properly cached and reset
-    assert getattr(linop, "_" + property_name) == quantity
-    linop.compute_kronecker_factors()
-    assert getattr(linop, "_" + property_name) is None
 
 
 def _test_save_and_load_state_dict(

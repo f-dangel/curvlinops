@@ -482,8 +482,6 @@ class EKFACLinearOperator(KFACLinearOperator):
 
     def compute_eigenvalue_correction(self):
         """Compute and cache the corrected eigenvalues for EKFAC."""
-        self._reset_matrix_properties()
-
         # Compute the eigenvectors of the KFAC approximation
         if not (
             self._input_covariances_eigenvectors
@@ -669,47 +667,37 @@ class EKFACLinearOperator(KFACLinearOperator):
                     eigencorrection.mul_(correction),
                 )
 
-    @property
     def trace(self) -> Tensor:
         r"""Trace of the EKFAC approximation.
 
         Will call ``compute_kronecker_factors`` and ``compute_eigenvalue_correction`` if
-        either of them has not been called before and will cache the trace until one of
-        them is called again.
+        either of them has not been called before.
 
         Returns:
             Trace of the EKFAC approximation.
         """
-        if self._trace is not None:
-            return self._trace
-
         self._maybe_compute_ekfac()
 
         # Compute the trace using the corrected eigenvalues
-        self._trace = 0.0
+        trace = 0.0
         for corrected_eigenvalues in self._corrected_eigenvalues.values():
             if isinstance(corrected_eigenvalues, dict):
                 for val in corrected_eigenvalues.values():
-                    self._trace += val.sum()
+                    trace += val.sum()
             else:
-                self._trace += corrected_eigenvalues.sum()
+                trace += corrected_eigenvalues.sum()
 
-        return self._trace
+        return trace
 
-    @property
     def det(self) -> Tensor:
         r"""Determinant of the EKFAC approximation.
 
         Will call ``compute_kronecker_factors`` and ``compute_eigenvalue_correction`` if
-        either of them has not been called before and will cache the determinant until
-        one of them is called again.
+        either of them has not been called before.
 
         Returns:
             Determinant of the EKFAC approximation.
         """
-        if self._det is not None:
-            return self._det
-
         self._maybe_compute_ekfac()
 
         # Compute the determinant using the corrected eigenvalues
@@ -723,60 +711,50 @@ class EKFACLinearOperator(KFACLinearOperator):
 
         return self._det
 
-    @property
     def logdet(self) -> Tensor:
         r"""Log determinant of the EKFAC approximation.
 
         More numerically stable than the ``det`` property.
         Will call ``compute_kronecker_factors`` and ``compute_eigenvalue_correction`` if
-        either of them has not been called before and will cache the logdet until one of
-        them is called again.
+        either of them has not been called before.
 
         Returns:
             Log determinant of the EKFAC approximation.
         """
-        if self._logdet is not None:
-            return self._logdet
-
         self._maybe_compute_ekfac()
 
         # Compute the log determinant using the corrected eigenvalues
-        self._logdet = 0.0
+        logdet = 0.0
         for corrected_eigenvalues in self._corrected_eigenvalues.values():
             if isinstance(corrected_eigenvalues, dict):
                 for val in corrected_eigenvalues.values():
-                    self._logdet += val.log().sum()
+                    logdet += val.log().sum()
             else:
-                self._logdet += corrected_eigenvalues.log().sum()
+                logdet += corrected_eigenvalues.log().sum()
 
-        return self._logdet
+        return logdet
 
-    @property
     def frobenius_norm(self) -> Tensor:
         r"""Frobenius norm of the EKFAC approximation.
 
         Will call ``compute_kronecker_factors`` and ``compute_eigenvalue_correction`` if
-        either of them has not been called before and will cache the Frobenius norm
-        until one of them is called again.
+        either of them has not been called before.
 
         Returns:
             Frobenius norm of the EKFAC approximation.
         """
-        if self._frobenius_norm is not None:
-            return self._frobenius_norm
-
         self._maybe_compute_ekfac()
 
         # Compute the Frobenius norm using the corrected eigenvalues
-        self._frobenius_norm = 0.0
+        frobenius_norm = 0.0
         for corrected_eigenvalues in self._corrected_eigenvalues.values():
             if isinstance(corrected_eigenvalues, dict):
                 for val in corrected_eigenvalues.values():
-                    self._frobenius_norm += val.square().sum()
+                    frobenius_norm += val.square().sum()
             else:
-                self._frobenius_norm += corrected_eigenvalues.square().sum()
+                frobenius_norm += corrected_eigenvalues.square().sum()
 
-        return self._frobenius_norm.sqrt_()
+        return frobenius_norm.sqrt()
 
     def state_dict(self) -> Dict[str, Any]:
         """Return the state of the EKFAC linear operator.
