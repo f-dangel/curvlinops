@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+- Merge tests for testing matrix-matrix & matrix-vector products
+  with the original and transposed operator, reducing number of tests
+  ([PR](https://github.com/f-dangel/curvlinops/pull/222))
+
+- Execute many tests in `float64` and with lower tolerances
+  ([PR](https://github.com/f-dangel/curvlinops/pull/224))
+
 ## [3.0.1] - 2026-01-14
 
 This patch provides major performance improvements for all curvature matrices (by using `torch.func`, and by improving EKFAC's eigenvalue correction) and deprecates Python 3.9 (we now require at least 3.10).

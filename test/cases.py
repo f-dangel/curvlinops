@@ -248,19 +248,19 @@ for case in CASES_NO_DEVICE:
 CNN_CASES_NO_DEVICE = [
     {
         "model_func": lambda: Sequential(
-            Conv2d(1, 6, 5),
+            Conv2d(1, 3, 5),
             ReLU(),
             MaxPool2d(2),
-            Conv2d(6, 16, 5),
+            Conv2d(3, 6, 5),
             ReLU(),
             MaxPool2d(2),
             Flatten(),
-            Linear(16 * 4 * 4, 10),
+            Linear(6 * 4, 10),
         ),
         "loss_func": lambda: CrossEntropyLoss(),
         "data": lambda: [
-            (rand(5, 1, 28, 28), classification_targets((5,), 10)),
-            (rand(5, 1, 28, 28), classification_targets((5,), 10)),
+            (rand(5, 1, 20, 20), classification_targets((5,), 10)),
+            (rand(5, 1, 20, 20), classification_targets((5,), 10)),
         ],
         "seed": 0,
     },
@@ -369,12 +369,6 @@ for case in NON_DETERMINISTIC_CASES_NO_DEVICE:
     for device in DEVICES:
         case_with_device = {**case, "device": device}
         NON_DETERMINISTIC_CASES.append(case_with_device)
-
-ADJOINT_CASES = [False, True]
-ADJOINT_IDS = ["", "adjoint"]
-
-IS_VECS = [False, True]
-IS_VEC_IDS = ["matvec", "matmat"]
 
 
 BLOCK_SIZES_FNS = {

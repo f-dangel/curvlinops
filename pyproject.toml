@@ -64,7 +64,6 @@ test = [
     "coveralls",
     "pytest",
     "pytest-cov",
-    "pytest-optional-tests==0.1.1",
 ]
 
 # Dependencies needed for linting.

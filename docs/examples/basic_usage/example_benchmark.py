@@ -21,6 +21,7 @@ from contextlib import nullcontext
 from itertools import product
 from math import floor
 from os import environ, makedirs, path
+from shutil import which
 from subprocess import CalledProcessError, CompletedProcess, run
 from time import perf_counter
 from typing import Iterable, List, Tuple
@@ -85,10 +86,10 @@ HAS_JVP = (
     EFLinearOperator,
 )
 
-# When running on RTD, we only want to execute the small example and also
-# take into account that there is no LaTeX installation
+# When running on RTD, we only want to execute the small example
 ON_RTD = environ.get("READTHEDOCS", "False") == "True"
-USETEX = not ON_RTD
+# Use LaTeX if available
+USETEX = which("latex") is not None
 
 # Devices to run the benchmark on
 DEVICE_STRS = ["cuda"] if cuda.is_available() else ["cpu"]
