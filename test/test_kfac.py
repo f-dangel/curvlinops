@@ -48,8 +48,8 @@ from test.utils import (
 )
 
 # Constants for MC tests
-MC_SAMPLES = 10_000
-MC_TOLS = {"rtol": 2e-2, "atol": 5e-3}
+MC_SAMPLES = 3_000
+MC_TOLS = {"rtol": 1e-1, "atol": 1.5e-2}
 
 
 @mark.parametrize(

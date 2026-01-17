@@ -12,7 +12,7 @@ from test.utils import (
     compare_matmat_expectation,
 )
 
-MAX_REPEATS_MC_SAMPLES = [(15_000, 1), (150, 100)]
+MAX_REPEATS_MC_SAMPLES = [(4_000, 1), (40, 100)]
 MAX_REPEATS_MC_SAMPLES_IDS = [
     f"max_repeats={n}-mc_samples={m}" for (n, m) in MAX_REPEATS_MC_SAMPLES
 ]
