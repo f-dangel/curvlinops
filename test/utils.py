@@ -824,19 +824,16 @@ def _test_property(  # noqa: C901
     if property_name == "logdet":
         DELTA = 1e-3
         if type(linop) is KFACLinearOperator:
-            if not check_deterministic:
-                linop.compute_kronecker_factors()
-            assert linop._input_covariances or linop._gradient_covariances
-            for aaT in linop._input_covariances.values():
+            assert (
+                linop.representation["input_covariances"]
+                or linop.representation["gradient_covariances"]
+            )
+            for aaT in linop.representation["input_covariances"].values():
                 aaT.add_(eye_like(aaT), alpha=DELTA)
-            for ggT in linop._gradient_covariances.values():
+            for ggT in linop.representation["gradient_covariances"].values():
                 ggT.add_(eye_like(ggT), alpha=DELTA)
         elif type(linop) is EKFACLinearOperator:
-            if not check_deterministic:
-                linop.compute_kronecker_factors()
-                linop.compute_eigenvalue_correction()
-            assert linop._corrected_eigenvalues
-            for eigenvalues in linop._corrected_eigenvalues.values():
+            for eigenvalues in linop.representation["corrected_eigenvalues"].values():
                 if isinstance(eigenvalues, dict):
                     for eigenvals in eigenvalues.values():
                         eigenvals.add_(DELTA)
