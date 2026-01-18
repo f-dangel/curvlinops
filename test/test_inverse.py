@@ -231,19 +231,23 @@ def test_KFAC_inverse_damped_matmat(
         fisher_type=fisher_type,
         check_deterministic=False,
     )
-    KFAC.compute_kronecker_factors()
+
+    # Access representation to trigger computation and get covariances
+    representation = KFAC.representation
+    input_covariances = representation["input_covariances"]
+    gradient_covariances = representation["gradient_covariances"]
 
     # add damping manually
-    for aaT in KFAC._input_covariances.values():
+    for aaT in input_covariances.values():
         aaT.add_(eye_like(aaT), alpha=delta)
-    for ggT in KFAC._gradient_covariances.values():
+    for ggT in gradient_covariances.values():
         ggT.add_(eye_like(ggT), alpha=delta)
     inv_KFAC_naive = inv(KFAC @ eye_like(KFAC))
 
     # remove damping and pass it on as an argument instead
-    for aaT in KFAC._input_covariances.values():
+    for aaT in input_covariances.values():
         aaT.sub_(eye_like(aaT), alpha=delta)
-    for ggT in KFAC._gradient_covariances.values():
+    for ggT in gradient_covariances.values():
         ggT.sub_(eye_like(ggT), alpha=delta)
     # as a single scalar
     inv_KFAC = KFACInverseLinearOperator(KFAC, damping=delta, cache=cache)
@@ -323,13 +327,17 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901, PLR0912, PLR09
         separate_weight_and_bias=separate_weight_and_bias,
         check_deterministic=False,
     )
-    KFAC.compute_kronecker_factors()
+
+    # Access representation to trigger computation and get covariances
+    representation = KFAC.representation
+    input_covariances = representation["input_covariances"]
+    gradient_covariances = representation["gradient_covariances"]
 
     # add heuristic damping manually
     heuristic_damping = {}
     for mod_name in KFAC._mapping.keys():
-        aaT = KFAC._input_covariances.get(mod_name)
-        ggT = KFAC._gradient_covariances.get(mod_name)
+        aaT = input_covariances.get(mod_name)
+        ggT = gradient_covariances.get(mod_name)
         if aaT is not None and ggT is not None:
             aaT_eig_mean = aaT.trace() / aaT.shape[0]
             ggT_eig_mean = ggT.trace() / ggT.shape[0]
@@ -353,8 +361,8 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901, PLR0912, PLR09
 
     # remove heuristic damping
     for mod_name in KFAC._mapping.keys():
-        aaT = KFAC._input_covariances.get(mod_name)
-        ggT = KFAC._gradient_covariances.get(mod_name)
+        aaT = input_covariances.get(mod_name)
+        ggT = gradient_covariances.get(mod_name)
         damping_aaT, damping_ggT = heuristic_damping.get(mod_name, (delta, delta))
         if aaT is not None:
             aaT.sub_(eye_like(aaT), alpha=damping_aaT)
@@ -717,7 +725,7 @@ def test_EKFAC_inverse_exactly_damped_matmat(
     compare_matmat(inv_EKFAC, inv_EKFAC_naive, adjoint, is_vec)
 
     assert inv_EKFAC._cache == cache
-    # test that the cache is empty
+    # For EKFAC, the cache is always empty since it uses eigendecomposition directly
     assert len(inv_EKFAC._inverse_input_covariances) == 0
     assert len(inv_EKFAC._inverse_gradient_covariances) == 0
 
