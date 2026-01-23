@@ -1,13 +1,13 @@
 """Contains LinearOperator implementation of the GGN."""
 
-from math import sqrt
 from collections.abc import MutableMapping
 from functools import cached_property, partial
+from math import sqrt
 from typing import Callable, Iterable, List, Optional, Tuple, Union
 
-from torch import Generator, Tensor, no_grad, vmap, zeros_like
+from torch import Generator, Tensor, device, no_grad, vmap, zeros_like
 from torch.func import jacrev, jvp, vjp
-from torch.nn import BCEWithLogitsLoss, MSELoss, Module, Parameter
+from torch.nn import BCEWithLogitsLoss, Module, MSELoss, Parameter
 
 from curvlinops._torch_base import CurvatureLinearOperator
 from curvlinops.kfac_utils import loss_hessian_matrix_sqrt, make_grad_output_sampler
@@ -71,6 +71,153 @@ def make_ggn_vector_product(
         return f_vjp_func(c_hvp)
 
     return ggn_vector_product
+
+
+def make_batch_ggn_diagonal_func(
+    model_func: Module,
+    loss_func: Module,
+    params: Tuple[Parameter, ...],
+    mode: str,
+    mc_samples: int,
+) -> Callable[
+    [Union[Tensor, MutableMapping], Tensor, Optional[Generator]],
+    List[Tensor],
+]:
+    """Create a function that computes the GGN diagonal for a batch.
+
+    Args:
+        model_func: PyTorch module representing the neural network.
+        loss_func: Loss function module.
+        params: Tuple of model parameters.
+        mode: Computation mode, either ``'exact'`` or ``'mc'``.
+        mc_samples: Number of Monte Carlo samples (used when ``mode='mc'``).
+
+    Returns:
+        Function with signature ``(X, y, generator) -> List[Tensor]``
+        that computes the GGN diagonal on the batch ``(X, y)``.
+
+    Raises:
+        RuntimeError: If loss_func is BCEWithLogitsLoss, which doesn't support
+            vmap.
+    """
+    # Create functional version of the model: (*params, x) -> prediction
+    f, _ = make_functional_model_and_loss(model_func, loss_func, params)
+
+    # Set up vector generation
+    sample_grad_output = make_grad_output_sampler(loss_func)
+    reduction = loss_func.reduction
+
+    def backpropagation_vector_generator_func(
+        f_x: Tensor, y: Tensor, generator: Optional[Generator] = None
+    ) -> Tensor:
+        """Generate vectors for backpropagation based on the computation mode.
+
+        Args:
+            f_x: Model prediction for a single datum.
+            y: Label for the datum.
+            generator: Random generator (used for MC mode, ignored in exact mode).
+
+        Returns:
+            Vectors for backpropagation. For exact mode, returns Hessian square
+            root vectors. For MC mode, returns Monte Carlo sampled gradient
+            vectors.
+
+        Raises:
+            ValueError: If mode is not 'exact' or 'mc'.
+        """
+        f_x, y = f_x.unsqueeze(0), y.unsqueeze(0)
+        reduction = loss_func.reduction
+
+        if mode == "exact":
+            hessian_sqrt = loss_hessian_matrix_sqrt(f_x, y, loss_func)
+            return hessian_sqrt.T
+        elif mode == "mc":
+            grad_output_samples = sample_grad_output(
+                f_x, mc_samples, y, generator
+            ).squeeze(1)
+
+            # Apply scaling to average over and MC samples, and for the case MSE with
+            # mean reduction to also average over the output dimensions
+            scale = (
+                1.0 / sqrt(f_x.numel() * mc_samples)
+                if isinstance(loss_func, MSELoss) and reduction == "mean"
+                else 1.0 / sqrt(mc_samples)
+            )
+            return grad_output_samples.mul_(scale)
+        else:
+            raise ValueError(f"Unknown mode: {mode}")
+
+    def ggn_diagonal_datum(
+        x: Tensor,
+        y: Tensor,
+        generator: Optional[Generator] = None,
+    ) -> List[Tensor]:
+        """Compute the GGN diagonal for a single datum.
+
+        Args:
+            x: Input datum.
+            y: Label for the datum.
+            generator: Generator for MC sampling (optional).
+
+        Returns:
+            List of tensors containing the diagonal elements for each parameter.
+            Items have the same shape as the neural network's parameters.
+
+        Raises:
+            RuntimeError: If predictions are not 1-dimensional (sequence-valued
+                predictions are unsupported) or if vectors for backpropagation
+                are not 2-dimensional.
+        """
+        f_x, f_vjp = vjp(lambda *p: f(*p, x), *params)
+        if f_x.ndim != 1:
+            raise RuntimeError("Sequence-valued predictions are unsupported.")
+
+        vectors = backpropagation_vector_generator_func(f_x, y, generator)
+        if vectors.ndim != 2:
+            raise RuntimeError("Expected 2d vectors for backpropagation.")
+
+        gs = vmap(f_vjp)(vectors)
+        return [(g**2).sum(0) for g in gs]
+
+    if isinstance(loss_func, BCEWithLogitsLoss):
+        raise RuntimeError("BCEWithLogitsLoss does not support vmap.")
+
+    # Parallelize over data points
+    ggn_diagonal_batched = vmap(
+        ggn_diagonal_datum,
+        in_dims=(0, 0, None),
+        randomness="different" if mode == "mc" else "same",
+    )
+
+    def batch_ggn_diagonal(
+        X: Union[Tensor, MutableMapping],
+        y: Tensor,
+        generator: Optional[Generator] = None,
+    ) -> List[Tensor]:
+        """Compute the GGN diagonal on a batch.
+
+        Args:
+            X: Input batch.
+            y: Labels for the batch.
+            generator: Random generator (optional).
+
+        Returns:
+            List of tensors containing the batch GGN's diagonal elements for each
+            parameter. Items have the same shape as the neural network's
+            parameters.
+
+        Raises:
+            RuntimeError: If X is not a Tensor (only tensor-valued inputs are
+                supported by vmap).
+        """
+        if not isinstance(X, Tensor):
+            raise RuntimeError("Only tensor-valued inputs are supported by vmap.")
+
+        # For mean reduction, we have to divide by the batch size to obtain correct scale
+        scale = {"sum": 1.0, "mean": 1.0 / X.shape[0]}[reduction]
+        return [res.sum(0).mul_(scale) for res in ggn_diagonal_batched(X, y, generator)]
+
+    return batch_ggn_diagonal
 
 
 def make_batch_ggn_matrix_product(
@@ -256,6 +403,10 @@ class GGNDiagonalLinearOperator(CurvatureLinearOperator):
             batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
                 needs to be specified. The intended behavior is to consume the first
                 entry of the iterates from ``data`` and return their batch size.
+
+        Raises:
+            ValueError: If mode is not one of the supported modes ('exact' or
+                'mc').
         """
         if mode not in self.SUPPORTED_MODES:
             raise ValueError(
@@ -297,55 +448,6 @@ class GGNDiagonalLinearOperator(CurvatureLinearOperator):
         # Accessing the property triggers the re-computation
         _ = self.state
 
-    def _setup_vector_generation(
-        self,
-    ) -> Callable[[Tensor, Tensor, Optional[Generator]], Tensor]:
-        """Set up vector generation function based on computation mode.
-
-        Returns:
-            Function to generate vectors for backpropagation.
-        """
-        # Create gradient output sampler for MC mode (unused in exact mode)
-        sample_grad_output = make_grad_output_sampler(self._loss_func)
-
-        def vector_generator_fn(
-            f_x: Tensor, y: Tensor, generator: Optional[Generator] = None
-        ) -> Tensor:
-            """Generate vectors for backpropagation based on the computation mode.
-
-            Args:
-                f_x: Model prediction for a single datum.
-                y: Label for the datum.
-                generator: Random generator (used for MC mode, ignored in exact mode).
-
-            Returns:
-                Vectors for backpropagation. For exact mode, returns Hessian square
-                root vectors. For MC mode, returns Monte Carlo sampled gradient
-                vectors.
-            """
-            f_x, y = f_x.unsqueeze(0), y.unsqueeze(0)
-            if self._mode == "exact":
-                hessian_sqrt = loss_hessian_matrix_sqrt(f_x, y, self._loss_func)
-                return hessian_sqrt.T
-            elif self._mode == "mc":
-                grad_output_samples = sample_grad_output(
-                    f_x, self._mc_samples, y, generator
-                ).squeeze(1)
-
-                # Apply scaling for MSE with mean reduction
-                scale = (
-                    sqrt(1.0 / f_x.numel())
-                    if isinstance(self._loss_func, MSELoss)
-                    and self._loss_func.reduction == "mean"
-                    else 1.0
-                )
-
-                return grad_output_samples * scale
-            else:
-                raise ValueError(f"Unknown mode: {self._mode}")
-
-        return vector_generator_fn
-
     def _compute_ggn_diagonal(self) -> List[Tensor]:
         """Compute the GGN diagonal on the entire data set.
 
@@ -355,89 +457,32 @@ class GGNDiagonalLinearOperator(CurvatureLinearOperator):
         Returns:
             List of tensors containing the diagonal elements for each parameter.
         """
-        # Create functional version of the model: (*params, x) -> prediction
-        f, _ = make_functional_model_and_loss(
-            self._model_func, self._loss_func, tuple(self._params)
+        # Create batch GGN diagonal function
+        batch_ggn_diagonal_func = make_batch_ggn_diagonal_func(
+            self._model_func,
+            self._loss_func,
+            tuple(self._params),
+            self._mode,
+            self._mc_samples,
         )
 
-        # Set up vector generation function
-        vector_generator_fn = self._setup_vector_generation()
-
-        # Set up normalization, generator, and description based on mode
-        reduction = self._loss_func.reduction
-        if self._mode == "exact":
-            normalization_factor = {"sum": 1.0, "mean": 1 / self._N_data}[reduction]
-            generator = None
-        elif self._mode == "mc":
-            normalization_factor = {
-                "sum": 1.0 / self._mc_samples,
-                "mean": 1.0 / self._N_data / self._mc_samples,
-            }[reduction]
-            generator = Generator(self.device)
-            generator.manual_seed(self._seed)
-        else:
-            raise ValueError(f"Unknown mode: {self._mode}")
-
-        def ggn_diagonal_datum(
-            x: Tensor, y: Tensor, generator: Optional[Generator] = None
-        ) -> List[Tensor]:
-            """Compute the GGN diagonal for a single datum.
-
-            Args:
-                x: Input datum.
-                y: Label for the datum.
-                generator: Generator for MC sampling (optional).
-
-            Returns:
-                List of tensors containing the diagonal elements for each parameter.
-                Items have the same shape as the neural network's parameters.
-            """
-            f_x, f_vjp = vjp(lambda *params: f(*params, x), *self._params)
-            if f_x.ndim != 1:
-                raise RuntimeError("Sequence-valued predictions are unsupported.")
-
-            # Generate vectors to backpropagate
-            vectors = vector_generator_fn(f_x, y, generator)
-
-            if vectors.ndim != 2:
-                raise RuntimeError("Expected 2d vectors for backpropagation.")
-
-            gs = vmap(f_vjp)(vectors)
-            return [(g**2).sum(0) for g in gs]
-
-        if isinstance(self._loss_func, BCEWithLogitsLoss):
-            raise RuntimeError("BCEWithLogitsLoss does not support vmap.")
-
-        # Parallelize over data points
-        randomness = "different" if generator is not None else "same"
-        ggn_diagonal_batched = vmap(
-            ggn_diagonal_datum, in_dims=(0, 0, None), randomness=randomness
+        # For MC approximations, we need to generate and seed a generator
+        generator = (
+            None
+            if self._mode == "exact"
+            else self._setup_generator(self.device, self._seed)
         )
 
-        def ggn_diagonal(X: Union[MutableMapping, Tensor], y: Tensor) -> List[Tensor]:
-            """Compute the GGN diagonal on a batch.
-
-            Args:
-                X: Input batch.
-                y: Labels for the batch.
-
-            Returns:
-                List of tensors containing the batch GGN's diagonal elements for each
-                parameter. Items have the same shape as the neural network's
-                parameters.
-            """
-            if not isinstance(X, Tensor):
-                raise RuntimeError("Only tensor-valued inputs are supported by vmap.")
-
-            return [res.sum(0) for res in ggn_diagonal_batched(X, y, generator)]
-
-        out = [zeros_like(p) for p in self._params]
+        # Loop over batches, computing and accumulating the GGN diagonal
+        result = [zeros_like(p) for p in self._params]
 
         for X, y in self._loop_over_data(desc=f"GGN diagonal ({self._mode})"):
-            for out_p, batch_p in zip(out, ggn_diagonal(X, y), strict=True):
-                out_p.add_(batch_p, alpha=normalization_factor)
+            batch_result = batch_ggn_diagonal_func(X, y, generator)
+            normalization_factor = self._get_normalization_factor(X, y)
+            for res_p, batch_p in zip(result, batch_result, strict=True):
+                res_p.add_(batch_p, alpha=normalization_factor)
 
-        return out
+        return result
 
     def _matmat(self, M: List[Tensor]) -> List[Tensor]:
         """Multiply the GGN diagonal onto a matrix in list format.
@@ -453,3 +498,18 @@ class GGNDiagonalLinearOperator(CurvatureLinearOperator):
         # Need to unsqueeze so that both tensors have the same number of dimensions
         # and the multiplication becomes broadcast-able
         return [M_p * G_p.unsqueeze(-1) for M_p, G_p in zip(M, self.state, strict=True)]
+
+    @staticmethod
+    def _setup_generator(dev: device, seed: int) -> Generator:
+        """Set up a seeded generator on the specified device.
+
+        Args:
+            dev: Device to create the generator on.
+            seed: Random seed for the generator.
+
+        Returns:
+            Seeded generator instance on the specified device.
+        """
+        generator = Generator(dev)
+        generator.manual_seed(seed)
+        return generator
