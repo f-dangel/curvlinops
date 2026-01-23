@@ -1,15 +1,13 @@
 """Contains tests for ``curvlinops/ggn``."""
 
-from collections import UserDict
-from typing import List
-
+from pytest import raises
+from torch import Tensor
 from torch.nn import BCEWithLogitsLoss
 
 from curvlinops import GGNLinearOperator
 from curvlinops.examples.functorch import functorch_ggn
 from curvlinops.ggn import GGNDiagonalLinearOperator
 from test.utils import compare_consecutive_matmats, compare_matmat
-from pytest import raises
 
 
 def test_GGNLinearOperator_matvec(case, adjoint: bool, is_vec: bool):
@@ -41,33 +39,32 @@ def test_GGNDiagonalLinearOperator_matvec(case, adjoint: bool, is_vec: bool):
     """
     model_func, loss_func, params, data, batch_size_fn = case
 
+    def _construct_G():
+        return GGNDiagonalLinearOperator(
+            model_func, loss_func, params, data, batch_size_fn=batch_size_fn
+        )
+
     # Check that BCEWithLogitsLoss raises an error
     if isinstance(loss_func, BCEWithLogitsLoss):
         with raises(RuntimeError, match="BCEWithLogitsLoss does not support vmap."):
-            _ = GGNDiagonalLinearOperator(
-                model_func, loss_func, params, data, batch_size_fn=batch_size_fn
-            )
+            _construct_G()
         return
 
-    # Check that UserDict inputs raise an error
-    if any(isinstance(X, UserDict) for (X, y) in data):
-        with raises(RuntimeError, match="UserDict not supported by vmap."):
-            _ = GGNDiagonalLinearOperator(
-                model_func, loss_func, params, data, batch_size_fn=batch_size_fn
-            )
+    # Check that non-tensor inputs raise an error
+    if any(not isinstance(X, Tensor) for (X, _) in data):
+        with raises(
+            RuntimeError, match="Only tensor-valued inputs are supported by vmap."
+        ):
+            _construct_G()
         return
 
     # Check that sequence-valued predictions are unsupported
     if model_func(data[0][0]).ndim > 2:
         with raises(RuntimeError, match="Sequence-valued predictions are unsupported."):
-            G = GGNDiagonalLinearOperator(
-                model_func, loss_func, params, data, batch_size_fn=batch_size_fn
-            )
+            _construct_G()
         return
 
-    G = GGNDiagonalLinearOperator(
-        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
-    )
+    G = _construct_G()
     G_mat = (
         functorch_ggn(model_func, loss_func, params, data, input_key="x")
         .detach()
