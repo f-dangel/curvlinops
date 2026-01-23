@@ -2,13 +2,14 @@
 
 from collections.abc import MutableMapping
 from functools import cached_property, partial
-from typing import Callable, List, Tuple, Union
+from typing import Callable, Iterable, List, Optional, Tuple, Union
 
-from torch import Tensor, no_grad, vmap
+from torch import Tensor, no_grad, vmap, zeros_like
 from torch.func import jacrev, jvp, vjp
-from torch.nn import Module, Parameter
+from torch.nn import BCEWithLogitsLoss, Module, Parameter
 
 from curvlinops._torch_base import CurvatureLinearOperator
+from curvlinops.kfac_utils import loss_hessian_matrix_sqrt
 from curvlinops.utils import make_functional_model_and_loss
 
 
@@ -182,3 +183,134 @@ class GGNLinearOperator(CurvatureLinearOperator):
             trailing dimension of matrix columns.
         """
         return list(self._mp(X, y, *M))
+
+
+class GGNDiagonalLinearOperator(CurvatureLinearOperator):
+    """Linear operator for multiplication with the GGN diagonal.
+
+    This operator represents multiplication by the diagonal of the Generalized
+    Gauss-Newton matrix. The diagonal is computed by backpropagating the columns
+    of the loss function's Hessian square root, then squaring and summing the
+    results.
+
+    Attributes:
+        SELF_ADJOINT: Whether the linear operator is self-adjoint. ``True`` for
+            diagonal matrices.
+    """
+
+    SELF_ADJOINT: bool = True
+
+    def __init__(
+        self,
+        model_func: Callable[[Union[Tensor, MutableMapping]], Tensor],
+        loss_func: Union[Callable[[Tensor, Tensor], Tensor], None],
+        params: List[Parameter],
+        data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
+        progressbar: bool = False,
+        check_deterministic: bool = True,
+        num_data: Optional[int] = None,
+        batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
+    ):
+        """Initialize the GGN diagonal linear operator.
+
+        Args:
+            model_func: The neural network.
+            loss_func: The loss function.
+            params: The parameters defining the GGN diagonal.
+            data: A data loader containing the data.
+            progressbar: Whether to show a progress bar. Defaults to ``False``.
+            check_deterministic: Whether to check that the linear operator is
+                deterministic. Defaults to ``True``.
+            num_data: Number of data points. If ``None``, it is inferred from the data
+                at the cost of one traversal through the data loader.
+            batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
+                needs to be specified. The intended behavior is to consume the first
+                entry of the iterates from ``data`` and return their batch size.
+        """
+        self._state = None
+        super().__init__(
+            model_func,
+            loss_func,
+            params,
+            data,
+            progressbar=progressbar,
+            check_deterministic=check_deterministic,
+            num_data=num_data,
+            batch_size_fn=batch_size_fn,
+        )
+
+    @property
+    def state(self) -> List[Tensor]:
+        """Compute and cache the GGN diagonal.
+
+        Returns:
+            List of tensors representing the GGN diagonal, one for each parameter.
+        """
+        if self._state is None:
+            self._state = self._compute_ggn_diagonal()
+
+        return self._state
+
+    def refresh_state(self):
+        """Refresh the internal state of the linear operator.
+
+        Re-computes the GGN diagonal.
+        """
+        self._state = None
+        # Accessing the property triggers the re-computation
+        _ = self.state
+
+    def _compute_ggn_diagonal(self) -> List[Tensor]:
+        """Compute the diagonal of the GGN matrix.
+
+        Uses the algorithm: for each sample, compute the loss Hessian square root,
+        backpropagate each column through the model, square the gradients, and sum.
+
+        Returns:
+            List of tensors containing the diagonal elements for each parameter.
+        """
+        # Create functional versions
+        f, _ = make_functional_model_and_loss(
+            self._model_func, self._loss_func, tuple(self._params)
+        )
+
+        def ggn_diagonal_one_datum(x, y, *params_inner):
+            output, f_vjp = vjp(
+                lambda *params_inner: f(*params_inner, x), *self._params
+            )
+            hessian_sqrt = loss_hessian_matrix_sqrt(
+                output.unsqueeze(0), y.unsqueeze(0), self._loss_func
+            )
+            assert hessian_sqrt.ndim == 2
+
+            gs = vmap(f_vjp)(hessian_sqrt.T)
+
+            return [(g**2).sum(0) for g in gs]
+
+        if isinstance(self._loss_func, BCEWithLogitsLoss):
+            raise RuntimeError("BCEWithLogitsLoss does not support vmap.")
+        ggn_diagonal_batch = vmap(
+            lambda x, y: ggn_diagonal_one_datum(x, y, *self._params),
+        )
+
+        def ggn_diagonal(X, y):
+            return [res.sum(0) for res in ggn_diagonal_batch(X, y)]
+
+        out = [zeros_like(p) for p in self._params]
+
+        for X, y in self._loop_over_data(desc="GGN diagonal"):
+            normalization_factor = {"sum": 1.0, "mean": 1 / self._N_data}[
+                self._loss_func.reduction
+            ]
+            # TODO There are instances where X is a UserDict containing the input, and vmap breaks.
+            batch_ggn = ggn_diagonal(X, y)
+            assert len(batch_ggn) == len(out)
+            assert all(o.shape == g.shape for o, g in zip(out, batch_ggn))
+            for o, g in zip(out, batch_ggn):
+                o.add_(g, alpha=normalization_factor)
+
+        return out
+
+    def _matmat(self, M: List[Tensor]) -> List[Tensor]:
+        assert len(M) == len(self.state)
+        return [m * s.unsqueeze(-1) for m, s in zip(M, self.state)]

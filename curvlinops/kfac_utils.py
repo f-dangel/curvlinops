@@ -126,11 +126,11 @@ def loss_hessian_matrix_sqrt(
         return (diag(p_sqrt) - einsum(p, p_sqrt, "i, j -> i j")).mul_(sqrt(c))
 
     elif isinstance(loss_func, BCEWithLogitsLoss):
-        unique = set(target_one_datum.unique().flatten().tolist())
-        if not unique.issubset({0, 1}):
+        binary = target_one_datum.eq(1) or target_one_datum.eq(0)
+        if not binary.all():
             raise NotImplementedError(
                 "Only binary targets (0, 1) are currently supported with"
-                + f"BCEWithLogitsLoss. Got {unique}."
+                + f"BCEWithLogitsLoss. Got {target_one_datum}."
             )
 
         c = {"sum": 1.0, "mean": 1.0 / output_dim}[loss_func.reduction]
