@@ -272,11 +272,7 @@ class GGNDiagonalLinearOperator(CurvatureLinearOperator):
             self._state = None
 
         if self._state is None:
-            self._state = (
-                self._compute_ggnmc_diagonal(self._mc_samples, self._seed)
-                if self._mode == "mc"
-                else self._compute_ggn_diagonal()
-            )
+            self._state = self._compute_ggn_diagonal()
 
         return self._state
 
@@ -289,107 +285,11 @@ class GGNDiagonalLinearOperator(CurvatureLinearOperator):
         # Accessing the property triggers the re-computation
         _ = self.state
 
-    def _compute_ggnmc_diagonal(self, mc_samples: int, seed: int) -> List[Tensor]:
-        """Compute the MC-approximated GGN diagonal on the entire data set.
-
-        Returns:
-            List of tensors containing the diagonal elements for each parameter.
-        """
-        # Create functional version of the model: (*params, x) -> prediction
-        f, _ = make_functional_model_and_loss(
-            self._model_func, self._loss_func, tuple(self._params)
-        )
-
-        # Create the gradient output sampler for this loss function
-        sample_grad_output = make_grad_output_sampler(self._loss_func)
-
-        def ggnmc_diagonal_datum(
-            x: Tensor, y: Tensor, generator: Generator
-        ) -> List[Tensor]:
-            """Compute the Monte-Carlo approximated GGN diagonal for a single datum.
-
-            Args:
-                x: Input datum.
-                y: Label for the datum.
-
-            Returns:
-                List of tensors containing the diagonal elements for each parameter.
-                Items have the same shape as the neural network's parameters.
-
-            Raises:
-                RuntimeError: If the model's output is sequence-valued.
-                RuntimeError: If the loss Hessian square root is not 2d.
-                RuntimeError: If the loss function is BCEWithLogitsLoss.
-            """
-            f_x, f_vjp = vjp(lambda *params: f(*params, x), *self._params)
-            if f_x.ndim != 1:
-                raise RuntimeError("Sequence-valued predictions are unsupported.")
-            grad_output_samples = sample_grad_output(
-                f_x.unsqueeze(0), mc_samples, y.unsqueeze(0), generator
-            ).squeeze(1)
-            if grad_output_samples.ndim != 2:
-                raise RuntimeError("Expected 2d sampled output gradients.")
-
-            scale = (
-                1.0 / f_x.numel()
-                if isinstance(self._loss_func, MSELoss)
-                and self._loss_func.reduction == "mean"
-                else 1.0
-            )
-
-            gs = vmap(f_vjp)(grad_output_samples)
-            return [(g**2).sum(0).mul_(scale) for g in gs]
-
-        if isinstance(self._loss_func, BCEWithLogitsLoss):
-            raise RuntimeError("BCEWithLogitsLoss does not support vmap.")
-
-        # Parallelize over data points
-        ggnmc_diagonal_batched = vmap(
-            ggnmc_diagonal_datum, in_dims=(0, 0, None), randomness="different"
-        )
-
-        def ggnmc_diagonal(
-            X: Union[MutableMapping, Tensor], y: Tensor, generator: Generator
-        ) -> List[Tensor]:
-            """Compute the Monte-Carlo approximated GGN diagonal on a batch.
-
-            Args:
-                X: Input batch.
-                y: Labels for the batch.
-
-            Returns:
-                List of tensors containing the batch GGN's diagonal elements for each
-                parameter. Items have the same shape as the neural network's parameters.
-
-            Raises:
-                RuntimeError: If the input is not a tensor (due to unsupported vmap).
-            """
-            if not isinstance(X, Tensor):
-                raise RuntimeError("Only tensor-valued inputs are supported by vmap.")
-            return [res.sum(0) for res in ggnmc_diagonal_batched(X, y, generator)]
-
-        out = [zeros_like(p) for p in self._params]
-
-        # NOTE We sum the per-datum GGNs and need to incorporate the scaling from the
-        # loss function's reduction post-hoc
-        normalization_factor = {
-            "sum": 1.0 / mc_samples,
-            "mean": 1.0 / self._N_data / mc_samples,
-        }[self._loss_func.reduction]
-
-        generator = Generator(self.device)
-        generator.manual_seed(seed)
-
-        for X, y in self._loop_over_data(desc="GGN diagonal"):
-            for out_p, batch_p in zip(
-                out, ggnmc_diagonal(X, y, generator), strict=True
-            ):
-                out_p.add_(batch_p, alpha=normalization_factor)
-
-        return out
-
     def _compute_ggn_diagonal(self) -> List[Tensor]:
-        """Compute the diagonal of the GGN matrix on the entire data set.
+        """Compute the GGN diagonal on the entire data set.
+
+        Uses exact computation for mode='exact' and Monte Carlo approximation for
+        mode='mc'.
 
         Returns:
             List of tensors containing the diagonal elements for each parameter.
@@ -399,41 +299,100 @@ class GGNDiagonalLinearOperator(CurvatureLinearOperator):
             self._model_func, self._loss_func, tuple(self._params)
         )
 
-        def ggn_diagonal_datum(x: Tensor, y: Tensor) -> List[Tensor]:
+        # Set up vector generation and normalization based on mode
+        if self._mode == "exact":
+
+            def vector_generator_fn(f_x: Tensor, y: Tensor) -> Tensor:
+                """Generate exact Hessian square root vectors."""
+                hessian_sqrt = loss_hessian_matrix_sqrt(
+                    f_x.unsqueeze(0), y.unsqueeze(0), self._loss_func
+                )
+                return hessian_sqrt.T
+
+            normalization_factor = {"sum": 1.0, "mean": 1 / self._N_data}[
+                self._loss_func.reduction
+            ]
+            use_generator = False
+            generator = None
+            desc = "GGN diagonal (exact)"
+
+        elif self._mode == "mc":
+            # Create the gradient output sampler for this loss function
+            sample_grad_output = make_grad_output_sampler(self._loss_func)
+
+            def vector_generator_fn(
+                f_x: Tensor, y: Tensor, gen: Generator
+            ) -> Tensor:
+                """Generate MC sampled gradient vectors."""
+                grad_output_samples = sample_grad_output(
+                    f_x.unsqueeze(0), self._mc_samples, y.unsqueeze(0), gen
+                ).squeeze(1)
+
+                # Apply scaling for MSE with mean reduction
+                scale = (
+                    1.0 / f_x.numel()
+                    if isinstance(self._loss_func, MSELoss)
+                    and self._loss_func.reduction == "mean"
+                    else 1.0
+                )
+
+                return grad_output_samples * scale**0.5
+
+            normalization_factor = {
+                "sum": 1.0 / self._mc_samples,
+                "mean": 1.0 / self._N_data / self._mc_samples,
+            }[self._loss_func.reduction]
+            use_generator = True
+            generator = Generator(self.device)
+            generator.manual_seed(self._seed)
+            desc = "GGN diagonal (MC)"
+        else:
+            raise ValueError(f"Unknown mode: {self._mode}")
+
+        def ggn_diagonal_datum(
+            x: Tensor, y: Tensor, gen: Optional[Generator] = None
+        ) -> List[Tensor]:
             """Compute the GGN diagonal for a single datum.
 
             Args:
                 x: Input datum.
                 y: Label for the datum.
+                gen: Generator for MC sampling (optional).
 
             Returns:
                 List of tensors containing the diagonal elements for each parameter.
                 Items have the same shape as the neural network's parameters.
-
-            Raises:
-                RuntimeError: If the model's output is sequence-valued.
-                RuntimeError: If the loss Hessian square root is not 2d.
-                RuntimeError: If the loss function is BCEWithLogitsLoss.
             """
             f_x, f_vjp = vjp(lambda *params: f(*params, x), *self._params)
             if f_x.ndim != 1:
                 raise RuntimeError("Sequence-valued predictions are unsupported.")
-            hessian_sqrt = loss_hessian_matrix_sqrt(
-                f_x.unsqueeze(0), y.unsqueeze(0), self._loss_func
-            )
-            if hessian_sqrt.ndim != 2:
-                raise RuntimeError("Expected 2d Hessian square root.")
 
-            gs = vmap(f_vjp)(hessian_sqrt.T)
+            # Generate vectors to backpropagate based on the strategy
+            if use_generator:
+                vectors = vector_generator_fn(f_x, y, gen)
+            else:
+                vectors = vector_generator_fn(f_x, y)
+
+            if vectors.ndim != 2:
+                raise RuntimeError("Expected 2d vectors for backpropagation.")
+
+            gs = vmap(f_vjp)(vectors)
             return [(g**2).sum(0) for g in gs]
 
         if isinstance(self._loss_func, BCEWithLogitsLoss):
             raise RuntimeError("BCEWithLogitsLoss does not support vmap.")
 
         # Parallelize over data points
-        ggn_diagonal_batched = vmap(ggn_diagonal_datum)
+        if use_generator:
+            ggn_diagonal_batched = vmap(
+                ggn_diagonal_datum, in_dims=(0, 0, None), randomness="different"
+            )
+        else:
+            ggn_diagonal_batched = vmap(ggn_diagonal_datum, in_dims=(0, 0))
 
-        def ggn_diagonal(X: Union[MutableMapping, Tensor], y: Tensor) -> List[Tensor]:
+        def ggn_diagonal(
+            X: Union[MutableMapping, Tensor], y: Tensor
+        ) -> List[Tensor]:
             """Compute the GGN diagonal on a batch.
 
             Args:
@@ -442,24 +401,22 @@ class GGNDiagonalLinearOperator(CurvatureLinearOperator):
 
             Returns:
                 List of tensors containing the batch GGN's diagonal elements for each
-                parameter. Items have the same shape as the neural network's parameters.
-
-            Raises:
-                RuntimeError: If the input is not a tensor (due to unsupported vmap).
+                parameter. Items have the same shape as the neural network's
+                parameters.
             """
             if not isinstance(X, Tensor):
-                raise RuntimeError("Only tensor-valued inputs are supported by vmap.")
-            return [res.sum(0) for res in ggn_diagonal_batched(X, y)]
+                raise RuntimeError(
+                    "Only tensor-valued inputs are supported by vmap."
+                )
+
+            if use_generator:
+                return [res.sum(0) for res in ggn_diagonal_batched(X, y, generator)]
+            else:
+                return [res.sum(0) for res in ggn_diagonal_batched(X, y)]
 
         out = [zeros_like(p) for p in self._params]
 
-        # NOTE We sum the per-datum GGNs and need to incorporate the scaling from the
-        # loss function's reduction post-hoc
-        normalization_factor = {"sum": 1.0, "mean": 1 / self._N_data}[
-            self._loss_func.reduction
-        ]
-
-        for X, y in self._loop_over_data(desc="GGN diagonal"):
+        for X, y in self._loop_over_data(desc=desc):
             for out_p, batch_p in zip(out, ggn_diagonal(X, y), strict=True):
                 out_p.add_(batch_p, alpha=normalization_factor)
 
