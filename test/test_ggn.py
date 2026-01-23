@@ -1,5 +1,6 @@
 """Contains tests for ``curvlinops/ggn``."""
 
+from collections import UserDict
 from typing import List
 
 from torch.nn import BCEWithLogitsLoss
@@ -40,9 +41,26 @@ def test_GGNDiagonalLinearOperator_matvec(case, adjoint: bool, is_vec: bool):
     """
     model_func, loss_func, params, data, batch_size_fn = case
 
+    # Check that BCEWithLogitsLoss raises an error
     if isinstance(loss_func, BCEWithLogitsLoss):
         with raises(RuntimeError, match="BCEWithLogitsLoss does not support vmap."):
             _ = GGNDiagonalLinearOperator(
+                model_func, loss_func, params, data, batch_size_fn=batch_size_fn
+            )
+        return
+
+    # Check that UserDict inputs raise an error
+    if any(isinstance(X, UserDict) for (X, y) in data):
+        with raises(RuntimeError, match="UserDict not supported by vmap."):
+            _ = GGNDiagonalLinearOperator(
+                model_func, loss_func, params, data, batch_size_fn=batch_size_fn
+            )
+        return
+
+    # Check that sequence-valued predictions are unsupported
+    if model_func(data[0][0]).ndim > 2:
+        with raises(RuntimeError, match="Sequence-valued predictions are unsupported."):
+            G = GGNDiagonalLinearOperator(
                 model_func, loss_func, params, data, batch_size_fn=batch_size_fn
             )
         return

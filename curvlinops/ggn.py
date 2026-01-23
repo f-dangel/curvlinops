@@ -1,5 +1,6 @@
 """Contains LinearOperator implementation of the GGN."""
 
+from collections import UserDict
 from collections.abc import MutableMapping
 from functools import cached_property, partial
 from typing import Callable, Iterable, List, Optional, Tuple, Union
@@ -274,26 +275,25 @@ class GGNDiagonalLinearOperator(CurvatureLinearOperator):
             self._model_func, self._loss_func, tuple(self._params)
         )
 
-        def ggn_diagonal_one_datum(x, y, *params_inner):
-            output, f_vjp = vjp(
-                lambda *params_inner: f(*params_inner, x), *self._params
-            )
+        def ggn_diagonal_datum(x, y):
+            output, f_vjp = vjp(lambda *params: f(*params, x), *self._params)
+            if output.ndim != 1:
+                raise RuntimeError("Sequence-valued predictions are unsupported.")
             hessian_sqrt = loss_hessian_matrix_sqrt(
                 output.unsqueeze(0), y.unsqueeze(0), self._loss_func
             )
             assert hessian_sqrt.ndim == 2
 
             gs = vmap(f_vjp)(hessian_sqrt.T)
-
             return [(g**2).sum(0) for g in gs]
 
         if isinstance(self._loss_func, BCEWithLogitsLoss):
             raise RuntimeError("BCEWithLogitsLoss does not support vmap.")
-        ggn_diagonal_batch = vmap(
-            lambda x, y: ggn_diagonal_one_datum(x, y, *self._params),
-        )
+        ggn_diagonal_batch = vmap(lambda x, y: ggn_diagonal_datum(x, y))
 
         def ggn_diagonal(X, y):
+            if isinstance(X, UserDict):
+                raise RuntimeError("UserDict not supported by vmap.")
             return [res.sum(0) for res in ggn_diagonal_batch(X, y)]
 
         out = [zeros_like(p) for p in self._params]
@@ -302,12 +302,9 @@ class GGNDiagonalLinearOperator(CurvatureLinearOperator):
             normalization_factor = {"sum": 1.0, "mean": 1 / self._N_data}[
                 self._loss_func.reduction
             ]
-            # TODO There are instances where X is a UserDict containing the input, and vmap breaks.
             batch_ggn = ggn_diagonal(X, y)
-            assert len(batch_ggn) == len(out)
-            assert all(o.shape == g.shape for o, g in zip(out, batch_ggn))
-            for o, g in zip(out, batch_ggn):
-                o.add_(g, alpha=normalization_factor)
+            for i in range(len(out)):
+                out[i].add_(batch_ggn[i], alpha=normalization_factor)
 
         return out
 
