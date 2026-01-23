@@ -1,5 +1,6 @@
 """Contains LinearOperator implementation of the GGN."""
 
+from math import sqrt
 from collections.abc import MutableMapping
 from functools import cached_property, partial
 from typing import Callable, Iterable, List, Optional, Tuple, Union
@@ -200,6 +201,7 @@ class GGNDiagonalLinearOperator(CurvatureLinearOperator):
 
     SELF_ADJOINT: bool = True
     FIXED_DATA_ORDER: bool = True
+    SUPPORTED_MODES: Tuple[str, ...] = ("exact", "mc")
 
     def __init__(
         self,
@@ -242,13 +244,23 @@ class GGNDiagonalLinearOperator(CurvatureLinearOperator):
                 model's forward pass could depend on the order in which mini-batches
                 are presented (BatchNorm, Dropout). Default: ``True``. This is a
                 safeguard, only turn it off if you know what you are doing.
+            mode: Computation mode for the GGN diagonal. ``'exact'`` computes the
+                exact diagonal using the loss Hessian's square root. ``'mc'`` uses
+                Monte Carlo approximation with sampled gradients. Default: ``'exact'``.
+            seed: Random seed for Monte Carlo sampling when ``mode='mc'``.
+                Default: ``2147483647``.
+            mc_samples: Number of Monte Carlo samples when ``mode='mc'``.
+                Default: ``1``.
             num_data: Number of data points. If ``None``, it is inferred from the data
                 at the cost of one traversal through the data loader.
             batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
                 needs to be specified. The intended behavior is to consume the first
                 entry of the iterates from ``data`` and return their batch size.
         """
-        assert mode in {"exact", "mc"}
+        if mode not in self.SUPPORTED_MODES:
+            raise ValueError(
+                f"Invalid mode {mode!r}. Must be one of {self.SUPPORTED_MODES}."
+            )
         self._mode, self._seed, self._mc_samples = mode, seed, mc_samples
         super().__init__(
             model_func,
@@ -285,6 +297,55 @@ class GGNDiagonalLinearOperator(CurvatureLinearOperator):
         # Accessing the property triggers the re-computation
         _ = self.state
 
+    def _setup_vector_generation(
+        self,
+    ) -> Callable[[Tensor, Tensor, Optional[Generator]], Tensor]:
+        """Set up vector generation function based on computation mode.
+
+        Returns:
+            Function to generate vectors for backpropagation.
+        """
+        # Create gradient output sampler for MC mode (unused in exact mode)
+        sample_grad_output = make_grad_output_sampler(self._loss_func)
+
+        def vector_generator_fn(
+            f_x: Tensor, y: Tensor, generator: Optional[Generator] = None
+        ) -> Tensor:
+            """Generate vectors for backpropagation based on the computation mode.
+
+            Args:
+                f_x: Model prediction for a single datum.
+                y: Label for the datum.
+                generator: Random generator (used for MC mode, ignored in exact mode).
+
+            Returns:
+                Vectors for backpropagation. For exact mode, returns Hessian square
+                root vectors. For MC mode, returns Monte Carlo sampled gradient
+                vectors.
+            """
+            f_x, y = f_x.unsqueeze(0), y.unsqueeze(0)
+            if self._mode == "exact":
+                hessian_sqrt = loss_hessian_matrix_sqrt(f_x, y, self._loss_func)
+                return hessian_sqrt.T
+            elif self._mode == "mc":
+                grad_output_samples = sample_grad_output(
+                    f_x, self._mc_samples, y, generator
+                ).squeeze(1)
+
+                # Apply scaling for MSE with mean reduction
+                scale = (
+                    sqrt(1.0 / f_x.numel())
+                    if isinstance(self._loss_func, MSELoss)
+                    and self._loss_func.reduction == "mean"
+                    else 1.0
+                )
+
+                return grad_output_samples * scale
+            else:
+                raise ValueError(f"Unknown mode: {self._mode}")
+
+        return vector_generator_fn
+
     def _compute_ggn_diagonal(self) -> List[Tensor]:
         """Compute the GGN diagonal on the entire data set.
 
@@ -299,65 +360,33 @@ class GGNDiagonalLinearOperator(CurvatureLinearOperator):
             self._model_func, self._loss_func, tuple(self._params)
         )
 
-        # Set up vector generation and normalization based on mode
+        # Set up vector generation function
+        vector_generator_fn = self._setup_vector_generation()
+
+        # Set up normalization, generator, and description based on mode
+        reduction = self._loss_func.reduction
         if self._mode == "exact":
-
-            def vector_generator_fn(f_x: Tensor, y: Tensor) -> Tensor:
-                """Generate exact Hessian square root vectors."""
-                hessian_sqrt = loss_hessian_matrix_sqrt(
-                    f_x.unsqueeze(0), y.unsqueeze(0), self._loss_func
-                )
-                return hessian_sqrt.T
-
-            normalization_factor = {"sum": 1.0, "mean": 1 / self._N_data}[
-                self._loss_func.reduction
-            ]
-            use_generator = False
+            normalization_factor = {"sum": 1.0, "mean": 1 / self._N_data}[reduction]
             generator = None
-            desc = "GGN diagonal (exact)"
-
         elif self._mode == "mc":
-            # Create the gradient output sampler for this loss function
-            sample_grad_output = make_grad_output_sampler(self._loss_func)
-
-            def vector_generator_fn(
-                f_x: Tensor, y: Tensor, gen: Generator
-            ) -> Tensor:
-                """Generate MC sampled gradient vectors."""
-                grad_output_samples = sample_grad_output(
-                    f_x.unsqueeze(0), self._mc_samples, y.unsqueeze(0), gen
-                ).squeeze(1)
-
-                # Apply scaling for MSE with mean reduction
-                scale = (
-                    1.0 / f_x.numel()
-                    if isinstance(self._loss_func, MSELoss)
-                    and self._loss_func.reduction == "mean"
-                    else 1.0
-                )
-
-                return grad_output_samples * scale**0.5
-
             normalization_factor = {
                 "sum": 1.0 / self._mc_samples,
                 "mean": 1.0 / self._N_data / self._mc_samples,
-            }[self._loss_func.reduction]
-            use_generator = True
+            }[reduction]
             generator = Generator(self.device)
             generator.manual_seed(self._seed)
-            desc = "GGN diagonal (MC)"
         else:
             raise ValueError(f"Unknown mode: {self._mode}")
 
         def ggn_diagonal_datum(
-            x: Tensor, y: Tensor, gen: Optional[Generator] = None
+            x: Tensor, y: Tensor, generator: Optional[Generator] = None
         ) -> List[Tensor]:
             """Compute the GGN diagonal for a single datum.
 
             Args:
                 x: Input datum.
                 y: Label for the datum.
-                gen: Generator for MC sampling (optional).
+                generator: Generator for MC sampling (optional).
 
             Returns:
                 List of tensors containing the diagonal elements for each parameter.
@@ -367,11 +396,8 @@ class GGNDiagonalLinearOperator(CurvatureLinearOperator):
             if f_x.ndim != 1:
                 raise RuntimeError("Sequence-valued predictions are unsupported.")
 
-            # Generate vectors to backpropagate based on the strategy
-            if use_generator:
-                vectors = vector_generator_fn(f_x, y, gen)
-            else:
-                vectors = vector_generator_fn(f_x, y)
+            # Generate vectors to backpropagate
+            vectors = vector_generator_fn(f_x, y, generator)
 
             if vectors.ndim != 2:
                 raise RuntimeError("Expected 2d vectors for backpropagation.")
@@ -383,16 +409,12 @@ class GGNDiagonalLinearOperator(CurvatureLinearOperator):
             raise RuntimeError("BCEWithLogitsLoss does not support vmap.")
 
         # Parallelize over data points
-        if use_generator:
-            ggn_diagonal_batched = vmap(
-                ggn_diagonal_datum, in_dims=(0, 0, None), randomness="different"
-            )
-        else:
-            ggn_diagonal_batched = vmap(ggn_diagonal_datum, in_dims=(0, 0))
+        randomness = "different" if generator is not None else "same"
+        ggn_diagonal_batched = vmap(
+            ggn_diagonal_datum, in_dims=(0, 0, None), randomness=randomness
+        )
 
-        def ggn_diagonal(
-            X: Union[MutableMapping, Tensor], y: Tensor
-        ) -> List[Tensor]:
+        def ggn_diagonal(X: Union[MutableMapping, Tensor], y: Tensor) -> List[Tensor]:
             """Compute the GGN diagonal on a batch.
 
             Args:
@@ -405,18 +427,13 @@ class GGNDiagonalLinearOperator(CurvatureLinearOperator):
                 parameters.
             """
             if not isinstance(X, Tensor):
-                raise RuntimeError(
-                    "Only tensor-valued inputs are supported by vmap."
-                )
+                raise RuntimeError("Only tensor-valued inputs are supported by vmap.")
 
-            if use_generator:
-                return [res.sum(0) for res in ggn_diagonal_batched(X, y, generator)]
-            else:
-                return [res.sum(0) for res in ggn_diagonal_batched(X, y)]
+            return [res.sum(0) for res in ggn_diagonal_batched(X, y, generator)]
 
         out = [zeros_like(p) for p in self._params]
 
-        for X, y in self._loop_over_data(desc=desc):
+        for X, y in self._loop_over_data(desc=f"GGN diagonal ({self._mode})"):
             for out_p, batch_p in zip(out, ggn_diagonal(X, y), strict=True):
                 out_p.add_(batch_p, alpha=normalization_factor)
 
