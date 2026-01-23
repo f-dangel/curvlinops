@@ -2,14 +2,14 @@
 
 from collections.abc import MutableMapping
 from functools import cached_property, partial
-from typing import Callable, List, Tuple, Union
+from typing import Callable, Iterable, List, Optional, Tuple, Union
 
-from torch import Tensor, no_grad, vmap, zeros_like
+from torch import Generator, Tensor, no_grad, vmap, zeros_like
 from torch.func import jacrev, jvp, vjp
-from torch.nn import BCEWithLogitsLoss, Module, Parameter
+from torch.nn import BCEWithLogitsLoss, MSELoss, Module, Parameter
 
 from curvlinops._torch_base import CurvatureLinearOperator
-from curvlinops.kfac_utils import loss_hessian_matrix_sqrt
+from curvlinops.kfac_utils import loss_hessian_matrix_sqrt, make_grad_output_sampler
 from curvlinops.utils import make_functional_model_and_loss
 
 
@@ -199,6 +199,67 @@ class GGNDiagonalLinearOperator(CurvatureLinearOperator):
     """
 
     SELF_ADJOINT: bool = True
+    FIXED_DATA_ORDER: bool = True
+
+    def __init__(
+        self,
+        model_func: Callable[[Union[Tensor, MutableMapping]], Tensor],
+        loss_func: Union[Callable[[Tensor, Tensor], Tensor], None],
+        params: List[Parameter],
+        data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
+        progressbar: bool = False,
+        check_deterministic: bool = True,
+        mode: str = "exact",
+        seed: int = 2_147_483_647,
+        mc_samples: int = 1,
+        num_data: Optional[int] = None,
+        batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
+    ):
+        """Linear operator for the GGN diagonal.
+
+        Note:
+            f(X; θ) denotes a neural network, parameterized by θ, that maps a mini-batch
+            input X to predictions p. ℓ(p, y) maps the prediction to a loss, using the
+            mini-batch labels y.
+
+        Args:
+            model_func: A function that maps the mini-batch input X to predictions.
+                Could be a PyTorch module representing a neural network.
+            loss_func: Loss function criterion. Maps predictions and mini-batch labels
+                to a scalar value. If ``None``, there is no loss function and the
+                represented matrix is independent of the loss function.
+            params: List of differentiable parameters used by the prediction function.
+            data: Source from which mini-batches can be drawn, for instance a list of
+                mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``. Note that ``X``
+                could be a ``dict`` or ``UserDict``; this is useful for custom models.
+                In this case, you must (i) specify the ``batch_size_fn`` argument, and
+                (ii) take care of preprocessing like ``X.to(device)`` inside of your
+                ``model.forward()`` function.
+            progressbar: Show a progressbar during matrix-multiplication.
+                Default: ``False``.
+            check_deterministic: Probe that model and data are deterministic, i.e.
+                that the data does not use ``drop_last`` or data augmentation. Also, the
+                model's forward pass could depend on the order in which mini-batches
+                are presented (BatchNorm, Dropout). Default: ``True``. This is a
+                safeguard, only turn it off if you know what you are doing.
+            num_data: Number of data points. If ``None``, it is inferred from the data
+                at the cost of one traversal through the data loader.
+            batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
+                needs to be specified. The intended behavior is to consume the first
+                entry of the iterates from ``data`` and return their batch size.
+        """
+        assert mode in {"exact", "mc"}
+        self._mode, self._seed, self._mc_samples = mode, seed, mc_samples
+        super().__init__(
+            model_func,
+            loss_func,
+            params,
+            data,
+            progressbar=progressbar,
+            check_deterministic=check_deterministic,
+            num_data=num_data,
+            batch_size_fn=batch_size_fn,
+        )
 
     @property
     def state(self) -> List[Tensor]:
@@ -211,7 +272,11 @@ class GGNDiagonalLinearOperator(CurvatureLinearOperator):
             self._state = None
 
         if self._state is None:
-            self._state = self._compute_ggn_diagonal()
+            self._state = (
+                self._compute_ggnmc_diagonal(self._mc_samples, self._seed)
+                if self._mode == "mc"
+                else self._compute_ggn_diagonal()
+            )
 
         return self._state
 
@@ -223,6 +288,105 @@ class GGNDiagonalLinearOperator(CurvatureLinearOperator):
         self._state = None
         # Accessing the property triggers the re-computation
         _ = self.state
+
+    def _compute_ggnmc_diagonal(self, mc_samples: int, seed: int) -> List[Tensor]:
+        """Compute the MC-approximated GGN diagonal on the entire data set.
+
+        Returns:
+            List of tensors containing the diagonal elements for each parameter.
+        """
+        # Create functional version of the model: (*params, x) -> prediction
+        f, _ = make_functional_model_and_loss(
+            self._model_func, self._loss_func, tuple(self._params)
+        )
+
+        # Create the gradient output sampler for this loss function
+        sample_grad_output = make_grad_output_sampler(self._loss_func)
+
+        def ggnmc_diagonal_datum(
+            x: Tensor, y: Tensor, generator: Generator
+        ) -> List[Tensor]:
+            """Compute the Monte-Carlo approximated GGN diagonal for a single datum.
+
+            Args:
+                x: Input datum.
+                y: Label for the datum.
+
+            Returns:
+                List of tensors containing the diagonal elements for each parameter.
+                Items have the same shape as the neural network's parameters.
+
+            Raises:
+                RuntimeError: If the model's output is sequence-valued.
+                RuntimeError: If the loss Hessian square root is not 2d.
+                RuntimeError: If the loss function is BCEWithLogitsLoss.
+            """
+            f_x, f_vjp = vjp(lambda *params: f(*params, x), *self._params)
+            if f_x.ndim != 1:
+                raise RuntimeError("Sequence-valued predictions are unsupported.")
+            grad_output_samples = sample_grad_output(
+                f_x.unsqueeze(0), mc_samples, y.unsqueeze(0), generator
+            ).squeeze(1)
+            if grad_output_samples.ndim != 2:
+                raise RuntimeError("Expected 2d sampled output gradients.")
+
+            scale = (
+                1.0 / f_x.numel()
+                if isinstance(self._loss_func, MSELoss)
+                and self._loss_func.reduction == "mean"
+                else 1.0
+            )
+
+            gs = vmap(f_vjp)(grad_output_samples)
+            return [(g**2).sum(0).mul_(scale) for g in gs]
+
+        if isinstance(self._loss_func, BCEWithLogitsLoss):
+            raise RuntimeError("BCEWithLogitsLoss does not support vmap.")
+
+        # Parallelize over data points
+        ggnmc_diagonal_batched = vmap(
+            ggnmc_diagonal_datum, in_dims=(0, 0, None), randomness="different"
+        )
+
+        def ggnmc_diagonal(
+            X: Union[MutableMapping, Tensor], y: Tensor, generator: Generator
+        ) -> List[Tensor]:
+            """Compute the Monte-Carlo approximated GGN diagonal on a batch.
+
+            Args:
+                X: Input batch.
+                y: Labels for the batch.
+
+            Returns:
+                List of tensors containing the batch GGN's diagonal elements for each
+                parameter. Items have the same shape as the neural network's parameters.
+
+            Raises:
+                RuntimeError: If the input is not a tensor (due to unsupported vmap).
+            """
+            if not isinstance(X, Tensor):
+                raise RuntimeError("Only tensor-valued inputs are supported by vmap.")
+            return [res.sum(0) for res in ggnmc_diagonal_batched(X, y, generator)]
+
+        out = [zeros_like(p) for p in self._params]
+
+        # NOTE We sum the per-datum GGNs and need to incorporate the scaling from the
+        # loss function's reduction post-hoc
+        normalization_factor = {
+            "sum": 1.0 / mc_samples,
+            "mean": 1.0 / self._N_data / mc_samples,
+        }[self._loss_func.reduction]
+
+        generator = Generator(self.device)
+        generator.manual_seed(seed)
+
+        for X, y in self._loop_over_data(desc="GGN diagonal"):
+            for out_p, batch_p in zip(
+                out, ggnmc_diagonal(X, y, generator), strict=True
+            ):
+                out_p.add_(batch_p, alpha=normalization_factor)
+
+        return out
 
     def _compute_ggn_diagonal(self) -> List[Tensor]:
         """Compute the diagonal of the GGN matrix on the entire data set.

@@ -1,14 +1,14 @@
 """Utility functions related to KFAC."""
 
 from math import sqrt
-from typing import Tuple, Union
+from typing import Callable, Tuple, Union
 
 from einconv import index_pattern
 from einconv.utils import get_conv_paddings
 from einops import einsum, rearrange, reduce
-from torch import Tensor, diag, eye
+from torch import Generator, Tensor, as_tensor, diag, eye, normal, softmax, zeros
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
-from torch.nn.functional import unfold
+from torch.nn.functional import one_hot, unfold
 from torch.nn.modules.utils import _pair
 
 
@@ -244,3 +244,92 @@ def extract_averaged_patches(
 
     x = einsum(x, *patterns, "b c_in i1 i2, k1 i1, k2 i2 -> b c_in k1 k2")
     return rearrange(x, "b c_in k1 k2 -> b (c_in k1 k2)")
+
+
+def make_grad_output_sampler(
+    loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
+) -> Callable[[Tensor, int, Tensor, Generator], Tensor]:
+    """Create a function that samples gradients w.r.t. network outputs.
+
+    Args:
+        loss_func: The loss function to create the sampler for.
+
+    Returns:
+        A function that samples gradients w.r.t. the model prediction.
+        Signature: (output, num_samples, y, generator) -> grad_samples
+    """
+
+    def sample_grad_output(
+        output: Tensor, num_samples: int, y: Tensor, generator: Generator
+    ) -> Tensor:
+        """Draw would-be gradients ``∇_f log p(·|f)`` with explicit generator.
+
+        For a single data point, the would-be gradient's outer product equals the
+        Hessian ``∇²_f log p(·|f)`` in expectation.
+
+        Currently only supports ``MSELoss``, ``CrossEntropyLoss``, and
+        ``BCEWithLogitsLoss``.
+
+        The returned gradient does not account for the scaling of the loss function by
+        the output dimension ``C`` that ``MSELoss`` and ``BCEWithLogitsLoss`` apply when
+        ``reduction='mean'``.
+
+        Args:
+            output: model prediction ``f`` for multiple data with batch axis as
+                0th dimension.
+            num_samples: Number of samples to draw.
+            y: Labels of the data on which output was produced.
+            generator: Random generator for sampling.
+
+        Returns:
+            Samples of the gradient w.r.t. the model prediction.
+            Has shape ``[num_samples, *output.shape]``.
+
+        Raises:
+            NotImplementedError: For unsupported loss functions.
+            NotImplementedError: If the prediction does not have two dimensions.
+            NotImplementedError: If binary classification labels are not binary.
+        """
+        if output.ndim != 2:
+            raise NotImplementedError(f"Only 2d outputs supported. Got {output.shape}")
+
+        _, C = output.shape
+
+        if isinstance(loss_func, MSELoss):
+            std = as_tensor(sqrt(0.5), device=output.device)
+            mean = zeros(
+                num_samples, *output.shape, device=output.device, dtype=output.dtype
+            )
+            return 2 * normal(mean, std, generator=generator)
+
+        elif isinstance(loss_func, CrossEntropyLoss):
+            prob = softmax(output, dim=1)
+            sample = prob.multinomial(
+                num_samples=num_samples, replacement=True, generator=generator
+            )
+            sample = rearrange(sample, "batch s -> s batch")
+            onehot_sample = one_hot(sample, num_classes=C)
+            # repeat ``num_sample`` times along a new leading axis to avoid broadcasting
+            prob = prob.unsqueeze(0).expand_as(onehot_sample)
+            return prob - onehot_sample
+
+        elif isinstance(loss_func, BCEWithLogitsLoss):
+            # Check if targets are binary by ensuring all values are 0 or 1
+            is_binary = (y == 0).logical_or(y == 1).all()
+            if not is_binary:
+                raise NotImplementedError(
+                    "Only binary targets (0, 1) are currently supported with"
+                    + f" BCEWithLogitsLoss. Got non-binary values {y.unique()}."
+                )
+            prob = output.sigmoid()
+            # repeat ``num_sample`` times along a new leading axis
+            prob = prob.unsqueeze(0).expand(num_samples, -1, -1)
+            sample = prob.bernoulli(generator=generator)
+            return prob - sample
+
+        else:
+            raise NotImplementedError(
+                f"Supported losses: {(MSELoss, CrossEntropyLoss, BCEWithLogitsLoss)}"
+            )
+
+    return sample_grad_output
