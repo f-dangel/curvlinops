@@ -17,6 +17,8 @@ from torch import (
     zeros,
     block_diag,
     vmap,
+    stack,
+    eye,
 )
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from torch.nn.functional import one_hot, unfold
@@ -172,18 +174,15 @@ def loss_hessian_matrix_sqrt(
             return (diag(p_sqrt) - einsum(p, p_sqrt, "i, j -> i j")).mul_(sqrt(c))
 
         # Compute the per-element Hessian square root
-        blocks = list(vmap(hess_sqrt_element, in_dims=-1)(p))
-        # print(output_flat.shape)
-        # print([b.shape for b in blocks])
-        # print(output_one_datum.shape)
-        # This matrix is [d1 * d2 * ... * C, d1 * d2 * ... * C], but we
-        # need [C * d1 * d2 * ..., C * d1 * d2 * ...]
-        hess_sqrt_flat = block_diag(*blocks)
+        blocks_stacked = vmap(hess_sqrt_element, in_dims=-1)(p)  # [D, C, C]
+
         C, D = output_flat.shape
-        hess_sqrt_flat = hess_sqrt_flat.reshape(D, C, D, C)
-        hess_sqrt_flat = einsum(hess_sqrt_flat, "d1 c1 d2 c2 -> c1 d1 c2 d2").reshape(
-            C * D, C * D
-        )
+        # Create identity matrix for the D dimension to select block-diagonal
+        eye_D = eye(D, device=p.device, dtype=p.dtype)  # [D, D]
+        # Construct [C, D, C, D] tensor with blocks on the (d, d) diagonal
+        # blocks_stacked[d, c1, c2] * eye_D[d, d2] gives non-zero only when d == d2
+        hess_sqrt_flat = einsum(blocks_stacked, eye_D, "d c1 c2, d d2 -> c1 d c2 d2")
+        hess_sqrt_flat = hess_sqrt_flat.reshape(C * D, C * D)
 
     elif isinstance(loss_func, BCEWithLogitsLoss):
         if check_binary_if_BCEWithLogitsLoss:
