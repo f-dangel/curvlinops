@@ -142,7 +142,7 @@ def make_batch_ggn_diagonal_func(
             hessian_sqrt = loss_hessian_matrix_sqrt(
                 f_x, y, loss_func, check_binary_if_BCEWithLogitsLoss=False
             )
-            return hessian_sqrt.T
+            return hessian_sqrt.reshape(*f_x.shape[1:], f_x.numel()).movedim(-1, 0)
         elif mode == "mc":
             grad_output_samples = sample_grad_output(
                 f_x, mc_samples, y, generator
@@ -182,11 +182,11 @@ def make_batch_ggn_diagonal_func(
                 are not 2-dimensional.
         """
         f_x, f_vjp = vjp(lambda *p: f(*p, x), *params)
-        if f_x.ndim != 1:
+        if f_x.ndim != 1 and mode == "mc":
             raise RuntimeError("Sequence-valued predictions are unsupported.")
 
         vectors = backpropagation_vector_generator_func(f_x, y, generator)
-        if vectors.ndim != 2:
+        if vectors.ndim != 2 and mode == "mc":
             raise RuntimeError("Expected 2d vectors for backpropagation.")
 
         gs = vmap(f_vjp)(vectors)
