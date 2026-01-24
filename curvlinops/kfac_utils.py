@@ -12,10 +12,34 @@ from torch.nn.functional import one_hot, unfold
 from torch.nn.modules.utils import _pair
 
 
+def _check_binary_if_BCEWithLogitsLoss(
+    target: Tensor,
+    loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
+) -> None:
+    """Check if targets are binary (0 or 1) when using BCEWithLogitsLoss.
+
+    Args:
+        target: Target tensor.
+        loss_func: The loss function being used.
+
+    Raises:
+        NotImplementedError: If the loss function is BCEWithLogitsLoss but targets
+            are not binary (0 or 1).
+    """
+    if isinstance(loss_func, BCEWithLogitsLoss):
+        unique = set(u for u in target.unique().tolist())
+        if not unique.issubset({0, 1}):
+            raise NotImplementedError(
+                "Only binary targets (0, 1) are currently supported with"
+                + f" BCEWithLogitsLoss. Got values {unique}."
+            )
+
+
 def loss_hessian_matrix_sqrt(
     output_one_datum: Tensor,
     target_one_datum: Tensor,
     loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
+    check_binary_if_BCEWithLogitsLoss: bool = True,
 ) -> Tensor:
     r"""Compute the loss function's matrix square root for a sample's output.
 
@@ -25,6 +49,8 @@ def loss_hessian_matrix_sqrt(
             network).
         target_one_datum: The label of the single datum.
         loss_func: The loss function.
+        check_binary_if_BCEWithLogitsLoss: Whether to check if targets are binary
+            for BCEWithLogitsLoss. Default: ``True``.
 
     Returns:
         The matrix square root
@@ -126,12 +152,8 @@ def loss_hessian_matrix_sqrt(
         return (diag(p_sqrt) - einsum(p, p_sqrt, "i, j -> i j")).mul_(sqrt(c))
 
     elif isinstance(loss_func, BCEWithLogitsLoss):
-        binary = target_one_datum.eq(1) or target_one_datum.eq(0)
-        if not binary.all():
-            raise NotImplementedError(
-                "Only binary targets (0, 1) are currently supported with"
-                + f"BCEWithLogitsLoss. Got {target_one_datum}."
-            )
+        if check_binary_if_BCEWithLogitsLoss:
+            _check_binary_if_BCEWithLogitsLoss(target_one_datum, loss_func)
 
         c = {"sum": 1.0, "mean": 1.0 / output_dim}[loss_func.reduction]
         p = output_one_datum.sigmoid().squeeze(0)
@@ -248,11 +270,14 @@ def extract_averaged_patches(
 
 def make_grad_output_sampler(
     loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
+    check_binary_if_BCEWithLogitsLoss: bool = True,
 ) -> Callable[[Tensor, int, Tensor, Generator], Tensor]:
     """Create a function that samples gradients w.r.t. network outputs.
 
     Args:
         loss_func: The loss function to create the sampler for.
+        check_binary_if_BCEWithLogitsLoss: Whether to check if targets are binary
+            for BCEWithLogitsLoss. Default: ``True``.
 
     Returns:
         A function that samples gradients w.r.t. the model prediction.
@@ -314,13 +339,8 @@ def make_grad_output_sampler(
             return prob - onehot_sample
 
         elif isinstance(loss_func, BCEWithLogitsLoss):
-            # Check if targets are binary by ensuring all values are 0 or 1
-            is_binary = (y == 0).logical_or(y == 1).all()
-            if not is_binary:
-                raise NotImplementedError(
-                    "Only binary targets (0, 1) are currently supported with"
-                    + f" BCEWithLogitsLoss. Got non-binary values {y.unique()}."
-                )
+            if check_binary_if_BCEWithLogitsLoss:
+                _check_binary_if_BCEWithLogitsLoss(y, loss_func)
             prob = output.sigmoid()
             # repeat ``num_sample`` times along a new leading axis
             prob = prob.unsqueeze(0).expand(num_samples, -1, -1)

@@ -57,12 +57,6 @@ def test_GGNDiagonalLinearOperator_matvec(
             model_func, loss_func, params, data, batch_size_fn=batch_size_fn, **kwargs
         )
 
-    # Check that BCEWithLogitsLoss raises an error
-    if isinstance(loss_func, BCEWithLogitsLoss):
-        with raises(RuntimeError, match="BCEWithLogitsLoss does not support vmap."):
-            _construct_G()
-        return
-
     # Check that non-tensor inputs raise an error
     if any(not isinstance(X, Tensor) for (X, _) in data):
         with raises(

@@ -10,7 +10,11 @@ from torch.func import jacrev, jvp, vjp
 from torch.nn import BCEWithLogitsLoss, Module, MSELoss, Parameter
 
 from curvlinops._torch_base import CurvatureLinearOperator
-from curvlinops.kfac_utils import loss_hessian_matrix_sqrt, make_grad_output_sampler
+from curvlinops.kfac_utils import (
+    _check_binary_if_BCEWithLogitsLoss,
+    loss_hessian_matrix_sqrt,
+    make_grad_output_sampler,
+)
 from curvlinops.utils import make_functional_model_and_loss
 
 
@@ -104,7 +108,11 @@ def make_batch_ggn_diagonal_func(
     f, _ = make_functional_model_and_loss(model_func, loss_func, params)
 
     # Set up vector generation
-    sample_grad_output = make_grad_output_sampler(loss_func)
+    # Disable binary target check since it's performed outside the vmapped function
+    # to avoid unsupported operations within vmap
+    sample_grad_output = make_grad_output_sampler(
+        loss_func, check_binary_if_BCEWithLogitsLoss=False
+    )
     reduction = loss_func.reduction
 
     def backpropagation_vector_generator_func(
@@ -129,18 +137,23 @@ def make_batch_ggn_diagonal_func(
         reduction = loss_func.reduction
 
         if mode == "exact":
-            hessian_sqrt = loss_hessian_matrix_sqrt(f_x, y, loss_func)
+            # Disable binary check to avoid incompatibility during vmap.
+            # This check is run by the vmapped function.
+            hessian_sqrt = loss_hessian_matrix_sqrt(
+                f_x, y, loss_func, check_binary_if_BCEWithLogitsLoss=False
+            )
             return hessian_sqrt.T
         elif mode == "mc":
             grad_output_samples = sample_grad_output(
                 f_x, mc_samples, y, generator
             ).squeeze(1)
 
-            # Apply scaling to average over and MC samples, and for the case MSE with
-            # mean reduction to also average over the output dimensions
+            # Apply scaling to average over and MC samples, and for the case
+            # MSE/BCEWithLogitsLoss with mean reduction to also average over the output dimensions
             scale = (
                 1.0 / sqrt(f_x.numel() * mc_samples)
-                if isinstance(loss_func, MSELoss) and reduction == "mean"
+                if isinstance(loss_func, (MSELoss, BCEWithLogitsLoss))
+                and reduction == "mean"
                 else 1.0 / sqrt(mc_samples)
             )
             return grad_output_samples.mul_(scale)
@@ -179,9 +192,6 @@ def make_batch_ggn_diagonal_func(
         gs = vmap(f_vjp)(vectors)
         return [(g**2).sum(0) for g in gs]
 
-    if isinstance(loss_func, BCEWithLogitsLoss):
-        raise RuntimeError("BCEWithLogitsLoss does not support vmap.")
-
     # Parallelize over data points
     ggn_diagonal_batched = vmap(
         ggn_diagonal_datum,
@@ -212,6 +222,10 @@ def make_batch_ggn_diagonal_func(
         """
         if not isinstance(X, Tensor):
             raise RuntimeError("Only tensor-valued inputs are supported by vmap.")
+        # We turn off this check in the function that computes the GGN diagonal for a
+        # single datum due to incompatibility with vmap. Therefore we need to re-introduce
+        # this check here.
+        _check_binary_if_BCEWithLogitsLoss(y, loss_func)
 
         # For mean reduction, we have to divide by the batch size to obtain correct scale
         scale = {"sum": 1.0, "mean": 1.0 / X.shape[0]}[reduction]
