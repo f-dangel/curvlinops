@@ -5,7 +5,7 @@ from functools import cached_property, partial
 from math import sqrt
 from typing import Callable, Iterable, List, Optional, Tuple, Union
 
-from torch import Generator, Tensor, device, no_grad, vmap, zeros_like
+from torch import Generator, Tensor, allclose, device, no_grad, vmap, zeros_like
 from torch.func import jacrev, jvp, vjp
 from torch.nn import BCEWithLogitsLoss, Module, MSELoss, Parameter
 
@@ -438,6 +438,27 @@ class GGNDiagonalLinearOperator(CurvatureLinearOperator):
             batch_size_fn=batch_size_fn,
         )
 
+    def _check_deterministic(self):
+        """Check that the linear operator is deterministic.
+
+        Additionally, verifies that the model's forward pass supports batched and
+        un-batched inputs, which is crucial for the vmap-based implementation of the
+        GGN diagonal.
+
+        Raises:
+            NotImplementedError: If the inputs are not ``torch.Tensor``s.
+        """
+        # Check that the model supports batched and un-batched inputs.
+        # This is essential for the vmap-based implementation of the GGN diagonal,
+        # which assumes that the model's forward pass supports un-batched tensors.
+        X, _ = next(iter(self._data))
+        if not isinstance(X, Tensor):
+            raise NotImplementedError(
+                f"Only Tensor inputs are supported, got {type(X)}."
+            )
+        self._check_supports_batched_and_unbatched_inputs(X, self._model_func)
+        return super()._check_deterministic()
+
     @property
     def state(self) -> List[Tensor]:
         """Compute and cache the GGN diagonal.
@@ -527,3 +548,39 @@ class GGNDiagonalLinearOperator(CurvatureLinearOperator):
         generator = Generator(dev)
         generator.manual_seed(seed)
         return generator
+
+    @staticmethod
+    def _check_supports_batched_and_unbatched_inputs(
+        X: Tensor,
+        f: Callable[[Tensor], Tensor],
+        batch_axis: int = 0,
+        rtol: float = 1e-5,
+        atol: float = 1e-8,
+    ):
+        """Verify that a function f works correctly on batched and unbatched inputs.
+
+        This function checks that f(X) = vmap(f)(X), where X is a batched tensor
+        and vmap applies f to each individual sample in the batch. This can be used
+        to verify that the model's forward pass works correctly on batched and
+        un-batched inputs.
+
+        Args:
+            X: Batched input tensor where one axis represents the batch dimension.
+            f: Function to test. Should accept a tensor and return a tensor.
+            batch_axis: Which axis represents the batch dimension. Default: ``0``.
+            rtol: Relative tolerance for comparison. Default: ``1e-5``.
+            atol: Absolute tolerance for comparison. Default: ``1e-8``.
+
+        Raises:
+            ValueError: If batch_axis is out of bounds for tensor X.
+        """
+        # Apply f to the batched tensor directly
+        batched_result = f(X)
+
+        # Apply vmap(f) to X to get f applied to each individual sample
+        vmapped_f = vmap(f, in_dims=batch_axis, out_dims=batch_axis)
+        vmapped_result = vmapped_f(X)
+
+        # Compare results
+        if not allclose(batched_result, vmapped_result, rtol=rtol, atol=atol):
+            raise ValueError("Function does not support batched and un-batched inputs.")

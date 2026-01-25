@@ -166,11 +166,13 @@ for case in INV_CASES_NO_DEVICE:
 # add test cases here
 CASES_NO_DEVICE = INV_CASES_NO_DEVICE + [
     # softmax cross-entropy loss with additional input/output dimension
+    # Sequential output shape: (batch, seq=5, classes=3) -> num_output_feature_dims=2
     {
         "model_func": lambda: WeightShareModel(
             Sequential(Linear(10, 5), ReLU(), Linear(5, 3)),
             setting=KFACType.EXPAND,
             loss="CE",
+            num_output_feature_dims=2,
         ),
         "loss_func": lambda: CrossEntropyLoss(reduction="mean"),
         "data": lambda: [
@@ -185,6 +187,7 @@ CASES_NO_DEVICE = INV_CASES_NO_DEVICE + [
             Sequential(Linear(10, 5), ReLU(), Linear(5, 3)),
             setting=KFACType.EXPAND,
             loss="CE",
+            num_output_feature_dims=2,
         ),
         "loss_func": lambda: CrossEntropyLoss(reduction="sum"),
         "data": lambda: [

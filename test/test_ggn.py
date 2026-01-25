@@ -66,9 +66,6 @@ def test_GGNDiagonalLinearOperator_matvec(
         for x, y in data
     ]
 
-    print(case)
-    print(loss_func.reduction)
-
     def _construct_G():
         return GGNDiagonalLinearOperator(
             model_func, loss_func, params, data, batch_size_fn=batch_size_fn, **kwargs
@@ -76,9 +73,7 @@ def test_GGNDiagonalLinearOperator_matvec(
 
     # Check that non-tensor inputs raise an error
     if any(not isinstance(X, Tensor) for (X, _) in data):
-        with raises(
-            RuntimeError, match="Only tensor-valued inputs are supported by vmap."
-        ):
+        with raises(RuntimeError, match="Only Tensor inputs are supported."):
             _construct_G()
         return
 
