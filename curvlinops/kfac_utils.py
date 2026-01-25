@@ -336,7 +336,7 @@ def make_grad_output_sampler(
 
         Args:
             output: model prediction ``f`` for multiple data with batch axis as
-        0th dimension.
+                0th dimension.
             num_samples: Number of samples to draw.
             y: Labels of the data on which output was produced.
             generator: Random generator for sampling.

@@ -7,7 +7,7 @@ from typing import Callable, Iterable, List, Optional, Tuple, Union
 
 from torch import Generator, Tensor, allclose, device, no_grad, vmap, zeros_like
 from torch.func import jacrev, jvp, vjp
-from torch.nn import BCEWithLogitsLoss, Module, MSELoss, Parameter
+from torch.nn import Module, Parameter
 
 from curvlinops._torch_base import CurvatureLinearOperator
 from curvlinops.kfac_utils import (
@@ -99,10 +99,6 @@ def make_batch_ggn_diagonal_func(
     Returns:
         Function with signature ``(X, y, generator) -> List[Tensor]``
         that computes the GGN diagonal on the batch ``(X, y)``.
-
-    Raises:
-        RuntimeError: If loss_func is BCEWithLogitsLoss, which doesn't support
-            vmap.
     """
     # Create functional version of the model: (*params, x) -> prediction
     f, _ = make_functional_model_and_loss(model_func, loss_func, params)
@@ -445,7 +441,7 @@ class GGNDiagonalLinearOperator(CurvatureLinearOperator):
                 f"Only Tensor inputs are supported, got {type(X)}."
             )
         self._check_supports_batched_and_unbatched_inputs(X, self._model_func)
-        return super()._check_deterministic()
+        super()._check_deterministic()
 
     @property
     def state(self) -> List[Tensor]:
