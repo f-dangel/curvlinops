@@ -38,7 +38,7 @@ def _check_binary_if_BCEWithLogitsLoss(
             are not binary (0 or 1).
     """
     if isinstance(loss_func, BCEWithLogitsLoss):
-        unique = set(u for u in target.unique().tolist())
+        unique = set(target.unique().tolist())
         if not unique.issubset({0, 1}):
             raise NotImplementedError(
                 "Only binary targets (0, 1) are currently supported with"

@@ -33,7 +33,7 @@ def _register_userdict_as_pytree():
         This function relies on PyTorch's private ``torch.utils._pytree`` module,
         which may change in future PyTorch versions without notice.
     """
-    global _userdict_pytree_registered
+    global _userdict_pytree_registered  # noqa: PLW0603
     if _userdict_pytree_registered:
         return
 
