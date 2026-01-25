@@ -1,9 +1,11 @@
 """Contains LinearOperator implementation of the GGN."""
 
+from collections import UserDict
 from collections.abc import MutableMapping
 from functools import cached_property, partial
 from math import sqrt
-from typing import Callable, Iterable, List, Optional, Tuple, Union
+from typing import Any, Callable, Iterable, List, Optional, Tuple, Union
+from warnings import warn
 
 from torch import Generator, Tensor, allclose, device, no_grad, vmap, zeros_like
 from torch.func import jacrev, jvp, vjp
@@ -16,6 +18,61 @@ from curvlinops.kfac_utils import (
     make_grad_output_sampler,
 )
 from curvlinops.utils import make_functional_model_and_loss
+
+# Track whether UserDict has been registered as a PyTree node
+_userdict_pytree_registered = False
+
+
+def _register_userdict_as_pytree():
+    """Register UserDict as a PyTree node for torch.vmap compatibility.
+
+    This allows torch.vmap to accept UserDict arguments directly by defining
+    how to flatten and unflatten UserDict instances.
+
+    Warning:
+        This function relies on PyTorch's private ``torch.utils._pytree`` module,
+        which may change in future PyTorch versions without notice.
+    """
+    global _userdict_pytree_registered
+    if _userdict_pytree_registered:
+        return
+
+    warn(
+        "UserDict PyTree registration relies on PyTorch's private "
+        "`torch.utils._pytree` module, which may change in future versions.",
+        UserWarning,
+        stacklevel=3,
+    )
+
+    from torch.utils._pytree import register_pytree_node
+
+    def userdict_flatten(ud: UserDict) -> Tuple[List[Any], Tuple[str, ...]]:
+        """Flatten a UserDict into a list of values and a tuple of keys.
+
+        Args:
+            ud: The UserDict to flatten.
+
+        Returns:
+            A tuple of (list of values, tuple of keys).
+        """
+        keys = tuple(ud.data.keys())
+        values = tuple(ud.data[k] for k in keys)
+        return list(values), keys
+
+    def userdict_unflatten(values: List[Any], keys: Tuple[str, ...]) -> UserDict:
+        """Unflatten a list of values and keys back into a UserDict.
+
+        Args:
+            values: The values to unflatten.
+            keys: The keys corresponding to the values.
+
+        Returns:
+            A UserDict with the given keys and values.
+        """
+        return UserDict(dict(zip(keys, values)))
+
+    register_pytree_node(UserDict, userdict_flatten, userdict_unflatten)
+    _userdict_pytree_registered = True
 
 
 def make_ggn_vector_product(
@@ -83,6 +140,7 @@ def make_batch_ggn_diagonal_func(
     params: Tuple[Parameter, ...],
     mode: str,
     mc_samples: int,
+    batch_size_fn: Callable[[Union[Tensor, MutableMapping]], int],
 ) -> Callable[
     [Union[Tensor, MutableMapping], Tensor, Optional[Generator]],
     List[Tensor],
@@ -95,6 +153,9 @@ def make_batch_ggn_diagonal_func(
         params: Tuple of model parameters.
         mode: Computation mode, either ``'exact'`` or ``'mc'``.
         mc_samples: Number of Monte Carlo samples (used when ``mode='mc'``).
+        batch_size_fn: Function that returns the batch size given an input ``X``.
+            If ``None``, defaults to using ``X.shape[0]`` for tensors or the first
+            value's shape for MutableMapping inputs.
 
     Returns:
         Function with signature ``(X, y, generator) -> List[Tensor]``
@@ -148,7 +209,7 @@ def make_batch_ggn_diagonal_func(
             raise ValueError(f"Unknown mode: {mode}")
 
     def ggn_diagonal_datum(
-        x: Tensor,
+        x: Union[Tensor, MutableMapping],
         y: Tensor,
         generator: Optional[Generator] = None,
     ) -> List[Tensor]:
@@ -199,20 +260,18 @@ def make_batch_ggn_diagonal_func(
             List of tensors containing the batch GGN's diagonal elements for each
             parameter. Items have the same shape as the neural network's
             parameters.
-
-        Raises:
-            RuntimeError: If X is not a Tensor (only tensor-valued inputs are
-                supported by vmap).
         """
-        if not isinstance(X, Tensor):
-            raise RuntimeError("Only tensor-valued inputs are supported by vmap.")
+        # Register UserDict as PyTree if needed for vmap compatibility
+        if isinstance(X, UserDict):
+            _register_userdict_as_pytree()
         # We turn off this check in the function that computes the GGN diagonal for a
         # single datum due to incompatibility with vmap. Therefore we need to re-introduce
         # this check here.
         _check_binary_if_BCEWithLogitsLoss(y, loss_func)
 
-        # For mean reduction, we have to divide by the batch size to obtain correct scale
-        scale = {"sum": 1.0, "mean": 1.0 / X.shape[0]}[reduction]
+        # For mean reduction, we have to divide by the batch size to obtain correct
+        # scale
+        scale = {"sum": 1.0, "mean": 1.0 / batch_size_fn(X)}[reduction]
         return [res.sum(0).mul_(scale) for res in ggn_diagonal_batched(X, y, generator)]
 
     return batch_ggn_diagonal
@@ -356,11 +415,11 @@ class GGNDiagonalLinearOperator(CurvatureLinearOperator):
         data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
+        num_data: Optional[int] = None,
+        batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
         mode: str = "exact",
         seed: int = 2_147_483_647,
         mc_samples: int = 1,
-        num_data: Optional[int] = None,
-        batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
     ):
         """Linear operator for the GGN diagonal.
 
@@ -389,6 +448,12 @@ class GGNDiagonalLinearOperator(CurvatureLinearOperator):
                 model's forward pass could depend on the order in which mini-batches
                 are presented (BatchNorm, Dropout). Default: ``True``. This is a
                 safeguard, only turn it off if you know what you are doing.
+            num_data: Number of data points. If ``None``, it is inferred from the data
+                at the cost of one traversal through the data loader.
+            batch_size_fn: Function that computes the batch size from input data. For
+                ``torch.Tensor`` inputs, this should typically return ``X.shape[0]``.
+                For ``dict``/``UserDict`` inputs, this should return the batch size of
+                the contained tensors.
             mode: Computation mode for the GGN diagonal. ``'exact'`` computes the
                 exact diagonal using the loss Hessian's square root. ``'mc'`` uses
                 Monte Carlo approximation with sampled gradients. Default: ``'exact'``.
@@ -396,11 +461,6 @@ class GGNDiagonalLinearOperator(CurvatureLinearOperator):
                 Default: ``2147483647``.
             mc_samples: Number of Monte Carlo samples when ``mode='mc'``.
                 Default: ``1``.
-            num_data: Number of data points. If ``None``, it is inferred from the data
-                at the cost of one traversal through the data loader.
-            batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
-                needs to be specified. The intended behavior is to consume the first
-                entry of the iterates from ``data`` and return their batch size.
 
         Raises:
             ValueError: If mode is not one of the supported modes ('exact' or
@@ -428,18 +488,11 @@ class GGNDiagonalLinearOperator(CurvatureLinearOperator):
         Additionally, verifies that the model's forward pass supports batched and
         un-batched inputs, which is crucial for the vmap-based implementation of the
         GGN diagonal.
-
-        Raises:
-            NotImplementedError: If the inputs are not ``torch.Tensor``s.
         """
         # Check that the model supports batched and un-batched inputs.
         # This is essential for the vmap-based implementation of the GGN diagonal,
         # which assumes that the model's forward pass supports un-batched tensors.
         X, _ = next(iter(self._data))
-        if not isinstance(X, Tensor):
-            raise NotImplementedError(
-                f"Only Tensor inputs are supported, got {type(X)}."
-            )
         self._check_supports_batched_and_unbatched_inputs(X, self._model_func)
         super()._check_deterministic()
 
@@ -483,6 +536,7 @@ class GGNDiagonalLinearOperator(CurvatureLinearOperator):
             tuple(self._params),
             self._mode,
             self._mc_samples,
+            self._batch_size_fn,
         )
 
         # For MC approximations, we need to generate and seed a generator
@@ -535,7 +589,7 @@ class GGNDiagonalLinearOperator(CurvatureLinearOperator):
 
     @staticmethod
     def _check_supports_batched_and_unbatched_inputs(
-        X: Tensor,
+        X: Union[Tensor, MutableMapping],
         f: Callable[[Tensor], Tensor],
         batch_axis: int = 0,
         rtol: float = 1e-5,
@@ -562,6 +616,8 @@ class GGNDiagonalLinearOperator(CurvatureLinearOperator):
         batched_result = f(X)
 
         # Apply vmap(f) to X to get f applied to each individual sample
+        if isinstance(X, UserDict):
+            _register_userdict_as_pytree()
         vmapped_f = vmap(f, in_dims=batch_axis, out_dims=batch_axis)
         vmapped_result = vmapped_f(X)
 

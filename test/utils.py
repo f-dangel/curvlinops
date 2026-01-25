@@ -57,7 +57,6 @@ from curvlinops import (
     KFACLinearOperator,
 )
 from curvlinops._torch_base import CurvatureLinearOperator, PyTorchLinearOperator
-from curvlinops.kfac import KFACType
 from curvlinops.utils import allclose_report
 
 

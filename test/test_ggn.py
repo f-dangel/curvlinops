@@ -2,8 +2,7 @@
 
 from typing import Dict
 
-from pytest import mark, raises
-from torch import Tensor
+from pytest import mark
 
 from curvlinops import GGNLinearOperator
 from curvlinops.examples.functorch import functorch_ggn
@@ -51,18 +50,9 @@ def test_GGNDiagonalLinearOperator_matvec(
     """
     model_func, loss_func, params, data, batch_size_fn = case
 
-    def _construct_G():
-        return GGNDiagonalLinearOperator(
-            model_func, loss_func, params, data, batch_size_fn=batch_size_fn, **kwargs
-        )
-
-    # Check that non-tensor inputs raise an error
-    if any(not isinstance(X, Tensor) for (X, _) in data):
-        with raises(RuntimeError, match="Only Tensor inputs are supported."):
-            _construct_G()
-        return
-
-    G = _construct_G()
+    G = GGNDiagonalLinearOperator(
+        model_func, loss_func, params, data, batch_size_fn=batch_size_fn, **kwargs
+    )
     G_mat = (
         functorch_ggn(model_func, loss_func, params, data, input_key="x")
         .detach()
