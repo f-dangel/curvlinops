@@ -14,6 +14,9 @@ Generalized Gauss-Newton
 .. autoclass:: curvlinops.GGNLinearOperator
    :members: __init__
 
+.. autoclass:: curvlinops.GGNDiagonalLinearOperator
+   :members: __init__
+
 Fisher (approximate)
 --------------------
 
