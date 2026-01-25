@@ -134,7 +134,6 @@ def make_batch_ggn_diagonal_func(
             ValueError: If mode is not 'exact' or 'mc'.
         """
         f_x, y = f_x.unsqueeze(0), y.unsqueeze(0)
-        reduction = loss_func.reduction
 
         if mode == "exact":
             # Disable binary check to avoid incompatibility during vmap.
@@ -148,8 +147,7 @@ def make_batch_ggn_diagonal_func(
                 f_x, mc_samples, y, generator
             ).squeeze(1)
             # Apply scaling to average over MC samples
-            scale = 1.0 / sqrt(mc_samples)
-            return grad_output_samples.mul_(scale)
+            return grad_output_samples.div_(sqrt(mc_samples))
         else:
             raise ValueError(f"Unknown mode: {mode}")
 
