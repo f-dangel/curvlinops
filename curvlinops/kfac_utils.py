@@ -148,18 +148,19 @@ def loss_hessian_matrix_sqrt(
         )
     output_dim = output_one_datum.numel()
     # Construct the Hessian square root as matrix (w.r.t. the flattened outputs)
+    reduction = loss_func.reduction
 
     if isinstance(loss_func, MSELoss):
-        c = {"sum": 1.0, "mean": 1.0 / output_dim}[loss_func.reduction]
+        c = {"sum": 1.0, "mean": 1.0 / output_dim}[reduction]
         hess_sqrt_flat = (
             zeros_like(output_one_datum).fill_(sqrt(2 * c)).flatten().diag()
         )
 
     elif isinstance(loss_func, CrossEntropyLoss):
-        c = 1.0
         # Output has shape [1, C, d1, d2, ...], flatten into [C, d1 * d2 * ...]
         output_flat = output_one_datum.squeeze(0).unsqueeze(-1).flatten(start_dim=1)
         p = output_flat.softmax(dim=0)
+        c = {"sum": 1.0, "mean": 1.0 / p.shape[1]}[reduction]
 
         def hess_sqrt_element(p: Tensor) -> Tensor:
             """Compute the Hessian square root for a single element of the sequence.
@@ -188,7 +189,7 @@ def loss_hessian_matrix_sqrt(
         if check_binary_if_BCEWithLogitsLoss:
             _check_binary_if_BCEWithLogitsLoss(target_one_datum, loss_func)
 
-        c = {"sum": 1.0, "mean": 1.0 / output_dim}[loss_func.reduction]
+        c = {"sum": 1.0, "mean": 1.0 / output_dim}[reduction]
         p = output_one_datum.flatten().sigmoid()
         hess_diag = sqrt(c) * (p * (1 - p)).sqrt()
         hess_sqrt_flat = hess_diag.diag()
