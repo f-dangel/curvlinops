@@ -57,6 +57,7 @@ from curvlinops import (
     KFACLinearOperator,
 )
 from curvlinops._torch_base import CurvatureLinearOperator, PyTorchLinearOperator
+from curvlinops.kfac import KFACType
 from curvlinops.utils import allclose_report
 
 
@@ -222,7 +223,7 @@ class WeightShareModel(Sequential):
         *args: Module,
         setting: str = "expand",
         loss: str = "MSE",
-        num_output_feature_dims: Optional[Dict[str, int]] = None,
+        num_output_feature_dims: int = 1,
     ):
         """Initialize the model.
 
@@ -232,32 +233,15 @@ class WeightShareModel(Sequential):
                 ``'expand-flatten'``, or ``'reduce'``.
             loss: The type of loss function the model is used with. One of ``'MSE'``,
                 ``'CE'``, or ``'BCE'``.
-            num_output_feature_dims: Dictionary mapping setting names to their
-                respective number of feature dimensions in the output (excluding batch
-                dimension). For example, if the sequential model outputs
-                ``(batch, seq, classes)`` for the "expand" setting, the value should
-                be 2. Used to detect whether a batch dimension is present.
-
-        Raises:
-            ValueError: If ``num_output_feature_dims`` property has not been set.
+            num_output_feature_dims: Number of feature dimensions in the output
+                (excluding batch dimension). For example, if the sequential model
+                outputs ``(batch, seq, classes)``, the value should be 2. Used to
+                detect whether a batch dimension is present.
         """
         super().__init__(*args)
         self.setting = setting
         self.loss = loss
-        if num_output_feature_dims is None:
-            raise ValueError(
-                "WeightShareModel.num_output_feature_dims has not been set."
-            )
-        self._num_output_feature_dims_config = num_output_feature_dims
-
-    @property
-    def _num_output_feature_dims(self) -> int:
-        """Return the number of output feature dimensions for the current setting.
-
-        Returns:
-            The number of output feature dimensions.
-        """
-        return self._num_output_feature_dims_config[self._setting]
+        self._num_output_feature_dims = num_output_feature_dims
 
     @property
     def setting(self) -> str:

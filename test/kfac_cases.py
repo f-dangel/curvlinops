@@ -82,11 +82,7 @@ KFAC_WEIGHT_SHARING_EXACT_CASES_NO_DEVICE_NO_LOSS_FUNC = [
         "model_func": lambda: WeightShareModel(
             Linear(5, 4),
             Linear(4, 3),
-            num_output_feature_dims={
-                "expand": 3,
-                "expand-flatten": 1,
-                "reduce": 1,
-            },
+            num_output_feature_dims=3,
         ),
         "data": lambda: {
             KFACType.EXPAND: [
@@ -220,11 +216,7 @@ SINGLE_LAYER_WEIGHT_SHARING_CASES_NO_DEVICE_NO_LOSS_FUNC = [
     {
         "model_func": lambda: WeightShareModel(
             Linear(5, 3),
-            num_output_feature_dims={
-                "expand": 3,
-                "expand-flatten": 1,
-                "reduce": 1,
-            },
+            num_output_feature_dims=3,
         ),
         "data": lambda: {
             KFACType.EXPAND: [

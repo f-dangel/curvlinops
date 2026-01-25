@@ -50,8 +50,6 @@ def test_GGNDiagonalLinearOperator_matvec(
             the GGN diagonal is approximated (either exactly or via Monte-Carlo).
     """
     model_func, loss_func, params, data, batch_size_fn = case
-    print(case)
-    print(loss_func.reduction)
 
     def _construct_G():
         return GGNDiagonalLinearOperator(

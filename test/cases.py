@@ -20,7 +20,6 @@ from torch.nn import (
 )
 from torch.utils.data import DataLoader, TensorDataset
 
-from curvlinops.kfac import KFACType
 from test.utils import (
     WeightShareModel,
     binary_classification_targets,
@@ -170,9 +169,9 @@ CASES_NO_DEVICE = INV_CASES_NO_DEVICE + [
     {
         "model_func": lambda: WeightShareModel(
             Sequential(Linear(10, 5), ReLU(), Linear(5, 3)),
-            setting=KFACType.EXPAND,
+            setting="expand",
             loss="CE",
-            num_output_feature_dims={KFACType.EXPAND: 2},
+            num_output_feature_dims=2,
         ),
         "loss_func": lambda: CrossEntropyLoss(reduction="mean"),
         "data": lambda: [
@@ -185,9 +184,9 @@ CASES_NO_DEVICE = INV_CASES_NO_DEVICE + [
     {
         "model_func": lambda: WeightShareModel(
             Sequential(Linear(10, 5), ReLU(), Linear(5, 3)),
-            setting=KFACType.EXPAND,
+            setting="expand",
             loss="CE",
-            num_output_feature_dims={KFACType.EXPAND: 2},
+            num_output_feature_dims=2,
         ),
         "loss_func": lambda: CrossEntropyLoss(reduction="sum"),
         "data": lambda: [
