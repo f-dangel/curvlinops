@@ -147,15 +147,8 @@ def make_batch_ggn_diagonal_func(
             grad_output_samples = sample_grad_output(
                 f_x, mc_samples, y, generator
             ).squeeze(1)
-
-            # Apply scaling to average over and MC samples, and for the case
-            # MSE/BCEWithLogitsLoss with mean reduction to also average over the output dimensions
-            scale = (
-                1.0 / sqrt(f_x.numel() * mc_samples)
-                if isinstance(loss_func, (MSELoss, BCEWithLogitsLoss))
-                and reduction == "mean"
-                else 1.0 / sqrt(mc_samples)
-            )
+            # Apply scaling to average over MC samples
+            scale = 1.0 / sqrt(mc_samples)
             return grad_output_samples.mul_(scale)
         else:
             raise ValueError(f"Unknown mode: {mode}")
@@ -177,17 +170,14 @@ def make_batch_ggn_diagonal_func(
             Items have the same shape as the neural network's parameters.
 
         Raises:
-            RuntimeError: If predictions are not 1-dimensional (sequence-valued
-                predictions are unsupported) or if vectors for backpropagation
-                are not 2-dimensional.
+            RuntimeError: If the backpropagated vectors have incorrect shape.
         """
         f_x, f_vjp = vjp(lambda *p: f(*p, x), *params)
-        if f_x.ndim != 1 and mode == "mc":
-            raise RuntimeError("Sequence-valued predictions are unsupported.")
-
         vectors = backpropagation_vector_generator_func(f_x, y, generator)
-        if vectors.ndim != 2 and mode == "mc":
-            raise RuntimeError("Expected 2d vectors for backpropagation.")
+        if vectors.shape[1:] != f_x.shape:
+            raise RuntimeError(
+                f"Expected vectors of shape[1:] {f_x.shape}. Got {vectors.shape[1:]}."
+            )
 
         gs = vmap(f_vjp)(vectors)
         return [(g**2).sum(0) for g in gs]

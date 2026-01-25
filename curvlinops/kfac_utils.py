@@ -8,17 +8,15 @@ from einconv.utils import get_conv_paddings
 from einops import einsum, rearrange, reduce
 from torch import (
     Generator,
-    zeros_like,
     Tensor,
     as_tensor,
     diag,
+    eye,
     normal,
     softmax,
-    zeros,
-    block_diag,
     vmap,
-    stack,
-    eye,
+    zeros,
+    zeros_like,
 )
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from torch.nn.functional import one_hot, unfold
@@ -330,16 +328,15 @@ def make_grad_output_sampler(
         For a single data point, the would-be gradient's outer product equals the
         Hessian ``∇²_f log p(·|f)`` in expectation.
 
-        Currently only supports ``MSELoss``, ``CrossEntropyLoss``, and
-        ``BCEWithLogitsLoss``.
+        Currently supports ``MSELoss``, ``CrossEntropyLoss``, and
+        ``BCEWithLogitsLoss`` with arbitrary output dimensions.
 
-        The returned gradient does not account for the scaling of the loss function by
-        the output dimension ``C`` that ``MSELoss`` and ``BCEWithLogitsLoss`` apply when
-        ``reduction='mean'``.
+        The returned gradients include proper scaling based on the loss function's
+        reduction type.
 
         Args:
             output: model prediction ``f`` for multiple data with batch axis as
-                0th dimension.
+        0th dimension.
             num_samples: Number of samples to draw.
             y: Labels of the data on which output was produced.
             generator: Random generator for sampling.
@@ -350,40 +347,65 @@ def make_grad_output_sampler(
 
         Raises:
             NotImplementedError: For unsupported loss functions.
-            NotImplementedError: If the prediction does not have two dimensions.
             NotImplementedError: If binary classification labels are not binary.
         """
-        if output.ndim != 2:
-            raise NotImplementedError(f"Only 2d outputs supported. Got {output.shape}")
-
-        _, C = output.shape
+        batch_size = output.shape[0]
+        output_dim_per_sample = output.numel() // batch_size
+        reduction = loss_func.reduction
 
         if isinstance(loss_func, MSELoss):
-            std = as_tensor(sqrt(0.5), device=output.device)
+            # All dimensions after batch are feature dimensions
+            c = {"sum": 1.0, "mean": 1.0 / output_dim_per_sample}[reduction]
+            std = as_tensor(sqrt(2 * c), device=output.device)
             mean = zeros(
                 num_samples, *output.shape, device=output.device, dtype=output.dtype
             )
-            return 2 * normal(mean, std, generator=generator)
+            return normal(mean, std, generator=generator)
 
         elif isinstance(loss_func, CrossEntropyLoss):
-            prob = softmax(output, dim=1)
-            sample = prob.multinomial(
+            # First dim after batch is class dimension, rest are sequence dims
+            C = output.shape[1]
+            sequence_length = output_dim_per_sample // C
+            c = {"sum": 1.0, "mean": 1.0 / sequence_length}[reduction]
+
+            # Flatten sequence dimensions: [batch, C, *seq] -> [batch, C, seq_flat]
+            output_flat = output.unsqueeze(-1).flatten(
+                start_dim=2
+            )  # [batch, C, seq_flat]
+            prob = softmax(output_flat, dim=1)  # [batch, C, seq_flat]
+
+            # Sample for each sequence position independently
+            # Rearrange to [batch * seq_flat, C] for multinomial sampling
+            prob_for_sampling = rearrange(prob, "b c s -> (b s) c")
+            samples = prob_for_sampling.multinomial(
                 num_samples=num_samples, replacement=True, generator=generator
-            )
-            sample = rearrange(sample, "batch s -> s batch")
-            onehot_sample = one_hot(sample, num_classes=C)
-            # repeat ``num_sample`` times along a new leading axis to avoid broadcasting
-            prob = prob.unsqueeze(0).expand_as(onehot_sample)
-            return prob - onehot_sample
+            )  # [(batch * seq_flat), num_samples]
+            samples = rearrange(
+                samples, "(b s) n -> n b s", b=batch_size
+            )  # [num_samples, batch, seq_flat]
+            onehot_samples = one_hot(samples, num_classes=C)
+            # [num_samples, batch, seq_flat, C] -> [num_samples, batch, C, seq_flat]
+            onehot_samples = rearrange(onehot_samples, "n b s c -> n b c s")
+
+            # Expand prob to match: [batch, C, seq_flat] -> [num_samples, batch, C, s]
+            prob_expanded = prob.unsqueeze(0).expand_as(onehot_samples)
+            grad_samples_flat = sqrt(c) * (prob_expanded - onehot_samples)
+
+            # Reshape back to original sequence dimensions
+            target_shape = (num_samples, *output.shape)
+            return grad_samples_flat.reshape(target_shape)
 
         elif isinstance(loss_func, BCEWithLogitsLoss):
             if check_binary_if_BCEWithLogitsLoss:
                 _check_binary_if_BCEWithLogitsLoss(y, loss_func)
+
+            # All dimensions after batch are feature dimensions
+            c = {"sum": 1.0, "mean": 1.0 / output_dim_per_sample}[reduction]
             prob = output.sigmoid()
             # repeat ``num_sample`` times along a new leading axis
-            prob = prob.unsqueeze(0).expand(num_samples, -1, -1)
+            prob = prob.unsqueeze(0).expand(num_samples, *prob.shape)
             sample = prob.bernoulli(generator=generator)
-            return prob - sample
+            return sqrt(c) * (prob - sample)
 
         else:
             raise NotImplementedError(

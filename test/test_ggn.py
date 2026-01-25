@@ -3,13 +3,12 @@
 from typing import Dict
 
 from pytest import mark, raises
-from torch import Tensor, float64
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss
+from torch import Tensor
 
 from curvlinops import GGNLinearOperator
 from curvlinops.examples.functorch import functorch_ggn
 from curvlinops.ggn import GGNDiagonalLinearOperator
-from test.utils import compare_consecutive_matmats, compare_matmat, cast_input
+from test.utils import compare_consecutive_matmats, compare_matmat
 
 
 def test_GGNLinearOperator_matvec(case, adjoint: bool, is_vec: bool):
@@ -51,20 +50,8 @@ def test_GGNDiagonalLinearOperator_matvec(
             the GGN diagonal is approximated (either exactly or via Monte-Carlo).
     """
     model_func, loss_func, params, data, batch_size_fn = case
-
-    # Convert to float64 for higher precision
-    dtype = float64  # use double precision for better numerical stability
-    model_func = model_func.to(dtype=dtype)
-    loss_func = loss_func.to(dtype=dtype)
-    params = [p.to(dtype=dtype) for p in params]
-    data = [
-        (
-            (cast_input(x, dtype), y)
-            if isinstance(loss_func, CrossEntropyLoss)
-            else (cast_input(x, dtype), y.to(dtype=dtype))
-        )
-        for x, y in data
-    ]
+    print(case)
+    print(loss_func.reduction)
 
     def _construct_G():
         return GGNDiagonalLinearOperator(
@@ -74,12 +61,6 @@ def test_GGNDiagonalLinearOperator_matvec(
     # Check that non-tensor inputs raise an error
     if any(not isinstance(X, Tensor) for (X, _) in data):
         with raises(RuntimeError, match="Only Tensor inputs are supported."):
-            _construct_G()
-        return
-
-    # Check that sequence-valued predictions are unsupported
-    if model_func(data[0][0]).ndim > 2 and kwargs["mode"] == "mc":
-        with raises(RuntimeError, match="Sequence-valued predictions are unsupported."):
             _construct_G()
         return
 
