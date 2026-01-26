@@ -11,6 +11,8 @@ from torch.nn import Module, Parameter
 from curvlinops._torch_base import CurvatureLinearOperator
 from curvlinops.utils import make_functional_model_and_loss
 
+s
+
 
 def make_ggn_vector_product(
     f: Callable[..., Tensor], c: Callable[..., Tensor], num_c_extra_args: int = 0
