@@ -67,7 +67,9 @@ def test_CGInverseLinearOperator_damped_GGN(inv_case, delta_rel: float = 2e-2):
     # specify tolerance and turn off internal damping to get solution with accuracy
     inv_GGN = CGInverseLinearOperator(GGN + damping, eps=0, tolerance=1e-5)
     compare_consecutive_matmats(inv_GGN)
-    compare_matmat(inv_GGN, inv_GGN_naive)
+    # Need to use larger tolerances on GPU, despite float64
+    atol, rtol = (1e-8, 1e-5) if "cpu" in str(dev) else (1e-7, 1e-4)
+    compare_matmat(inv_GGN, inv_GGN_naive, atol=atol, rtol=rtol)
 
 
 def test_LSMRInverseLinearOperator_damped_GGN(inv_case, delta: float = 2e-2):

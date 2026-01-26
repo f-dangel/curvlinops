@@ -412,7 +412,13 @@ def test_ekfac_mc_one_datum(
 
     # Normalize so we can share tolerances across reductions
     scale = ggn.abs().max()
-    assert allclose_report(ggn / scale, ekfac_mat / scale, **MC_TOLS)
+    # Need to use larger tolerances on GPU despite float64
+    tols = (
+        MC_TOLS
+        if "cpu" in str(params[0].device)
+        else {k: 2 * v for k, v in MC_TOLS.items()}
+    )
+    assert allclose_report(ggn / scale, ekfac_mat / scale, **tols)
 
 
 @mark.parametrize(
