@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Merge GitHub actions for linting and formatting with `ruff`
   ([PR](https://github.com/f-dangel/curvlinops/pull/225))
 
-- Execute many tests in `float64` and with lower tolerances
+- Execute many tests in `float64`, allowing to lower many tolerances
   ([PR](https://github.com/f-dangel/curvlinops/pull/224))
 
 ## [3.0.1] - 2026-01-14
