@@ -75,6 +75,44 @@ class PyTorchLinearOperator:
         self._out_shape_flat = [s.numel() for s in self._out_shape]
         self.shape = (sum(self._out_shape_flat), sum(self._in_shape_flat))
 
+    def __rmatmul__(self, X: Tensor) -> Tensor:
+        """Multiply a tensor from the left onto the linear operator (``X @ A``).
+
+        Args:
+            X: A vector or matrix that left-multiplies the linear operator.
+                Assume the linear operator has total shape ``[M, N]``:
+                ``X`` can be of shape ``[M]`` (vector), or ``[K, M]`` (matrix).
+                The result will have shape ``[N]`` or ``[K, N]``.
+
+        Returns:
+            The result of the vector- or matrix-matrix multiplication as tensor
+            of shape ``[N]`` or ``[K, N]``.
+
+        Raises:
+            NotImplementedError: If the vector/matrix for multiplication is not
+                provided as tensor (e.g. tensor list format is unsupported).
+            ValueError: If the input shape incompatible with the linear operator.
+        """
+        if not isinstance(X, Tensor):
+            raise NotImplementedError(
+                f"Left multiplication only supports tensor format. Got {type(X)}."
+            )
+
+        # Shape check
+        if X.ndim > 2 or X.shape[-1] != self.shape[0]:
+            raise ValueError(
+                f"Expecting tensor shape (K, {self.shape[0]}) or ({self.shape[0]},)."
+                + f" got {X.shape}."
+            )
+
+        is_vec = X.ndim == 1
+
+        # Use that X @ A = (A^H @ X^H)^H
+        AH = self.adjoint()
+        AH_XH = AH @ (X.unsqueeze(0) if is_vec else X).adjoint()
+        X_A = AH_XH.adjoint()
+        return X_A.squeeze(-1) if is_vec else X_A
+
     def __matmul__(
         self, X: Union[List[Tensor], Tensor, PyTorchLinearOperator]
     ) -> Union[List[Tensor], Tensor, _ChainPyTorchLinearOperator]:

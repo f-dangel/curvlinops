@@ -217,15 +217,6 @@ def test_KFAC_inverse_damped_matmat(
         assert len(inv_KFAC._inverse_input_covariances) == 0
         assert len(inv_KFAC._inverse_gradient_covariances) == 0
 
-    inv_KFAC, inv_KFAC_tuple, inv_KFAC_naive = (
-        inv_KFAC.adjoint(),
-        inv_KFAC_tuple.adjoint(),
-        inv_KFAC_naive.adjoint(),
-    )
-    compare_consecutive_matmats(inv_KFAC)
-    compare_matmat(inv_KFAC, inv_KFAC_naive)
-    compare_consecutive_matmats(inv_KFAC_tuple)
-    compare_matmat(inv_KFAC_tuple, inv_KFAC_naive)
 
 
 @mark.parametrize("cache", [True, False], ids=["cached", "uncached"])
@@ -342,9 +333,6 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901, PLR0912, PLR09
         assert len(inv_KFAC._inverse_input_covariances) == 0
         assert len(inv_KFAC._inverse_gradient_covariances) == 0
 
-    inv_KFAC, inv_KFAC_naive = inv_KFAC.adjoint(), inv_KFAC_naive.adjoint()
-    compare_consecutive_matmats(inv_KFAC)
-    compare_matmat(inv_KFAC, inv_KFAC_naive)
 
 
 @mark.parametrize("cache", [True, False], ids=["cached", "uncached"])
@@ -422,9 +410,6 @@ def test_KFAC_inverse_exactly_damped_matmat(
         assert len(inv_KFAC._inverse_input_covariances) == 0
         assert len(inv_KFAC._inverse_gradient_covariances) == 0
 
-    inv_KFAC, inv_KFAC_naive = inv_KFAC.adjoint(), inv_KFAC_naive.adjoint()
-    compare_consecutive_matmats(inv_KFAC)
-    compare_matmat(inv_KFAC, inv_KFAC_naive)
 
 
 @mark.parametrize("use_exact_damping", [True, False], ids=["exact_damping", ""])
@@ -631,9 +616,6 @@ def test_EKFAC_inverse_exactly_damped_matmat(
     assert len(inv_EKFAC._inverse_input_covariances) == 0
     assert len(inv_EKFAC._inverse_gradient_covariances) == 0
 
-    inv_EKFAC, inv_EKFAC_naive = inv_EKFAC.adjoint(), inv_EKFAC_naive.adjoint()
-    compare_consecutive_matmats(inv_EKFAC)
-    compare_matmat(inv_EKFAC, inv_EKFAC_naive)
 
 
 def test_EKFAC_inverse_save_and_load_state_dict():

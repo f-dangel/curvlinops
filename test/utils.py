@@ -539,25 +539,17 @@ def compare_matmat(
     """
     dt = op.dtype
     dev = op.device
-    shape = [tuple(s) for s in op._in_shape]
-
-    # Generate vectors/matrices in all accepted formats
-    # For matrix-vector multiplication
-    x_list_vec, x_tensor_vec, x_numpy_vec = rand_accepted_formats(
-        shape, True, dt, dev, num_vecs=1
-    )
-    # For matrix-matrix multiplication
-    x_list_mat, x_tensor_mat, x_numpy_mat = rand_accepted_formats(
-        shape, False, dt, dev, num_vecs=num_vecs
-    )
+    in_shape = [tuple(s) for s in op._in_shape]
+    out_shape = [tuple(s) for s in op._out_shape]
 
     tol = {"atol": atol, "rtol": rtol}
     op_scipy = op.to_scipy()
 
-    for x_list, x_tensor, x_numpy, is_vec in [
-        (x_list_vec, x_tensor_vec, x_numpy_vec, True),
-        (x_list_mat, x_tensor_mat, x_numpy_mat, False),
-    ]:
+    # Test operator @ tensor (__matmul__)
+    for is_vec in [True, False]:
+        x_list, x_tensor, x_numpy = rand_accepted_formats(
+            in_shape, is_vec, dt, dev, num_vecs=num_vecs
+        )
         # input in tensor format
         mat_x = mat @ x_tensor
         assert allclose_report(op @ x_tensor, mat_x, **tol)
@@ -570,12 +562,32 @@ def compare_matmat(
         # input in tensor list format
         mat_x = [
             m_x.reshape(s if is_vec else (*s, num_vecs))
-            for m_x, s in zip(mat_x.split(op._out_shape_flat), op._out_shape)
+            for m_x, s in zip(
+                mat_x.split(op._out_shape_flat), op._out_shape, strict=True
+            )
         ]
         op_x = op @ x_list
-        assert len(op_x) == len(mat_x)
-        for o_x, m_x in zip(op_x, mat_x):
+        for o_x, m_x in zip(op_x, mat_x, strict=True):
             assert allclose_report(o_x, m_x, **tol)
+
+    # Test tensor @ operator (__rmatmul__, relies on adjoint)
+    for is_vec in [True, False]:
+        y_list, y_tensor, _ = rand_accepted_formats(
+            out_shape, is_vec, dt, dev, num_vecs=num_vecs
+        )
+        # Row dimension is last, move it to first
+        y_tensor = y_tensor if is_vec else y_tensor.T
+
+        # input in tensor format
+        y_mat = y_tensor @ mat
+        assert allclose_report(y_tensor @ op, y_mat, **tol)
+
+        # Check that tensor lists are unsupported
+        with raises(
+            NotImplementedError,
+            match="Left multiplication only supports tensor format.",
+        ):
+            _ = y_list @ op
 
 
 def compare_consecutive_matmats(

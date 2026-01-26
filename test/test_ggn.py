@@ -22,7 +22,3 @@ def test_GGNLinearOperator_matvec(case):
 
     compare_consecutive_matmats(G)
     compare_matmat(G, G_mat)
-
-    G, G_mat = G.adjoint(), G_mat.adjoint()
-    compare_consecutive_matmats(G)
-    compare_matmat(G, G_mat)

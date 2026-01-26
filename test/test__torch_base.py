@@ -197,16 +197,10 @@ def test_SumPyTorchLinearOperator():
     A_plus_B_linop = A_linop + B_linop
     compare_matmat(A_plus_B_linop, A_plus_B)
 
-    A_plus_B, A_plus_B_linop = A_plus_B.adjoint(), A_plus_B_linop.adjoint()
-    compare_matmat(A_plus_B_linop, A_plus_B)
-
     # test subtraction
     A_minus_B = A - B
     A_linop, B_linop = TensorLinearOperator(A), TensorLinearOperator(B)
     A_minus_B_linop = A_linop - B_linop
-    compare_matmat(A_minus_B_linop, A_minus_B)
-
-    A_minus_B, A_minus_B_linop = A_minus_B.adjoint(), A_minus_B_linop.adjoint()
     compare_matmat(A_minus_B_linop, A_minus_B)
 
 
@@ -221,16 +215,10 @@ def test_ScalePyTorchLinearOperator():
     A_scaled_linop = A_linop * scalar
     compare_matmat(A_scaled_linop, A_scaled)
 
-    A_scaled, A_scaled_linop = A_scaled.adjoint(), A_scaled_linop.adjoint()
-    compare_matmat(A_scaled_linop, A_scaled)
-
     # test scaling from the left
     A_linop = TensorLinearOperator(A)
     A_scaled = scalar * A
     A_scaled_linop = scalar * A_linop
-    compare_matmat(A_scaled_linop, A_scaled)
-
-    A_scaled, A_scaled_linop = A_scaled.adjoint(), A_scaled_linop.adjoint()
     compare_matmat(A_scaled_linop, A_scaled)
 
 
@@ -245,7 +233,4 @@ def test_ChainPyTorchLinearOperator():
     ABC_linop = (
         TensorLinearOperator(A) @ TensorLinearOperator(B) @ TensorLinearOperator(C)
     )
-    compare_matmat(ABC_linop, ABC)
-
-    ABC, ABC_linop = ABC.adjoint(), ABC_linop.adjoint()
     compare_matmat(ABC_linop, ABC)

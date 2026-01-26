@@ -21,10 +21,6 @@ def test_JacobianLinearOperator(case):
     compare_consecutive_matmats(J)
     compare_matmat(J, J_mat)
 
-    J, J_mat = J.adjoint(), J_mat.adjoint()
-    compare_consecutive_matmats(J)
-    compare_matmat(J, J_mat)
-
 
 def test_TransposedJacobianLinearOperator(case):
     """Test matrix-matrix multiplication with the transpose Jacobian.
@@ -39,9 +35,5 @@ def test_TransposedJacobianLinearOperator(case):
     )
     JT_mat = functorch_jacobian(model_func, params, data, input_key="x").detach().T
 
-    compare_consecutive_matmats(JT)
-    compare_matmat(JT, JT_mat)
-
-    JT, JT_mat = JT.adjoint(), JT_mat.adjoint()
     compare_consecutive_matmats(JT)
     compare_matmat(JT, JT_mat)
