@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Internal
 
 - Merge Github actions for linting and formatting with `ruff`
-  ([PR](https://github.com/f-dangel/curvlinops/issues/225))
+  ([PR](https://github.com/f-dangel/curvlinops/pull/225))
 
 ## [3.0.1] - 2026-01-14
 
