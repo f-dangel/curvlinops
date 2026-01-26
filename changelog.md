@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with the original and transposed operator, reducing number of tests
   ([PR](https://github.com/f-dangel/curvlinops/pull/222))
 
+- Merge GitHub actions for linting and formatting with `ruff`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/225))
+
 - Execute many tests in `float64` and with lower tolerances
   ([PR](https://github.com/f-dangel/curvlinops/pull/224))
 
