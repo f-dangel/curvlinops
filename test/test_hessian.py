@@ -13,16 +13,12 @@ from test.utils import compare_consecutive_matmats, compare_matmat
 
 def test_HessianLinearOperator(
     case,
-    adjoint: bool,
-    is_vec: bool,
     block_sizes_fn: Callable[[List[Parameter]], Optional[List[int]]],
 ):
     """Test matrix-matrix multiplication with the Hessian.
 
     Args:
         case: Tuple of model, loss function, parameters, data, and batch size getter.
-        adjoint: Whether to test the adjoint operator.
-        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
         block_sizes_fn: The function that generates the block sizes used to define
             block diagonal approximations from the parameters.
     """
@@ -47,5 +43,11 @@ def test_HessianLinearOperator(
     ]
     H_mat = block_diag(*H_blocks)
 
-    compare_consecutive_matmats(H, adjoint, is_vec)
-    compare_matmat(H, H_mat, adjoint, is_vec, rtol=1e-4, atol=1e-6)
+    tols = {"atol": 1e-6, "rtol": 1e-4}
+
+    compare_consecutive_matmats(H)
+    compare_matmat(H, H_mat, **tols)
+
+    H, H_mat = H.adjoint(), H_mat.adjoint()
+    compare_consecutive_matmats(H)
+    compare_matmat(H, H_mat, **tols)

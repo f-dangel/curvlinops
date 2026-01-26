@@ -185,13 +185,8 @@ def test_gradient_and_loss(case):
         assert allclose_report(g, g_functorch)
 
 
-def test_SumPyTorchLinearOperator(adjoint: bool, is_vec: bool):
-    """Test adding two PyTorch linear operators.
-
-    Args:
-        adjoint: Whether to test the adjoint operator.
-        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
-    """
+def test_SumPyTorchLinearOperator():
+    """Test adding two PyTorch linear operators."""
     manual_seed(0)
     A = linspace(1, 10, steps=20).reshape(5, 4)
     B = rand_like(A)
@@ -200,41 +195,47 @@ def test_SumPyTorchLinearOperator(adjoint: bool, is_vec: bool):
     A_plus_B = A + B
     A_linop, B_linop = TensorLinearOperator(A), TensorLinearOperator(B)
     A_plus_B_linop = A_linop + B_linop
-    compare_matmat(A_plus_B_linop, A_plus_B, adjoint, is_vec)
+    compare_matmat(A_plus_B_linop, A_plus_B)
+
+    A_plus_B, A_plus_B_linop = A_plus_B.adjoint(), A_plus_B_linop.adjoint()
+    compare_matmat(A_plus_B_linop, A_plus_B)
 
     # test subtraction
     A_minus_B = A - B
     A_linop, B_linop = TensorLinearOperator(A), TensorLinearOperator(B)
     A_minus_B_linop = A_linop - B_linop
-    compare_matmat(A_minus_B_linop, A_minus_B, adjoint, is_vec)
+    compare_matmat(A_minus_B_linop, A_minus_B)
+
+    A_minus_B, A_minus_B_linop = A_minus_B.adjoint(), A_minus_B_linop.adjoint()
+    compare_matmat(A_minus_B_linop, A_minus_B)
 
 
-def test_ScalePyTorchLinearOperator(adjoint: bool, is_vec: bool):
-    """Test scaling a PyTorch linear operator with a scalar.
-
-    Args:
-        adjoint: Whether to test the adjoint operator.
-        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
-    """
+def test_ScalePyTorchLinearOperator():
+    """Test scaling a PyTorch linear operator with a scalar."""
     A = linspace(1, 10, steps=20).reshape(5, 4)
     scalar = 0.1
 
+    # test scaling from the right
     A_scaled = scalar * A
     A_linop = TensorLinearOperator(A)
+    A_scaled_linop = A_linop * scalar
+    compare_matmat(A_scaled_linop, A_scaled)
 
-    # scale from the right
-    compare_matmat(A_linop * scalar, A_scaled, adjoint, is_vec)
-    # scale from the left
-    compare_matmat(scalar * A_linop, A_scaled, adjoint, is_vec)
+    A_scaled, A_scaled_linop = A_scaled.adjoint(), A_scaled_linop.adjoint()
+    compare_matmat(A_scaled_linop, A_scaled)
+
+    # test scaling from the left
+    A_linop = TensorLinearOperator(A)
+    A_scaled = scalar * A
+    A_scaled_linop = scalar * A_linop
+    compare_matmat(A_scaled_linop, A_scaled)
+
+    A_scaled, A_scaled_linop = A_scaled.adjoint(), A_scaled_linop.adjoint()
+    compare_matmat(A_scaled_linop, A_scaled)
 
 
-def test_ChainPyTorchLinearOperator(adjoint: bool, is_vec: bool):
-    """Test chaining two PyTorch linear operators.
-
-    Args:
-        adjoint: Whether to test the adjoint operator.
-        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
-    """
+def test_ChainPyTorchLinearOperator():
+    """Test chaining two PyTorch linear operators."""
     manual_seed(0)
     A = linspace(1, 10, steps=20).reshape(5, 4)
     B = rand(4, 3)
@@ -244,4 +245,7 @@ def test_ChainPyTorchLinearOperator(adjoint: bool, is_vec: bool):
     ABC_linop = (
         TensorLinearOperator(A) @ TensorLinearOperator(B) @ TensorLinearOperator(C)
     )
-    compare_matmat(ABC_linop, ABC, adjoint, is_vec)
+    compare_matmat(ABC_linop, ABC)
+
+    ABC, ABC_linop = ABC.adjoint(), ABC_linop.adjoint()
+    compare_matmat(ABC_linop, ABC)

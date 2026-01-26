@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+- Merge tests for testing matrix-matrix & matrix-vector products
+  with the original and transposed operator, reducing number of tests
+  ([PR](https://github.com/f-dangel/curvlinops/pull/222))
+
 - Merge GitHub actions for linting and formatting with `ruff`
   ([PR](https://github.com/f-dangel/curvlinops/pull/225))
 
