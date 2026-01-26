@@ -512,7 +512,7 @@ def rand_accepted_formats(
 
     if is_vec:
         M_tensor_list = [M.squeeze(-1) for M in M_tensor_list]
-        M_tensor.squeeze(-1)
+        M_tensor = M_tensor.squeeze(-1)
 
     M_ndarray = M_tensor.cpu().numpy()
 
