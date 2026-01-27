@@ -218,7 +218,6 @@ def test_KFAC_inverse_damped_matmat(
         assert len(inv_KFAC._inverse_gradient_covariances) == 0
 
 
-
 @mark.parametrize("cache", [True, False], ids=["cached", "uncached"])
 @mark.parametrize(
     "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
@@ -334,7 +333,6 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901, PLR0912, PLR09
         assert len(inv_KFAC._inverse_gradient_covariances) == 0
 
 
-
 @mark.parametrize("cache", [True, False], ids=["cached", "uncached"])
 @mark.parametrize(
     "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
@@ -409,7 +407,6 @@ def test_KFAC_inverse_exactly_damped_matmat(
         # test that the cache is empty
         assert len(inv_KFAC._inverse_input_covariances) == 0
         assert len(inv_KFAC._inverse_gradient_covariances) == 0
-
 
 
 @mark.parametrize("use_exact_damping", [True, False], ids=["exact_damping", ""])
@@ -615,7 +612,6 @@ def test_EKFAC_inverse_exactly_damped_matmat(
     # test that the cache is empty
     assert len(inv_EKFAC._inverse_input_covariances) == 0
     assert len(inv_EKFAC._inverse_gradient_covariances) == 0
-
 
 
 def test_EKFAC_inverse_save_and_load_state_dict():
