@@ -576,18 +576,23 @@ def compare_matmat(
             out_shape, is_vec, dt, dev, num_vecs=num_vecs
         )
         # Row dimension is last, move it to first
+        y_list = y_list if is_vec else [y.movedim(-1, 0) for y in y_list]
         y_tensor = y_tensor if is_vec else y_tensor.T
 
         # input in tensor format
         y_mat = y_tensor @ mat
         assert allclose_report(y_tensor @ op, y_mat, **tol)
 
-        # Check that tensor lists are unsupported
-        with raises(
-            NotImplementedError,
-            match="Left multiplication only supports tensor format.",
-        ):
-            _ = y_list @ op
+        # input in tensor list format
+        y_mat = [
+            y_m.reshape(s if is_vec else (num_vecs, *s))
+            for y_m, s in zip(
+                y_mat.split(op._in_shape_flat, dim=-1), op._in_shape, strict=True
+            )
+        ]
+        y_op = y_list @ op
+        for y_o, y_m in zip(y_op, y_mat, strict=True):
+            assert allclose_report(y_o, y_m, **tol)
 
 
 def compare_consecutive_matmats(
