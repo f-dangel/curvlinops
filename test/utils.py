@@ -644,8 +644,9 @@ def compare_matmat_expectation(
     op_x = zeros_like(x)
     mat_x = mat @ x
 
-    atol *= mat_x.flatten().abs().max().item()
-    tol = {"atol": atol, "rtol": rtol}
+    # Normalize so we can share tolerances across different loss reductions
+    scale = mat_x.abs().max()
+    tols = {"atol": atol, "rtol": rtol}
 
     for m in range(max_repeats):
         op_x += op @ x
@@ -654,10 +655,10 @@ def compare_matmat_expectation(
         total_samples = (m + 1) * op._mc_samples
         if total_samples % check_every == 0:
             with redirect_stdout(None), suppress(ValueError), suppress(AssertionError):
-                assert allclose_report(op_x / (m + 1), mat_x, **tol)
+                assert allclose_report(op_x / (m + 1) / scale, mat_x / scale, **tols)
                 return
 
-    assert allclose_report(op_x / max_repeats, mat_x, **tol)
+    assert allclose_report(op_x / max_repeats / scale, mat_x / scale, **tols)
 
 
 def eye_like(A: Union[Tensor, PyTorchLinearOperator]) -> Tensor:
@@ -1032,7 +1033,28 @@ def _test_ekfac_closer_to_exact_than_kfac(
     exact_kfac_dist = linalg.matrix_norm(exact - kfac_mat) / exact_norm
     exact_ekfac_dist = linalg.matrix_norm(exact - ekfac_mat) / exact_norm
     assert exact_kfac_dist > exact_ekfac_dist or (
-        allclose_report(exact_kfac_dist, exact_ekfac_dist, atol=1e-6)
+        allclose_report(exact_kfac_dist, exact_ekfac_dist)
         if exclude == "weight"
         else False
     )  # For no_weights the numerical error might dominate.
+
+
+def change_dtype(case: Tuple, dt: dtype) -> Tuple:
+    """Change the data type of a test case.
+
+    Args:
+        case: The test case (model, loss_func, params, data).
+        dt: The target data type.
+
+    Returns:
+        The converted test case with model, loss function, and data casted to ``dt``.
+    """
+    model_func, loss_func, params, data, batch_size_fn = case
+
+    model_func, loss_func = model_func.to(dt), loss_func.to(dt)
+    data = [
+        (cast_input(X, dt), y.to(dt) if isinstance(loss_func, MSELoss) else y)
+        for (X, y) in data
+    ]
+
+    return model_func, loss_func, params, data, batch_size_fn
