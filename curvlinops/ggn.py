@@ -2,7 +2,7 @@
 
 from collections.abc import MutableMapping
 from functools import cached_property, partial
-from typing import Callable, List, Tuple, Union
+from typing import Any, Callable, List, Tuple, Union
 
 from torch import Tensor, no_grad, vmap
 from torch.func import jacrev, jvp, vjp
@@ -13,60 +13,58 @@ from curvlinops.utils import make_functional_model_and_loss
 
 
 def make_ggn_vector_product(
-    f: Callable[..., Tensor], c: Callable[..., Tensor], num_c_extra_args: int = 0
-) -> Callable[..., Tuple[Tensor, ...]]:
+    f: Callable[[Tuple[Tensor, ...], Union[Tensor, MutableMapping]], Tensor],
+    c: Callable[[Tensor, Any], Tensor],
+) -> Callable[
+    [Tuple[Tensor, ...], Tuple[Tensor, ...], Union[Tensor, MutableMapping], Any],
+    Tuple[Tensor, ...],
+]:
     """Create a function that computes GGN-vector products for given f and c functions.
 
     Args:
         f: Function that takes parameters and input, returns prediction.
-            Signature: (*params, X) -> prediction
-        c: Function that takes prediction, target, and optional additional args.
-            Signature: (prediction, y, *args) -> loss
-        num_c_extra_args: Number of additional arguments that the loss function c expects
-            beyond prediction and target. Used to correctly split the input arguments
-            between the vector to multiply and the additional loss function arguments.
+            Signature: (params, X) -> prediction
+        c: Function that takes the prediction, and optional additional args (e.g. labels).
+            Signature: (prediction, *args) -> loss
 
     Returns:
         A function that computes GGN-vector products.
-        Signature: (params, X, y, *c_args, *v) -> GGN @ v
-        where c_args are additional arguments passed to the loss function c.
+        Signature: (params, v, X, *args) -> GGN @ v
+        where args are additional arguments passed to the loss function c.
     """
 
     @no_grad()
     def ggn_vector_product(
         params: Tuple[Tensor, ...],
-        X: Tensor,
-        y: Tensor,
-        *args_and_v: Tuple[Tensor, ...],
+        v: Tuple[Tensor, ...],
+        X: Union[Tensor, MutableMapping],
+        *args: Any,
     ) -> Tuple[Tensor, ...]:
         """Multiply the GGN on a vector in list format.
 
         Args:
             params: Parameters of the model.
+            v: Vector to be multiplied with in tensor list format.
             X: Input to the DNN.
-            y: Ground truth.
-            *args_and_v: Additional arguments for the loss function c,
-                followed by vector to be multiplied with in tensor list format.
+            *args: Additional arguments for the loss function c.
 
         Returns:
             Result of GGN multiplication in list format. Has the same shape as
             the vector part of args_and_v.
         """
-        # Split args_and_v into additional loss function arguments and vector v
-        c_args, v = args_and_v[:num_c_extra_args], args_and_v[num_c_extra_args:]
-
         # Apply the Jacobian of f onto v: v → Jv
-        f_val, f_jvp = jvp(lambda *params_inner: f(*params_inner, X), params, v)
+        f_val, f_jvp = jvp(lambda params_inner: f(params_inner, X), (params,), (v,))
 
         # Apply the criterion's Hessian onto Jv: Jv → HJv
-        c_grad_func = jacrev(lambda pred: c(pred, y, *c_args))
+        c_grad_func = jacrev(lambda pred: c(pred, *args))
         _, c_hvp = jvp(c_grad_func, (f_val,), (f_jvp,))
 
         # Apply the transposed Jacobian of f onto HJv: HJv → JᵀHJv
         # NOTE This re-evaluates the net's forward pass. [Unverified] It should be op-
         # timized away by common sub-expression elimination if you compile the function.
-        _, f_vjp_func = vjp(lambda *params_inner: f(*params_inner, X), *params)
-        return f_vjp_func(c_hvp)
+        _, f_vjp_func = vjp(lambda params_inner: f(params_inner, X), params)
+        (result,) = f_vjp_func(c_hvp)
+        return result
 
     return ggn_vector_product
 
@@ -88,24 +86,23 @@ def make_batch_ggn_matrix_product(
         A function that takes inputs ``X``, ``y``, and a matrix ``M`` in list
         format, and returns the mini-batch GGN applied to ``M`` in list format.
     """
-    # Create functional versions of the model (f: *params, X -> prediction) and
+    # Create functional versions of the model (f: params, X -> prediction) and
     # criterion function (c: prediction, y -> loss)
     f, c = make_functional_model_and_loss(model_func, loss_func, params)
 
     # Create the functional GGN-vector product
-    ggn_vp = make_ggn_vector_product(f, c)  # params, X, y, *v -> *Gv
+    ggn_vp = make_ggn_vector_product(f, c)  # params, v, X, y -> Gv
 
     # Fix the parameters
-    ggnvp = partial(ggn_vp, params)  # X, y, *c_args, *v -> *Gv
+    ggnvp = partial(ggn_vp, params)  # v, X, y -> Gv
 
     # Parallelize over vectors to multiply onto a matrix in list format
-    list_format_vmap_dims = tuple(p.ndim for p in params)  # last axis
     return vmap(
         ggnvp,
-        # No vmap in X, y, last-axis vmap over vector in list format
-        in_dims=(None, None, *list_format_vmap_dims),
+        # Last-axis vmap over vector tuple, no vmap in X, y
+        in_dims=(-1, None, None),
         # Vmapped output axis is last
-        out_dims=list_format_vmap_dims,
+        out_dims=-1,
         # We want each vector to be multiplied with the same mini-batch GGN
         randomness="same",
     )
@@ -181,4 +178,4 @@ class GGNLinearOperator(CurvatureLinearOperator):
             ``M``, i.e. each tensor in the list has the shape of a parameter and a
             trailing dimension of matrix columns.
         """
-        return list(self._mp(X, y, *M))
+        return list(self._mp(tuple(M), X, y))

@@ -68,6 +68,8 @@ This patch provides major performance improvements for all curvature matrices (b
     ([PR](https://github.com/f-dangel/curvlinops/pull/204))
   - (Transpose) Jacobian-vector products
     ([PR](https://github.com/f-dangel/curvlinops/pull/206))
+  - Refactor `torch.func` code to treat parameters as tuple
+    ([PR](https://github.com/f-dangel/curvlinops/pull/220))
 
 ## [3.0.0] - 2025-10-16
 
