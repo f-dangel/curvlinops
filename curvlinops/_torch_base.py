@@ -237,11 +237,9 @@ class PyTorchLinearOperator:
 
         return X_tensor_list, list_format, is_vec, num_vecs
 
+    @staticmethod
     def __check_tensor_and_preprocess(
-        self,
-        X: Tensor,
-        expected_shapes: List[Size],
-        free_dim: str,
+        X: Tensor, expected_shapes: List[Size], free_dim: str
     ) -> Tuple[List[Tensor], bool, int]:
         """Check single-tensor input format and process into a matrix tensor list.
 
@@ -295,11 +293,9 @@ class PyTorchLinearOperator:
 
         return X_processed, is_vec, num_vecs
 
+    @staticmethod
     def __check_tensor_list_and_preprocess(
-        self,
-        X: List[Tensor],
-        expected_shapes: List[Size],
-        free_dim: str,
+        X: List[Tensor], expected_shapes: List[Size], free_dim: str
     ) -> Tuple[List[Tensor], bool, int]:
         """Check tensor list input format and process into a matrix tensor list.
 
@@ -346,8 +342,8 @@ class PyTorchLinearOperator:
 
         return X_processed, is_vec, num_vecs
 
+    @staticmethod
     def _check_output_and_postprocess(
-        self,
         AX: List[Tensor],
         list_format: bool,
         is_vec: bool,
