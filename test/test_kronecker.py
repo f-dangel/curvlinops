@@ -14,7 +14,7 @@ def test_KroneckerProductLinearOperator():
     manual_seed(0)
     kwargs = {"dtype": float64}
     # Create rectangular factors: 3x2, 4x3, 2x5
-    S1, S2, S3 = rand(3, 2, **kwargs), rand(4, 3, **kwargs), rand(2, 5, *kwargs)
+    S1, S2, S3 = rand(3, 2, **kwargs), rand(4, 3, **kwargs), rand(2, 5, **kwargs)
 
     # Create and test Kronecker product operator's @ operation
     op = KroneckerProductLinearOperator(S1, S2, S3)
