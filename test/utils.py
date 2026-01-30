@@ -545,54 +545,53 @@ def compare_matmat(
     tol = {"atol": atol, "rtol": rtol}
     op_scipy = op.to_scipy()
 
-    # Test operator @ tensor (__matmul__)
-    for is_vec in [True, False]:
+    # Test left- and right-multiplication `y = A @ x` or `y = x @ A`.
+    # Right multiplication internally uses `.adjoint()`.
+    for op_pos, is_vec in product(["left", "right"], [True, False]):
+        shape = {"left": in_shape, "right": out_shape}[op_pos]
         x_list, x_tensor, x_numpy = rand_accepted_formats(
-            in_shape, is_vec, dt, dev, num_vecs=num_vecs
+            shape, is_vec, dt, dev, num_vecs=num_vecs
         )
-        # input in tensor format
-        mat_x = mat @ x_tensor
-        assert allclose_report(op @ x_tensor, mat_x, **tol)
 
-        # input in numpy format
-        op_x = op_scipy @ x_numpy
-        assert type(op_x) is ndarray
-        assert allclose_report(as_tensor(op_x, device=dev), mat_x, **tol)
+        # Left multiplication (used to generate the xs) uses trailing axis for columns.
+        # Right multiplication uses leading axis for the row dimension.
+        # Move trailing to leading axis for right multiplication
+        if not is_vec:
+            x_list = x_list if op_pos == "left" else [x.movedim(-1, 0) for x in x_list]
+            x_tensor = x_tensor if op_pos == "left" else x_tensor.T
+            x_numpy = x_numpy if op_pos == "left" else x_numpy.T
 
-        # input in tensor list format
-        mat_x = [
-            m_x.reshape(s if is_vec else (*s, num_vecs))
-            for m_x, s in zip(
-                mat_x.split(op._out_shape_flat), op._out_shape, strict=True
+        # 1) Set up ground truths
+        # In tensor format
+        y_tensor = mat @ x_tensor if op_pos == "left" else x_tensor @ mat
+        # In tensor list format
+        y_list = []
+        split_dim = 0 if is_vec else {"left": 0, "right": -1}[op_pos]
+        shapes = {"left": op._out_shape, "right": op._in_shape}[op_pos]
+        shapes_flat = [s.numel() for s in shapes]
+        for y, s in zip(y_tensor.split(shapes_flat, dim=split_dim), shapes):
+            # Left multiplication uses trailing, right multiplication
+            # uses leading axes for parallel multiplies (columns, rows)
+            s_out = (
+                s
+                if is_vec
+                else {"left": (*s, num_vecs), "right": (num_vecs, *s)}[op_pos]
             )
-        ]
-        op_x = op @ x_list
-        for o_x, m_x in zip(op_x, mat_x, strict=True):
-            assert allclose_report(o_x, m_x, **tol)
+            y_list.append(y.reshape(s_out))
 
-    # Test tensor @ operator (__rmatmul__, relies on adjoint)
-    for is_vec in [True, False]:
-        y_list, y_tensor, _ = rand_accepted_formats(
-            out_shape, is_vec, dt, dev, num_vecs=num_vecs
-        )
-        # Row dimension is last, move it to first
-        y_list = y_list if is_vec else [y.movedim(-1, 0) for y in y_list]
-        y_tensor = y_tensor if is_vec else y_tensor.T
+        # 2.1) Test multiplication with input in tensor format
+        y_op_tensor = op @ x_tensor if op_pos == "left" else x_tensor @ op
+        assert allclose_report(y_op_tensor, y_tensor, **tol)
 
-        # input in tensor format
-        y_mat = y_tensor @ mat
-        assert allclose_report(y_tensor @ op, y_mat, **tol)
+        # 2.2) Test multiplication with input in numpy format
+        y_op_numpy = op_scipy @ x_numpy if op_pos == "left" else x_numpy @ op_scipy
+        assert type(y_op_numpy) is ndarray
+        assert allclose_report(as_tensor(y_op_numpy, device=dev), y_tensor, **tol)
 
-        # input in tensor list format
-        y_mat = [
-            y_m.reshape(s if is_vec else (num_vecs, *s))
-            for y_m, s in zip(
-                y_mat.split(op._in_shape_flat, dim=-1), op._in_shape, strict=True
-            )
-        ]
-        y_op = y_list @ op
-        for y_o, y_m in zip(y_op, y_mat, strict=True):
-            assert allclose_report(y_o, y_m, **tol)
+        # 2.3) Test multiplication with input in tensor list format
+        y_op_list = op @ x_list if op_pos == "left" else x_list @ op
+        for y_op, y in zip(y_op_list, y_list, strict=True):
+            assert allclose_report(y_op, y, **tol)
 
 
 def compare_consecutive_matmats(
