@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Execute many tests in `float64`, allowing to lower many tolerances
   ([PR](https://github.com/f-dangel/curvlinops/pull/224))
 
+- Add linear operator `EighDecomposedLinearOperator` for `eigh`-decomposed matrices `Q diag(λ) Q^T` with orthogonal `Q`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/210))
+
 ## [3.0.1] - 2026-01-14
 
 This patch provides major performance improvements for all curvature matrices (by using `torch.func`, and by improving EKFAC's eigenvalue correction) and deprecates Python 3.9 (we now require at least 3.10).
