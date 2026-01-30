@@ -10,14 +10,10 @@ from torch.nn import Module, MSELoss, Parameter
 
 import test.utils
 from test.cases import (
-    ADJOINT_CASES,
-    ADJOINT_IDS,
     BLOCK_SIZES_FNS,
     CASES,
     CNN_CASES,
     INV_CASES,
-    IS_VEC_IDS,
-    IS_VECS,
     NON_DETERMINISTIC_CASES,
 )
 from test.kfac_cases import (
@@ -113,24 +109,6 @@ def non_deterministic_case(
 ]:
     case = request.param
     yield initialize_case(case)
-
-
-@fixture(params=ADJOINT_CASES, ids=ADJOINT_IDS)
-def adjoint(request) -> bool:
-    return request.param
-
-
-@fixture(params=IS_VECS, ids=IS_VEC_IDS)
-def is_vec(request) -> bool:
-    """Whether to test matrix-vector or matrix-matrix multiplication.
-
-    Args:
-        request: Pytest request object.
-
-    Returns:
-        ``True`` if the test is for matrix-vector multiplication, ``False`` otherwise.
-    """
-    return request.param
 
 
 @fixture(params=BLOCK_SIZES_FNS.values(), ids=BLOCK_SIZES_FNS.keys())

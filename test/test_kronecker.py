@@ -9,16 +9,17 @@ from curvlinops.utils import allclose_report
 from test.utils import compare_matmat, eye_like
 
 
-def test_KroneckerProductLinearOperator(adjoint: bool, is_vec: bool):
+def test_KroneckerProductLinearOperator():
     """Test matrix multiplication with rectangular Kronecker factors."""
     manual_seed(0)
+    kwargs = {"dtype": float64}
     # Create rectangular factors: 3x2, 4x3, 2x5
-    S1, S2, S3 = rand(3, 2), rand(4, 3), rand(2, 5)
+    S1, S2, S3 = rand(3, 2, **kwargs), rand(4, 3, **kwargs), rand(2, 5, *kwargs)
 
     # Create and test Kronecker product operator's @ operation
     op = KroneckerProductLinearOperator(S1, S2, S3)
     mat = kron(kron(S1, S2), S3)
-    compare_matmat(op, mat, adjoint, is_vec)
+    compare_matmat(op, mat)
 
     # Test mathematical properties
     for property in ["trace", "det", "logdet"]:
@@ -27,7 +28,7 @@ def test_KroneckerProductLinearOperator(adjoint: bool, is_vec: bool):
     assert isclose(matrix_norm(mat), op.frobenius_norm())
 
 
-def test_KroneckerProductLinearOperator_square(adjoint: bool, is_vec: bool):
+def test_KroneckerProductLinearOperator_square():
     """Test matrix multiplication with square Kronecker factors."""
     manual_seed(0)
     # Use double-precision because we are testing logdet below
@@ -38,7 +39,7 @@ def test_KroneckerProductLinearOperator_square(adjoint: bool, is_vec: bool):
     # Create and test Kronecker product operator's @ operation
     op = KroneckerProductLinearOperator(S1, S2, S3)
     mat = kron(kron(S1, S2), S3)
-    compare_matmat(op, mat, adjoint, is_vec)
+    compare_matmat(op, mat)
 
     # Test mathematical properties
     assert isclose(mat.trace(), op.trace())

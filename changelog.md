@@ -12,13 +12,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+- Merge tests for testing matrix-matrix & matrix-vector products
+  with the original and transposed operator, reducing number of tests
+  ([PR](https://github.com/f-dangel/curvlinops/pull/222))
 
-- Add linear operator `KroneckerProductLinearOperator` for matrices `S_1 ⊗ S_2 ⊗ ...`
-  ([PR](https://github.com/f-dangel/curvlinops/pull/211))
+- Merge GitHub actions for linting and formatting with `ruff`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/225))
+
+- Execute many tests in `float64`, allowing to lower many tolerances
+  ([PR](https://github.com/f-dangel/curvlinops/pull/224))
 
 - Add linear operator `EighDecomposedLinearOperator` for `eigh`-decomposed matrices `Q diag(λ) Q^T` with orthogonal `Q`
   ([PR](https://github.com/f-dangel/curvlinops/pull/210))
 
+- Add linear operator `KroneckerProductLinearOperator` for matrices `S_1 ⊗ S_2 ⊗ ...`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/211))
+
+## [3.0.1] - 2026-01-14
+
+This patch provides major performance improvements for all curvature matrices (by using `torch.func`, and by improving EKFAC's eigenvalue correction) and deprecates Python 3.9 (we now require at least 3.10).
+
+### Added/New
+
+### Fixed/Removed
+
+### Internal
+
+- Add EKFAC and a new problem (ResNet18 on CIFAR10) to benchmark
+  ([PR](https://github.com/f-dangel/curvlinops/pull/214)),
+  expose a run time and memory inefficiency in EKFAC
+  ([issue](https://github.com/f-dangel/curvlinops/issues/193)).
+  This issue is successfully resolved with:
+
+  - Improve performance of EKFAC by merging gradient computation and basis rotation into a single `einsum`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/215))
+
+  - Improve performance of EKFAC by efficiently taking the square and sum over the batch dimension in the absence of weight sharing
+  ([PR](https://github.com/f-dangel/curvlinops/pull/216))
+
+  - Generalize trick for no weight sharing to mild weight sharing, further improve memory performance of EKFAC
+  ([PR](https://github.com/f-dangel/curvlinops/pull/219))
+
+- Minor fixes in docs, code and examples to reduce CI pipeline errors ([PR](https://github.com/f-dangel/curvlinops/pull/218))
+
+- Updated supported Python version from 3.9 (deprecated) to 3.10 ([PR](https://github.com/f-dangel/curvlinops/pull/213))
+
+>>>>>>> main
 - Use A6000 GPU instead of A40 to benchmark linear operators
   ([PR](https://github.com/f-dangel/curvlinops/pull/199))
 
@@ -454,7 +493,8 @@ Adds various new features:
 
 Initial release
 
-[Unreleased]: https://github.com/f-dangel/curvlinops/compare/3.0.0...HEAD
+[Unreleased]: https://github.com/f-dangel/curvlinops/compare/3.0.1...HEAD
+[3.0.1]: https://github.com/f-dangel/curvlinops/releases/tag/3.0.1
 [3.0.0]: https://github.com/f-dangel/curvlinops/releases/tag/3.0.0
 [2.0.1]: https://github.com/f-dangel/curvlinops/releases/tag/2.0.1
 [2.0.0]: https://github.com/f-dangel/curvlinops/releases/tag/2.0.0

@@ -48,8 +48,8 @@ def allclose_report(
     Returns:
         ``True`` if the tensors are close, ``False`` otherwise.
     """
-    tensor1, tensor2 = as_tensor(tensor1), as_tensor(tensor2)
-
+    tensor1 = as_tensor(tensor1)
+    tensor2 = as_tensor(tensor2, device=tensor1.device)
     close = tensor1.allclose(tensor2, rtol=rtol, atol=atol)
     if not close:
         # print non-close values

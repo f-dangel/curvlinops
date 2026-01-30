@@ -166,11 +166,10 @@ rhs = sum(fisher @ theta for fisher, theta in zip(fishers, thetas))
 
 dim = fishers[0].shape[0]
 param_shapes = [p.shape for p in models[0].parameters() if p.requires_grad]
-identity = IdentityLinearOperator(param_shapes, DEVICE, rhs.dtype)
+identity = IdentityLinearOperator(param_shapes, fishers[0].device, rhs.dtype)
 damping = 1e-3
 
 fisher_sum = damping * identity
-
 for fisher in fishers:
     fisher_sum += fisher
 
@@ -227,7 +226,6 @@ for task_idx in range(T):
     loss_function = loss_functions[task_idx]
 
     X, y = next(iter(data_loader))
-    X, y = X.to(DEVICE), y.to(DEVICE)
 
     fisher_loss = loss_function(fisher_model(X), y)
     average_loss = loss_function(average_model(X), y)
