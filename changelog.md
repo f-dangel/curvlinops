@@ -57,7 +57,6 @@ This patch provides major performance improvements for all curvature matrices (b
 
 - Updated supported Python version from 3.9 (deprecated) to 3.10 ([PR](https://github.com/f-dangel/curvlinops/pull/213))
 
->>>>>>> main
 - Use A6000 GPU instead of A40 to benchmark linear operators
   ([PR](https://github.com/f-dangel/curvlinops/pull/199))
 
