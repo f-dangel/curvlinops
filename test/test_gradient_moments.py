@@ -24,7 +24,3 @@ def test_EFLinearOperator(case):
 
     compare_consecutive_matmats(E)
     compare_matmat(E, E_mat)
-
-    E, E_mat = E.adjoint(), E_mat.adjoint()
-    compare_consecutive_matmats(E)
-    compare_matmat(E, E_mat)

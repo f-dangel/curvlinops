@@ -42,7 +42,3 @@ def test_FisherMCLinearOperator_expectation(case, max_repeats: int, mc_samples: 
 
     compare_consecutive_matmats(F)
     compare_matmat_expectation(F, G_mat, max_repeats, CHECK_EVERY, **MC_TOLS)
-
-    F, G_mat = F.adjoint(), G_mat.adjoint()
-    compare_consecutive_matmats(F)
-    compare_matmat_expectation(F, G_mat, max_repeats, CHECK_EVERY, **MC_TOLS)

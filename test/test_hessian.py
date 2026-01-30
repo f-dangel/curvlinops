@@ -47,7 +47,3 @@ def test_HessianLinearOperator(
 
     compare_consecutive_matmats(H)
     compare_matmat(H, H_mat)
-
-    H, H_mat = H.adjoint(), H_mat.adjoint()
-    compare_consecutive_matmats(H)
-    compare_matmat(H, H_mat)
