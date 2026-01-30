@@ -7,7 +7,7 @@ from curvlinops.eigh import EighDecomposedLinearOperator
 from test.utils import compare_matmat, eye_like
 
 
-def test_EighDecomposedLinearOperator(adjoint: bool, is_vec: bool):
+def test_EighDecomposedLinearOperator():
     """Test matrix multiplication and properties of an eigen-decomposed matrix."""
     manual_seed(0)
     # Use double precision to improve stability of det/logdet
@@ -23,7 +23,7 @@ def test_EighDecomposedLinearOperator(adjoint: bool, is_vec: bool):
     mat = Q @ eigvals.diag() @ Q.T
 
     # Test matrix multiplication
-    compare_matmat(op, mat, adjoint, is_vec)
+    compare_matmat(op, mat)
 
     # Test mathematical properties
     assert isclose(mat.trace(), op.trace())
@@ -35,4 +35,4 @@ def test_EighDecomposedLinearOperator(adjoint: bool, is_vec: bool):
     damping = 1e-4
     op_inv = op.inverse(damping=damping)
     mat_inv = inv(mat + damping * eye_like(mat))
-    compare_matmat(op_inv, mat_inv, adjoint, is_vec)
+    compare_matmat(op_inv, mat_inv)
