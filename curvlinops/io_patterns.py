@@ -195,7 +195,7 @@ def match_parameter_usage(
 
         if not matched:
             raise ValueError(
-                f"Parameter node {p_node} is used in an unsupported operation."
+                f"Parameter node {p_node} is used in an unsupported pattern."
             )
 
     return usage_info

@@ -74,7 +74,10 @@ def with_param_io(
     }
 
     # Match the parameter nodes to usage patterns, such as linear w/o bias.
-    usage_info = match_parameter_usage(param_nodes)
+    try:
+        usage_info = match_parameter_usage(param_nodes)
+    except ValueError as e:
+        raise ValueError(f"FX Graph:\n{gm.graph}\n\n{e}") from e
 
     # NOTE We may want to verify here that the usage info is complete, i.e. that the parameter nodes are not consumed in additional ways compared to the detected usage
 

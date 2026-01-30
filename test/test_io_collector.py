@@ -2,9 +2,12 @@
 
 from typing import Tuple, Union
 
-from torch import Tensor, manual_seed, rand, zeros_like, arange
+from torch import Tensor, manual_seed, rand, zeros_like, arange, zeros
 from torch.nn.functional import linear
+from torch.nn import Linear
+from torch.func import functional_call
 from curvlinops.utils import allclose_report
+from pytest import raises
 
 from curvlinops.io_collector import with_param_io
 
@@ -88,3 +91,26 @@ def test_fully_connected():
     x, params = rand(N, D_in), {"weight": rand(D_out, D_in)}
     io_true = (("Linear(y=x@W^T+b)", x, f(x, params), "weight", None),)
     _verify_io(f, x, params, io_true)
+
+    # Use torch.nn
+    fc = Linear(D_out, D_in, bias=True)
+
+    def f(x: Tensor, params: dict) -> Tensor:
+        return functional_call(fc, params, x)
+
+    x, params = rand(N, D_in), {"weight": rand(D_out, D_in), "bias": rand(D_out)}
+    io_true = (("Linear(y=x@W^T+b)", x, f(x, params), "weight", "bias"),)
+    _verify_io(f, x, params, io_true)
+
+    # NOTE Although mathematically equivalent, these patterns are not implemented
+    # and can therefore not be detected.
+    # Unsupported: Using .T (calls aten.permute.default)
+    # Unsupported: Using + (calls aten.add.Tensor)
+    def f(x: Tensor, params: dict) -> Tensor:
+        return x @ params["weight"].T + params["bias"]
+
+    x_dummy = zeros(N, D_in)
+    params_dummy = {"weight": zeros(D_out, D_in), "bias": zeros(D_out)}
+
+    with raises(ValueError, match="is used in an unsupported pattern"):
+        _ = with_param_io(f, x_dummy, params_dummy)
