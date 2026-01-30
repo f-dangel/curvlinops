@@ -19,7 +19,6 @@ from torch import (
     device,
     dtype,
     eye,
-    from_numpy,
     linalg,
     load,
     logdet,
@@ -523,63 +522,64 @@ def rand_accepted_formats(
 def compare_matmat(
     op: PyTorchLinearOperator,
     mat: Tensor,
-    adjoint: bool,
-    is_vec: bool,
     num_vecs: int = 2,
     rtol: float = 1e-5,
     atol: float = 1e-8,
 ):
-    """Test the matrix-vector product of a PyTorch linear operator.
+    """Test the matrix-vector/matrix product of a PyTorch linear operator.
 
     Try all accepted formats for the input, as well as the SciPy-exported operator.
 
     Args:
         op: The operator to test.
         mat: The matrix representation of the linear operator.
-        adjoint: Whether to test the adjoint operator.
-        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
-        num_vecs: Number of vectors to test (ignored if ``is_vec`` is ``True``).
-            Default: ``2``.
+        num_vecs: Number of vectors to test matmat. Default: ``2``.
         rtol: Relative tolerance for the comparison. Default: ``1e-5``.
         atol: Absolute tolerance for the comparison. Default: ``1e-8``.
     """
-    if adjoint:
-        op, mat = op.adjoint(), mat.conj().T
-
-    num_vecs = 1 if is_vec else num_vecs
     dt = op.dtype
     dev = op.device
-    x_list, x_tensor, x_numpy = rand_accepted_formats(
-        [tuple(s) for s in op._in_shape], is_vec, dt, dev, num_vecs=num_vecs
+    shape = [tuple(s) for s in op._in_shape]
+
+    # Generate vectors/matrices in all accepted formats
+    # For matrix-vector multiplication
+    x_list_vec, x_tensor_vec, x_numpy_vec = rand_accepted_formats(
+        shape, True, dt, dev, num_vecs=1
+    )
+    # For matrix-matrix multiplication
+    x_list_mat, x_tensor_mat, x_numpy_mat = rand_accepted_formats(
+        shape, False, dt, dev, num_vecs=num_vecs
     )
 
     tol = {"atol": atol, "rtol": rtol}
-
-    # input in tensor format
-    mat_x = mat @ x_tensor
-    assert allclose_report(op @ x_tensor, mat_x, **tol)
-
-    # input in numpy format
     op_scipy = op.to_scipy()
-    op_x = op_scipy @ x_numpy
-    assert type(op_x) is ndarray
-    assert allclose_report(from_numpy(op_x).to(dev), mat_x, **tol)
 
-    # input in tensor list format
-    mat_x = [
-        m_x.reshape(s if is_vec else (*s, num_vecs))
-        for m_x, s in zip(mat_x.split(op._out_shape_flat), op._out_shape)
-    ]
-    op_x = op @ x_list
-    assert len(op_x) == len(mat_x)
-    for o_x, m_x in zip(op_x, mat_x):
-        assert allclose_report(o_x, m_x, **tol)
+    for x_list, x_tensor, x_numpy, is_vec in [
+        (x_list_vec, x_tensor_vec, x_numpy_vec, True),
+        (x_list_mat, x_tensor_mat, x_numpy_mat, False),
+    ]:
+        # input in tensor format
+        mat_x = mat @ x_tensor
+        assert allclose_report(op @ x_tensor, mat_x, **tol)
+
+        # input in numpy format
+        op_x = op_scipy @ x_numpy
+        assert type(op_x) is ndarray
+        assert allclose_report(as_tensor(op_x, device=dev), mat_x, **tol)
+
+        # input in tensor list format
+        mat_x = [
+            m_x.reshape(s if is_vec else (*s, num_vecs))
+            for m_x, s in zip(mat_x.split(op._out_shape_flat), op._out_shape)
+        ]
+        op_x = op @ x_list
+        assert len(op_x) == len(mat_x)
+        for o_x, m_x in zip(op_x, mat_x):
+            assert allclose_report(o_x, m_x, **tol)
 
 
 def compare_consecutive_matmats(
     op: PyTorchLinearOperator,
-    adjoint: bool,
-    is_vec: bool,
     num_vecs: int = 2,
     rtol: float = 1e-5,
     atol: float = 1e-8,
@@ -588,23 +588,17 @@ def compare_consecutive_matmats(
 
     Args:
         op: The operator to test.
-        adjoint: Whether to test the adjoint operator.
-        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
-        num_vecs: Number of vectors to test (ignored if ``is_vec`` is ``True``).
-            Default: ``2``.
+        num_vecs: Number of vectors to test on.
         rtol: Relative tolerance for the comparison. Default: ``1e-5``.
         atol: Absolute tolerance for the comparison. Default: ``1e-8``.
     """
-    if adjoint:
-        op = op.adjoint()
-
     tol = {"atol": atol, "rtol": rtol}
 
     # Generate the vector using rand_accepted_formats
     dt, dev = op.dtype, op.device
     _, X, _ = rand_accepted_formats(
         [tuple(s) for s in op._in_shape],
-        is_vec=is_vec,
+        is_vec=False,
         dtype=dt,
         device=dev,
         num_vecs=num_vecs,
@@ -621,8 +615,6 @@ def compare_consecutive_matmats(
 def compare_matmat_expectation(
     op: FisherMCLinearOperator,
     mat: Tensor,
-    adjoint: bool,
-    is_vec: bool,
     max_repeats: int,
     check_every: int,
     num_vecs: int = 2,
@@ -634,8 +626,6 @@ def compare_matmat_expectation(
     Args:
         op: The operator to test.
         mat: The matrix representation of the linear operator.
-        adjoint: Whether to test the adjoint operator.
-        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
         max_repeats: Maximum number of matrix-vector product within which the
             expectation must converge.
         check_every: Check the expectation every ``check_every`` iterations for
@@ -646,21 +636,17 @@ def compare_matmat_expectation(
         atol: Absolute tolerance for the comparison. Will be multiplied by the maximum
             absolute value of the ground truth. Default: ``1e-8``.
     """
-    if adjoint:
-        op, mat = op.adjoint(), mat.conj().T
-
-    num_vecs = 1 if is_vec else num_vecs
-    dt = op.dtype
-    dev = op.device
+    dt, dev = op.dtype, op.device
     _, x, _ = rand_accepted_formats(
-        [tuple(s) for s in op._in_shape], is_vec, dt, dev, num_vecs=num_vecs
+        [tuple(s) for s in op._in_shape], False, dt, dev, num_vecs=num_vecs
     )
 
     op_x = zeros_like(x)
     mat_x = mat @ x
 
-    atol *= mat_x.flatten().abs().max().item()
-    tol = {"atol": atol, "rtol": rtol}
+    # Normalize so we can share tolerances across different loss reductions
+    scale = mat_x.abs().max()
+    tols = {"atol": atol, "rtol": rtol}
 
     for m in range(max_repeats):
         op_x += op @ x
@@ -669,10 +655,10 @@ def compare_matmat_expectation(
         total_samples = (m + 1) * op._mc_samples
         if total_samples % check_every == 0:
             with redirect_stdout(None), suppress(ValueError), suppress(AssertionError):
-                assert allclose_report(op_x / (m + 1), mat_x, **tol)
+                assert allclose_report(op_x / (m + 1) / scale, mat_x / scale, **tols)
                 return
 
-    assert allclose_report(op_x / max_repeats, mat_x, **tol)
+    assert allclose_report(op_x / max_repeats / scale, mat_x / scale, **tols)
 
 
 def eye_like(A: Union[Tensor, PyTorchLinearOperator]) -> Tensor:
@@ -1047,7 +1033,28 @@ def _test_ekfac_closer_to_exact_than_kfac(
     exact_kfac_dist = linalg.matrix_norm(exact - kfac_mat) / exact_norm
     exact_ekfac_dist = linalg.matrix_norm(exact - ekfac_mat) / exact_norm
     assert exact_kfac_dist > exact_ekfac_dist or (
-        allclose_report(exact_kfac_dist, exact_ekfac_dist, atol=1e-6)
+        allclose_report(exact_kfac_dist, exact_ekfac_dist)
         if exclude == "weight"
         else False
     )  # For no_weights the numerical error might dominate.
+
+
+def change_dtype(case: Tuple, dt: dtype) -> Tuple:
+    """Change the data type of a test case.
+
+    Args:
+        case: The test case (model, loss_func, params, data).
+        dt: The target data type.
+
+    Returns:
+        The converted test case with model, loss function, and data casted to ``dt``.
+    """
+    model_func, loss_func, params, data, batch_size_fn = case
+
+    model_func, loss_func = model_func.to(dt), loss_func.to(dt)
+    data = [
+        (cast_input(X, dt), y.to(dt) if isinstance(loss_func, MSELoss) else y)
+        for (X, y) in data
+    ]
+
+    return model_func, loss_func, params, data, batch_size_fn

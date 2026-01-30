@@ -9,7 +9,7 @@ Here are the imports:
 """
 
 from math import e
-from os import getenv
+from shutil import which
 
 import matplotlib.pyplot as plt
 from scipy.sparse.linalg import eigsh
@@ -34,9 +34,8 @@ from curvlinops.papyan2020traces.spectrum import (
     lanczos_approximate_spectrum,
 )
 
-# LaTeX is not available in Github actions.
-# Therefore, we are turning it off if the script executes on GHA.
-USETEX = not getenv("CI")
+# Use LaTeX if is available
+USETEX = which("latex") is not None
 
 manual_seed(0)
 
