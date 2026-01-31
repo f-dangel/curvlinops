@@ -92,6 +92,9 @@ class LinearWeightMatcher(PatternMatcher):
             Tuple containing:
                 - List of LinearLayerInfo for all weight usage matches found.
                 - List of paths from parameter node to detected output nodes.
+
+        Raises:
+            ValueError: If the detected operation has unexpected arguments or structure.
         """
         matches, paths = [], []
 
@@ -110,7 +113,12 @@ class LinearWeightMatcher(PatternMatcher):
 
                 # Case: x @ W.T + b (addmm)
                 if target == aten.addmm.default:
-                    assert len(pT_user.args) == 3 and not pT_user.kwargs
+                    if len(pT_user.args) != 3 or pT_user.kwargs:
+                        raise ValueError(
+                            f"Expected addmm node to have exactly 3 args and no "
+                            f"kwargs, got {len(pT_user.args)} args and "
+                            f"kwargs={pT_user.kwargs}"
+                        )
                     bias, inputs, _ = pT_user.args
                     layer_info = LinearLayerInfo(
                         p_node, inputs, pT_user, bias_node=bias
@@ -120,7 +128,11 @@ class LinearWeightMatcher(PatternMatcher):
 
                 # Case: x @ W.T (mm, no bias)
                 elif target == aten.mm.default:
-                    assert len(pT_user.args) == 2 and not pT_user.kwargs
+                    if len(pT_user.args) != 2 or pT_user.kwargs:
+                        raise ValueError(
+                            f"Expected mm node to have exactly 2 args and no kwargs, "
+                            f"got {len(pT_user.args)} args and kwargs={pT_user.kwargs}"
+                        )
                     inputs, _ = pT_user.args
                     layer_info = LinearLayerInfo(p_node, inputs, pT_user)
                     matches.append(layer_info)
@@ -147,6 +159,9 @@ class LinearBiasMatcher(PatternMatcher):
             Tuple containing:
                 - List of LinearLayerInfo for all bias usage matches found.
                 - List of paths from parameter node to detected output nodes.
+
+        Raises:
+            ValueError: If the detected operation has unexpected structure.
         """
         matches = []
         paths = []
@@ -159,7 +174,12 @@ class LinearBiasMatcher(PatternMatcher):
             if p_user.target == aten.addmm.default:
                 # Detect the weight
                 bias, inputs, WT = p_user.args
-                assert WT.op == "call_function" and WT.target == aten.t.default
+                if not (WT.op == "call_function" and WT.target == aten.t.default):
+                    raise ValueError(
+                        f"Expected weight transpose node to be 'call_function' with "
+                        f"target 'aten.t.default', got op='{WT.op}' and "
+                        f"target='{WT.target}'"
+                    )
                 (W,) = list(WT.all_input_nodes)
                 layer_info = LinearLayerInfo(W, inputs, p_user, bias_node=bias)
                 matches.append(layer_info)

@@ -2,15 +2,15 @@
 
 from typing import Tuple, Union
 
-from torch import Tensor, manual_seed, rand, zeros_like, arange, zeros
-from torch.nn.functional import linear
-from torch.nn import Linear
-from torch.func import functional_call
-from curvlinops.utils import allclose_report
 from pytest import raises
+from torch import Tensor, arange, manual_seed, rand, zeros, zeros_like
+from torch.func import functional_call
+from torch.nn import Linear
+from torch.nn.functional import linear
 
 from curvlinops.io_collector import with_param_io
 from curvlinops.io_patterns import NOT_A_PARAM
+from curvlinops.utils import allclose_report
 
 
 def compare_io(
