@@ -24,7 +24,8 @@ from torch.fx import GraphModule
 from torch.fx.experimental.proxy_tensor import make_fx
 from torch.nn import Linear, Sequential
 
-from curvlinops.io_patterns import match_parameter_usage, verify_match_complete
+from curvlinops.io_verification import verify_match_complete
+from curvlinops.io_patterns import match_parameter_usage
 
 
 def with_param_io(
@@ -101,20 +102,3 @@ def with_param_io(
     gm.recompile()
 
     return gm
-
-
-if __name__ == "__main__":
-    # Simple one-layer MLP test case
-    manual_seed(0)
-    mlp = Sequential(Linear(4, 3, bias=True))
-    print(dict(mlp.named_parameters()))
-
-    mlp_functional = lambda x, params: functional_call(mlp, params, args=x)
-
-    x_test = randn(2, 4)
-    params_test = {name: rand_like(p) for name, p in mlp.named_parameters()}
-
-    mlp_with_io = with_param_io(mlp_functional, x_test, params_test)
-
-    print(mlp_with_io.graph)
-    print(mlp_with_io(x_test, params_test))

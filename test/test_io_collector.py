@@ -1,6 +1,6 @@
 """Tests collecting parameter in- and output relationships."""
 
-from typing import Tuple, Union
+from typing import Callable, Dict, Tuple, Union
 
 from pytest import raises
 from torch import Tensor, arange, manual_seed, rand, zeros, zeros_like
@@ -40,7 +40,29 @@ def compare_io(
                 assert item == item_true, f"Value mismatch: {item} vs {item_true}"
 
 
-def _verify_io(f, x, params, io_true):
+def _verify_io(
+    f: Callable[[Tensor, Dict[str, Tensor]], Tensor],
+    x: Tensor,
+    params: Dict[str, Tensor],
+    io_true: Tuple[Tuple[Union[str, Tensor, None], ...], ...],
+) -> None:
+    """Verify that with_param_io produces correct outputs and IO information.
+
+    Tests that the traced function with IO collection produces the same output
+    as the original function and captures the expected layer IO relationships.
+
+    Args:
+        f: Function to test, with signature f(x, params) -> output.
+        x: Input tensor to the function.
+        params: Dictionary mapping parameter names to parameter tensors.
+        io_true: Expected tuple of layer information tuples.
+            Each layer info tuple contains:
+            (layer_type, output_node, input_node, weight_name, bias_name)
+
+    Raises:
+        AssertionError: If the function output doesn't match the expected output
+            or if the collected IO information doesn't match expectations.
+    """
     y_true = f(x, params)
 
     dummy_x = zeros_like(x)
@@ -150,9 +172,8 @@ def test_undetected_parameter_paths():
         W = params["weight"]
         return linear(x, W, bias=W.sum(1))
 
-    x, params = rand(N, D_in), {"weight": rand(D_out, D_in)}
+    x_dummy = zeros(N, D_in)
+    params_dummy = {"weight": zeros(D_out, D_in)}
 
     with raises(ValueError, match="Some parameters are used in unsupported patterns."):
-        x_dummy = zeros_like(x)
-        params_dummy = {n: zeros_like(p) for n, p in params.items()}
         _ = with_param_io(f, x_dummy, params_dummy)
