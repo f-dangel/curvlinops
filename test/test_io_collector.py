@@ -119,7 +119,7 @@ def test_unsupported_patterns():
     x_dummy = zeros(N, D_in)
     params_dummy = {"weight": zeros(D_out, D_in), "bias": zeros(D_out)}
 
-    with raises(ValueError, match="is used in an unsupported pattern"):
+    with raises(ValueError, match="Some parameters are used in unsupported patterns."):
         _ = with_param_io(f, x_dummy, params_dummy)
 
 
@@ -152,10 +152,7 @@ def test_undetected_parameter_paths():
 
     x, params = rand(N, D_in), {"weight": rand(D_out, D_in)}
 
-    # TODO This example is breaking the path detection.
-    # NOTE Maybe I have to introduce a W and WT node
-    # NOTE I need to implement a function that returns all paths.
-    with raises(ValueError, match="is used in an unsupported pattern"):
+    with raises(ValueError, match="Some parameters are used in unsupported patterns."):
         x_dummy = zeros_like(x)
         params_dummy = {n: zeros_like(p) for n, p in params.items()}
         _ = with_param_io(f, x_dummy, params_dummy)

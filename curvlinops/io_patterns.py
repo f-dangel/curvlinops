@@ -1,9 +1,9 @@
 """Contains patterns for detecting how parameters are used."""
 
 from dataclasses import dataclass
-from typing import Dict, Iterator, List, Optional, Set, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple
 
-from torch.fx import Graph, Node
+from torch.fx import Node
 from torch.ops import aten
 
 NOT_A_PARAM: str = "__not_a_param"
@@ -58,14 +58,18 @@ class PatternMatcher:
     (e.g., linear layers with/without bias).
     """
 
-    def matches(self, p_node: Node) -> List[LinearLayerInfo]:
+    def matches(
+        self, p_node: Node
+    ) -> Tuple[List[LinearLayerInfo], List[Tuple[Node, ...]]]:
         """Attempt to match a parameter node to known usage patterns.
 
         Args:
             p_node: A parameter node to check.
 
         Returns:
-            List of LinearLayerInfo for all matches found for this pattern.
+            Tuple containing:
+                - List of LinearLayerInfo for all matches found for this pattern.
+                - List of paths from parameter node to detected output nodes.
         """
         raise NotImplementedError
 
@@ -76,16 +80,20 @@ class LinearWeightMatcher(PatternMatcher):
     Detects patterns: x @ W.T (mm) or x @ W.T + b (addmm).
     """
 
-    def matches(self, p_node: Node) -> List[LinearLayerInfo]:
+    def matches(
+        self, p_node: Node
+    ) -> Tuple[List[LinearLayerInfo], List[Tuple[Node, ...]]]:
         """Match a parameter node used as weight in linear layers.
 
         Args:
             p_node: A parameter node to check.
 
         Returns:
-            List of LinearLayerInfo for all weight usage matches found.
+            Tuple containing:
+                - List of LinearLayerInfo for all weight usage matches found.
+                - List of paths from parameter node to detected output nodes.
         """
-        matches = []
+        matches, paths = [], []
 
         # Iterate over all usages where p is transposed
         for pT in [
@@ -108,6 +116,7 @@ class LinearWeightMatcher(PatternMatcher):
                         p_node, inputs, pT_user, bias_node=bias
                     )
                     matches.append(layer_info)
+                    paths.append((p_node, pT, pT_user))
 
                 # Case: x @ W.T (mm, no bias)
                 elif target == aten.mm.default:
@@ -115,8 +124,9 @@ class LinearWeightMatcher(PatternMatcher):
                     inputs, _ = pT_user.args
                     layer_info = LinearLayerInfo(p_node, inputs, pT_user)
                     matches.append(layer_info)
+                    paths.append((p_node, pT, pT_user))
 
-        return matches
+        return matches, paths
 
 
 class LinearBiasMatcher(PatternMatcher):
@@ -125,16 +135,21 @@ class LinearBiasMatcher(PatternMatcher):
     Detects pattern: x @ W.T + b (addmm) where the node is b.
     """
 
-    def matches(self, p_node: Node) -> List[LinearLayerInfo]:
+    def matches(
+        self, p_node: Node
+    ) -> Tuple[List[LinearLayerInfo], List[Tuple[Node, ...]]]:
         """Match a parameter node used as bias in linear layers.
 
         Args:
             p_node: A parameter node to check.
 
         Returns:
-            List of LinearLayerInfo for all bias usage matches found.
+            Tuple containing:
+                - List of LinearLayerInfo for all bias usage matches found.
+                - List of paths from parameter node to detected output nodes.
         """
         matches = []
+        paths = []
 
         # Check all users of the parameter node
         for p_user in p_node.users:
@@ -148,110 +163,164 @@ class LinearBiasMatcher(PatternMatcher):
                 (W,) = list(WT.all_input_nodes)
                 layer_info = LinearLayerInfo(W, inputs, p_user, bias_node=bias)
                 matches.append(layer_info)
+                paths.append((p_node, p_user))
 
-        return matches
+        return matches, paths
 
 
 def match_parameter_usage(
     param_nodes: List[Node],
-) -> List[LinearLayerInfo]:
+) -> Tuple[List[LinearLayerInfo], List[Tuple[Node, ...]]]:
     """Match parameter nodes against known usage patterns.
 
     Args:
         param_nodes: List of parameter nodes to analyze.
 
     Returns:
-        List of LinearLayerInfo for all matched patterns.
+        Tuple containing:
+            - List of LinearLayerInfo for all matched patterns.
+            - List of paths from parameter nodes to detected output nodes.
 
     Raises:
         ValueError: If a parameter node is used in an unsupported operation.
     """
     patterns: List[PatternMatcher] = [LinearWeightMatcher(), LinearBiasMatcher()]
     usage_info: List[LinearLayerInfo] = []
+    path_info: List[Tuple[Node, ...]] = []
 
     for p_node in param_nodes:
         p_usage_info = []
 
         for pattern in patterns:
-            layer_infos = pattern.matches(p_node)
+            layer_infos, detected_paths = pattern.matches(p_node)
             for info in layer_infos:
                 if info not in usage_info + p_usage_info:
                     p_usage_info.append(info)
 
+            path_info.extend(detected_paths)
+
         usage_info.extend(p_usage_info)
 
-    return usage_info
+    return usage_info, path_info
 
 
-def _find_undetected_paths(
-    node: Node, path: Tuple[Node, ...], endpoints: Set[Node]
-) -> Iterator[Tuple[Node, ...]]:
-    """Recursively find paths that reach leaf nodes without detection.
+def _truncate_to_mismatch(
+    path: Tuple[Node, ...], detected_paths_from_p: List[Tuple[Node, ...]]
+) -> Tuple[Node, ...]:
+    """Truncate a path to show only up to the first mismatching node.
 
     Args:
-        node: Current node in the traversal.
-        path: Current path from parameter node.
-        endpoints: Set of detected layer output nodes.
+        path: The uncovered path.
+        detected_paths_from_p: All detected paths from the same parameter.
+
+    Returns:
+        Truncated path up to and including the first mismatching node.
+    """
+    if not detected_paths_from_p:
+        return path
+
+    # Find the longest common prefix with any detected path
+    max_common_length = 0
+    for detected_path in detected_paths_from_p:
+        common_length = 0
+        for path_node, detected_node in zip(path, detected_path):
+            if path_node == detected_node:
+                common_length += 1
+            else:
+                break
+        max_common_length = max(max_common_length, common_length)
+
+    # Return path up to and including the first mismatching node
+    return path[: max_common_length + 1] if max_common_length < len(path) else path
+
+
+def _find_all_paths_from_param(
+    param_node: Node, max_length: Optional[int] = None
+) -> Iterator[Tuple[Node, ...]]:
+    """Find all usage paths starting from a parameter node.
+
+    Args:
+        param_node: The parameter node to start from.
+        max_length: Maximum length of paths to traverse. If None, traverse all
+            paths.
 
     Yields:
-        Undetected paths from current node.
+        All paths from the parameter node to leaf nodes or up to max_length.
     """
-    if node in endpoints:
-        # Reached a detected output, this path is captured
-        return
 
-    # Check if this is a leaf node (no users)
-    if not node.users:
-        # Reached a leaf node - check if we went through a detected output
-        if not any(n in endpoints for n in path):
-            yield path
-        return
+    def _traverse_from_node(
+        node: Node, path: Tuple[Node, ...]
+    ) -> Iterator[Tuple[Node, ...]]:
+        # Always yield the current path (we want all paths up to max_length)
+        yield path
 
-    # Continue traversal to users
-    for user in node.users:
-        yield from _find_undetected_paths(user, path + (user,), endpoints)
+        # Stop if we've reached the maximum path length
+        if max_length is not None and len(path) >= max_length:
+            return
+
+        # Stop if this is a leaf node
+        if not node.users:
+            return
+
+        # Continue to all users
+        for user in node.users:
+            yield from _traverse_from_node(user, path + (user,))
+
+    # Start traversal from parameter node
+    yield from _traverse_from_node(param_node, (param_node,))
 
 
 def verify_match_complete(
     param_nodes: List[Node],
-    usage_info: List[LinearLayerInfo],
-    graph: Graph,
+    detected_paths: List[Tuple[Node, ...]],
 ) -> None:
     """Verify that all parameter usages were detected by pattern matching.
 
-    For each parameter node, traverses all user paths and verifies that each
-    path eventually leads to a detected layer output rather than the final
-    graph output without going through detected patterns.
+    Finds all parameter usage paths and verifies that each path starts with
+    one of the detected paths (i.e., is covered by pattern matching).
 
     Args:
         param_nodes: List of parameter nodes to verify.
-        usage_info: List of detected layer information.
-        graph: The full FX graph.
+        detected_paths: List of paths from parameter nodes to detected output nodes.
 
     Raises:
-        ValueError: If any parameter usage was not detected, including the
-            graph and the first undetected path in the error message.
+        ValueError: If any parameter usage path does not start with a detected path.
     """
-    # For each parameter, collect all detected output nodes
-    param_to_detected_outputs: Dict[Node, set] = {node: set() for node in param_nodes}
+    all_uncovered_paths = []
 
-    for info in usage_info:
-        weight_node, bias_node = info.weight_node, info.bias_node
-        output_node = info.output_node
-        if weight_node is not None and weight_node in param_nodes:
-            param_to_detected_outputs[weight_node].add(output_node)
-        if bias_node is not None and bias_node in param_nodes:
-            param_to_detected_outputs[bias_node].add(output_node)
-
-    # For each parameter, verify all usage paths
+    # For each parameter, find all usage paths and check coverage
     for p in param_nodes:
-        detected_endpoints = param_to_detected_outputs[p]
+        detected_paths_from_p = [path for path in detected_paths if path[0] == p]
 
-        # Start traversal from parameter node and raise error on first undetected path
-        for undetected_path in _find_undetected_paths(p, (p,), detected_endpoints):
-            path_str = " -> ".join([str(node) for node in undetected_path])
-            raise ValueError(
-                f"FX Graph:\n{graph}\n\n"
-                f"First undetected usage path:\n{path_str}\n\n"
-                f"Parameter node {p} is used in an unsupported pattern."
+        # We only need to explore paths until the maximum detected path length
+        max_length = max([len(path) for path in detected_paths_from_p] + [0])
+
+        for path in _find_all_paths_from_param(p, max_length):
+            # Check if this usage path starts with any detected path
+            is_covered = any(
+                path == detected_path[: len(path)]
+                if len(path) <= len(detected_path)
+                else False
+                for detected_path in detected_paths_from_p
             )
+            if not is_covered:
+                # Truncate the path to show only the mismatching part
+                truncated_path = _truncate_to_mismatch(path, detected_paths_from_p)
+
+                # Only append the truncated path if it is not already in uncovered paths
+                if truncated_path not in all_uncovered_paths:
+                    all_uncovered_paths.append(truncated_path)
+
+    # If we found any uncovered paths, raise an error with all of them
+    if all_uncovered_paths:
+        error_lines = ["Undetected usage paths:"]
+        error_lines.extend(
+            [
+                f"\t{' -> '.join([str(node) for node in path])}"
+                for path in all_uncovered_paths
+            ]
+        )
+        error_lines.append("")
+        error_lines.append("Some parameters are used in unsupported patterns.")
+
+        raise ValueError("\n".join(error_lines))

@@ -74,10 +74,14 @@ def with_param_io(
     }
 
     # Match the parameter nodes to usage patterns, such as linear w/o bias.
-    usage_info = match_parameter_usage(param_nodes)
+    usage_info, detected_paths = match_parameter_usage(param_nodes)
 
     # Verify that we detected all usages
-    verify_match_complete(param_nodes, usage_info, gm.graph)
+    try:
+        verify_match_complete(param_nodes, detected_paths)
+    except ValueError as e:
+        # Prepend the fx.graph to the error message and raise
+        raise ValueError(f"FX Graph:\n{gm.graph}\n\n{str(e)}") from e
 
     # Find the original output node
     (output_node,) = [n for n in gm.graph.nodes if n.op == "output"]
