@@ -64,7 +64,7 @@ def test_fully_connected():
         return linear(x, params["weight"], bias=params["bias"])
 
     x, params = rand(N, D_in), {"weight": rand(D_out, D_in), "bias": rand(D_out)}
-    io_true = (("Linear(y=x@W^T+b)", x, f(x, params), "weight", "bias"),)
+    io_true = (("Linear(y=x@W^T+b)", f(x, params), x, "weight", "bias"),)
     _verify_io(f, x, params, io_true)
 
     # 2) Only weight as free parameter (frozen bias)
@@ -73,7 +73,7 @@ def test_fully_connected():
         return linear(x, params["weight"], bias=bias)
 
     x, params = rand(N, D_in), {"weight": rand(D_out, D_in)}
-    io_true = (("Linear(y=x@W^T+b)", x, f(x, params), "weight", NOT_A_PARAM),)
+    io_true = (("Linear(y=x@W^T+b)", f(x, params), x, "weight", NOT_A_PARAM),)
     _verify_io(f, x, params, io_true)
 
     # 3) Fully-connected layer with only bias as free parameter (frozen weight)
@@ -82,7 +82,7 @@ def test_fully_connected():
         return linear(x, weight, params["bias"])
 
     x, params = rand(N, D_in), {"bias": rand(D_out)}
-    io_true = (("Linear(y=x@W^T+b)", x, f(x, params), NOT_A_PARAM, "bias"),)
+    io_true = (("Linear(y=x@W^T+b)", f(x, params), x, NOT_A_PARAM, "bias"),)
     _verify_io(f, x, params, io_true)
 
     # 4) Fully-connected layer without bias
@@ -90,7 +90,7 @@ def test_fully_connected():
         return linear(x, params["weight"])
 
     x, params = rand(N, D_in), {"weight": rand(D_out, D_in)}
-    io_true = (("Linear(y=x@W^T+b)", x, f(x, params), "weight", None),)
+    io_true = (("Linear(y=x@W^T+b)", f(x, params), x, "weight", None),)
     _verify_io(f, x, params, io_true)
 
     # 5) Use torch.nn
@@ -100,7 +100,7 @@ def test_fully_connected():
         return functional_call(fc, params, x)
 
     x, params = rand(N, D_in), {"weight": rand(D_out, D_in), "bias": rand(D_out)}
-    io_true = (("Linear(y=x@W^T+b)", x, f(x, params), "weight", "bias"),)
+    io_true = (("Linear(y=x@W^T+b)", f(x, params), x, "weight", "bias"),)
     _verify_io(f, x, params, io_true)
 
 
@@ -135,8 +135,8 @@ def test_multiple_parameter_usages():
     x, params = rand(N, D), {"weight": rand(D, D), "bias": rand(D)}
     xW = linear(x, params["weight"], bias=params["bias"])
     io_true = (
-        ("Linear(y=x@W^T+b)", x, xW, "weight", "bias"),
-        ("Linear(y=x@W^T+b)", xW, f(x, params), "weight", None),
+        ("Linear(y=x@W^T+b)", xW, x, "weight", "bias"),
+        ("Linear(y=x@W^T+b)", f(x, params), xW, "weight", None),
     )
     _verify_io(f, x, params, io_true)
 

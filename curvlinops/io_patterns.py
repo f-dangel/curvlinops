@@ -1,7 +1,7 @@
 """Contains patterns for detecting how parameters are used."""
 
 from dataclasses import dataclass
-from typing import Dict, Iterator, List, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple, Union
 
 from torch.fx import Node
 from torch.ops import aten
@@ -14,16 +14,18 @@ class LinearLayerInfo:
     """Information about a detected linear layer operation.
 
     Attributes:
-        weight_node: The FX node representing the weight parameter.
-        input_node: The FX node representing the input to the linear operation.
-        output_node: The FX node representing the output of the linear operation.
-        bias_node: The FX node representing the bias parameter, if present.
+        y_node: The FX node representing the output of the linear operation.
+        x_node: The FX node representing the input to the linear operation.
+        WT_node: The FX node representing the weight transpose operation.
+        W_node: The FX node representing the weight parameter.
+        b_node: The FX node representing the bias parameter.
     """
 
-    weight_node: Node
-    input_node: Node
-    output_node: Node
-    bias_node: Optional[Node] = None
+    y_node: Node
+    x_node: Node
+    WT_node: Node
+    W_node: Union[Node, None]
+    b_node: Optional[Node]
 
     def to_info_tuple(
         self, node_name_to_param_name: Dict[str, str]
@@ -34,18 +36,22 @@ class LinearLayerInfo:
             node_name_to_param_name: Mapping from FX node names to parameter names.
 
         Returns:
-            Tuple containing ("Linear", input_node, output_node, weight_name, bias_name).
+            Tuple containing ("Linear", y_node, x_node, weight_name, bias_name).
         """
-        weight_name = node_name_to_param_name.get(self.weight_node.name, NOT_A_PARAM)
+        weight_name = (
+            node_name_to_param_name.get(self.W_node.name, NOT_A_PARAM)
+            if self.W_node is not None
+            else NOT_A_PARAM
+        )
         bias_name = (
             None
-            if self.bias_node is None
-            else node_name_to_param_name.get(self.bias_node.name, NOT_A_PARAM)
+            if self.b_node is None
+            else node_name_to_param_name.get(self.b_node.name, NOT_A_PARAM)
         )
         return (
             "Linear(y=x@W^T+b)",
-            self.input_node,
-            self.output_node,
+            self.y_node,
+            self.x_node,
             weight_name,
             bias_name,
         )
@@ -112,29 +118,28 @@ class LinearWeightMatcher(PatternMatcher):
                 target = pT_user.target
 
                 # Case: x @ W.T + b (addmm)
-                if target == aten.addmm.default:
-                    if len(pT_user.args) != 3 or pT_user.kwargs:
-                        raise ValueError(
-                            f"Expected addmm node to have exactly 3 args and no "
-                            f"kwargs, got {len(pT_user.args)} args and "
-                            f"kwargs={pT_user.kwargs}"
-                        )
+                if (
+                    target == aten.addmm.default
+                    and len(pT_user.args) == 3
+                    and not pT_user.kwargs
+                ):
                     bias, inputs, _ = pT_user.args
                     layer_info = LinearLayerInfo(
-                        p_node, inputs, pT_user, bias_node=bias
+                        pT_user, inputs, pT, W_node=p_node, b_node=bias
                     )
                     matches.append(layer_info)
                     paths.append((p_node, pT, pT_user))
 
                 # Case: x @ W.T (mm, no bias)
-                elif target == aten.mm.default:
-                    if len(pT_user.args) != 2 or pT_user.kwargs:
-                        raise ValueError(
-                            f"Expected mm node to have exactly 2 args and no kwargs, "
-                            f"got {len(pT_user.args)} args and kwargs={pT_user.kwargs}"
-                        )
+                elif (
+                    target == aten.mm.default
+                    and len(pT_user.args) == 2
+                    and not pT_user.kwargs
+                ):
                     inputs, _ = pT_user.args
-                    layer_info = LinearLayerInfo(p_node, inputs, pT_user)
+                    layer_info = LinearLayerInfo(
+                        pT_user, inputs, pT, W_node=p_node, b_node=None
+                    )
                     matches.append(layer_info)
                     paths.append((p_node, pT, pT_user))
 
@@ -174,14 +179,16 @@ class LinearBiasMatcher(PatternMatcher):
             if p_user.target == aten.addmm.default:
                 # Detect the weight
                 bias, inputs, WT = p_user.args
-                if not (WT.op == "call_function" and WT.target == aten.t.default):
-                    raise ValueError(
-                        f"Expected weight transpose node to be 'call_function' with "
-                        f"target 'aten.t.default', got op='{WT.op}' and "
-                        f"target='{WT.target}'"
-                    )
-                (W,) = list(WT.all_input_nodes)
-                layer_info = LinearLayerInfo(W, inputs, p_user, bias_node=bias)
+
+                # Check if WT is a valid weight transpose operation
+                (W_node,) = (
+                    list(WT.all_input_nodes)
+                    if (WT.op, WT.target) == ("call_function", aten.t.default)
+                    else (None,)
+                )
+                layer_info = LinearLayerInfo(
+                    p_user, inputs, WT, W_node=W_node, b_node=bias
+                )
                 matches.append(layer_info)
                 paths.append((p_node, p_user))
 
