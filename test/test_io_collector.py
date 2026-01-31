@@ -177,3 +177,24 @@ def test_undetected_parameter_paths():
 
     with raises(ValueError, match="Some parameters are used in unsupported patterns."):
         _ = with_param_io(f, x_dummy, params_dummy)
+
+
+def test_supports_multiple_batch_sizes():
+    """Test with_param_io supports batch sizes other than the one used for tracing."""
+    manual_seed(0)
+    N1, N2, D_in, D_out = 2, 3, 4, 5
+
+    def f(x: Tensor, params: dict) -> Tensor:
+        return linear(x, params["weight"], bias=params["bias"])
+
+    x1, x2 = rand(N1, D_in), rand(N2, D_in)
+    params = {"weight": rand(D_out, D_in), "bias": rand(D_out)}
+
+    # Use x1 for tracing
+    f_with_io = with_param_io(f, x1, params)
+
+    # Check IO for batch sizes N1 and N2
+    for x in [x1, x2]:
+        io_true = (("Linear(y=x@W^T+b)", f(x, params), x, "weight", "bias"),)
+        io = f_with_io(x, params)[1:]
+        compare_io(io, io_true)
