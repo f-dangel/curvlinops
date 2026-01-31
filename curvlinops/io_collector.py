@@ -24,7 +24,7 @@ from torch.fx import GraphModule
 from torch.fx.experimental.proxy_tensor import make_fx
 from torch.nn import Linear, Sequential
 
-from curvlinops.io_patterns import match_parameter_usage
+from curvlinops.io_patterns import match_parameter_usage, verify_match_complete
 
 
 def with_param_io(
@@ -74,12 +74,10 @@ def with_param_io(
     }
 
     # Match the parameter nodes to usage patterns, such as linear w/o bias.
-    try:
-        usage_info = match_parameter_usage(param_nodes)
-    except ValueError as e:
-        raise ValueError(f"FX Graph:\n{gm.graph}\n\n{e}") from e
+    usage_info = match_parameter_usage(param_nodes)
 
-    # NOTE We may want to verify here that the usage info is complete, i.e. that the parameter nodes are not consumed in additional ways compared to the detected usage
+    # Verify that we detected all usages
+    verify_match_complete(param_nodes, usage_info, gm.graph)
 
     # Find the original output node
     (output_node,) = [n for n in gm.graph.nodes if n.op == "output"]

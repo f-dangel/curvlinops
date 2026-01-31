@@ -1,10 +1,12 @@
 """Contains patterns for detecting how parameters are used."""
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Set, Tuple
 
-from torch.fx import Node
+from torch.fx import Graph, Node
 from torch.ops import aten
+
+NOT_A_PARAM: str = "__not_a_param"
 
 
 @dataclass
@@ -22,7 +24,6 @@ class LinearLayerInfo:
     input_node: Node
     output_node: Node
     bias_node: Optional[Node] = None
-    not_a_param: str = "__not_a_param"
 
     def to_info_tuple(
         self, node_name_to_param_name: Dict[str, str]
@@ -35,13 +36,11 @@ class LinearLayerInfo:
         Returns:
             Tuple containing ("Linear", input_node, output_node, weight_name, bias_name).
         """
-        weight_name = node_name_to_param_name.get(
-            self.weight_node.name, self.not_a_param
-        )
+        weight_name = node_name_to_param_name.get(self.weight_node.name, NOT_A_PARAM)
         bias_name = (
             None
             if self.bias_node is None
-            else node_name_to_param_name.get(self.bias_node.name, self.not_a_param)
+            else node_name_to_param_name.get(self.bias_node.name, NOT_A_PARAM)
         )
         return (
             "Linear(y=x@W^T+b)",
@@ -59,34 +58,16 @@ class PatternMatcher:
     (e.g., linear layers with/without bias).
     """
 
-    def matches(self, p_node: Node) -> Optional[LinearLayerInfo]:
-        """Attempt to match a parameter node to a known usage pattern.
+    def matches(self, p_node: Node) -> List[LinearLayerInfo]:
+        """Attempt to match a parameter node to known usage patterns.
 
         Args:
             p_node: A parameter node to check.
 
         Returns:
-            LinearLayerInfo if the node matches this pattern, None otherwise.
+            List of LinearLayerInfo for all matches found for this pattern.
         """
         raise NotImplementedError
-
-    @staticmethod
-    def _ensure_single_user(node: Node) -> Node:
-        """Get the single user of a node, raising if not exactly one.
-
-        Args:
-            node: The node to check.
-
-        Returns:
-            The single user node.
-
-        Raises:
-            ValueError: If the node does not have exactly one user.
-        """
-        users = list(node.users.keys())
-        if len(users) != 1:
-            raise ValueError(f"Node {node} is not used once ({len(users)}x).")
-        return users[0]
 
 
 class LinearWeightMatcher(PatternMatcher):
@@ -95,44 +76,47 @@ class LinearWeightMatcher(PatternMatcher):
     Detects patterns: x @ W.T (mm) or x @ W.T + b (addmm).
     """
 
-    def matches(self, p_node: Node) -> Optional[LinearLayerInfo]:
-        """Match a parameter node used as weight in a linear layer.
+    def matches(self, p_node: Node) -> List[LinearLayerInfo]:
+        """Match a parameter node used as weight in linear layers.
 
         Args:
             p_node: A parameter node to check.
 
         Returns:
-            LinearLayerInfo if the node is used as a weight, None otherwise.
+            List of LinearLayerInfo for all weight usage matches found.
         """
-        user_node = self._ensure_single_user(p_node)
+        matches = []
 
-        # Weight must first be transposed
-        if not (user_node.op == "call_function" and user_node.target == aten.t.default):
-            return None
+        # Iterate over all usages where p is transposed
+        for pT in [
+            n
+            for n in p_node.users
+            if (n.op, n.target) == ("call_function", aten.t.default)
+        ]:
+            # Check all users of p.T
+            for pT_user in pT.users:
+                if pT_user.op != "call_function":
+                    continue
 
-        T_user_node = self._ensure_single_user(user_node)
+                target = pT_user.target
 
-        # Case: x @ W.T + b (addmm)
-        if (
-            T_user_node.op == "call_function"
-            and T_user_node.target == aten.addmm.default
-        ):
-            assert len(T_user_node.args) == 3 and not T_user_node.kwargs
-            bias, inputs, _ = T_user_node.args
-            layer_info = LinearLayerInfo(p_node, inputs, T_user_node, bias_node=bias)
+                # Case: x @ W.T + b (addmm)
+                if target == aten.addmm.default:
+                    assert len(pT_user.args) == 3 and not pT_user.kwargs
+                    bias, inputs, _ = pT_user.args
+                    layer_info = LinearLayerInfo(
+                        p_node, inputs, pT_user, bias_node=bias
+                    )
+                    matches.append(layer_info)
 
-        # Case: x @ W.T (mm, no bias)
-        elif (
-            T_user_node.op == "call_function" and T_user_node.target == aten.mm.default
-        ):
-            assert len(T_user_node.args) == 2 and not T_user_node.kwargs
-            inputs, _ = T_user_node.args
-            layer_info = LinearLayerInfo(p_node, inputs, T_user_node)
+                # Case: x @ W.T (mm, no bias)
+                elif target == aten.mm.default:
+                    assert len(pT_user.args) == 2 and not pT_user.kwargs
+                    inputs, _ = pT_user.args
+                    layer_info = LinearLayerInfo(p_node, inputs, pT_user)
+                    matches.append(layer_info)
 
-        else:
-            layer_info = None
-
-        return layer_info
+        return matches
 
 
 class LinearBiasMatcher(PatternMatcher):
@@ -141,27 +125,31 @@ class LinearBiasMatcher(PatternMatcher):
     Detects pattern: x @ W.T + b (addmm) where the node is b.
     """
 
-    def matches(self, p_node: Node) -> Optional[LinearLayerInfo]:
-        """Match a parameter node used as bias in a linear layer.
+    def matches(self, p_node: Node) -> List[LinearLayerInfo]:
+        """Match a parameter node used as bias in linear layers.
 
         Args:
             p_node: A parameter node to check.
 
         Returns:
-            LinearLayerInfo if the node is used as a bias, None otherwise.
+            List of LinearLayerInfo for all bias usage matches found.
         """
-        user_node = self._ensure_single_user(p_node)
+        matches = []
 
-        # Bias is used directly in addmm
-        if not (
-            user_node.op == "call_function" and user_node.target == aten.addmm.default
-        ):
-            return None
+        # Check all users of the parameter node
+        for p_user in p_node.users:
+            if p_user.op != "call_function":
+                continue
 
-        bias, inputs, WT = user_node.args
-        assert WT.op == "call_function" and WT.target == aten.t.default
-        (W,) = list(WT.all_input_nodes)
-        return LinearLayerInfo(W, inputs, user_node, bias_node=bias)
+            if p_user.target == aten.addmm.default:
+                # Detect the weight
+                bias, inputs, WT = p_user.args
+                assert WT.op == "call_function" and WT.target == aten.t.default
+                (W,) = list(WT.all_input_nodes)
+                layer_info = LinearLayerInfo(W, inputs, p_user, bias_node=bias)
+                matches.append(layer_info)
+
+        return matches
 
 
 def match_parameter_usage(
@@ -182,20 +170,88 @@ def match_parameter_usage(
     usage_info: List[LinearLayerInfo] = []
 
     for p_node in param_nodes:
-        matched = False
+        p_usage_info = []
 
         for pattern in patterns:
-            layer_info = pattern.matches(p_node)
-            if layer_info is not None:
-                matched = True
-                break
+            layer_infos = pattern.matches(p_node)
+            for info in layer_infos:
+                if info not in usage_info + p_usage_info:
+                    p_usage_info.append(info)
 
-        if layer_info is not None and layer_info not in usage_info:
-            usage_info.append(layer_info)
-
-        if not matched:
-            raise ValueError(
-                f"Parameter node {p_node} is used in an unsupported pattern."
-            )
+        usage_info.extend(p_usage_info)
 
     return usage_info
+
+
+def _find_undetected_paths(
+    node: Node, path: Tuple[Node, ...], endpoints: Set[Node]
+) -> Iterator[Tuple[Node, ...]]:
+    """Recursively find paths that reach leaf nodes without detection.
+
+    Args:
+        node: Current node in the traversal.
+        path: Current path from parameter node.
+        endpoints: Set of detected layer output nodes.
+
+    Yields:
+        Undetected paths from current node.
+    """
+    if node in endpoints:
+        # Reached a detected output, this path is captured
+        return
+
+    # Check if this is a leaf node (no users)
+    if not node.users:
+        # Reached a leaf node - check if we went through a detected output
+        if not any(n in endpoints for n in path):
+            yield path
+        return
+
+    # Continue traversal to users
+    for user in node.users:
+        yield from _find_undetected_paths(user, path + (user,), endpoints)
+
+
+def verify_match_complete(
+    param_nodes: List[Node],
+    usage_info: List[LinearLayerInfo],
+    graph: Graph,
+) -> None:
+    """Verify that all parameter usages were detected by pattern matching.
+
+    For each parameter node, traverses all user paths and verifies that each
+    path eventually leads to a detected layer output rather than the final
+    graph output without going through detected patterns.
+
+    Args:
+        param_nodes: List of parameter nodes to verify.
+        usage_info: List of detected layer information.
+        graph: The full FX graph.
+
+    Raises:
+        ValueError: If any parameter usage was not detected, including the
+            graph and the first undetected path in the error message.
+    """
+    # For each parameter, collect all detected output nodes
+    param_to_detected_outputs: Dict[Node, set] = {node: set() for node in param_nodes}
+
+    for info in usage_info:
+        weight_node, bias_node = info.weight_node, info.bias_node
+        output_node = info.output_node
+        if weight_node is not None and weight_node in param_nodes:
+            param_to_detected_outputs[weight_node].add(output_node)
+        if bias_node is not None and bias_node in param_nodes:
+            param_to_detected_outputs[bias_node].add(output_node)
+
+    # For each parameter, verify all usage paths
+    for p in param_nodes:
+        detected_endpoints = param_to_detected_outputs[p]
+
+        # Start traversal from parameter node and raise error on first undetected path
+        for undetected_path in _find_undetected_paths(p, (p,), detected_endpoints):
+            path_str = " -> ".join([str(node) for node in undetected_path])
+            raise ValueError(
+                f"FX Graph:\n{graph}\n\n"
+                f"First undetected usage path:\n{path_str}\n\n"
+                f"Parameter node {p} is used in an unsupported pattern."
+            )

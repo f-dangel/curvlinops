@@ -10,6 +10,7 @@ from curvlinops.utils import allclose_report
 from pytest import raises
 
 from curvlinops.io_collector import with_param_io
+from curvlinops.io_patterns import NOT_A_PARAM
 
 
 def compare_io(
@@ -72,7 +73,7 @@ def test_fully_connected():
         return linear(x, params["weight"], bias=bias)
 
     x, params = rand(N, D_in), {"weight": rand(D_out, D_in)}
-    io_true = (("Linear(y=x@W^T+b)", x, f(x, params), "weight", "__not_a_param"),)
+    io_true = (("Linear(y=x@W^T+b)", x, f(x, params), "weight", NOT_A_PARAM),)
     _verify_io(f, x, params, io_true)
 
     # 3) Fully-connected layer with only bias as free parameter (frozen weight)
@@ -81,10 +82,10 @@ def test_fully_connected():
         return linear(x, weight, params["bias"])
 
     x, params = rand(N, D_in), {"bias": rand(D_out)}
-    io_true = (("Linear(y=x@W^T+b)", x, f(x, params), "__not_a_param", "bias"),)
+    io_true = (("Linear(y=x@W^T+b)", x, f(x, params), NOT_A_PARAM, "bias"),)
     _verify_io(f, x, params, io_true)
 
-    # Fully-connected layer without bias
+    # 4) Fully-connected layer without bias
     def f(x: Tensor, params: dict) -> Tensor:
         return linear(x, params["weight"])
 
@@ -92,7 +93,7 @@ def test_fully_connected():
     io_true = (("Linear(y=x@W^T+b)", x, f(x, params), "weight", None),)
     _verify_io(f, x, params, io_true)
 
-    # Use torch.nn
+    # 5) Use torch.nn
     fc = Linear(D_out, D_in, bias=True)
 
     def f(x: Tensor, params: dict) -> Tensor:
@@ -101,6 +102,12 @@ def test_fully_connected():
     x, params = rand(N, D_in), {"weight": rand(D_out, D_in), "bias": rand(D_out)}
     io_true = (("Linear(y=x@W^T+b)", x, f(x, params), "weight", "bias"),)
     _verify_io(f, x, params, io_true)
+
+
+def test_unsupported_patterns():
+    """Test that unsupported patterns raise ValueError."""
+    manual_seed(0)
+    N, D_in, D_out = 2, 3, 4
 
     # NOTE Although mathematically equivalent, these patterns are not implemented
     # and can therefore not be detected.
@@ -113,4 +120,42 @@ def test_fully_connected():
     params_dummy = {"weight": zeros(D_out, D_in), "bias": zeros(D_out)}
 
     with raises(ValueError, match="is used in an unsupported pattern"):
+        _ = with_param_io(f, x_dummy, params_dummy)
+
+
+def test_multiple_parameter_usages():
+    """Test multiple usages of the same parameter (recurrent structure)."""
+    manual_seed(0)
+    N, D = 2, 3
+
+    def f(x: Tensor, params: dict) -> Tensor:
+        xW = linear(x, params["weight"], bias=params["bias"])
+        return linear(xW, params["weight"])
+
+    x, params = rand(N, D), {"weight": rand(D, D), "bias": rand(D)}
+    xW = linear(x, params["weight"], bias=params["bias"])
+    io_true = (
+        ("Linear(y=x@W^T+b)", x, xW, "weight", "bias"),
+        ("Linear(y=x@W^T+b)", xW, f(x, params), "weight", None),
+    )
+    _verify_io(f, x, params, io_true)
+
+
+def test_undetected_parameter_paths():
+    """Test case where not all parameter usage paths are detected."""
+    manual_seed(0)
+    N, D_in, D_out = 2, 3, 4
+
+    def f(x: Tensor, params: dict) -> Tensor:
+        W = params["weight"]
+        return linear(x, W, bias=W.sum(1))
+
+    x, params = rand(N, D_in), {"weight": rand(D_out, D_in)}
+
+    # TODO This example is breaking the path detection.
+    # NOTE Maybe I have to introduce a W and WT node
+    # NOTE I need to implement a function that returns all paths.
+    with raises(ValueError, match="is used in an unsupported pattern"):
+        x_dummy = zeros_like(x)
+        params_dummy = {n: zeros_like(p) for n, p in params.items()}
         _ = with_param_io(f, x_dummy, params_dummy)
