@@ -18,14 +18,13 @@ the intermediates that are consumed and produced by the specified parameters.
 
 from typing import Callable, Dict
 
-from torch import Tensor, manual_seed, rand_like, randn
-from torch.func import functional_call, functionalize
+from torch import Tensor
+from torch.func import functionalize
 from torch.fx import GraphModule
 from torch.fx.experimental.proxy_tensor import make_fx
-from torch.nn import Linear, Sequential
 
-from curvlinops.io_verification import verify_match_complete
 from curvlinops.io_patterns import match_parameter_usage
+from curvlinops.io_verification import verify_match_complete
 
 
 def with_param_io(
