@@ -83,17 +83,15 @@ def with_param_io(
         # Prepend the fx.graph to the error message and raise
         raise ValueError(f"FX Graph:\n{gm.graph}\n\n{str(e)}") from e
 
-    # Find the original output node
-    (output_node,) = [n for n in gm.graph.nodes if n.op == "output"]
-    ((output_value_node,),) = output_node.args
-
     # Build the layer info tuples to return alongside the original output
     # Format: ("Linear", input_node, output_node, weight_name | None, bias_name | None)
-    layer_info_tuples = []
+    layer_info_tuples = [
+        info.to_info_tuple(node_name_to_param_name) for info in usage_info
+    ]
 
-    for info in usage_info:
-        layer_info_tuples.append(info.to_info_tuple(node_name_to_param_name))
-
+    # Find the original output node and modify its argument
+    (output_node,) = [n for n in gm.graph.nodes if n.op == "output"]
+    ((output_value_node,),) = output_node.args
     output_node.args = (((output_value_node, *layer_info_tuples),),)
 
     # Recompile the graph after modification
