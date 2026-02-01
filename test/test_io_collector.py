@@ -133,8 +133,21 @@ def test_convolution():
     manual_seed(0)
     N, C_out, C_in, K1, K2, I1, I2 = 2, 3, 4, 5, 6, 15, 16
 
+    # 1) Standard convolution
     def f(x: Tensor, params: dict) -> Tensor:
         return conv2d(x, params["weight"], bias=params["bias"])
+
+    x = rand(N, C_in, I1, I2)
+    params = {"weight": rand(C_out, C_in, K1, K2), "bias": rand(C_out)}
+    io_true = (("Conv2d(y=x*W+b)", f(x, params), x, "weight", "bias"),)
+    _verify_io(f, x, params, io_true)
+
+    # 2) Non-standard convolution
+    def f(x: Tensor, params: dict) -> Tensor:
+        stride = 2
+        # NOTE We are only supplying padding as keyword arg and bias and strides
+        # as positional in an attempt to confuse fx
+        return conv2d(x, params["weight"], params["bias"], stride, padding=1)
 
     x = rand(N, C_in, I1, I2)
     params = {"weight": rand(C_out, C_in, K1, K2), "bias": rand(C_out)}
