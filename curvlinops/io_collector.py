@@ -49,8 +49,10 @@ def with_param_io(
         A traced FX GraphModule that returns a tuple:
             (original_output, layer_info_1, layer_info_2, ...)
         where each layer_info is a tuple:
-            ("Linear", layer_input, layer_output, weight_name, bias_name)
-        with bias_name being None if the layer has no bias.
+            ("Linear", layer_output, layer_input, weight_name, bias_name)
+        with bias_name being None if the layer has no bias and weight_name or
+        bias_name being `NOT_A_PARAM` if the tensor used as weight or bias is
+        not a parameter of `named_params`.
 
     Raises:
         ValueError: If a parameter is used in an unsupported way, or if the
