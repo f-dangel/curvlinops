@@ -171,4 +171,4 @@ def with_kfac_io(
 
         return out, layer_inputs, layer_outputs, layer_names
 
-    return f_and_kfac_io
+    return make_fx(f_and_kfac_io)(x, named_params)
