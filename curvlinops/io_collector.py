@@ -16,7 +16,6 @@ With the above mechanism, we can now augment f to not only return f(x), but also
 the intermediates that are consumed and produced by the specified parameters.
 """
 
-from collections import Counter
 from typing import Any, Callable, Dict, Tuple, Union
 
 from torch import Tensor
@@ -25,6 +24,7 @@ from torch.fx.experimental.proxy_tensor import make_fx
 
 from curvlinops.io_patterns import NOT_A_PARAM, match_parameter_usage
 from curvlinops.io_verification import verify_match_complete
+from curvlinops.kfac import FisherType
 
 
 def with_param_io(
@@ -108,10 +108,12 @@ def with_kfac_io(
     x: Tensor,
     named_params: Dict[str, Tensor],
     fisher_type: str,
-) -> Callable[[Tensor, Dict[str, Tensor]], Tuple[Tensor, Dict[str, Tensor]]]:
+) -> Callable[
+    [Tensor, Dict[str, Tensor]],
+    Tuple[Tensor, Dict[str, Tensor], Dict[str, Tensor], Dict[str, Dict[str, str]]],
+]:
     """Return layers and their relevant inputs/outputs of parameters."""
-    assert fisher_type == "empirical"
-
+    assert fisher_type in FisherType
     f_with_param_io = with_param_io(f, x, named_params)
 
     # Extract layer info from the traced function's output structure to check param usage
@@ -158,10 +160,13 @@ def with_kfac_io(
             name = f"Linear{i}"
             layer_names[name] = {}
             if weight_name != NOT_A_PARAM:
-                layer_inputs[name], layer_outputs[name] = x, y
+                layer_inputs[name] = x
+                if fisher_type != "forward-only":
+                    layer_outputs[name] = y
                 layer_names[name]["weight"] = weight_name
             if bias_name not in {None, NOT_A_PARAM}:
-                layer_outputs[name] = y
+                if fisher_type != "forward-only":
+                    layer_outputs[name] = y
                 layer_names[name]["bias"] = bias_name
 
         return out, layer_inputs, layer_outputs, layer_names
