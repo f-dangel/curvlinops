@@ -1,7 +1,7 @@
 """Pattern matching for detecting linear layer operations and parameter usage."""
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from torch.fx import Node
 from torch.ops import aten
@@ -29,14 +29,15 @@ class LinearLayerInfo:
 
     def to_info_tuple(
         self, node_name_to_param_name: Dict[str, str]
-    ) -> Tuple[str, Node, Node, Optional[str], Optional[str]]:
+    ) -> Tuple[str, Node, Node, Optional[str], Optional[str], Dict[str, Any]]:
         """Convert to layer info tuple format.
 
         Args:
             node_name_to_param_name: Mapping from FX node names to parameter names.
 
         Returns:
-            Tuple containing ("Linear", y_node, x_node, weight_name, bias_name).
+            Tuple containing:
+                ("Linear", y_node, x_node, weight_name, bias_name, hyperparams).
         """
         return _create_info_tuple(
             "Linear(y=x@W^T+b)",
@@ -44,6 +45,7 @@ class LinearLayerInfo:
             self.x_node,
             self.W_node,
             self.b_node,
+            {},  # Linear layers have no hyperparameters
             node_name_to_param_name,
         )
 

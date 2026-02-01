@@ -1,7 +1,7 @@
 """Tests collecting parameter in- and output relationships."""
 
 from collections import OrderedDict
-from typing import Callable, Dict, Tuple, Union
+from typing import Any, Callable, Dict, Tuple, Union
 
 from pytest import mark, raises
 from torch import Tensor, arange, manual_seed, rand, randn_like, zeros, zeros_like
@@ -16,8 +16,8 @@ from curvlinops.utils import allclose_report
 
 
 def compare_io(
-    info: Tuple[Tuple[Union[str, Tensor, None], ...], ...],
-    info_true: Tuple[Tuple[Union[str, Tensor, None], ...], ...],
+    info: Tuple[Tuple[Union[str, Tensor, None, Dict[str, Any]], ...], ...],
+    info_true: Tuple[Tuple[Union[str, Tensor, None, Dict[str, Any]], ...], ...],
 ) -> None:
     """Compare two layer info tuple collections for equality.
 
@@ -38,6 +38,8 @@ def compare_io(
         for item, item_true in zip(layer_info, layer_info_true):
             if isinstance(item, Tensor) and isinstance(item_true, Tensor):
                 assert allclose_report(item, item_true)
+            elif isinstance(item, dict) and isinstance(item_true, dict):
+                assert item == item_true, f"Dict mismatch: {item} vs {item_true}"
             else:
                 assert item == item_true, f"Value mismatch: {item} vs {item_true}"
 
@@ -46,7 +48,7 @@ def _verify_io(
     f: Callable[[Tensor, Dict[str, Tensor]], Tensor],
     x: Tensor,
     params: Dict[str, Tensor],
-    io_true: Tuple[Tuple[Union[str, Tensor, None], ...], ...],
+    io_true: Tuple[Tuple[Union[str, Tensor, None, Dict[str, Any]], ...], ...],
 ) -> None:
     """Verify that with_param_io produces correct outputs and IO information.
 
@@ -59,7 +61,7 @@ def _verify_io(
         params: Dictionary mapping parameter names to parameter tensors.
         io_true: Expected tuple of layer information tuples.
             Each layer info tuple contains:
-            (layer_type, output_node, input_node, weight_name, bias_name)
+            (layer_type, output_node, input_node, weight_name, bias_name, hyperparams)
 
     Raises:
         AssertionError: If the function output doesn't match the expected output
@@ -88,7 +90,7 @@ def test_fully_connected():
         return linear(x, params["weight"], bias=params["bias"])
 
     x, params = rand(N, D_in), {"weight": rand(D_out, D_in), "bias": rand(D_out)}
-    io_true = (("Linear(y=x@W^T+b)", f(x, params), x, "weight", "bias"),)
+    io_true = (("Linear(y=x@W^T+b)", f(x, params), x, "weight", "bias", {}),)
     _verify_io(f, x, params, io_true)
 
     # 2) Only weight as free parameter (frozen bias)
@@ -97,7 +99,7 @@ def test_fully_connected():
         return linear(x, params["weight"], bias=bias)
 
     x, params = rand(N, D_in), {"weight": rand(D_out, D_in)}
-    io_true = (("Linear(y=x@W^T+b)", f(x, params), x, "weight", NOT_A_PARAM),)
+    io_true = (("Linear(y=x@W^T+b)", f(x, params), x, "weight", NOT_A_PARAM, {}),)
     _verify_io(f, x, params, io_true)
 
     # 3) Only bias as free parameter (frozen weight)
@@ -106,7 +108,7 @@ def test_fully_connected():
         return linear(x, weight, params["bias"])
 
     x, params = rand(N, D_in), {"bias": rand(D_out)}
-    io_true = (("Linear(y=x@W^T+b)", f(x, params), x, NOT_A_PARAM, "bias"),)
+    io_true = (("Linear(y=x@W^T+b)", f(x, params), x, NOT_A_PARAM, "bias", {}),)
     _verify_io(f, x, params, io_true)
 
     # 4) Without bias
@@ -114,7 +116,7 @@ def test_fully_connected():
         return linear(x, params["weight"])
 
     x, params = rand(N, D_in), {"weight": rand(D_out, D_in)}
-    io_true = (("Linear(y=x@W^T+b)", f(x, params), x, "weight", None),)
+    io_true = (("Linear(y=x@W^T+b)", f(x, params), x, "weight", None, {}),)
     _verify_io(f, x, params, io_true)
 
     # 5) Use torch.nn
@@ -124,8 +126,18 @@ def test_fully_connected():
         return functional_call(fc, params, x)
 
     x, params = rand(N, D_in), {"weight": rand(D_out, D_in), "bias": rand(D_out)}
-    io_true = (("Linear(y=x@W^T+b)", f(x, params), x, "weight", "bias"),)
+    io_true = (("Linear(y=x@W^T+b)", f(x, params), x, "weight", "bias", {}),)
     _verify_io(f, x, params, io_true)
+
+
+CONV2D_DEFAULT_PARAMS = {
+    "stride": [1, 1],
+    "padding": [0, 0],
+    "dilation": [1, 1],
+    "transposed": False,
+    "output_padding": [0, 0],
+    "groups": 1,
+}
 
 
 def test_convolution():
@@ -133,16 +145,18 @@ def test_convolution():
     manual_seed(0)
     N, C_out, C_in, K1, K2, I1, I2 = 2, 3, 4, 5, 6, 15, 16
 
-    # 1) Standard convolution
+    # 1) Standard convolution with weight and bias
     def f(x: Tensor, params: dict) -> Tensor:
         return conv2d(x, params["weight"], bias=params["bias"])
 
     x = rand(N, C_in, I1, I2)
     params = {"weight": rand(C_out, C_in, K1, K2), "bias": rand(C_out)}
-    io_true = (("Conv2d(y=x*W+b)", f(x, params), x, "weight", "bias"),)
+    io_true = (
+        ("Conv2d(y=x*W+b)", f(x, params), x, "weight", "bias", CONV2D_DEFAULT_PARAMS),
+    )
     _verify_io(f, x, params, io_true)
 
-    # 2) Non-standard convolution
+    # 2) Non-standard convolution with weight and bias
     def f(x: Tensor, params: dict) -> Tensor:
         stride = 2
         # NOTE We are only supplying padding as keyword arg and bias and strides
@@ -151,8 +165,17 @@ def test_convolution():
 
     x = rand(N, C_in, I1, I2)
     params = {"weight": rand(C_out, C_in, K1, K2), "bias": rand(C_out)}
-    io_true = (("Conv2d(y=x*W+b)", f(x, params), x, "weight", "bias"),)
+    hyperparams_true = {
+        **CONV2D_DEFAULT_PARAMS,
+        **{"stride": [2, 2], "padding": [1, 1]},
+    }
+    io_true = (
+        ("Conv2d(y=x*W+b)", f(x, params), x, "weight", "bias", hyperparams_true),
+    )
     _verify_io(f, x, params, io_true)
+
+    # 3) TODO
+    raise NotImplementedError
 
 
 def test_unsupported_patterns():
@@ -186,8 +209,8 @@ def test_multiple_parameter_usages():
     x, params = rand(N, D), {"weight": rand(D, D), "bias": rand(D)}
     xW = linear(x, params["weight"], bias=params["bias"])
     io_true = (
-        ("Linear(y=x@W^T+b)", xW, x, "weight", "bias"),
-        ("Linear(y=x@W^T+b)", f(x, params), xW, "weight", None),
+        ("Linear(y=x@W^T+b)", xW, x, "weight", "bias", {}),
+        ("Linear(y=x@W^T+b)", f(x, params), xW, "weight", None, {}),
     )
     _verify_io(f, x, params, io_true)
 
@@ -224,7 +247,7 @@ def test_supports_multiple_batch_sizes():
 
     # Check IO for batch sizes N1 and N2
     for x in [x1, x2]:
-        io_true = (("Linear(y=x@W^T+b)", f(x, params), x, "weight", "bias"),)
+        io_true = (("Linear(y=x@W^T+b)", f(x, params), x, "weight", "bias", {}),)
         io = f_with_io(x, params)[1:]
         compare_io(io, io_true)
 
@@ -249,16 +272,20 @@ def _verify_kfac_io(
     params: Dict[str, Tensor],
     fisher_type: str,
     kfac_io_true: Tuple[
-        Tensor, Dict[str, Tensor], Dict[str, Tensor], Dict[str, Dict[str, str]]
+        Tensor,
+        Dict[str, Tensor],
+        Dict[str, Tensor],
+        Dict[str, Dict[str, str]],
+        Dict[str, Dict[str, Any]],
     ],
 ) -> None:
-    y_true, inputs_true, outputs_true, layers_true = kfac_io_true
+    y_true, inputs_true, outputs_true, layers_true, hyperparams_true = kfac_io_true
 
     dummy_x = zeros_like(x)
     dummy_params = {n: zeros_like(p) for n, p in params.items()}
     f_and_kfac_io = with_kfac_io(f, dummy_x, dummy_params, fisher_type)
 
-    y, inputs, outputs, layers = f_and_kfac_io(x, params)
+    y, inputs, outputs, layers, hyperparams = f_and_kfac_io(x, params)
 
     # Compare function value
     assert allclose_report(y, y_true)
@@ -275,6 +302,9 @@ def _verify_kfac_io(
 
     # Compare layer dicts
     assert layers == layers_true
+
+    # Compare hyperparameters
+    assert hyperparams == hyperparams_true
 
 
 def test_with_kfac_io_fully_connected():
@@ -300,6 +330,7 @@ def test_with_kfac_io_fully_connected():
             # Forward-only KFAC does not require storing outputs
             {} if fisher_type == FisherType.FORWARD_ONLY else {"Linear0": f(x, params)},
             {"Linear0": {"weight": "w", "bias": "b"}},
+            {"Linear0": {}},  # Linear layers have empty hyperparams
         )
         _verify_kfac_io(f, x, params, fisher_type, kfac_io_true)
 
@@ -317,6 +348,7 @@ def test_with_kfac_io_fully_connected():
             # Forward-only KFAC does not require storing outputs
             {} if fisher_type == FisherType.FORWARD_ONLY else {"Linear0": f(x, params)},
             {"Linear0": {"weight": "w"}},
+            {"Linear0": {}},  # Linear layers have empty hyperparams
         )
         _verify_kfac_io(f, x, params, fisher_type, kfac_io_true)
 
@@ -334,6 +366,7 @@ def test_with_kfac_io_fully_connected():
             # Forward-only KFAC does not require storing outputs
             {} if fisher_type == FisherType.FORWARD_ONLY else {"Linear0": f(x, params)},
             {"Linear0": {"bias": "b"}},
+            {"Linear0": {}},  # Linear layers have empty hyperparams
         )
         _verify_kfac_io(f, x, params, fisher_type, kfac_io_true)
 
@@ -350,6 +383,7 @@ def test_with_kfac_io_fully_connected():
             # Forward-only KFAC does not require storing outputs
             {} if fisher_type == FisherType.FORWARD_ONLY else {"Linear0": f(x, params)},
             {"Linear0": {"weight": "w"}},
+            {"Linear0": {}},  # Linear layers have empty hyperparams
         )
         _verify_kfac_io(f, x, params, fisher_type, kfac_io_true)
 
@@ -417,6 +451,11 @@ def test_kfac_io_mlp(inplace: bool):
                 "Linear0": {"weight": "0.weight", "bias": "0.bias"},
                 "Linear1": {"weight": "2.weight"},
                 "Linear2": {"bias": "4.bias"},
+            },
+            {
+                "Linear0": {},  # Linear layers have empty hyperparams
+                "Linear1": {},  # Linear layers have empty hyperparams
+                "Linear2": {},  # Linear layers have empty hyperparams
             },
         )
         _verify_kfac_io(f, x, params, fisher_type, kfac_io_true)

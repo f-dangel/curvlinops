@@ -14,8 +14,9 @@ def _create_info_tuple(
     x_node: Node,
     W_node: Union[Node, None],
     b_node: Optional[Node],
+    hyperparams: Dict[str, Any],
     node_name_to_param_name: Dict[str, str],
-) -> Tuple[str, Node, Node, Optional[str], Optional[str]]:
+) -> Tuple[str, Node, Node, Optional[str], Optional[str], Dict[str, Any]]:
     """Create a layer info tuple with common logic.
 
     Args:
@@ -24,10 +25,12 @@ def _create_info_tuple(
         x_node: The input node.
         W_node: The weight parameter node.
         b_node: The bias parameter node.
+        hyperparams: Dictionary of layer hyperparameters.
         node_name_to_param_name: Mapping from FX node names to parameter names.
 
     Returns:
-        Tuple containing (operation_name, y_node, x_node, weight_name, bias_name).
+        Tuple containing:
+            (operation_name, y_node, x_node, weight_name, bias_name, hyperparams).
     """
     weight_name = (
         node_name_to_param_name.get(W_node.name, NOT_A_PARAM)
@@ -39,7 +42,7 @@ def _create_info_tuple(
         if b_node is None
         else node_name_to_param_name.get(b_node.name, NOT_A_PARAM)
     )
-    return (operation_name, y_node, x_node, weight_name, bias_name)
+    return (operation_name, y_node, x_node, weight_name, bias_name, hyperparams)
 
 
 class PatternMatcher:

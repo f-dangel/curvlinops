@@ -110,9 +110,30 @@ def with_kfac_io(
     fisher_type: str,
 ) -> Callable[
     [Tensor, Dict[str, Tensor]],
-    Tuple[Tensor, Dict[str, Tensor], Dict[str, Tensor], Dict[str, Dict[str, str]]],
+    Tuple[
+        Tensor,
+        Dict[str, Tensor],
+        Dict[str, Tensor],
+        Dict[str, Dict[str, str]],
+        Dict[str, Dict[str, Any]],
+    ],
 ]:
-    """Return layers and their relevant inputs/outputs of parameters."""
+    """Return layers and their relevant inputs/outputs of parameters.
+
+    Args:
+        f: Function to trace and augment with KFAC IO collection.
+        x: Example input tensor for tracing.
+        named_params: Dictionary mapping parameter names to parameter tensors.
+        fisher_type: Type of Fisher information computation.
+
+    Returns:
+        Traced function that returns:
+            - Original function output
+            - Layer inputs (dict mapping layer names to input tensors)
+            - Layer outputs (dict mapping layer names to output tensors)
+            - Layer parameter names (dict mapping layer names to param name dicts)
+            - Layer hyperparameters (dict mapping layer names to hyperparameter dicts)
+    """
     assert fisher_type in FisherType
     f_with_param_io = with_param_io(f, x, named_params)
 
@@ -127,8 +148,9 @@ def with_kfac_io(
     # (multiple usages are currently unsupported)
     param_usages = dict.fromkeys(named_params, 0)
     for layer_info_tuple in layer_info_tuples:
-        # Each layer_info_tuple is ("Linear", y_node, x_node, weight_name, bias_name)
-        _, _, _, weight_name, bias_name = layer_info_tuple
+        # Each layer_info_tuple is:
+        # ("Linear", y_node, x_node, weight_name, bias_name, hyperparams)
+        _, _, _, weight_name, bias_name, _ = layer_info_tuple
         if weight_name in param_usages:
             param_usages[weight_name] += 1
         if bias_name in param_usages:
@@ -141,8 +163,23 @@ def with_kfac_io(
 
     def f_and_kfac_io(
         x: Tensor, params: Dict[str, Tensor]
-    ) -> Tuple[Tensor, Dict[str, Tensor], Dict[str, Tensor], Dict[str, Dict[str, str]]]:
-        """Evaluate the function and return all relevant in/outputs for KFAC."""
+    ) -> Tuple[
+        Tensor,
+        Dict[str, Tensor],
+        Dict[str, Tensor],
+        Dict[str, Dict[str, str]],
+        Dict[str, Dict[str, Any]],
+    ]:
+        """Evaluate the function and return all relevant in/outputs for KFAC.
+
+        Returns:
+            Tuple containing:
+                - Original function output
+                - Layer inputs (dict mapping layer names to input tensors)
+                - Layer outputs (dict mapping layer names to output tensors)
+                - Layer parameter names (dict mapping layer names to param name dicts)
+                - Layer hyperparameters (dict mapping layer names to hyperparameter dicts)
+        """
         # Evaluate the function and its param IOs
         out_with_io = f_with_param_io(x, params)
         out, layer_infos = out_with_io[0], out_with_io[1:]
@@ -154,8 +191,10 @@ def with_kfac_io(
         layer_names: Dict[str, Dict[str, str]] = {}
         layer_inputs: Dict[str, Tensor] = {}
         layer_outputs: Dict[str, Tensor] = {}
+        layer_hyperparams: Dict[str, Dict[str, Any]] = {}
+
         for i, layer_info in enumerate(layer_infos):
-            op, y, x, weight_name, bias_name = layer_info
+            op, y, x, weight_name, bias_name, hyperparams = layer_info
             if op.startswith("Linear("):
                 name = f"Linear{i}"
             elif op.startswith("Conv2d("):
@@ -163,6 +202,8 @@ def with_kfac_io(
             else:
                 raise ValueError(f"Unsupported operation: {op}")
             layer_names[name] = {}
+            layer_hyperparams[name] = hyperparams
+
             if weight_name != NOT_A_PARAM:
                 layer_inputs[name] = x
                 if fisher_type != "forward-only":
@@ -173,6 +214,6 @@ def with_kfac_io(
                     layer_outputs[name] = y
                 layer_names[name]["bias"] = bias_name
 
-        return out, layer_inputs, layer_outputs, layer_names
+        return out, layer_inputs, layer_outputs, layer_names, layer_hyperparams
 
     return make_fx(f_and_kfac_io)(x, named_params)
