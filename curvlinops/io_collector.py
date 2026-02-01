@@ -156,8 +156,12 @@ def with_kfac_io(
         layer_outputs: Dict[str, Tensor] = {}
         for i, layer_info in enumerate(layer_infos):
             op, y, x, weight_name, bias_name = layer_info
-            assert op.startswith("Linear(")
-            name = f"Linear{i}"
+            if op.startswith("Linear("):
+                name = f"Linear{i}"
+            elif op.startswith("Conv2d("):
+                name = f"Conv2d{i}"
+            else:
+                raise ValueError(f"Unsupported operation: {op}")
             layer_names[name] = {}
             if weight_name != NOT_A_PARAM:
                 layer_inputs[name] = x

@@ -1,4 +1,4 @@
-"""Contains patterns for detecting how parameters are used."""
+"""Pattern matching for detecting linear layer operations and parameter usage."""
 
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Union
@@ -6,7 +6,7 @@ from typing import Dict, List, Optional, Tuple, Union
 from torch.fx import Node
 from torch.ops import aten
 
-NOT_A_PARAM: str = "__not_a_param"
+from ._base import PatternMatcher, _create_info_tuple
 
 
 @dataclass
@@ -38,40 +38,14 @@ class LinearLayerInfo:
         Returns:
             Tuple containing ("Linear", y_node, x_node, weight_name, bias_name).
         """
-        weight_name = (
-            node_name_to_param_name.get(self.W_node.name, NOT_A_PARAM)
-            if self.W_node is not None
-            else NOT_A_PARAM
+        return _create_info_tuple(
+            "Linear(y=x@W^T+b)",
+            self.y_node,
+            self.x_node,
+            self.W_node,
+            self.b_node,
+            node_name_to_param_name,
         )
-        bias_name = (
-            None
-            if self.b_node is None
-            else node_name_to_param_name.get(self.b_node.name, NOT_A_PARAM)
-        )
-        return ("Linear(y=x@W^T+b)", self.y_node, self.x_node, weight_name, bias_name)
-
-
-class PatternMatcher:
-    """Base class for matching parameter usage patterns in FX graphs.
-
-    Subclasses implement specific pattern matching logic for different layer types
-    (e.g., linear layers with/without bias).
-    """
-
-    def matches(
-        self, p_node: Node
-    ) -> Tuple[List[LinearLayerInfo], List[Tuple[Node, ...]]]:
-        """Attempt to match a parameter node to known usage patterns.
-
-        Args:
-            p_node: A parameter node to check.
-
-        Returns:
-            Tuple containing:
-                - List of LinearLayerInfo for all matches found for this pattern.
-                - List of paths from parameter node to detected output nodes.
-        """
-        raise NotImplementedError
 
 
 class LinearWeightMatcher(PatternMatcher):
@@ -187,39 +161,3 @@ class LinearBiasMatcher(PatternMatcher):
                 paths.append((p_node, p_user))
 
         return matches, paths
-
-
-def match_parameter_usage(
-    param_nodes: List[Node],
-) -> Tuple[List[LinearLayerInfo], List[Tuple[Node, ...]]]:
-    """Match parameter nodes against known usage patterns.
-
-    Args:
-        param_nodes: List of parameter nodes to analyze.
-
-    Returns:
-        Tuple containing:
-            - List of LinearLayerInfo for all matched patterns.
-            - List of paths from parameter nodes to detected output nodes.
-
-    Raises:
-        ValueError: If a parameter node is used in an unsupported operation.
-    """
-    patterns: List[PatternMatcher] = [LinearWeightMatcher(), LinearBiasMatcher()]
-    usage_info: List[LinearLayerInfo] = []
-    path_info: List[Tuple[Node, ...]] = []
-
-    for p_node in param_nodes:
-        p_usage_info = []
-
-        for pattern in patterns:
-            layer_infos, detected_paths = pattern.matches(p_node)
-            for info in layer_infos:
-                if info not in usage_info + p_usage_info:
-                    p_usage_info.append(info)
-
-            path_info.extend(detected_paths)
-
-        usage_info.extend(p_usage_info)
-
-    return usage_info, path_info

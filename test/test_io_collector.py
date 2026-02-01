@@ -7,7 +7,7 @@ from pytest import mark, raises
 from torch import Tensor, arange, manual_seed, rand, randn_like, zeros, zeros_like
 from torch.func import functional_call
 from torch.nn import Linear, ReLU, Sequential
-from torch.nn.functional import linear, relu
+from torch.nn.functional import linear, relu, conv2d
 
 from curvlinops.io_collector import with_kfac_io, with_param_io
 from curvlinops.io_patterns import NOT_A_PARAM
@@ -125,6 +125,20 @@ def test_fully_connected():
 
     x, params = rand(N, D_in), {"weight": rand(D_out, D_in), "bias": rand(D_out)}
     io_true = (("Linear(y=x@W^T+b)", f(x, params), x, "weight", "bias"),)
+    _verify_io(f, x, params, io_true)
+
+
+def test_convolution():
+    """Test that convolution patterns are detected correctly."""
+    manual_seed(0)
+    N, C_out, C_in, K1, K2, I1, I2 = 2, 3, 4, 5, 6, 15, 16
+
+    def f(x: Tensor, params: dict) -> Tensor:
+        return conv2d(x, params["weight"], bias=params["bias"])
+
+    x = rand(N, C_in, I1, I2)
+    params = {"weight": rand(C_out, C_in, K1, K2), "bias": rand(C_out)}
+    io_true = (("Conv2d(y=x*W+b)", f(x, params), x, "weight", "bias"),)
     _verify_io(f, x, params, io_true)
 
 
