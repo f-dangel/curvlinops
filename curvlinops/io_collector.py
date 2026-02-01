@@ -16,14 +16,14 @@ With the above mechanism, we can now augment f to not only return f(x), but also
 the intermediates that are consumed and produced by the specified parameters.
 """
 
-from typing import Callable, Dict
+from collections import Counter
+from typing import Any, Callable, Dict, Tuple, Union
 
 from torch import Tensor
 from torch.func import functionalize
-from torch.fx import GraphModule
 from torch.fx.experimental.proxy_tensor import make_fx
 
-from curvlinops.io_patterns import match_parameter_usage
+from curvlinops.io_patterns import NOT_A_PARAM, match_parameter_usage
 from curvlinops.io_verification import verify_match_complete
 
 
@@ -31,7 +31,7 @@ def with_param_io(
     f: Callable[[Tensor, Dict[str, Tensor]], Tensor],
     x: Tensor,
     named_params: Dict[str, Tensor],
-) -> GraphModule:
+) -> Callable[[Tensor, Dict[str, Tensor]], Tuple[Union[Tensor, Tuple[Any, ...]], ...]]:
     """Get a traced module that returns layer inputs and outputs alongside the result.
 
     This function traces f(x, params) using torch.fx, functionalizes any
@@ -101,3 +101,69 @@ def with_param_io(
     gm.recompile()
 
     return gm
+
+
+def with_kfac_io(
+    f: Callable[[Tensor, Dict[str, Tensor]], Tensor],
+    x: Tensor,
+    named_params: Dict[str, Tensor],
+    fisher_type: str,
+) -> Callable[[Tensor, Dict[str, Tensor]], Tuple[Tensor, Dict[str, Tensor]]]:
+    """Return layers and their relevant inputs/outputs of parameters."""
+    assert fisher_type == "empirical"
+
+    f_with_param_io = with_param_io(f, x, named_params)
+
+    # Extract layer info from the traced function's output structure to check param usage
+    # The output node contains ((output_value_node, *layer_info_tuples),)
+    (output_node,) = [n for n in f_with_param_io.graph.nodes if n.op == "output"]
+    ((output_tuple,),) = output_node.args
+    layer_info_tuples = output_tuple[1:]  # Skip the first element (original output)
+
+    # Check parameter usage once during setup
+    # Make sure that each parameter is only used in a single layer info
+    # (multiple usages are currently unsupported)
+    param_usages = dict.fromkeys(named_params, 0)
+    for layer_info_tuple in layer_info_tuples:
+        # Each layer_info_tuple is ("Linear", y_node, x_node, weight_name, bias_name)
+        _, _, _, weight_name, bias_name = layer_info_tuple
+        if weight_name in param_usages:
+            param_usages[weight_name] += 1
+        if bias_name in param_usages:
+            param_usages[bias_name] += 1
+
+    if any(usage > 1 for usage in param_usages.values()):
+        raise ValueError(
+            f"Parameters used multiple times (currently unsupported): {param_usages}"
+        )
+
+    def f_and_kfac_io(
+        x: Tensor, params: Dict[str, Tensor]
+    ) -> Tuple[Tensor, Dict[str, Tensor], Dict[str, Tensor], Dict[str, Dict[str, str]]]:
+        """Evaluate the function and return all relevant in/outputs for KFAC."""
+        # Evaluate the function and its param IOs
+        out_with_io = f_with_param_io(x, params)
+        out, layer_infos = out_with_io[0], out_with_io[1:]
+
+        # Look at the IO and figure out which parameters are one layer.
+        # Set up a dictionary that maps layers (e.g. 'Linear0') to their weight
+        # and bias names {'weight': weight_name, 'bias': bias_name}.
+        # Also set up and fill dictionaries for layer inputs and outputs.
+        layer_names: Dict[str, Dict[str, str]] = {}
+        layer_inputs: Dict[str, Tensor] = {}
+        layer_outputs: Dict[str, Tensor] = {}
+        for i, layer_info in enumerate(layer_infos):
+            op, y, x, weight_name, bias_name = layer_info
+            assert op.startswith("Linear(")
+            name = f"Linear{i}"
+            layer_names[name] = {}
+            if weight_name != NOT_A_PARAM:
+                layer_inputs[name], layer_outputs[name] = x, y
+                layer_names[name]["weight"] = weight_name
+            if bias_name not in {None, NOT_A_PARAM}:
+                layer_outputs[name] = y
+                layer_names[name]["bias"] = bias_name
+
+        return out, layer_inputs, layer_outputs, layer_names
+
+    return f_and_kfac_io

@@ -8,7 +8,7 @@ from torch.func import functional_call
 from torch.nn import Linear
 from torch.nn.functional import linear
 
-from curvlinops.io_collector import with_param_io
+from curvlinops.io_collector import with_kfac_io, with_param_io
 from curvlinops.io_patterns import NOT_A_PARAM
 from curvlinops.utils import allclose_report
 
@@ -198,3 +198,17 @@ def test_supports_multiple_batch_sizes():
         io_true = (("Linear(y=x@W^T+b)", f(x, params), x, "weight", "bias"),)
         io = f_with_io(x, params)[1:]
         compare_io(io, io_true)
+
+
+def test_with_kfac_io_multiple_parameter_usages():
+    manual_seed(0)
+    N, D = 2, 3
+
+    def f(x: Tensor, params: dict) -> Tensor:
+        xW = linear(x, params["weight"], bias=params["bias"])
+        return linear(xW, params["weight"])
+
+    x, params = rand(N, D), {"weight": rand(D, D), "bias": rand(D)}
+
+    with raises(ValueError, match="Parameters used multiple times"):
+        with_kfac_io(f, x, params, "empirical")
