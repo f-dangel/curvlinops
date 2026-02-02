@@ -564,9 +564,6 @@ def test_kfac_io_cnn(inplace: bool):
     linear1_in = linear0_relu
     linear1_out = linear(linear0_relu, params["9.weight"], bias=params["9.bias"])
 
-    # Define expected hyperparameters for convolution layers
-    conv_hyperparams = {**CONV2D_DEFAULT_PARAMS, **{"padding": [1, 1]}}
-
     # Verify KFAC IOs for different Fisher types
     for fisher_type in FisherType:
         kfac_io_true = (
