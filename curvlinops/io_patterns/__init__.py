@@ -4,7 +4,6 @@ from typing import List, Tuple, Union
 
 from torch.fx import Node
 
-from curvlinops.io_patterns._base import NOT_A_PARAM
 from curvlinops.io_patterns.conv import (
     ConvolutionBiasMatcher,
     ConvolutionLayerInfo,

@@ -10,7 +10,7 @@ from torch.nn import Conv2d, Linear, ReLU, Sequential
 from torch.nn.functional import conv2d, linear, relu
 
 from curvlinops.io_collector import with_kfac_io, with_param_io
-from curvlinops.io_patterns import NOT_A_PARAM
+from curvlinops.io_patterns._base import NOT_A_PARAM
 from curvlinops.kfac import FisherType
 from curvlinops.utils import allclose_report
 

@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from torch.fx import Node
 from torch.ops import aten
 
-from ._base import PatternMatcher, _create_info_tuple
+from curvlinops.io_patterns._base import NOT_A_PARAM, PatternMatcher, _create_info_tuple
 
 
 @dataclass
@@ -16,16 +16,16 @@ class LinearLayerInfo:
     Attributes:
         y_node: The FX node representing the output of the linear operation.
         x_node: The FX node representing the input to the linear operation.
-        WT_node: The FX node representing the weight transpose operation.
-        W_node: The FX node representing the weight parameter.
-        b_node: The FX node representing the bias parameter.
+        W_node: The FX node representing the weight parameter, None if no weight,
+            or NOT_A_PARAM if weight exists but is not tracked.
+        b_node: The FX node representing the bias parameter, None if no bias,
+            or NOT_A_PARAM if bias exists but is not tracked.
     """
 
     y_node: Node
     x_node: Node
-    WT_node: Node
-    W_node: Union[Node, None]
-    b_node: Optional[Node]
+    W_node: Union[Node, None, str]
+    b_node: Union[Node, None, str]
 
     def to_info_tuple(
         self, node_name_to_param_name: Dict[str, str]
@@ -94,9 +94,7 @@ class LinearWeightMatcher(PatternMatcher):
                     and not pT_user.kwargs
                 ):
                     bias, inputs, _ = pT_user.args
-                    layer_info = LinearLayerInfo(
-                        pT_user, inputs, pT, W_node=p_node, b_node=bias
-                    )
+                    layer_info = LinearLayerInfo(pT_user, inputs, p_node, bias)
                     matches.append(layer_info)
                     paths.append((p_node, pT, pT_user))
 
@@ -107,9 +105,7 @@ class LinearWeightMatcher(PatternMatcher):
                     and not pT_user.kwargs
                 ):
                     inputs, _ = pT_user.args
-                    layer_info = LinearLayerInfo(
-                        pT_user, inputs, pT, W_node=p_node, b_node=None
-                    )
+                    layer_info = LinearLayerInfo(pT_user, inputs, p_node, None)
                     matches.append(layer_info)
                     paths.append((p_node, pT, pT_user))
 
@@ -150,15 +146,14 @@ class LinearBiasMatcher(PatternMatcher):
                 # Detect the weight
                 bias, inputs, WT = p_user.args
 
-                # Check if WT is a valid weight transpose operation
+                # Check if WT is a valid weight transpose operation and extract W_node
                 (W_node,) = (
                     list(WT.all_input_nodes)
                     if (WT.op, WT.target) == ("call_function", aten.t.default)
-                    else (None,)
+                    else [NOT_A_PARAM]
                 )
-                layer_info = LinearLayerInfo(
-                    p_user, inputs, WT, W_node=W_node, b_node=bias
-                )
+
+                layer_info = LinearLayerInfo(p_user, inputs, W_node, bias)
                 matches.append(layer_info)
                 paths.append((p_node, p_user))
 

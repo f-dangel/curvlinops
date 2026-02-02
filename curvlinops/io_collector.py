@@ -22,7 +22,8 @@ from torch import Tensor
 from torch.func import functionalize
 from torch.fx.experimental.proxy_tensor import make_fx
 
-from curvlinops.io_patterns import NOT_A_PARAM, match_parameter_usage
+from curvlinops.io_patterns import match_parameter_usage
+from curvlinops.io_patterns._base import NOT_A_PARAM
 from curvlinops.io_verification import verify_match_complete
 from curvlinops.kfac import FisherType
 

@@ -12,8 +12,8 @@ def _create_info_tuple(
     operation_name: str,
     y_node: Node,
     x_node: Node,
-    W_node: Union[Node, None],
-    b_node: Optional[Node],
+    W_node: Union[Node, None, str],
+    b_node: Union[Node, None, str],
     hyperparams: Dict[str, Any],
     node_name_to_param_name: Dict[str, str],
 ) -> Tuple[str, Node, Node, Optional[str], Optional[str], Dict[str, Any]]:
@@ -23,8 +23,8 @@ def _create_info_tuple(
         operation_name: Name of the operation (e.g., "Linear(y=x@W^T+b)").
         y_node: The output node.
         x_node: The input node.
-        W_node: The weight parameter node.
-        b_node: The bias parameter node.
+        W_node: The weight parameter node, None if no weight, or NOT_A_PARAM string.
+        b_node: The bias parameter node, None if no bias, or NOT_A_PARAM string.
         hyperparams: Dictionary of layer hyperparameters.
         node_name_to_param_name: Mapping from FX node names to parameter names.
 
@@ -32,16 +32,20 @@ def _create_info_tuple(
         Tuple containing:
             (operation_name, y_node, x_node, weight_name, bias_name, hyperparams).
     """
-    weight_name = (
-        node_name_to_param_name.get(W_node.name, NOT_A_PARAM)
-        if W_node is not None
-        else NOT_A_PARAM
-    )
-    bias_name = (
-        None
-        if b_node is None
-        else node_name_to_param_name.get(b_node.name, NOT_A_PARAM)
-    )
+    if isinstance(W_node, str):
+        weight_name = W_node  # Should be NOT_A_PARAM
+    elif W_node is not None:
+        weight_name = node_name_to_param_name.get(W_node.name, NOT_A_PARAM)
+    else:
+        weight_name = NOT_A_PARAM
+
+    if isinstance(b_node, str):
+        bias_name = b_node  # Should be NOT_A_PARAM
+    elif b_node is not None:
+        bias_name = node_name_to_param_name.get(b_node.name, NOT_A_PARAM)
+    else:
+        bias_name = None
+
     return (operation_name, y_node, x_node, weight_name, bias_name, hyperparams)
 
 
