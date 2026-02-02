@@ -6,8 +6,8 @@ from typing import Any, Callable, Dict, Tuple, Union
 from pytest import mark, raises
 from torch import Tensor, arange, manual_seed, rand, randn_like, zeros, zeros_like
 from torch.func import functional_call
-from torch.nn import Linear, ReLU, Sequential
-from torch.nn.functional import linear, relu, conv2d
+from torch.nn import Conv2d, Linear, ReLU, Sequential
+from torch.nn.functional import conv2d, linear, relu
 
 from curvlinops.io_collector import with_kfac_io, with_param_io
 from curvlinops.io_patterns import NOT_A_PARAM
@@ -143,7 +143,7 @@ CONV2D_DEFAULT_PARAMS = {
 def test_convolution():
     """Test that convolution patterns are detected correctly."""
     manual_seed(0)
-    N, C_out, C_in, K1, K2, I1, I2 = 2, 3, 4, 5, 6, 15, 16
+    N, C_out, C_in, K1, K2, I1, I2 = 2, 3, 4, 5, 6, 10, 11
 
     # 1) Standard convolution with weight and bias
     def f(x: Tensor, params: dict) -> Tensor:
@@ -159,8 +159,8 @@ def test_convolution():
     # 2) Non-standard convolution with weight and bias
     def f(x: Tensor, params: dict) -> Tensor:
         stride = 2
-        # NOTE We are only supplying padding as keyword arg and bias and strides
-        # as positional in an attempt to confuse fx
+        # NOTE Supply padding as keyword arg and bias and strides
+        # as positional to attempt to confuse fx
         return conv2d(x, params["weight"], params["bias"], stride, padding=1)
 
     x = rand(N, C_in, I1, I2)
@@ -174,8 +174,27 @@ def test_convolution():
     )
     _verify_io(f, x, params, io_true)
 
-    # 3) TODO
-    raise NotImplementedError
+    # 3) Standard convolution with weight only
+    def f(x: Tensor, params: dict) -> Tensor:
+        return conv2d(x, params["weight"])
+
+    x = rand(N, C_in, I1, I2)
+    params = {"weight": rand(C_out, C_in, K1, K2)}
+    io_true = (
+        ("Conv2d(y=x*W+b)", f(x, params), x, "weight", None, CONV2D_DEFAULT_PARAMS),
+    )
+    _verify_io(f, x, params, io_true)
+
+    # 4) Use torch.nn nn
+    conv = Conv2d(C_in, C_out, (K1, K2), stride=(2, 1), bias=False)
+
+    def f(x: Tensor, params: dict) -> Tensor:
+        return functional_call(conv, params, x)
+
+    hyperparams_true = {**CONV2D_DEFAULT_PARAMS, **{"stride": [2, 1]}}
+    x, params = (rand(N, C_in, I1, I2), {"weight": rand(C_out, C_in, K1, K2)})
+    io_true = (("Conv2d(y=x*W+b)", f(x, params), x, "weight", None, hyperparams_true),)
+    _verify_io(f, x, params, io_true)
 
 
 def test_unsupported_patterns():
