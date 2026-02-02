@@ -7,13 +7,13 @@ from torch.ops import aten
 
 from curvlinops.io_patterns._base import AffineLayerInfo, _PatternMatcher
 
-CONV_STR = "Conv2d(y=W*x+b)"
+CONV_STR = "Conv(y=W*x+b)"
 
 
 class ConvolutionWeightMatcher(_PatternMatcher):
-    """Matcher for weight parameters in 2D convolution layers.
+    """Matcher for weight parameters in convolution layers.
 
-    Detects pattern: conv2d(x, W, b, ...) where the node is W.
+    Detects pattern: conv(x, W, b, ...) where the node is W.
     """
 
     def matches(
@@ -57,7 +57,7 @@ class ConvolutionWeightMatcher(_PatternMatcher):
 class ConvolutionBiasMatcher(_PatternMatcher):
     """Matcher for bias parameters in convolution layers.
 
-    Detects pattern: conv2d(x, W, b, ...) where the node is b.
+    Detects pattern: conv(x, W, b, ...) where the node is b.
     """
 
     def matches(
