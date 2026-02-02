@@ -5,7 +5,7 @@ from typing import List, Tuple
 from torch.fx import Node
 from torch.ops import aten
 
-from ._base import NOT_A_PARAM, AffineLayerInfo, _PatternMatcher
+from curvlinops.io_patterns._base import NOT_A_PARAM, AffineLayerInfo, _PatternMatcher
 
 LINEAR_STR = "Linear(y=W@x+b)"
 

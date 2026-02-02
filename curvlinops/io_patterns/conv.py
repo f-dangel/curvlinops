@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Tuple
 from torch.fx import Node
 from torch.ops import aten
 
-from ._base import AffineLayerInfo, _PatternMatcher
+from curvlinops.io_patterns._base import AffineLayerInfo, _PatternMatcher
 
 CONV_STR = "Conv2d(y=W*x+b)"
 

@@ -4,9 +4,9 @@ from typing import List, Tuple
 
 from torch.fx import Node
 
-from ._base import AffineLayerInfo
-from .conv import ConvolutionBiasMatcher, ConvolutionWeightMatcher
-from .linear import LinearBiasMatcher, LinearWeightMatcher
+from curvlinops.io_patterns._base import AffineLayerInfo
+from curvlinops.io_patterns.conv import ConvolutionBiasMatcher, ConvolutionWeightMatcher
+from curvlinops.io_patterns.linear import LinearBiasMatcher, LinearWeightMatcher
 
 
 def match_parameter_usage(
