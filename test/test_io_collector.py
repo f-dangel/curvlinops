@@ -4,10 +4,27 @@ from collections import OrderedDict
 from typing import Any, Callable, Dict, Tuple, Union
 
 from pytest import mark, raises
-from torch import Tensor, arange, manual_seed, rand, randn_like, zeros, zeros_like
+from torch import (
+    Tensor,
+    arange,
+    flatten,
+    manual_seed,
+    rand,
+    randn_like,
+    zeros,
+    zeros_like,
+)
 from torch.func import functional_call
-from torch.nn import Conv2d, Linear, ReLU, Sequential
-from torch.nn.functional import conv2d, linear, relu
+from torch.nn import (
+    AdaptiveAvgPool2d,
+    Conv2d,
+    Flatten,
+    Linear,
+    MaxPool2d,
+    ReLU,
+    Sequential,
+)
+from torch.nn.functional import adaptive_avg_pool2d, conv2d, linear, max_pool2d, relu
 
 from curvlinops.io_collector import with_kfac_io, with_param_io
 from curvlinops.io_patterns._base import NOT_A_PARAM
@@ -471,6 +488,111 @@ def test_kfac_io_mlp(inplace: bool):
                 "Linear0": {},  # Linear layers have empty hyperparams
                 "Linear1": {},  # Linear layers have empty hyperparams
                 "Linear2": {},  # Linear layers have empty hyperparams
+            },
+        )
+        _verify_kfac_io(f, x, params, fisher_type, kfac_io_true)
+
+
+@mark.parametrize("inplace", [False, True], ids=["out-of-place", "in-place"])
+def test_kfac_io_cnn(inplace: bool):
+    """Test correctness of KFAC IO on a CNN with convolutions, pooling, and linear.
+
+    Test with in- or out-of-place activations to make sure that the IO
+    collector replaces in-place activations correctly (otherwise we
+    would wrongly collect the modified IO).
+
+    Args:
+        inplace: Whether to use in-place activations.
+    """
+    manual_seed(0)
+    N, C_in, H, W = 2, 3, 8, 8
+    C_hidden, C_out = 4, 6
+    Linear_in, Linear_hidden, Linear_out = C_out * 2 * 2, 10, 5  # After 2x2x2 pooling
+
+    cnn = Sequential(
+        OrderedDict(
+            [
+                # Conv layer with weight & bias
+                ("0", Conv2d(C_in, C_hidden, kernel_size=3, padding=1)),
+                ("1", ReLU(inplace=inplace)),
+                ("2", MaxPool2d(kernel_size=2, stride=2)),
+                # Conv layer with weight only (no bias)
+                ("3", Conv2d(C_hidden, C_out, kernel_size=4, stride=2, bias=False)),
+                ("4", ReLU(inplace=inplace)),
+                ("5", AdaptiveAvgPool2d((2, 2))),
+                ("6", Flatten()),
+                # Linear layer with bias only (frozen weight)
+                ("7", Linear(Linear_in, Linear_hidden)),
+                ("8", ReLU(inplace=inplace)),
+                # Linear layer with weight & bias
+                ("9", Linear(Linear_hidden, Linear_out)),
+            ]
+        )
+    )
+
+    # Freeze the weight of the first linear layer (layer 7)
+    frozen_weight_7 = randn_like(cnn.get_submodule("7").weight)
+
+    def f(x: Tensor, params: Dict[str, Tensor]) -> Tensor:
+        assert "7.weight" not in params
+        return functional_call(cnn, {**params, "7.weight": frozen_weight_7}, x)
+
+    x, params = (
+        rand(N, C_in, H, W),
+        {n: randn_like(p) for n, p in cnn.named_parameters() if n != "7.weight"},
+    )
+
+    # Manually compute inputs and outputs of layers with parameters
+    # Conv layer 0 (weight + bias)
+    conv0_in = x
+    conv0_out = conv2d(x, params["0.weight"], bias=params["0.bias"], padding=1)
+    conv0_relu = relu(conv0_out, inplace=False)
+    conv0_pool = max_pool2d(conv0_relu, kernel_size=2, stride=2)
+
+    # Conv layer 3 (weight only, no bias)
+    conv1_in = conv0_pool
+    conv1_out = conv2d(conv0_pool, params["3.weight"], stride=2, padding=0)
+    conv1_relu = relu(conv1_out, inplace=False)
+    conv1_pool = adaptive_avg_pool2d(conv1_relu, (2, 2))
+
+    # Linear layer 7 (bias only, frozen weight)
+    linear0_in = flatten(conv1_pool, start_dim=1)
+    linear0_out = linear(linear0_in, frozen_weight_7, bias=params["7.bias"])
+    linear0_relu = relu(linear0_out, inplace=False)
+
+    # Linear layer 9 (weight + bias)
+    linear1_in = linear0_relu
+    linear1_out = linear(linear0_relu, params["9.weight"], bias=params["9.bias"])
+
+    # Define expected hyperparameters for convolution layers
+    conv_hyperparams = {**CONV2D_DEFAULT_PARAMS, **{"padding": [1, 1]}}
+
+    # Verify KFAC IOs for different Fisher types
+    for fisher_type in FisherType:
+        kfac_io_true = (
+            f(x, params),
+            # Inputs are stored for layers that have weights (not bias-only layers)
+            {"Conv0": conv0_in, "Conv1": conv1_in, "Linear1": linear1_in},
+            # Forward-only KFAC does not require storing outputs
+            {}
+            if fisher_type == FisherType.FORWARD_ONLY
+            else {
+                "Conv0": conv0_out,
+                "Conv1": conv1_out,
+                "Linear0": linear0_out,
+                "Linear1": linear1_out,
+            },
+            {
+                "Conv0": {"weight": "0.weight", "bias": "0.bias"},
+                "Conv1": {"weight": "3.weight"},
+                "Linear0": {"bias": "7.bias"},
+                "Linear1": {"weight": "9.weight", "bias": "9.bias"},
+            },
+            {
+                "Conv0": {**CONV2D_DEFAULT_PARAMS, **{"padding": [1, 1]}},
+                "Conv1": {**CONV2D_DEFAULT_PARAMS, **{"stride": [2, 2]}},
+                "Linear0": {},  # Linear layers have empty hyperparams
+                "Linear1": {},  # Linear layers have empty hyperparams
             },
         )
         _verify_kfac_io(f, x, params, fisher_type, kfac_io_true)
