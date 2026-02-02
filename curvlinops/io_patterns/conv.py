@@ -35,10 +35,7 @@ class ConvolutionWeightMatcher(_PatternMatcher):
         for p_user in p_node.users:
             if (
                 (p_user.op, p_user.target)
-                != (
-                    "call_function",
-                    aten.convolution.default,
-                )
+                != ("call_function", aten.convolution.default)
                 or p_user.kwargs
                 or len(p_user.args) < 3  # At least x, weight, bias
             ):
@@ -82,10 +79,7 @@ class ConvolutionBiasMatcher(_PatternMatcher):
         for p_user in p_node.users:
             if (
                 (p_user.op, p_user.target)
-                != (
-                    "call_function",
-                    aten.convolution.default,
-                )
+                != ("call_function", aten.convolution.default)
                 or p_user.kwargs
                 or len(p_user.args) < 3  # At least x, weight, bias
             ):
