@@ -11,6 +11,8 @@ from torch.nn.functional import conv2d, linear, relu
 
 from curvlinops.io_collector import with_kfac_io, with_param_io
 from curvlinops.io_patterns._base import NOT_A_PARAM
+from curvlinops.io_patterns.conv import CONV_STR
+from curvlinops.io_patterns.linear import LINEAR_STR
 from curvlinops.kfac import FisherType
 from curvlinops.utils import allclose_report
 
@@ -90,7 +92,7 @@ def test_fully_connected():
         return linear(x, params["weight"], bias=params["bias"])
 
     x, params = rand(N, D_in), {"weight": rand(D_out, D_in), "bias": rand(D_out)}
-    io_true = (("Linear(y=x@W^T+b)", f(x, params), x, "weight", "bias", {}),)
+    io_true = ((LINEAR_STR, f(x, params), x, "weight", "bias", {}),)
     _verify_io(f, x, params, io_true)
 
     # 2) Only weight as free parameter (frozen bias)
@@ -99,7 +101,7 @@ def test_fully_connected():
         return linear(x, params["weight"], bias=bias)
 
     x, params = rand(N, D_in), {"weight": rand(D_out, D_in)}
-    io_true = (("Linear(y=x@W^T+b)", f(x, params), x, "weight", NOT_A_PARAM, {}),)
+    io_true = ((LINEAR_STR, f(x, params), x, "weight", NOT_A_PARAM, {}),)
     _verify_io(f, x, params, io_true)
 
     # 3) Only bias as free parameter (frozen weight)
@@ -108,7 +110,7 @@ def test_fully_connected():
         return linear(x, weight, params["bias"])
 
     x, params = rand(N, D_in), {"bias": rand(D_out)}
-    io_true = (("Linear(y=x@W^T+b)", f(x, params), x, NOT_A_PARAM, "bias", {}),)
+    io_true = ((LINEAR_STR, f(x, params), x, NOT_A_PARAM, "bias", {}),)
     _verify_io(f, x, params, io_true)
 
     # 4) Without bias
@@ -116,7 +118,7 @@ def test_fully_connected():
         return linear(x, params["weight"])
 
     x, params = rand(N, D_in), {"weight": rand(D_out, D_in)}
-    io_true = (("Linear(y=x@W^T+b)", f(x, params), x, "weight", None, {}),)
+    io_true = ((LINEAR_STR, f(x, params), x, "weight", None, {}),)
     _verify_io(f, x, params, io_true)
 
     # 5) Use torch.nn
@@ -126,7 +128,7 @@ def test_fully_connected():
         return functional_call(fc, params, x)
 
     x, params = rand(N, D_in), {"weight": rand(D_out, D_in), "bias": rand(D_out)}
-    io_true = (("Linear(y=x@W^T+b)", f(x, params), x, "weight", "bias", {}),)
+    io_true = ((LINEAR_STR, f(x, params), x, "weight", "bias", {}),)
     _verify_io(f, x, params, io_true)
 
 
@@ -151,9 +153,7 @@ def test_convolution():
 
     x = rand(N, C_in, I1, I2)
     params = {"weight": rand(C_out, C_in, K1, K2), "bias": rand(C_out)}
-    io_true = (
-        ("Conv2d(y=x*W+b)", f(x, params), x, "weight", "bias", CONV2D_DEFAULT_PARAMS),
-    )
+    io_true = ((CONV_STR, f(x, params), x, "weight", "bias", CONV2D_DEFAULT_PARAMS),)
     _verify_io(f, x, params, io_true)
 
     # 2) Non-standard convolution with weight and bias
@@ -169,9 +169,7 @@ def test_convolution():
         **CONV2D_DEFAULT_PARAMS,
         **{"stride": [2, 2], "padding": [1, 1]},
     }
-    io_true = (
-        ("Conv2d(y=x*W+b)", f(x, params), x, "weight", "bias", hyperparams_true),
-    )
+    io_true = ((CONV_STR, f(x, params), x, "weight", "bias", hyperparams_true),)
     _verify_io(f, x, params, io_true)
 
     # 3) Standard convolution with weight only
@@ -180,9 +178,7 @@ def test_convolution():
 
     x = rand(N, C_in, I1, I2)
     params = {"weight": rand(C_out, C_in, K1, K2)}
-    io_true = (
-        ("Conv2d(y=x*W+b)", f(x, params), x, "weight", None, CONV2D_DEFAULT_PARAMS),
-    )
+    io_true = ((CONV_STR, f(x, params), x, "weight", None, CONV2D_DEFAULT_PARAMS),)
     _verify_io(f, x, params, io_true)
 
     # 4) Use torch.nn nn
@@ -193,7 +189,7 @@ def test_convolution():
 
     hyperparams_true = {**CONV2D_DEFAULT_PARAMS, **{"stride": [2, 1]}}
     x, params = (rand(N, C_in, I1, I2), {"weight": rand(C_out, C_in, K1, K2)})
-    io_true = (("Conv2d(y=x*W+b)", f(x, params), x, "weight", None, hyperparams_true),)
+    io_true = ((CONV_STR, f(x, params), x, "weight", None, hyperparams_true),)
     _verify_io(f, x, params, io_true)
 
 
@@ -228,8 +224,8 @@ def test_multiple_parameter_usages():
     x, params = rand(N, D), {"weight": rand(D, D), "bias": rand(D)}
     xW = linear(x, params["weight"], bias=params["bias"])
     io_true = (
-        ("Linear(y=x@W^T+b)", xW, x, "weight", "bias", {}),
-        ("Linear(y=x@W^T+b)", f(x, params), xW, "weight", None, {}),
+        (LINEAR_STR, xW, x, "weight", "bias", {}),
+        (LINEAR_STR, f(x, params), xW, "weight", None, {}),
     )
     _verify_io(f, x, params, io_true)
 
@@ -266,7 +262,7 @@ def test_supports_multiple_batch_sizes():
 
     # Check IO for batch sizes N1 and N2
     for x in [x1, x2]:
-        io_true = (("Linear(y=x@W^T+b)", f(x, params), x, "weight", "bias", {}),)
+        io_true = ((LINEAR_STR, f(x, params), x, "weight", "bias", {}),)
         io = f_with_io(x, params)[1:]
         compare_io(io, io_true)
 

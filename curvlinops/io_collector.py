@@ -23,7 +23,7 @@ from torch.func import functionalize
 from torch.fx.experimental.proxy_tensor import make_fx
 
 from curvlinops.io_patterns import match_parameter_usage
-from curvlinops.io_patterns._base import NOT_A_PARAM
+from curvlinops.io_patterns._base import NOT_A_PARAM, as_tuple
 from curvlinops.io_verification import verify_match_complete
 from curvlinops.kfac import FisherType
 
@@ -88,9 +88,7 @@ def with_param_io(
 
     # Build the layer info tuples to return alongside the original output
     # Format: ("Linear", input_node, output_node, weight_name | None, bias_name | None)
-    layer_info_tuples = [
-        info.to_info_tuple(node_name_to_param_name) for info in usage_info
-    ]
+    layer_info_tuples = [as_tuple(info, node_name_to_param_name) for info in usage_info]
 
     # Find the original output node and modify its argument
     (output_node,) = [n for n in gm.graph.nodes if n.op == "output"]

@@ -1,24 +1,17 @@
 """Pattern matching system for detecting parameter usage in PyTorch FX graphs."""
 
-from typing import List, Tuple, Union
+from typing import List, Tuple
 
 from torch.fx import Node
 
-from curvlinops.io_patterns.conv import (
-    ConvolutionBiasMatcher,
-    ConvolutionLayerInfo,
-    ConvolutionWeightMatcher,
-)
-from curvlinops.io_patterns.linear import (
-    LinearBiasMatcher,
-    LinearLayerInfo,
-    LinearWeightMatcher,
-)
+from ._base import AffineLayerInfo
+from .conv import ConvolutionBiasMatcher, ConvolutionWeightMatcher
+from .linear import LinearBiasMatcher, LinearWeightMatcher
 
 
 def match_parameter_usage(
     param_nodes: List[Node],
-) -> Tuple[List[Union[LinearLayerInfo, ConvolutionLayerInfo]], List[Tuple[Node, ...]]]:
+) -> Tuple[List[AffineLayerInfo], List[Tuple[Node, ...]]]:
     """Match parameter nodes against known usage patterns.
 
     Args:
@@ -26,7 +19,7 @@ def match_parameter_usage(
 
     Returns:
         Tuple containing:
-            - List of layer info objects for all matched patterns.
+            - List of affine layer info objects for all matched patterns.
             - List of paths from parameter nodes to detected output nodes.
 
     Raises:
@@ -38,7 +31,7 @@ def match_parameter_usage(
         ConvolutionWeightMatcher(),
         ConvolutionBiasMatcher(),
     ]
-    usage_info: List[Union[LinearLayerInfo, ConvolutionLayerInfo]] = []
+    usage_info: List[AffineLayerInfo] = []
     path_info: List[Tuple[Node, ...]] = []
 
     for p_node in param_nodes:

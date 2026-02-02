@@ -1,56 +1,16 @@
 """Pattern matching for detecting linear layer operations and parameter usage."""
 
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import List, Tuple
 
 from torch.fx import Node
 from torch.ops import aten
 
-from curvlinops.io_patterns._base import NOT_A_PARAM, PatternMatcher, _create_info_tuple
+from ._base import NOT_A_PARAM, AffineLayerInfo, _PatternMatcher
+
+LINEAR_STR = "Linear(y=W@x+b)"
 
 
-@dataclass
-class LinearLayerInfo:
-    """Information about a detected linear layer operation.
-
-    Attributes:
-        y_node: The FX node representing the output of the linear operation.
-        x_node: The FX node representing the input to the linear operation.
-        W_node: The FX node representing the weight parameter, None if no weight,
-            or NOT_A_PARAM if weight exists but is not tracked.
-        b_node: The FX node representing the bias parameter, None if no bias,
-            or NOT_A_PARAM if bias exists but is not tracked.
-    """
-
-    y_node: Node
-    x_node: Node
-    W_node: Union[Node, None, str]
-    b_node: Union[Node, None, str]
-
-    def to_info_tuple(
-        self, node_name_to_param_name: Dict[str, str]
-    ) -> Tuple[str, Node, Node, Optional[str], Optional[str], Dict[str, Any]]:
-        """Convert to layer info tuple format.
-
-        Args:
-            node_name_to_param_name: Mapping from FX node names to parameter names.
-
-        Returns:
-            Tuple containing:
-                ("Linear", y_node, x_node, weight_name, bias_name, hyperparams).
-        """
-        return _create_info_tuple(
-            "Linear(y=x@W^T+b)",
-            self.y_node,
-            self.x_node,
-            self.W_node,
-            self.b_node,
-            {},  # Linear layers have no hyperparameters
-            node_name_to_param_name,
-        )
-
-
-class LinearWeightMatcher(PatternMatcher):
+class LinearWeightMatcher(_PatternMatcher):
     """Matcher for weight parameters in linear layers.
 
     Detects patterns: x @ W.T (mm) or x @ W.T + b (addmm).
@@ -58,7 +18,7 @@ class LinearWeightMatcher(PatternMatcher):
 
     def matches(
         self, p_node: Node
-    ) -> Tuple[List[LinearLayerInfo], List[Tuple[Node, ...]]]:
+    ) -> Tuple[List[AffineLayerInfo], List[Tuple[Node, ...]]]:
         """Match a parameter node used as weight in linear layers.
 
         Args:
@@ -66,7 +26,7 @@ class LinearWeightMatcher(PatternMatcher):
 
         Returns:
             Tuple containing:
-                - List of LinearLayerInfo for all weight usage matches found.
+                - List of AffineLayerInfo for all weight usage matches found.
                 - List of paths from parameter node to detected output nodes.
 
         Raises:
@@ -94,7 +54,9 @@ class LinearWeightMatcher(PatternMatcher):
                     and not pT_user.kwargs
                 ):
                     bias, inputs, _ = pT_user.args
-                    layer_info = LinearLayerInfo(pT_user, inputs, p_node, bias)
+                    layer_info = AffineLayerInfo(
+                        LINEAR_STR, pT_user, p_node, inputs, bias, {}
+                    )
                     matches.append(layer_info)
                     paths.append((p_node, pT, pT_user))
 
@@ -105,14 +67,16 @@ class LinearWeightMatcher(PatternMatcher):
                     and not pT_user.kwargs
                 ):
                     inputs, _ = pT_user.args
-                    layer_info = LinearLayerInfo(pT_user, inputs, p_node, None)
+                    layer_info = AffineLayerInfo(
+                        LINEAR_STR, pT_user, p_node, inputs, None, {}
+                    )
                     matches.append(layer_info)
                     paths.append((p_node, pT, pT_user))
 
         return matches, paths
 
 
-class LinearBiasMatcher(PatternMatcher):
+class LinearBiasMatcher(_PatternMatcher):
     """Matcher for bias parameters in linear layers.
 
     Detects pattern: x @ W.T + b (addmm) where the node is b.
@@ -120,7 +84,7 @@ class LinearBiasMatcher(PatternMatcher):
 
     def matches(
         self, p_node: Node
-    ) -> Tuple[List[LinearLayerInfo], List[Tuple[Node, ...]]]:
+    ) -> Tuple[List[AffineLayerInfo], List[Tuple[Node, ...]]]:
         """Match a parameter node used as bias in linear layers.
 
         Args:
@@ -128,7 +92,7 @@ class LinearBiasMatcher(PatternMatcher):
 
         Returns:
             Tuple containing:
-                - List of LinearLayerInfo for all bias usage matches found.
+                - List of AffineLayerInfo for all bias usage matches found.
                 - List of paths from parameter node to detected output nodes.
 
         Raises:
@@ -153,7 +117,9 @@ class LinearBiasMatcher(PatternMatcher):
                     else [NOT_A_PARAM]
                 )
 
-                layer_info = LinearLayerInfo(p_user, inputs, W_node, bias)
+                layer_info = AffineLayerInfo(
+                    LINEAR_STR, p_user, W_node, inputs, bias, {}
+                )
                 matches.append(layer_info)
                 paths.append((p_node, p_user))
 
