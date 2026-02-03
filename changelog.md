@@ -8,9 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added/New
 
+- Support left multiplication with linear operators (`X @ A` with `X` a tensor or tensor list)
+  ([PR](https://github.com/f-dangel/curvlinops/pull/226))
+
 ### Fixed/Removed
 
 ### Internal
+
+- Merge tests for testing matrix-matrix & matrix-vector products
+  with the original and transposed operator, reducing number of tests
+  ([PR](https://github.com/f-dangel/curvlinops/pull/222))
+
+- Merge GitHub actions for linting and formatting with `ruff`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/225))
+
+- Execute many tests in `float64`, allowing to lower many tolerances
+  ([PR](https://github.com/f-dangel/curvlinops/pull/224))
+
+- Add linear operators for basic mathematical structures
+  - `BlockDiagonalLinearOperator` for matrices `block_diag(B_1, B_2, ...)`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/212))
+  - `KroneckerProductLinearOperator` for matrices `S_1 ⊗ S_2 ⊗ ...`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/211))
+  - `EighDecomposedLinearOperator` for `eigh`-decomposed matrices `Q diag(λ) Q^T` with orthogonal `Q`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/210))
 
 ## [3.0.1] - 2026-01-14
 
