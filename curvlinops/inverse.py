@@ -542,12 +542,10 @@ class KFACInverseLinearOperator(_InversePyTorchLinearOperator):
         """
         if isinstance(self._A, EKFACLinearOperator):
             representation = self._A.representation
-            aaT_eigenvectors = representation[
-                "input_covariances_eigenvectors"
-            ].get(name)
-            ggT_eigenvectors = representation["gradient_covariances_eigenvectors"][
+            aaT_eigenvectors = representation["input_covariances_eigenvectors"].get(
                 name
-            ]
+            )
+            ggT_eigenvectors = representation["gradient_covariances_eigenvectors"][name]
             eigenvalues = representation["corrected_eigenvalues"][name]
             if isinstance(eigenvalues, dict):
                 inv_damped_eigenvalues = {
