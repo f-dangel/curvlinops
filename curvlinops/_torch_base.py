@@ -106,7 +106,7 @@ class PyTorchLinearOperator:
 
         # Use that X @ A = (A^H @ X^H)^H
         AH = self.adjoint()
-        AH_XH = AH @ XH
+        AH_XH = AH._matmat(XH)
 
         # Apply final conjugate to get (A^H @ X^H)^H
         AX = [r.conj().movedim(-1, 0) for r in AH_XH]
