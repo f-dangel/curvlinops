@@ -9,7 +9,7 @@ from curvlinops.examples import TensorLinearOperator
 from test.utils import compare_matmat
 
 
-def test_BlockDiagonalLinearOperator(adjoint: bool, is_vec: bool):
+def test_BlockDiagonalLinearOperator():
     """Test matrix multiplication with rectangular blocks."""
     manual_seed(0)
     # Create rectangular blocks: 3x2, 4x3, 2x5
@@ -18,7 +18,7 @@ def test_BlockDiagonalLinearOperator(adjoint: bool, is_vec: bool):
     # Create and test block-diagonal product operator's @ operation
     op = BlockDiagonalLinearOperator([TensorLinearOperator(B) for B in [B1, B2, B3]])
     mat = block_diag(B1, B2, B3)
-    compare_matmat(op, mat, adjoint, is_vec)
+    compare_matmat(op, mat)
 
     # Test mathematical properties
     for property in ["trace", "det", "logdet"]:
@@ -27,7 +27,7 @@ def test_BlockDiagonalLinearOperator(adjoint: bool, is_vec: bool):
     assert isclose(matrix_norm(mat), op.frobenius_norm())
 
 
-def test_BlockDiagonalLinearOperator_square(adjoint: bool, is_vec: bool):
+def test_BlockDiagonalLinearOperator_square():
     """Test matrix multiplication with square blocks."""
     # Use double-precision because we are testing logdet below
     kwargs = {"dtype": float64}
@@ -37,7 +37,7 @@ def test_BlockDiagonalLinearOperator_square(adjoint: bool, is_vec: bool):
     # Create and test block diagonal operator's @ operation
     op = BlockDiagonalLinearOperator([TensorLinearOperator(B) for B in [B1, B2, B3]])
     mat = block_diag(B1, B2, B3)
-    compare_matmat(op, mat, adjoint, is_vec)
+    compare_matmat(op, mat)
 
     # Test mathematical properties
     assert isclose(mat.trace(), op.trace())
