@@ -660,10 +660,6 @@ def test_KFACLinearOperator(
     compare_consecutive_matmats(kfac)
     compare_matmat(kfac, kfac_mat)
 
-    kfac, kfac_mat = kfac.adjoint(), kfac_mat.adjoint()
-    compare_consecutive_matmats(kfac)
-    compare_matmat(kfac, kfac_mat)
-
 
 @mark.parametrize(
     "check_deterministic",

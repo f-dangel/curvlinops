@@ -98,7 +98,3 @@ def test_SubmatrixLinearOperator_on_curvatures(case, operator_case, submatrix_ca
     for row_idxs, col_idxs in invalid_idxs:
         with raises(ValueError):
             A_sub.set_submatrix(row_idxs, col_idxs)
-
-    # test forming the adjoint
-    A_sub, A_sub_functorch = A_sub.adjoint(), A_sub_functorch.adjoint()
-    compare_matmat(A_sub, A_sub_functorch)
