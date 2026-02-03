@@ -101,7 +101,7 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
         Returns:
             New KroneckerProductLinearOperator representing the adjoint.
         """
-        adjoint_factors = [factor.T for factor in self._factors]
+        adjoint_factors = [factor.adjoint() for factor in self._factors]
         return KroneckerProductLinearOperator(*adjoint_factors)
 
     @property
@@ -218,7 +218,7 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
         if use_heuristic_damping and use_exact_damping:
             raise ValueError("Either use heuristic damping or exact damping, not both.")
 
-        if use_heuristic_damping and len(self._factors) > 2:
+        if use_heuristic_damping and len(self._factors) != 2:
             raise ValueError(
                 f"Heuristic damping only implemented for two factors. "
                 f"Got {len(self._factors)}"

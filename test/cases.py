@@ -257,7 +257,7 @@ CNN_CASES_NO_DEVICE = [
             Flatten(),
             Linear(6 * 4, 10),
         ),
-        "loss_func": lambda: CrossEntropyLoss(),
+        "loss_func": CrossEntropyLoss,
         "data": lambda: [
             (rand(5, 1, 20, 20), classification_targets((5,), 10)),
             (rand(5, 1, 20, 20), classification_targets((5,), 10)),
