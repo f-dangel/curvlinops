@@ -27,10 +27,9 @@ from torch.nn import (
 from curvlinops import EFLinearOperator, GGNLinearOperator
 from curvlinops.ekfac import (
     EKFACLinearOperator,
-    FisherType,
-    KFACType,
     compute_eigenvalue_correction_linear_weight_sharing,
 )
+from curvlinops.kfac import FisherType, KFACType
 from curvlinops.utils import allclose_report
 from test.cases import DEVICES, DEVICES_IDS
 from test.test_kfac import MC_SAMPLES, MC_TOLS
@@ -894,4 +893,12 @@ def test_compute_eigenvalue_correction_linear_weight_sharing():
     with raises(ValueError, match="Invalid _force_strategy"):
         compute_eigenvalue_correction_linear_weight_sharing(
             g, ggT_eigvecs, a, aaT_eigvecs, _force_strategy="invalid_strategy"
+        )
+
+    # Test exception is raised if a and aaT_eigvecs do not have the same type
+    with raises(ValueError, match=r"Both \(a, aaT_eigvecs\) must be None or Tensor"):
+        compute_eigenvalue_correction_linear_weight_sharing(g, ggT_eigvecs, a, None)
+    with raises(ValueError, match=r"Both \(a, aaT_eigvecs\) must be None or Tensor"):
+        compute_eigenvalue_correction_linear_weight_sharing(
+            g, ggT_eigvecs, None, aaT_eigvecs
         )
