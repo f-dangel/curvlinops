@@ -36,8 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `EighDecomposedLinearOperator` for `eigh`-decomposed matrices `Q diag(λ) Q^T` with orthogonal `Q`
     ([PR](https://github.com/f-dangel/curvlinops/pull/210))
 
-- Reduce side effects in (E)KFAC's computation and reduce caching logic
-  ([PR](https://github.com/f-dangel/curvlinops/pull/227))
+- Major simplification of KFACLinearOperator and EKFACLinearOperator
+  - Reduce side effects in (E)KFAC's computation and reduce caching logic
+    ([PR1](https://github.com/f-dangel/curvlinops/pull/227),
+     [PR2](https://github.com/f-dangel/curvlinops/pull/228))
 
 ## [3.0.1] - 2026-01-14
 
