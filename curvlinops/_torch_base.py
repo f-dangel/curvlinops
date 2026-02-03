@@ -311,12 +311,19 @@ class PyTorchLinearOperator:
             num_vecs: The number of vectors represented by the input.
 
         Raises:
-            ValueError: If the tensor entries in the list have invalid shapes.
+            ValueError: If the tensor entries in the list have invalid shapes or there
+                are too many/few entries.
         """
         free_dim_pos = {"trailing": -1, "leading": 0}[free_dim]
 
+        if len(X) != len(expected_shapes):
+            raise ValueError(
+                f"Input list must have {len(expected_shapes)} tensors. "
+                + f"Got {len(X)}."
+            )
+
         # Check for vector format: [*N1], [*N2], ...
-        if all(x.shape == s for x, s in zip(X, expected_shapes, strict=True)):
+        if all(x.shape == s for x, s in zip(X, expected_shapes)):
             is_vec, num_vecs = True, 1
 
         # Check for matrix format: [*N1, K], [*N2, K], ... for trailing,
@@ -325,7 +332,7 @@ class PyTorchLinearOperator:
             all(
                 x.ndim == len(s) + 1
                 and (x.shape[:-1] if free_dim == "trailing" else x.shape[1:]) == s
-                for x, s in zip(X, expected_shapes, strict=True)
+                for x, s in zip(X, expected_shapes)
             )
             and len({x.shape[free_dim_pos] for x in X}) == 1
         ):
@@ -371,15 +378,22 @@ class PyTorchLinearOperator:
                 or list of tensors.
 
         Raises:
-            ValueError: If the output tensor list has an invalid shape.
+            ValueError: If the output tensor list has an invalid shape or number
+                of tensors.
         """
         free_dim_pos = {"trailing": -1, "leading": 0}[free_dim]
         fixed_dim_pos = {"trailing": 0, "leading": -1}[free_dim]
         expected_flat_sizes = [s.numel() for s in expected_shapes]
 
+        if len(AX) != len(expected_shapes):
+            raise ValueError(
+                f"Output tensor list must have {len(expected_shapes)} tensors. "
+                + f"Got {len(AX)}."
+            )
+
         if any(
             Ax.shape != ((*s, num_vecs) if free_dim == "trailing" else (num_vecs, *s))
-            for Ax, s in zip(AX, expected_shapes, strict=True)
+            for Ax, s in zip(AX, expected_shapes)
         ):
             raise ValueError(
                 f"Output tensors must have shapes {expected_shapes} and additional "
