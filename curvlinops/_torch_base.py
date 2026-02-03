@@ -75,6 +75,47 @@ class PyTorchLinearOperator:
         self._out_shape_flat = [s.numel() for s in self._out_shape]
         self.shape = (sum(self._out_shape_flat), sum(self._in_shape_flat))
 
+    def __rmatmul__(
+        self, X: Union[List[Tensor], Tensor]
+    ) -> Union[List[Tensor], Tensor]:
+        """Multiply a tensor from the left onto the linear operator (``X @ A``).
+
+        Args:
+            X: A vector or matrix that left-multiplies the linear operator.
+                Assume the linear operator has total shape ``[M, N]``:
+                ``X`` can be of shape ``[M]`` (vector), or ``[K, M]`` (matrix).
+                The result will have shape ``[N]`` or ``[K, N]``.
+                ``X`` can also be a list of tensors representing vectors of shape
+                ``[*M1], [*M2], ...`` or matrices of shape ``[K, *M1], [K, *M2], ...``,
+                where ``M1, M2, ...`` are the output shapes of the operator.
+
+        Returns:
+            The result of the vector- or matrix-matrix multiplication in the same
+            format as ``X``.
+        """
+        free_dim = "leading"  # position of axis in X to parallelize products over
+        # Check and preprocess input, yielding a matrix in tensor list format with
+        # leading matrix dimension (unsqueezed for the vector case)
+        X, list_format, is_vec, num_vecs = self._check_input_and_preprocess(
+            X, self._out_shape, free_dim
+        )
+
+        # Convert from leading to trailing dimension for compatibility with _matmat
+        # Pre-processing always adds explicit matrix dimension, so always use movedim
+        XH = [x.conj().movedim(0, -1) for x in X]
+
+        # Use that X @ A = (A^H @ X^H)^H
+        AH = self.adjoint()
+        AH_XH = AH._matmat(XH)
+
+        # Apply final conjugate to get (A^H @ X^H)^H
+        AX = [r.conj().movedim(-1, 0) for r in AH_XH]
+
+        # Postprocess output back to original format
+        return self._check_output_and_postprocess(
+            AX, list_format, is_vec, num_vecs, self._in_shape, free_dim
+        )
+
     def __matmul__(
         self, X: Union[List[Tensor], Tensor, PyTorchLinearOperator]
     ) -> Union[List[Tensor], Tensor, _ChainPyTorchLinearOperator]:
@@ -102,17 +143,22 @@ class PyTorchLinearOperator:
             format as ``X``, or a new linear operator representing the product of this
             and the passed linear operator.
         """
+        free_dim = "trailing"  # position of axis in X to parallelize products over
         if isinstance(X, PyTorchLinearOperator):
             return _ChainPyTorchLinearOperator(self, X)
 
         # convert to tensor list format
-        X, list_format, is_vec, num_vecs = self._check_input_and_preprocess(X)
+        X, list_format, is_vec, num_vecs = self._check_input_and_preprocess(
+            X, self._in_shape, free_dim
+        )
 
         # matrix-matrix-multiply using tensor list format
         AX = self._matmat(X)
 
         # return same format as ``X`` passed by the user
-        return self._check_output_and_postprocess(AX, list_format, is_vec, num_vecs)
+        return self._check_output_and_postprocess(
+            AX, list_format, is_vec, num_vecs, self._out_shape, free_dim
+        )
 
     def _matmat(self, X: List[Tensor]) -> List[Tensor]:
         """Matrix-matrix multiplication.
@@ -151,12 +197,18 @@ class PyTorchLinearOperator:
         raise NotImplementedError
 
     def _check_input_and_preprocess(
-        self, X: Union[List[Tensor], Tensor]
+        self,
+        X: Union[List[Tensor], Tensor],
+        expected_shapes: List[Size],
+        free_dim: str,
     ) -> Tuple[List[Tensor], bool, bool, int]:
         """Check input format and pre-process it to a matrix in tensor list format.
 
         Args:
             X: The object onto which the linear operator is multiplied.
+            expected_shapes: The expected shapes for tensor list format.
+            free_dim: Whether the matrix dimension is ``"trailing"`` or
+                ``"leading"``.
 
         Returns:
             X_tensor_list: The input object in tensor list format.
@@ -170,24 +222,32 @@ class PyTorchLinearOperator:
         """
         if isinstance(X, Tensor):
             list_format = False
-            X_tensor_list, is_vec, num_vecs = self.__check_tensor_and_preprocess(X)
+            X_tensor_list, is_vec, num_vecs = self.__check_tensor_and_preprocess(
+                X, expected_shapes, free_dim
+            )
 
         elif isinstance(X, list) and all(isinstance(x, Tensor) for x in X):
             list_format = True
-            X_tensor_list, is_vec, num_vecs = self.__check_tensor_list_and_preprocess(X)
+            X_tensor_list, is_vec, num_vecs = self.__check_tensor_list_and_preprocess(
+                X, expected_shapes, free_dim
+            )
 
         else:
             raise ValueError(f"Input must be tensor or list of tensors. Got {type(X)}.")
 
         return X_tensor_list, list_format, is_vec, num_vecs
 
+    @staticmethod
     def __check_tensor_and_preprocess(
-        self, X: Tensor
+        X: Tensor, expected_shapes: List[Size], free_dim: str
     ) -> Tuple[List[Tensor], bool, int]:
         """Check single-tensor input format and process into a matrix tensor list.
 
         Args:
             X: The tensor onto which the linear operator is multiplied.
+            expected_shapes: The expected shapes for the tensor list format.
+            free_dim: Whether the matrix dimension is ``"trailing"`` or
+                ``"leading"``.
 
         Returns:
             X_processed: The input tensor as matrix in tensor list format.
@@ -197,31 +257,53 @@ class PyTorchLinearOperator:
         Raises:
             ValueError: If the input tensor has an invalid shape.
         """
-        if X.ndim > 2 or X.shape[0] != self.shape[1]:
+        expected_total_size = sum(s.numel() for s in expected_shapes)
+        expected_flat_sizes = [s.numel() for s in expected_shapes]
+
+        free_dim_pos = {"trailing": 1, "leading": 0}[free_dim]
+        fixed_dim_pos = {"trailing": 0, "leading": -1}[free_dim]
+
+        # Unified shape check using fixed_dim_pos
+        if X.ndim > 2 or X.shape[fixed_dim_pos] != expected_total_size:
+            shape_description = (
+                f"({expected_total_size},) or "
+                + {
+                    "trailing": f"({expected_total_size}, K)",
+                    "leading": f"(K, {expected_total_size})",
+                }[free_dim]
+            )
             raise ValueError(
-                f"Input tensor must have shape ({self.shape[1]},) or "
-                + f"({self.shape[1]}, K), with K arbitrary. Got {X.shape}."
+                f"Input tensor must have shape {shape_description}, with "
+                + f"K arbitrary. Got {X.shape}."
             )
 
-        # determine whether the input is a vector or matrix
         is_vec = X.ndim == 1
-        num_vecs = 1 if is_vec else X.shape[1]
+        num_vecs = 1 if is_vec else X.shape[free_dim_pos]
 
-        # convert to matrix in tensor list format
         X_processed = [
             x.reshape(*s, num_vecs)
-            for x, s in zip(X.split(self._in_shape_flat), self._in_shape)
+            if free_dim == "trailing"
+            else x.reshape(num_vecs, *s)
+            for x, s in zip(
+                X.split(expected_flat_sizes, dim=fixed_dim_pos),
+                expected_shapes,
+                strict=True,
+            )
         ]
 
         return X_processed, is_vec, num_vecs
 
+    @staticmethod
     def __check_tensor_list_and_preprocess(
-        self, X: List[Tensor]
+        X: List[Tensor], expected_shapes: List[Size], free_dim: str
     ) -> Tuple[List[Tensor], bool, int]:
         """Check tensor list input format and process into a matrix tensor list.
 
         Args:
             X: The tensor list onto which the linear operator is multiplied.
+            expected_shapes: The expected shapes for the tensor list format.
+            free_dim: Whether the matrix dimension is ``"trailing"`` or
+                ``"leading"``.
 
         Returns:
             X_processed: The input as matrix in tensor list format.
@@ -229,73 +311,112 @@ class PyTorchLinearOperator:
             num_vecs: The number of vectors represented by the input.
 
         Raises:
-            ValueError: If the tensor entries in the list have invalid shapes.
+            ValueError: If the tensor entries in the list have invalid shapes or there
+                are too many/few entries.
         """
-        if len(X) != len(self._in_shape):
+        free_dim_pos = {"trailing": -1, "leading": 0}[free_dim]
+
+        if len(X) != len(expected_shapes):
             raise ValueError(
-                f"List must contain {len(self._in_shape)} tensors. Got {len(X)}."
+                f"Input list must have {len(expected_shapes)} tensors. "
+                + f"Got {len(X)}."
             )
 
-        # check if input is a vector or a matrix
-        if all(x.shape == s for x, s in zip(X, self._in_shape)):
+        # Check for vector format: [*N1], [*N2], ...
+        if all(x.shape == s for x, s in zip(X, expected_shapes)):
             is_vec, num_vecs = True, 1
+
+        # Check for matrix format: [*N1, K], [*N2, K], ... for trailing,
+        # [K, *N1], [K, *N2], ... for leading
         elif (
             all(
-                x.ndim == len(s) + 1 and x.shape[:-1] == s
-                for x, s in zip(X, self._in_shape)
+                x.ndim == len(s) + 1
+                and (x.shape[:-1] if free_dim == "trailing" else x.shape[1:]) == s
+                for x, s in zip(X, expected_shapes)
             )
-            and len({x.shape[-1] for x in X}) == 1
+            and len({x.shape[free_dim_pos] for x in X}) == 1
         ):
-            is_vec, (num_vecs,) = False, {x.shape[-1] for x in X}
+            is_vec, (num_vecs,) = False, {x.shape[free_dim_pos] for x in X}
+
         else:
             raise ValueError(
-                f"Input list must contain tensors with shapes {self._in_shape} "
-                + "and optional trailing dimension for the matrix columns. "
+                f"Input list must contain tensors with shapes {expected_shapes} "
+                + f"and optional {free_dim} dimension for the matrix columns. "
                 + f"Got {[x.shape for x in X]}."
             )
 
-        # convert to matrix in tensor list format
-        X_processed = [x.unsqueeze(-1) for x in X] if is_vec else X
+        X_processed = [x.unsqueeze(free_dim_pos) for x in X] if is_vec else X
 
         return X_processed, is_vec, num_vecs
 
+    @staticmethod
     def _check_output_and_postprocess(
-        self, AX: List[Tensor], list_format: bool, is_vec: bool, num_vecs: int
+        AX: List[Tensor],
+        list_format: bool,
+        is_vec: bool,
+        num_vecs: int,
+        expected_shapes: List[Size],
+        free_dim: str,
     ) -> Union[List[Tensor], Tensor]:
         """Check multiplication output and post-process it to the original format.
 
         Args:
             AX: The output of the multiplication as matrix in tensor list format.
+                For ``free_dim="trailing"``, expects shapes
+                ``[*S1, K], [*S2, K], ...``.
+                For ``free_dim="leading"``, expects shapes
+                ``[K, *S1], [K, *S2], ...`` (always with explicit matrix dimension).
             list_format: Whether the output should be in tensor list format.
             is_vec: Whether the output should be a vector or a matrix.
             num_vecs: The number of vectors represented by the output.
+            expected_shapes: The expected shapes for the output.
+            free_dim: Whether the matrix dimension is ``"trailing"`` or
+                ``"leading"``.
 
         Returns:
             AX_processed: The output in the original format, either as single tensor
                 or list of tensors.
 
         Raises:
-            ValueError: If the output tensor list has an invalid length or shape.
+            ValueError: If the output tensor list has an invalid shape or number
+                of tensors.
         """
-        # verify output tensor list format
-        if len(AX) != len(self._out_shape):
+        free_dim_pos = {"trailing": -1, "leading": 0}[free_dim]
+        fixed_dim_pos = {"trailing": 0, "leading": -1}[free_dim]
+        expected_flat_sizes = [s.numel() for s in expected_shapes]
+
+        if len(AX) != len(expected_shapes):
             raise ValueError(
-                f"Output list must contain {len(self._out_shape)} tensors. Got {len(AX)}."
+                f"Output tensor list must have {len(expected_shapes)} tensors. "
+                + f"Got {len(AX)}."
             )
-        if any(Ax.shape != (*s, num_vecs) for Ax, s in zip(AX, self._out_shape)):
+
+        if any(
+            Ax.shape != ((*s, num_vecs) if free_dim == "trailing" else (num_vecs, *s))
+            for Ax, s in zip(AX, expected_shapes)
+        ):
             raise ValueError(
-                f"Output tensors must have shapes {self._out_shape} and additional "
-                + f"trailing dimension of {num_vecs}. "
+                f"Output tensors must have shapes {expected_shapes} and additional "
+                + f"{free_dim} dimension of {num_vecs}. "
                 + f"Got {[Ax.shape for Ax in AX]}."
             )
 
         if list_format:
-            AX_processed = [Ax.squeeze(-1) for Ax in AX] if is_vec else AX
+            AX_processed = [Ax.squeeze(free_dim_pos) for Ax in AX] if is_vec else AX
+
         else:
-            AX_processed = cat(
-                [Ax.reshape(s, num_vecs) for Ax, s in zip(AX, self._out_shape_flat)]
+            AX_flattened = cat(
+                [
+                    Ax.reshape(s, num_vecs)
+                    if free_dim == "trailing"
+                    else Ax.reshape(num_vecs, s)
+                    for Ax, s in zip(AX, expected_flat_sizes)
+                ],
+                dim=fixed_dim_pos,
             )
-            AX_processed = AX_processed.squeeze(-1) if is_vec else AX_processed
+            AX_processed = (
+                AX_flattened.squeeze(free_dim_pos) if is_vec else AX_flattened
+            )
 
         return AX_processed
 

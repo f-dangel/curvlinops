@@ -84,7 +84,7 @@ data = [(X1, y1), (X2, y2)]
 GGN = GGNLinearOperator(model, loss_function, params, data)
 shapes = [p.shape for p in params]
 delta = 1e-2
-damping = delta * IdentityLinearOperator(shapes, DEVICE, DTYPE)
+damping = delta * IdentityLinearOperator(shapes, GGN.device, DTYPE)
 damped_GGN = GGN + damping
 
 # %%
@@ -164,8 +164,8 @@ assert allclose_report(gradient, gradient_functorch)
 
 # %%
 #
-#  We can now compute the natural gradient from the :code:`functorch
-#  `quantities. This should yield approximately the same result:
+#  We can now compute the natural gradient from the :code:`functorch`
+#  quantities. This should yield approximately the same result:
 
 natural_gradient_functorch = inv_damped_GGN_mat @ gradient_functorch
 
@@ -230,11 +230,11 @@ fig, ax = plt.subplots(ncols=2)
 plt.suptitle("Logarithm of absolute values")
 
 ax[0].set_title("Damped GGN/Fisher")
-image = ax[0].imshow(damped_GGN_mat.abs().log10())
+image = ax[0].imshow(damped_GGN_mat.detach().cpu().abs().log10())
 plt.colorbar(image, ax=ax[0], shrink=0.5)
 
 ax[1].set_title("Inv. damped GGN/Fisher")
-image = ax[1].imshow(inv_damped_GGN_mat.abs().log10())
+image = ax[1].imshow(inv_damped_GGN_mat.detach().cpu().abs().log10())
 plt.colorbar(image, ax=ax[1], shrink=0.5)
 
 # %%
@@ -281,12 +281,12 @@ plt.suptitle("Inverse damped Fisher (logarithm of absolute values)")
 for i, (n, inv) in enumerate(zip(num_terms, neumann_inverses)):
     ax = axes.flat[i]
     ax.set_title(f"Neumann, {n} terms")
-    image = ax.imshow(inv.abs().log10())
+    image = ax.imshow(inv.detach().cpu().abs().log10())
     plt.colorbar(image, ax=ax, shrink=0.5)
 
 ax = axes.flat[-1]
 ax.set_title("Exact inverse")
-image = ax.imshow(inv_damped_GGN_mat.abs().log10())
+image = ax.imshow(inv_damped_GGN_mat.detach().cpu().abs().log10())
 plt.colorbar(image, ax=ax, shrink=0.5)
 
 # %%

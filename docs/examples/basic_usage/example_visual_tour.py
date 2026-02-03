@@ -127,7 +127,10 @@ KFAC_mat = KFAC_linop @ identity
 #
 # We will show the matrix entries on a shared domain for better comparability.
 
-matrices = [Hessian_mat, GGN_mat, EF_mat, Hessian_blocked_mat, F_mat, KFAC_mat]
+matrices = [
+    m.cpu()
+    for m in (Hessian_mat, GGN_mat, EF_mat, Hessian_blocked_mat, F_mat, KFAC_mat)
+]
 titles = [
     "Hessian",
     "Generalized Gauss-Newton",

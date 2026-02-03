@@ -281,6 +281,7 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
                 retry_double_precision is False or the matrix is already in
                 double precision.
         """
+
         def _damped_cholesky(A: Tensor, damping: float) -> Tensor:
             A_damped = diagonal_scatter(A, A.diag() + damping)
             return cholesky(A_damped)
