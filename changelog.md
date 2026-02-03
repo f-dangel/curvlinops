@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Support left multiplication with linear operators (`X @ A` with `X` a tensor or tensor list)
   ([PR](https://github.com/f-dangel/curvlinops/pull/226))
 
+- **Backward-incompatible**: Change (E)KFAC's `det, log, logdet, frobenius_norm` properties into functions and modify (E)KFAC's output of `state_dict`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/227))
+
 ### Fixed/Removed
 
 ### Internal
@@ -32,6 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     ([PR](https://github.com/f-dangel/curvlinops/pull/211))
   - `EighDecomposedLinearOperator` for `eigh`-decomposed matrices `Q diag(λ) Q^T` with orthogonal `Q`
     ([PR](https://github.com/f-dangel/curvlinops/pull/210))
+
+- Reduce side effects in (E)KFAC's computation and reduce caching logic
+  ([PR](https://github.com/f-dangel/curvlinops/pull/227))
 
 ## [3.0.1] - 2026-01-14
 
