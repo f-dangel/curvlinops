@@ -67,27 +67,27 @@ def test_loss_hessian_matrix_sqrt(
 
     loss_func = loss_func_cls(reduction=reduction)
 
-    # Create prediction with batch dimension: [1, *output_shape]
-    output_one_datum = randn(1, *output_shape)
+    # Create prediction with batch dimension: [*output_shape]
+    output_one_datum = randn(*output_shape)
 
     # Create targets based on loss function type
     if loss_func_cls == CrossEntropyLoss:
         # For CrossEntropyLoss, first dim is class dimension C, rest are sequence dims
         C = output_shape[0]
         seq_shape = output_shape[1:] if len(output_shape) > 1 else ()
-        # Target shape: [1, *seq_shape] with class indices in [0, C)
-        target_one_datum = randint(0, C, (1, *seq_shape))
+        # Target shape: [*seq_shape] with class indices in [0, C)
+        target_one_datum = randint(0, C, seq_shape)
     elif loss_func_cls == MSELoss:
         # For MSELoss, all dims are feature axes; target shape matches output
-        target_one_datum = randn(1, *output_shape)
+        target_one_datum = randn(*output_shape)
     elif loss_func_cls == BCEWithLogitsLoss:
         # For BCEWithLogitsLoss, all dims are feature axes; target has binary values
-        target_one_datum = randint(0, 2, (1, *output_shape)).float()
+        target_one_datum = randint(0, 2, output_shape).float()
 
     # Compute Hessian square root using the function under test
     hess_sqrt = loss_hessian_matrix_sqrt(output_one_datum, target_one_datum, loss_func)
 
-    # hess_sqrt has shape [*output_shape[1:], *output_shape[1:]] = [C, *seq, C, *seq]
+    # hess_sqrt has shape [*output_shape, *output_shape] = [C, *seq, C, *seq]
     # Flatten to [C * prod(seq), C * prod(seq)] for matrix multiplication
     flat_dim = output_one_datum.numel()
     hess_sqrt_flat = hess_sqrt.reshape(flat_dim, flat_dim)
@@ -98,8 +98,10 @@ def test_loss_hessian_matrix_sqrt(
     # Compute true Hessian using torch.func.hessian
     def _loss_fn(pred_flat: Tensor) -> Tensor:
         """Loss as function of flattened prediction."""
-        pred = pred_flat.reshape(1, *output_shape)
-        return loss_func(pred, target_one_datum)
+        # NOTE We have to make the batch axis explicit for nn.CrossEntropyLoss
+        pred_with_batch_axis = pred_flat.reshape(1, *output_shape)
+        target_with_batch_axis = target_one_datum.unsqueeze(0)
+        return loss_func(pred_with_batch_axis, target_with_batch_axis)
 
     pred_flat = output_one_datum.flatten()
     true_hess = hessian(_loss_fn)(pred_flat)

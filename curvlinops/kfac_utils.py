@@ -45,10 +45,11 @@ def loss_hessian_matrix_sqrt(
 
     Args:
         output_one_datum: The model's prediction on a single datum.
-            Has shape ``[1, C, *D]`` for CE where ``C`` is the number of classes,
-            or ``[1, *D]`` for MSE/BCE with ``*D`` optional (and potentially multiple)
-            sequence dimensions.
-        target_one_datum: The label of the single datum. Has shape ``[1, *D]``.
+            Has shape ``[C, *D]`` for CE where ``C`` is the number of classes,
+            or ``[*D]`` for MSE/BCE with ``*D`` optional (and potentially multiple)
+            sequence dimensions. Has no batch axis.
+        target_one_datum: The label of the single datum. Has shape ``[*D]``.
+            Has no batch axis.
         loss_func: The loss function.
         check_binary_if_BCEWithLogitsLoss: Whether to check if targets are binary
             for BCEWithLogitsLoss. Default: ``True``.
@@ -67,8 +68,7 @@ def loss_hessian_matrix_sqrt(
         datum :math:`\mathbf{x}` and :math:`\mathbf{y}` is the label.
 
 
-    Below, we document the Hessian square roots for vector-valued predictions of shape
-    ``[1, C]``.
+    Below, we list the Hessian square roots for vector-valued predictions of shape ``[C]``.
 
     Note:
         For :class:`torch.nn.MSELoss` (with :math:`c = 1` for ``reduction='sum'``
@@ -124,19 +124,10 @@ def loss_hessian_matrix_sqrt(
         where the square root is applied element-wise.
 
     Raises:
-        ValueError: If the batch size is not one.
         NotImplementedError: If the loss function is not supported.
         NotImplementedError: If the loss function is ``BCEWithLogitsLoss`` but the
             target is not binary.
     """
-    if output_one_datum.shape[0] != 1:
-        raise ValueError(
-            f"Expected output_one_datum to have batch size 1, got {output_one_datum.shape}."
-        )
-    if target_one_datum.shape[0] != 1:  # targets for 2d predictions are sometimes 1d
-        raise ValueError(
-            f"Expected target_one_datum to have batch_size 1. Got {target_one_datum.shape}."
-        )
     output_dim = output_one_datum.numel()
     # Construct the Hessian square root as matrix (w.r.t. the flattened outputs)
     reduction = loss_func.reduction
@@ -148,8 +139,8 @@ def loss_hessian_matrix_sqrt(
         )
 
     elif isinstance(loss_func, CrossEntropyLoss):
-        # Output has shape [1, C, d1, d2, ...], flatten into [C, d1 * d2 * ...]
-        output_flat = output_one_datum.squeeze(0).unsqueeze(-1).flatten(start_dim=1)
+        # Output has shape [C, d1, d2, ...], flatten into [C, d1 * d2 * ...]
+        output_flat = output_one_datum.unsqueeze(-1).flatten(start_dim=1)
         C, D = output_flat.shape
         p = output_flat.softmax(dim=0)
         # Scaling factor from reduction
@@ -191,7 +182,7 @@ def loss_hessian_matrix_sqrt(
         raise NotImplementedError(f"Loss function {loss_func} not supported.")
 
     # Un-flatten the output dimensions
-    output_shape = output_one_datum.shape[1:]
+    output_shape = output_one_datum.shape
     return hess_sqrt_flat.reshape(*output_shape, *output_shape)
 
 
