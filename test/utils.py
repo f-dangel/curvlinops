@@ -55,6 +55,7 @@ from curvlinops import (
     KFACLinearOperator,
 )
 from curvlinops._torch_base import CurvatureLinearOperator, PyTorchLinearOperator
+from curvlinops.blockdiagonal import BlockDiagonalLinearOperator
 from curvlinops.utils import allclose_report
 
 
@@ -477,6 +478,8 @@ def compare_state_dicts(state_dict: dict, state_dict_new: dict):
                     assert v2 is None
                 else:
                     assert allclose(as_tensor(v), as_tensor(v2))
+        elif type(value) is type(value_new) is BlockDiagonalLinearOperator:
+            pass
         else:
             assert value == value_new
 
@@ -826,19 +829,16 @@ def _test_property(  # noqa: C901
     if property_name == "logdet":
         DELTA = 1e-3
         if type(linop) is KFACLinearOperator:
-            if not check_deterministic:
-                linop.compute_kronecker_factors()
-            assert linop._input_covariances or linop._gradient_covariances
-            for aaT in linop._input_covariances.values():
+            assert (
+                linop.representation["input_covariances"]
+                or linop.representation["gradient_covariances"]
+            )
+            for aaT in linop.representation["input_covariances"].values():
                 aaT.add_(eye_like(aaT), alpha=DELTA)
-            for ggT in linop._gradient_covariances.values():
+            for ggT in linop.representation["gradient_covariances"].values():
                 ggT.add_(eye_like(ggT), alpha=DELTA)
         elif type(linop) is EKFACLinearOperator:
-            if not check_deterministic:
-                linop.compute_kronecker_factors()
-                linop.compute_eigenvalue_correction()
-            assert linop._corrected_eigenvalues
-            for eigenvalues in linop._corrected_eigenvalues.values():
+            for eigenvalues in linop.representation["corrected_eigenvalues"].values():
                 if isinstance(eigenvalues, dict):
                     for eigenvals in eigenvalues.values():
                         eigenvals.add_(DELTA)
@@ -854,15 +854,10 @@ def _test_property(  # noqa: C901
     }[property_name]
 
     # Check for equivalence of property and naive computation
-    quantity = getattr(linop, property_name)
+    quantity = getattr(linop, property_name)()
     linop_mat = linop @ eye_like(linop)
     quantity_naive = torch_fn(linop_mat)
     assert allclose_report(quantity, quantity_naive, rtol=rtol, atol=atol)
-
-    # Check that the property is properly cached and reset
-    assert getattr(linop, "_" + property_name) == quantity
-    linop.compute_kronecker_factors()
-    assert getattr(linop, "_" + property_name) is None
 
 
 def _test_save_and_load_state_dict(

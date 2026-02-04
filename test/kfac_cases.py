@@ -94,7 +94,7 @@ KFAC_WEIGHT_SHARING_EXACT_CASES_NO_DEVICE_NO_LOSS_FUNC = [
     },
     # Conv2d module with vector output (uses average pooling for reduce setting)
     {
-        "model_func": lambda: Conv2dModel(),
+        "model_func": Conv2dModel,
         "data": lambda: {
             KFACType.EXPAND: [
                 (rand(2, 3, 20, 20), regression_targets((2, 21, 21, 2))),
@@ -225,7 +225,7 @@ SINGLE_LAYER_WEIGHT_SHARING_CASES_NO_DEVICE_NO_LOSS_FUNC = [
     },
     # Conv2d module with vector output (uses average pooling for reduce setting)
     {
-        "model_func": lambda: Conv2dModel(),
+        "model_func": Conv2dModel,
         "data": lambda: {
             KFACType.EXPAND: [
                 (rand(7, 3, 20, 20), regression_targets((7, 21, 21, 2))),

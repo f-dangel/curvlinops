@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Support left multiplication with linear operators (`X @ A` with `X` a tensor or tensor list)
   ([PR](https://github.com/f-dangel/curvlinops/pull/226))
 
+- **Backward-incompatible**: Change (E)KFAC's `det, log, logdet, frobenius_norm` properties into functions and modify (E)KFAC's output of `state_dict`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/227))
+
 ### Fixed/Removed
 
 ### Internal
@@ -25,11 +28,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Execute many tests in `float64`, allowing to lower many tolerances
   ([PR](https://github.com/f-dangel/curvlinops/pull/224))
 
-- Add linear operator `EighDecomposedLinearOperator` for `eigh`-decomposed matrices `Q diag(λ) Q^T` with orthogonal `Q`
-  ([PR](https://github.com/f-dangel/curvlinops/pull/210))
+- Add linear operators for basic mathematical structures
+  - `BlockDiagonalLinearOperator` for matrices `block_diag(B_1, B_2, ...)`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/212))
+  - `KroneckerProductLinearOperator` for matrices `S_1 ⊗ S_2 ⊗ ...`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/211))
+  - `EighDecomposedLinearOperator` for `eigh`-decomposed matrices `Q diag(λ) Q^T` with orthogonal `Q`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/210))
 
-- Add linear operator `KroneckerProductLinearOperator` for matrices `S_1 ⊗ S_2 ⊗ ...`
-  ([PR](https://github.com/f-dangel/curvlinops/pull/211))
+- Major simplification of KFACLinearOperator and EKFACLinearOperator
+  - Reduce side effects in (E)KFAC's computation and reduce caching logic
+    ([PR1](https://github.com/f-dangel/curvlinops/pull/227) (**backward-incompatible**),
+     [PR2](https://github.com/f-dangel/curvlinops/pull/228))
+  - Introduce canonicalization operators that convert from parameter space (determined by order of parameters) to KFAC's canonical space (block-diagonal Kronecker-factored matrix) and back
+    ([PR](https://github.com/f-dangel/curvlinops/pull/229))
 
 ## [3.0.1] - 2026-01-14
 

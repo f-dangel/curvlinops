@@ -105,7 +105,7 @@ def test_kfac_type2(
 
     # Check that input covariances were not computed
     if exclude == "weight":
-        assert len(kfac._input_covariances) == 0
+        assert len(kfac.representation["input_covariances"]) == 0
 
 
 @mark.parametrize("setting", [KFACType.EXPAND, KFACType.REDUCE])
@@ -177,7 +177,7 @@ def test_kfac_type2_weight_sharing(
 
     # Check that input covariances were not computed
     if exclude == "weight":
-        assert len(kfac._input_covariances) == 0
+        assert len(kfac.representation["input_covariances"]) == 0
 
 
 @mark.parametrize(
@@ -605,7 +605,7 @@ def test_expand_setting_scaling(
             output_random_variable_size = 3
             # MSE loss averages over number of output channels
             loss_term_factor *= output_random_variable_size
-        for ggT in kfac_sum._gradient_covariances.values():
+        for ggT in kfac_sum.representation["gradient_covariances"].values():
             ggT.div_(kfac_sum._N_data * loss_term_factor)
     kfac_simulated_mean_mat = kfac_sum @ eye_like(kfac_sum)
 
@@ -818,8 +818,15 @@ def test_forward_only_fisher_type(
         fisher_type=FisherType.EMPIRICAL,
     )
     # Manually set all gradient covariances to the identity to simulate FOOF
-    for name, block in foof_simulated._gradient_covariances.items():
-        foof_simulated._gradient_covariances[name] = eye_like(block)
+    for name, block in foof_simulated.representation["gradient_covariances"].items():
+        foof_simulated.representation["gradient_covariances"][name] = eye_like(block)
+    # Re-construct the canonical operator
+    foof_simulated.representation["canonical_op"] = (
+        foof_simulated._setup_canonical_operator(
+            foof_simulated.representation["input_covariances"],
+            foof_simulated.representation["gradient_covariances"],
+        )
+    )
     simulated_foof_mat = foof_simulated @ eye_like(foof_simulated)
 
     # Compute KFAC with `fisher_type=FisherType.FORWARD_ONLY`
@@ -835,14 +842,18 @@ def test_forward_only_fisher_type(
     foof_mat = foof @ eye_like(foof)
 
     # Check for equivalence
-    assert len(foof_simulated._input_covariances) == len(foof._input_covariances)
-    assert len(foof_simulated._gradient_covariances) == len(foof._gradient_covariances)
+    assert len(foof_simulated.representation["input_covariances"]) == len(
+        foof.representation["input_covariances"]
+    )
+    assert len(foof_simulated.representation["gradient_covariances"]) == len(
+        foof.representation["gradient_covariances"]
+    )
     assert allclose_report(simulated_foof_mat, foof_mat)
 
     # Check that input covariances were not computed
     if exclude == "weight":
-        assert len(foof_simulated._input_covariances) == 0
-        assert len(foof._input_covariances) == 0
+        assert len(foof_simulated.representation["input_covariances"]) == 0
+        assert len(foof.representation["input_covariances"]) == 0
 
 
 @mark.parametrize(
@@ -914,7 +925,7 @@ def test_forward_only_fisher_type_exact_case(
 
     # Check that input covariances were not computed
     if exclude == "weight":
-        assert len(foof._input_covariances) == 0
+        assert len(foof.representation["input_covariances"]) == 0
 
 
 @mark.parametrize("setting", [KFACType.EXPAND, KFACType.REDUCE])
@@ -1017,7 +1028,7 @@ def test_forward_only_fisher_type_exact_weight_sharing_case(
 
     # Check that input covariances were not computed
     if exclude == "weight":
-        assert len(foof._input_covariances) == 0
+        assert len(foof.representation["input_covariances"]) == 0
 
 
 def test_kfac_does_not_affect_grad():
