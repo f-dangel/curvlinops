@@ -2,106 +2,16 @@
 
 from collections.abc import MutableMapping
 from functools import cached_property, partial
-from math import sqrt
 from typing import Callable, Iterable, List, Optional, Tuple, Union
 
-from einops import einsum, rearrange
-from torch import Generator, Tensor, as_tensor, normal, softmax, vmap, zeros
+from einops import einsum
+from torch import Generator, Tensor, vmap
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, Module, MSELoss, Parameter
-from torch.nn.functional import one_hot
 
 from curvlinops._torch_base import CurvatureLinearOperator
 from curvlinops.ggn import make_ggn_vector_product
+from curvlinops.kfac_utils import make_grad_output_sampler
 from curvlinops.utils import make_functional_flattened_model_and_loss
-
-
-def make_grad_output_sampler(
-    loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
-) -> Callable[[Tensor, int, Tensor, Generator], Tensor]:
-    """Create a function that samples gradients w.r.t. network outputs.
-
-    Args:
-        loss_func: The loss function to create the sampler for.
-
-    Returns:
-        A function that samples gradients w.r.t. the model prediction.
-        Signature: (output, num_samples, y, generator) -> grad_samples
-    """
-
-    def sample_grad_output(
-        output: Tensor, num_samples: int, y: Tensor, generator: Generator
-    ) -> Tensor:
-        """Draw would-be gradients ``∇_f log p(·|f)`` with explicit generator.
-
-        For a single data point, the would-be gradient's outer product equals the
-        Hessian ``∇²_f log p(·|f)`` in expectation.
-
-        Currently only supports ``MSELoss``, ``CrossEntropyLoss``, and
-        ``BCEWithLogitsLoss``.
-
-        The returned gradient does not account for the scaling of the loss function by
-        the output dimension ``C`` that ``MSELoss`` and ``BCEWithLogitsLoss`` apply when
-        ``reduction='mean'``.
-
-        Args:
-            output: model prediction ``f`` for multiple data with batch axis as
-                0th dimension.
-            num_samples: Number of samples to draw.
-            y: Labels of the data on which output was produced.
-            generator: Random generator for sampling.
-
-        Returns:
-            Samples of the gradient w.r.t. the model prediction.
-            Has shape ``[num_samples, *output.shape]``.
-
-        Raises:
-            NotImplementedError: For unsupported loss functions.
-            NotImplementedError: If the prediction does not have two dimensions.
-            NotImplementedError: If binary classification labels are not binary.
-        """
-        if output.ndim != 2:
-            raise NotImplementedError(f"Only 2d outputs supported. Got {output.shape}")
-
-        _, C = output.shape
-
-        if isinstance(loss_func, MSELoss):
-            std = as_tensor(sqrt(0.5), device=output.device)
-            mean = zeros(
-                num_samples, *output.shape, device=output.device, dtype=output.dtype
-            )
-            return 2 * normal(mean, std, generator=generator)
-
-        elif isinstance(loss_func, CrossEntropyLoss):
-            prob = softmax(output, dim=1)
-            sample = prob.multinomial(
-                num_samples=num_samples, replacement=True, generator=generator
-            )
-            sample = rearrange(sample, "batch s -> s batch")
-            onehot_sample = one_hot(sample, num_classes=C)
-            # repeat ``num_sample`` times along a new leading axis to avoid broadcasting
-            prob = prob.unsqueeze(0).expand_as(onehot_sample)
-            return prob - onehot_sample
-
-        elif isinstance(loss_func, BCEWithLogitsLoss):
-            # Check if targets are binary by ensuring all values are 0 or 1
-            is_binary = (y == 0).logical_or(y == 1).all()
-            if not is_binary:
-                raise NotImplementedError(
-                    "Only binary targets (0, 1) are currently supported with"
-                    + f" BCEWithLogitsLoss. Got non-binary values {y.unique()}."
-                )
-            prob = output.sigmoid()
-            # repeat ``num_sample`` times along a new leading axis
-            prob = prob.unsqueeze(0).expand(num_samples, -1, -1)
-            sample = prob.bernoulli(generator=generator)
-            return prob - sample
-
-        else:
-            raise NotImplementedError(
-                f"Supported losses: {(MSELoss, CrossEntropyLoss, BCEWithLogitsLoss)}"
-            )
-
-    return sample_grad_output
 
 
 def make_batch_fmc_matrix_product(
@@ -174,15 +84,8 @@ def make_batch_fmc_matrix_product(
         )
 
         # Adjust the scale depending on the loss reduction used
-        num_loss_terms, C = output_flat.shape
-        reduction_factor = {
-            "mean": (
-                num_loss_terms
-                if isinstance(loss_func, CrossEntropyLoss)
-                else num_loss_terms * C
-            ),
-            "sum": 1.0,
-        }[loss_func.reduction]
+        num_loss_terms, _ = output_flat.shape
+        reduction_factor = {"mean": num_loss_terms, "sum": 1.0}[loss_func.reduction]
 
         # Compute the pseudo-loss: 0.5 / (M * c) * sum_n sum_m <f_n, g_nm>^2
         inner_products = einsum(

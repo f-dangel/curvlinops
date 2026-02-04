@@ -1,15 +1,24 @@
 """Utility functions related to KFAC."""
 
 from math import sqrt
-from typing import Tuple, Union
+from typing import Callable, Generator, Tuple, Union
 
 from einconv import index_pattern
 from einconv.utils import get_conv_paddings
 from einops import einsum, rearrange, reduce
-from torch import Tensor, block_diag, diag, zeros_like
+from torch import (
+    Tensor,
+    as_tensor,
+    block_diag,
+    diag,
+    normal,
+    softmax,
+    zeros,
+    zeros_like,
+)
 from torch.func import vmap
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
-from torch.nn.functional import unfold
+from torch.nn.functional import one_hot, unfold
 from torch.nn.modules.utils import _pair
 
 
@@ -193,6 +202,115 @@ def loss_hessian_matrix_sqrt(
     # Un-flatten the output dimensions
     output_shape = output_one_datum.shape[1:]
     return hess_sqrt_flat.reshape(*output_shape, *output_shape)
+
+
+def make_grad_output_sampler(
+    loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
+    check_binary_if_BCEWithLogitsLoss: bool = True,
+) -> Callable[[Tensor, int, Tensor, Generator], Tensor]:
+    """Create a function that samples gradients w.r.t. network outputs.
+
+    Args:
+        loss_func: The loss function to create the sampler for.
+        check_binary_if_BCEWithLogitsLoss: Whether to check if targets are binary
+            for BCEWithLogitsLoss. Default: ``True``.
+
+    Returns:
+        A function that samples gradients w.r.t. the model prediction.
+        Signature: (output, num_samples, y, generator) -> grad_samples
+    """
+
+    def sample_grad_output(
+        output: Tensor, num_samples: int, y: Tensor, generator: Generator
+    ) -> Tensor:
+        """Draw would-be gradients ``∇_f log p(·|f)`` with explicit generator.
+
+        For a single data point, the would-be gradient's outer product equals the
+        Hessian ``∇²_f log p(·|f)`` in expectation.
+        Currently supports ``MSELoss``, ``CrossEntropyLoss``, and
+        ``BCEWithLogitsLoss`` with arbitrary output dimensions.
+        The returned gradients include proper scaling based on the loss function's
+        reduction type.
+
+        Args:
+            output: model prediction ``f`` for multiple data with batch axis as
+                0th dimension.
+            num_samples: Number of samples to draw.
+            y: Labels of the data on which output was produced.
+            generator: Random generator for sampling.
+
+        Returns:
+            Samples of the gradient w.r.t. the model prediction.
+            Has shape ``[num_samples, *output.shape]``.
+
+        Raises:
+            NotImplementedError: For unsupported loss functions.
+            NotImplementedError: If binary classification labels are not binary.
+        """
+        batch_size = output.shape[0]
+        output_dim_per_sample = output.numel() // batch_size
+        reduction = loss_func.reduction
+
+        if isinstance(loss_func, MSELoss):
+            # All dimensions after batch are feature dimensions
+            c = {"sum": 1.0, "mean": 1.0 / output_dim_per_sample}[reduction]
+            std = as_tensor(sqrt(2 * c), device=output.device)
+            mean = zeros(
+                num_samples, *output.shape, device=output.device, dtype=output.dtype
+            )
+            return normal(mean, std, generator=generator)
+
+        elif isinstance(loss_func, CrossEntropyLoss):
+            # First dim after batch is class dimension, rest are sequence dims
+            C = output.shape[1]
+            sequence_length = output_dim_per_sample // C
+            c = {"sum": 1.0, "mean": 1.0 / sequence_length}[reduction]
+
+            # Flatten sequence dimensions: [batch, C, *seq] -> [batch, C, seq_flat]
+            output_flat = output.unsqueeze(-1).flatten(
+                start_dim=2
+            )  # [batch, C, seq_flat]
+            prob = softmax(output_flat, dim=1)  # [batch, C, seq_flat]
+
+            # Sample for each sequence position independently
+            # Rearrange to [batch * seq_flat, C] for multinomial sampling
+            prob_for_sampling = rearrange(prob, "b c s -> (b s) c")
+            samples = prob_for_sampling.multinomial(
+                num_samples=num_samples, replacement=True, generator=generator
+            )  # [(batch * seq_flat), num_samples]
+            samples = rearrange(
+                samples, "(b s) n -> n b s", b=batch_size
+            )  # [num_samples, batch, seq_flat]
+            onehot_samples = one_hot(samples, num_classes=C)
+            # [num_samples, batch, seq_flat, C] -> [num_samples, batch, C, seq_flat]
+            onehot_samples = rearrange(onehot_samples, "n b s c -> n b c s")
+
+            # Expand prob to match: [batch, C, seq_flat] -> [num_samples, batch, C, s]
+            prob_expanded = prob.unsqueeze(0).expand_as(onehot_samples)
+            grad_samples_flat = sqrt(c) * (prob_expanded - onehot_samples)
+
+            # Reshape back to original sequence dimensions
+            target_shape = (num_samples, *output.shape)
+            return grad_samples_flat.reshape(target_shape)
+
+        elif isinstance(loss_func, BCEWithLogitsLoss):
+            if check_binary_if_BCEWithLogitsLoss:
+                _check_binary_if_BCEWithLogitsLoss(y, loss_func)
+
+            # All dimensions after batch are feature dimensions
+            c = {"sum": 1.0, "mean": 1.0 / output_dim_per_sample}[reduction]
+            prob = output.sigmoid()
+            # repeat ``num_sample`` times along a new leading axis
+            prob = prob.unsqueeze(0).expand(num_samples, *prob.shape)
+            sample = prob.bernoulli(generator=generator)
+            return sqrt(c) * (prob - sample)
+
+        else:
+            raise NotImplementedError(
+                f"Supported losses: {(MSELoss, CrossEntropyLoss, BCEWithLogitsLoss)}"
+            )
+
+    return sample_grad_output
 
 
 def extract_patches(
