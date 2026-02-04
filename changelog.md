@@ -25,11 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Execute many tests in `float64`, allowing to lower many tolerances
   ([PR](https://github.com/f-dangel/curvlinops/pull/224))
 
-- Add linear operator `EighDecomposedLinearOperator` for `eigh`-decomposed matrices `Q diag(λ) Q^T` with orthogonal `Q`
-  ([PR](https://github.com/f-dangel/curvlinops/pull/210))
-
-- Add linear operator `KroneckerProductLinearOperator` for matrices `S_1 ⊗ S_2 ⊗ ...`
-  ([PR](https://github.com/f-dangel/curvlinops/pull/211))
+- Add linear operators for basic mathematical structures
+  - `BlockDiagonalLinearOperator` for matrices `block_diag(B_1, B_2, ...)`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/212))
+  - `KroneckerProductLinearOperator` for matrices `S_1 ⊗ S_2 ⊗ ...`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/211))
+  - `EighDecomposedLinearOperator` for `eigh`-decomposed matrices `Q diag(λ) Q^T` with orthogonal `Q`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/210))
 
 ## [3.0.1] - 2026-01-14
 
