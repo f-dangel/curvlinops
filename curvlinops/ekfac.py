@@ -477,7 +477,7 @@ class EKFACLinearOperator(KFACLinearOperator):
 
     @staticmethod
     def _eigenvectors_(dictionary: Dict[Any, Tensor]) -> Dict[Any, Tensor]:
-        """Replace all matrix values with their eigenvalues (inplace).
+        """Replace all matrix values with their eigenvectors (inplace).
 
         Args:
             dictionary: A dictionary mapping module names to square matrices.
@@ -766,7 +766,7 @@ class EKFACLinearOperator(KFACLinearOperator):
     def logdet(self) -> Tensor:
         r"""Log determinant of the EKFAC approximation.
 
-        More numerically stable than the ``det`` property.
+        More numerically stable than the ``det`` method.
         Will call ``compute_kronecker_factors`` and ``compute_eigenvalue_correction`` if
         either of them has not been called before.
 

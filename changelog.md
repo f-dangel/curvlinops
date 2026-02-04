@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Support left multiplication with linear operators (`X @ A` with `X` a tensor or tensor list)
   ([PR](https://github.com/f-dangel/curvlinops/pull/226))
 
-- **Backward-incompatible**: Change (E)KFAC's `det, log, logdet, frobenius_norm` properties into functions and modify (E)KFAC's output of `state_dict`
+- **Backward-incompatible**: Change (E)KFAC's `trace, det, logdet, frobenius_norm` properties into functions and modify (E)KFAC's output of `state_dict`
   ([PR](https://github.com/f-dangel/curvlinops/pull/227))
 
 ### Fixed/Removed

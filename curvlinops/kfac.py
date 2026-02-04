@@ -1016,7 +1016,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
     def logdet(self) -> Tensor:
         r"""Log determinant of the KFAC approximation.
 
-        More numerically stable than the ``det`` property.
+        More numerically stable than the ``det`` method.
         Will call ``compute_kronecker_factors`` if it has not been called before.
         Uses the property of the Kronecker product that
         :math:`\log \det(A \otimes B) = m \log \det(A) + n \log \det(B)`, where
