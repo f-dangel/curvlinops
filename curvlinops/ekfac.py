@@ -14,11 +14,7 @@ from torch.utils.hooks import RemovableHandle
 from curvlinops.blockdiagonal import BlockDiagonalLinearOperator
 from curvlinops.eigh import EighDecomposedLinearOperator
 from curvlinops.kfac import FisherType, KFACLinearOperator
-from curvlinops.kfac_utils import (
-    FromCanonicalLinearOperator,
-    ToCanonicalLinearOperator,
-    extract_patches,
-)
+from curvlinops.kfac_utils import extract_patches
 from curvlinops.kronecker import KroneckerProductLinearOperator
 
 
