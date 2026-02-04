@@ -55,6 +55,7 @@ from curvlinops import (
     KFACLinearOperator,
 )
 from curvlinops._torch_base import CurvatureLinearOperator, PyTorchLinearOperator
+from curvlinops.blockdiagonal import BlockDiagonalLinearOperator
 from curvlinops.utils import allclose_report
 
 
@@ -477,6 +478,8 @@ def compare_state_dicts(state_dict: dict, state_dict_new: dict):
                     assert v2 is None
                 else:
                     assert allclose(as_tensor(v), as_tensor(v2))
+        elif type(value) is type(value_new) is BlockDiagonalLinearOperator:
+            pass
         else:
             assert value == value_new
 
