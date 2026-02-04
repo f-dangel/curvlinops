@@ -6,30 +6,57 @@ from typing import Tuple, Union
 from einconv import index_pattern
 from einconv.utils import get_conv_paddings
 from einops import einsum, rearrange, reduce
-from torch import Tensor, diag, eye
+from torch import Tensor, block_diag, diag, zeros_like
+from torch.func import vmap
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from torch.nn.functional import unfold
 from torch.nn.modules.utils import _pair
+
+
+def _check_binary_if_BCEWithLogitsLoss(
+    target: Tensor, loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss]
+) -> None:
+    """Check if targets are binary (0 or 1) when using BCEWithLogitsLoss.
+
+    Args:
+        target: Target tensor.
+        loss_func: The loss function being used.
+
+    Raises:
+        NotImplementedError: If the loss function is BCEWithLogitsLoss but targets
+            are not binary (0 or 1).
+    """
+    if isinstance(loss_func, BCEWithLogitsLoss):
+        unique = set(target.unique().tolist())
+        if not unique.issubset({0, 1}):
+            raise NotImplementedError(
+                "Only binary targets (0, 1) are currently supported with"
+                + f" BCEWithLogitsLoss. Got values {unique}."
+            )
 
 
 def loss_hessian_matrix_sqrt(
     output_one_datum: Tensor,
     target_one_datum: Tensor,
     loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
+    check_binary_if_BCEWithLogitsLoss: bool = True,
 ) -> Tensor:
     r"""Compute the loss function's matrix square root for a sample's output.
 
     Args:
         output_one_datum: The model's prediction on a single datum. Has shape
-            ``[1, C]`` where ``C`` is the number of classes (outputs of the neural
-            network).
+            ``[1, *, C]`` where ``C`` is the number of classes (outputs of the neural
+            network) and * is arbitrary (e.g. empty or sequence length).
         target_one_datum: The label of the single datum.
+            Has shape ``[1, *]`` (CE) or ``[1, *, C]`` (BCE, MSE).
         loss_func: The loss function.
+        check_binary_if_BCEWithLogitsLoss: Whether to check if targets are binary
+            for BCEWithLogitsLoss. Default: ``True``.
 
     Returns:
         The matrix square root
         :math:`\mathbf{S}` of the Hessian. Has shape
-        ``[C, C]`` and satisfies the relation
+        ``[*, C, *, C]`` and satisfies the relation
 
         .. math::
             \mathbf{S} \mathbf{S}^\top
@@ -95,50 +122,74 @@ def loss_hessian_matrix_sqrt(
         where the square root is applied element-wise.
 
     Raises:
-        ValueError: If the batch size is not one, or the output is not 2d.
+        ValueError: If the batch size is not one.
         NotImplementedError: If the loss function is not supported.
         NotImplementedError: If the loss function is ``BCEWithLogitsLoss`` but the
             target is not binary.
     """
-    if output_one_datum.ndim != 2 or output_one_datum.shape[0] != 1:
+    if output_one_datum.shape[0] != 1:
         raise ValueError(
-            f"Expected 'output_one_datum' to be 2d with shape [1, C], got "
-            f"{output_one_datum.shape}"
+            f"Expected output_one_datum to have batch size 1, got {output_one_datum.shape}."
         )
     if target_one_datum.shape[0] != 1:  # targets for 2d predictions are sometimes 1d
         raise ValueError(
-            "Expected 'target_one_datum' to have batch_size 1."
-            + f" Got {target_one_datum.shape}."
+            "Expected 'target_one_datum' to have batch_size 1. Got {target_one_datum.shape}."
         )
-    output = output_one_datum.squeeze(0)
-    output_dim = output.numel()
+    output_dim = output_one_datum.numel()
+    # Construct the Hessian square root as matrix (w.r.t. the flattened outputs)
+    reduction = loss_func.reduction
 
     if isinstance(loss_func, MSELoss):
-        c = {"sum": 1.0, "mean": 1.0 / output_dim}[loss_func.reduction]
-        return eye(output_dim, device=output.device, dtype=output.dtype).mul_(
-            sqrt(2 * c)
+        c = {"sum": 1.0, "mean": 1.0 / output_dim}[reduction]
+        hess_sqrt_flat = (
+            zeros_like(output_one_datum).fill_(sqrt(2 * c)).flatten().diag()
         )
 
     elif isinstance(loss_func, CrossEntropyLoss):
-        c = 1.0
-        p = output_one_datum.softmax(dim=1).squeeze()
-        p_sqrt = p.sqrt()
-        return (diag(p_sqrt) - einsum(p, p_sqrt, "i, j -> i j")).mul_(sqrt(c))
+        # Output has shape [1, C, d1, d2, ...], flatten into [C, d1 * d2 * ...]
+        output_flat = output_one_datum.squeeze(0).unsqueeze(-1).flatten(start_dim=1)
+        p = output_flat.softmax(dim=0)
+        c = {"sum": 1.0, "mean": 1.0 / p.shape[1]}[reduction]
+
+        def hess_sqrt_element(p: Tensor) -> Tensor:
+            """Compute the Hessian square root for a single element of the sequence.
+
+            Args:
+                p: Vector of probabilities for a single sequence. Has shape ``[C]``.
+
+            Returns:
+                The Hessian square root matrix. Has shape ``[C, C]``.
+            """
+            p_sqrt = p.sqrt()
+            return (diag(p_sqrt) - einsum(p, p_sqrt, "i, j -> i j")).mul_(sqrt(c))
+
+        # Compute the per-element Hessian square root
+        blocks_stacked = vmap(hess_sqrt_element, in_dims=-1)(p)  # [D, C, C]
+
+        C, D = output_flat.shape
+        # This is the Hessian in a rearranged basis [d1 * d2 * ... , C]
+        blocks = block_diag(*blocks_stacked)
+        # Rearrange into the basis [C, d1 * d2 * ...]
+        hess_sqrt_flat = rearrange(
+            blocks, "(d1 c1) (d2 c2) -> (c1 d1) (c2 d2)", d1=D, d2=D, c1=C, c2=C
+        )
+        hess_sqrt_flat = hess_sqrt_flat.reshape(C * D, C * D)
 
     elif isinstance(loss_func, BCEWithLogitsLoss):
-        unique = set(target_one_datum.unique().flatten().tolist())
-        if not unique.issubset({0, 1}):
-            raise NotImplementedError(
-                "Only binary targets (0, 1) are currently supported with"
-                + f"BCEWithLogitsLoss. Got {unique}."
-            )
+        if check_binary_if_BCEWithLogitsLoss:
+            _check_binary_if_BCEWithLogitsLoss(target_one_datum, loss_func)
 
-        c = {"sum": 1.0, "mean": 1.0 / output_dim}[loss_func.reduction]
-        p = output_one_datum.sigmoid().squeeze(0)
+        c = {"sum": 1.0, "mean": 1.0 / output_dim}[reduction]
+        p = output_one_datum.flatten().sigmoid()
         hess_diag = sqrt(c) * (p * (1 - p)).sqrt()
-        return hess_diag.diag()
+        hess_sqrt_flat = hess_diag.diag()
+
     else:
         raise NotImplementedError(f"Loss function {loss_func} not supported.")
+
+    # Un-flatten the output dimensions
+    output_shape = output_one_datum.shape[1:]
+    return hess_sqrt_flat.reshape(*output_shape, *output_shape)
 
 
 def extract_patches(
