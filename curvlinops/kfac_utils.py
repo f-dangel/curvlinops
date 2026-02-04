@@ -133,7 +133,7 @@ def loss_hessian_matrix_sqrt(
         )
     if target_one_datum.shape[0] != 1:  # targets for 2d predictions are sometimes 1d
         raise ValueError(
-            "Expected 'target_one_datum' to have batch_size 1. Got {target_one_datum.shape}."
+            "Expected target_one_datum to have batch_size 1. Got {target_one_datum.shape}."
         )
     output_dim = output_one_datum.numel()
     # Construct the Hessian square root as matrix (w.r.t. the flattened outputs)
@@ -148,8 +148,10 @@ def loss_hessian_matrix_sqrt(
     elif isinstance(loss_func, CrossEntropyLoss):
         # Output has shape [1, C, d1, d2, ...], flatten into [C, d1 * d2 * ...]
         output_flat = output_one_datum.squeeze(0).unsqueeze(-1).flatten(start_dim=1)
+        C, D = output_flat.shape
         p = output_flat.softmax(dim=0)
-        c = {"sum": 1.0, "mean": 1.0 / p.shape[1]}[reduction]
+        # Scaling factor from reduction
+        c = {"sum": 1.0, "mean": 1.0 / D}[reduction]
 
         def hess_sqrt_element(p: Tensor) -> Tensor:
             """Compute the Hessian square root for a single element of the sequence.
@@ -166,8 +168,7 @@ def loss_hessian_matrix_sqrt(
         # Compute the per-element Hessian square root
         blocks_stacked = vmap(hess_sqrt_element, in_dims=-1)(p)  # [D, C, C]
 
-        C, D = output_flat.shape
-        # This is the Hessian in a rearranged basis [d1 * d2 * ... , C]
+        # This is the Hessian square root in a rearranged basis [d1 * d2 * ... , C]
         blocks = block_diag(*blocks_stacked)
         # Rearrange into the basis [C, d1 * d2 * ...]
         hess_sqrt_flat = rearrange(
