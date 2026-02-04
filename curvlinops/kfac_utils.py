@@ -44,29 +44,31 @@ def loss_hessian_matrix_sqrt(
     r"""Compute the loss function's matrix square root for a sample's output.
 
     Args:
-        output_one_datum: The model's prediction on a single datum. Has shape
-            ``[1, *, C]`` where ``C`` is the number of classes (outputs of the neural
-            network) and * is arbitrary (e.g. empty or sequence length).
-        target_one_datum: The label of the single datum.
-            Has shape ``[1, *]`` (CE) or ``[1, *, C]`` (BCE, MSE).
+        output_one_datum: The model's prediction on a single datum.
+            Has shape ``[1, C, *D]`` for CE where ``C`` is the number of classes,
+            or ``[1, *D]`` for MSE/BCE with ``*D`` optional (and potentially multiple)
+            sequence dimensions.
+        target_one_datum: The label of the single datum. Has shape ``[1, *D]``.
         loss_func: The loss function.
         check_binary_if_BCEWithLogitsLoss: Whether to check if targets are binary
             for BCEWithLogitsLoss. Default: ``True``.
 
     Returns:
         The matrix square root
-        :math:`\mathbf{S}` of the Hessian. Has shape
-        ``[*, C, *, C]`` and satisfies the relation
+        :math:`\mathbf{S}` of the Hessian. Has shape ``[C, *D, C, *D]`` for CE and
+        ``[*D, *D]`` for BCE/MSE loss. Its matrix view satisfies
 
         .. math::
             \mathbf{S} \mathbf{S}^\top
             =
             \nabla^2_{\mathbf{f}} \ell(\mathbf{f}, \mathbf{y})
-            \in \mathbb{R}^{C \times C}
 
-        where :math:`\mathbf{f} := f(\mathbf{x}) \in \mathbb{R}^C` is the model's
-        prediction on a single datum :math:`\mathbf{x}` and :math:`\mathbf{y}` is
-        the label.
+        where :math:`\mathbf{f} := f(\mathbf{x})` is the model's prediction on a single
+        datum :math:`\mathbf{x}` and :math:`\mathbf{y}` is the label.
+
+
+    Below, we document the Hessian square roots for vector-valued predictions of shape
+    ``[1, C]``.
 
     Note:
         For :class:`torch.nn.MSELoss` (with :math:`c = 1` for ``reduction='sum'``
@@ -133,7 +135,7 @@ def loss_hessian_matrix_sqrt(
         )
     if target_one_datum.shape[0] != 1:  # targets for 2d predictions are sometimes 1d
         raise ValueError(
-            "Expected target_one_datum to have batch_size 1. Got {target_one_datum.shape}."
+            f"Expected target_one_datum to have batch_size 1. Got {target_one_datum.shape}."
         )
     output_dim = output_one_datum.numel()
     # Construct the Hessian square root as matrix (w.r.t. the flattened outputs)
