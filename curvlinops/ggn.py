@@ -4,14 +4,19 @@ from collections import UserDict
 from collections.abc import MutableMapping
 from functools import cached_property, partial
 from math import sqrt
-from typing import Any, Callable, Iterable, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 from warnings import warn
 
 from torch import Generator, Tensor, allclose, device, no_grad, vmap, zeros_like
 from torch.func import jacrev, jvp, vjp
 from torch.nn import Module, Parameter
 
-from curvlinops._torch_base import CurvatureLinearOperator
+from curvlinops._torch_base import (
+    CurvatureLinearOperator,
+    PyTorchLinearOperator,
+    _SumPyTorchLinearOperator,
+)
+from curvlinops.diag import DiagonalLinearOperator
 from curvlinops.kfac_utils import (
     _check_binary_if_BCEWithLogitsLoss,
     loss_hessian_matrix_sqrt,
@@ -497,28 +502,29 @@ class GGNDiagonalLinearOperator(CurvatureLinearOperator):
         super()._check_deterministic()
 
     @property
-    def state(self) -> List[Tensor]:
+    def representation(self) -> Dict[str, DiagonalLinearOperator]:
         """Compute and cache the GGN diagonal.
 
         Returns:
             List of tensors representing the GGN diagonal, one for each parameter.
         """
-        if not hasattr(self, "_state"):
-            self._state = None
+        if not hasattr(self, "_representation"):
+            self._representation = None
 
-        if self._state is None:
-            self._state = self._compute_ggn_diagonal()
+        if self._representation is None:
+            ggn_diagonal = self._compute_ggn_diagonal()
+            self._representation = {"op": DiagonalLinearOperator(ggn_diagonal)}
 
-        return self._state
+        return self._representation
 
     def refresh_state(self):
         """Refresh the internal state of the linear operator.
 
         Re-computes the GGN diagonal.
         """
-        self._state = None
+        self._representation = None
         # Accessing the property triggers the re-computation
-        _ = self.state
+        _ = self.representation
 
     def _compute_ggn_diagonal(self) -> List[Tensor]:
         """Compute the GGN diagonal on the entire data set.
@@ -568,9 +574,7 @@ class GGNDiagonalLinearOperator(CurvatureLinearOperator):
         Returns:
             Result of GGN diagonal multiplication in list format (same format as ``M``).
         """
-        # Need to unsqueeze so that both tensors have the same number of dimensions
-        # and the multiplication becomes broadcast-able
-        return [M_p * G_p.unsqueeze(-1) for M_p, G_p in zip(M, self.state, strict=True)]
+        return self.representation["op"] @ M
 
     @staticmethod
     def _setup_generator(dev: device, seed: int) -> Generator:
@@ -624,3 +628,17 @@ class GGNDiagonalLinearOperator(CurvatureLinearOperator):
         # Compare results
         if not allclose(batched_result, vmapped_result, rtol=rtol, atol=atol):
             raise ValueError("Function does not support batched and un-batched inputs.")
+
+    def inverse(self, damping: float) -> DiagonalLinearOperator:
+        """Return the inverse of the damped linear operator."""
+        return self.representation["op"].inverse(damping)
+
+    def __add__(
+        self, other: PyTorchLinearOperator
+    ) -> Union[DiagonalLinearOperator, _SumPyTorchLinearOperator]:
+        if isinstance(other, DiagonalLinearOperator):
+            return self.representation["op"] + other
+        elif isinstance(other, GGNDiagonalLinearOperator):
+            return self.representation["op"] + other.representation["op"]
+        else:
+            return super().__add__(other)

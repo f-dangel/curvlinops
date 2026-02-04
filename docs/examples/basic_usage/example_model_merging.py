@@ -5,7 +5,7 @@ In this example we implement Fisher-weighted model averaging, a technique
 described in this `NeurIPS 2022 paper <https://openreview.net/pdf?id=LSKlp_aceO>`_.
 It requires Fisher-vector products, and multiplication with the inverse of a
 sum of Fisher matrices. The paper uses a diagonal approximation of the Fisher
-matrices. Instead, we will use the exact Fisher matrices and rely on
+matrices. In addition, we will also use the exact Fisher matrices and rely on
 matrix-free methods for applying the inverse.
 
 .. note::
@@ -28,8 +28,9 @@ matrices :math:`\mathbf{F}_t` of each task (given by the data set
    \left( \sum_{t=1}^T \mathbf{F}_t \mathbf{\theta}_t^\star\right)\,.
 
 This requires multiplying with the inverse of the sum of Fisher matrices
-(extended with a damping term). We will use
-:py:class:`curvlinops.CGInverseLinearOperator` for that.
+(extended with a damping term). If we approximate each Fisher with its diagonal,
+this is easy, without this approximation, we will use
+:py:class:`curvlinops.CGInverseLinearOperator` for inversion.
 
 Let's start with the imports.
 """
@@ -41,7 +42,11 @@ from torch.nn.utils import parameters_to_vector
 from torch.optim import SGD
 from torch.utils.data import DataLoader, TensorDataset
 
-from curvlinops import CGInverseLinearOperator, GGNLinearOperator
+from curvlinops import (
+    CGInverseLinearOperator,
+    GGNLinearOperator,
+    GGNDiagonalLinearOperator,
+)
 from curvlinops.examples import IdentityLinearOperator
 
 # make deterministic
@@ -128,6 +133,7 @@ for task_idx in range(T):
 #
 # We are now ready to set up the linear operators for the per-task Fishers:
 
+# full Fisher matrices
 fishers = [
     GGNLinearOperator(
         model,
@@ -137,6 +143,21 @@ fishers = [
     )
     for model, loss_function, data_loader in zip(models, loss_functions, data_loaders)
 ]
+
+# Diagonal approximation as used in the seminal paper
+# (Precisely speaking, the seminal paper uses a randomized approximation of the Fisher
+# based on sampling that can be achieved with `fisher_type='mc'` and `mc_samples=1`.
+# For simplicity we compute the exact GGN/Fisher diagonal here.)
+diagonal_fishers = [
+    GGNDiagonalLinearOperator(
+        model,
+        loss_function,
+        [p for p in model.parameters() if p.requires_grad],
+        data_loader,
+    )
+    for model, loss_function, data_loader in zip(models, loss_functions, data_loaders)
+]
+
 
 # %%
 #
@@ -157,6 +178,7 @@ thetas = [
 # side in the above equation):
 
 rhs = sum(fisher @ theta for fisher, theta in zip(fishers, thetas))
+diagonal_rhs = sum(fisher @ theta for fisher, theta in zip(diagonal_fishers, thetas))
 
 # %%
 #
@@ -188,6 +210,19 @@ fisher_sum_inv = CGInverseLinearOperator(fisher_sum)
 
 fisher_weighted_params = fisher_sum_inv @ rhs
 
+
+# %%
+#
+# Summing the diagonal Fishers then inverting their damped version is even simpler:
+
+diagonal_fisher_sum = diagonal_fishers[0]
+for diagonal_fisher in diagonal_fishers[1:]:
+    diagonal_fisher_sum = diagonal_fisher + diagonal_fisher_sum
+
+diagonal_fisher_sum_inv = diagonal_fisher_sum.inverse(damping)
+
+diagonal_fisher_weighted_params = diagonal_fisher_sum_inv @ diagonal_rhs
+
 # %%
 #
 # Comparison
@@ -200,8 +235,9 @@ average_params = sum(thetas) / len(thetas)
 
 # %%
 #
-# We initialize two neural networks with those parameters
+# We initialize three neural networks with those parameters
 
+# Using the full Fisher
 fisher_model = make_architecture()
 
 params = [p for p in fisher_model.parameters() if p.requires_grad]
@@ -209,7 +245,18 @@ theta_fisher = vector_to_parameter_list(fisher_weighted_params, params)
 for theta, param in zip(theta_fisher, params):
     param.data = theta.to(param.device, param.dtype).data
 
-# same for the average-weighted parameters
+# Using the diagonal Fisher
+diagonal_fisher_model = make_architecture()
+
+params = [p for p in diagonal_fisher_model.parameters() if p.requires_grad]
+theta_diagonal_fisher = vector_to_parameter_list(
+    diagonal_fisher_weighted_params, params
+)
+for theta, param in zip(theta_diagonal_fisher, params):
+    param.data = theta.to(param.device, param.dtype).data
+
+
+# Using averages (setting the Fisher matrix to be identity)
 average_model = make_architecture()
 
 params = [p for p in average_model.parameters() if p.requires_grad]
@@ -221,18 +268,29 @@ for theta, param in zip(theta_average, params):
 #
 # and probe them on one batch of each task:
 
+
+losses = {"Naive": [], "diag(F)": [], "F": []}
+header = "\t" + "\t".join(losses.keys())
+print(header)
+
 for task_idx in range(T):
     data_loader = data_loaders[task_idx]
     loss_function = loss_functions[task_idx]
-
     X, y = next(iter(data_loader))
 
-    fisher_loss = loss_function(fisher_model(X), y)
-    average_loss = loss_function(average_model(X), y)
-    assert fisher_loss < average_loss
+    losses["F"].append(loss_function(fisher_model(X), y).item())
+    losses["diag(F)"].append(loss_function(diagonal_fisher_model(X), y).item())
+    losses["Naive"].append(loss_function(average_model(X), y).item())
+    assert losses["F"][-1] < losses["Naive"][-1]
 
-    print(f"Task {task_idx} batch loss with Fisher averaging: {fisher_loss.item():.3f}")
-    print(f"Task {task_idx} batch loss with naive averaging: {average_loss.item():.3f}")
+    print(
+        f"Task {task_idx}\t{losses['Naive'][-1]:.3f}\t{losses['diag(F)'][-1]:.3f}\t{losses['F'][-1]:.3f}"
+    )
+
+mean_losses = {key: sum(loss) / len(loss) for key, loss in losses.items()}
+print(
+    f"Avg\t{mean_losses['Naive']:.3f}\t{mean_losses['diag(F)']:.3f}\t{mean_losses['F']:.3f}"
+)
 
 # %%
 #

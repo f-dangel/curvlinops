@@ -322,7 +322,7 @@ class PyTorchLinearOperator:
         Returns:
             A new linear operator representing the difference A - B.
         """
-        return _SumPyTorchLinearOperator(self, -1.0 * other)
+        return self + (-1.0 * other)
 
     def __mul__(self, scalar: Union[int, float]) -> _ScalePyTorchLinearOperator:
         """Multiply the linear operator by a scalar (A * scalar).
