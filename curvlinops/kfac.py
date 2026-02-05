@@ -605,7 +605,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
                     loss_hessian_matrix_sqrt, check_binary_if_BCEWithLogitsLoss=False
                 ),
                 in_dims=(0, 0, None),  # Parallelize over data, not over loss function
-            )(output, y, self._loss_func)
+            )(output.detach(), y, self._loss_func)
 
             # Fix scaling caused by the batch dimension
             num_loss_terms = output.shape[0]
