@@ -602,7 +602,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
             # NOTE Checking for binary labels is data-dependent and not supported in vmap.
             # Therefore, we check outside vmap and then turn it off inside vmap
             _check_binary_if_BCEWithLogitsLoss(y, self._loss_func)
-            hessian_sqrts_new = vmap(
+            hessian_sqrts = vmap(
                 partial(
                     loss_hessian_matrix_sqrt, check_binary_if_BCEWithLogitsLoss=False
                 ),
