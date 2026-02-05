@@ -154,10 +154,6 @@ def make_batch_fmc_matrix_product(
         Returns:
             Result of MC-Fisher matrix multiplication in tensor list format.
             Each tensor has the same shape as the corresponding input tensor in M.
-
-        Raises:
-            NotImplementedError: If using BCEWithLogitsLoss and targets are not
-                binary.
         """
         _check_binary_if_BCEWithLogitsLoss(y, loss_func)
         return fmcmp(X, y, mc_samples, generator, *M)
