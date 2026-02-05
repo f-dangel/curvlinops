@@ -127,12 +127,18 @@ def loss_hessian_matrix_sqrt(
         NotImplementedError: If the loss function is ``BCEWithLogitsLoss`` but the
             target is not binary.
     """
-    output_dim = output_one_datum.numel()
-    # Construct the Hessian square root as matrix (w.r.t. the flattened outputs)
+    # Number of losses contributed from a datum's sequence-valued prediction
+    num_features = (
+        output_one_datum.numel() / output_one_datum.shape[0]
+        if isinstance(loss_func, CrossEntropyLoss)
+        else output_one_datum.numel()
+    )
+    # Reduction factor from accumulation over losses in a sequence
     reduction = loss_func.reduction
+    c = {"sum": 1.0, "mean": 1.0 / num_features}[reduction]
 
+    # Construct the Hessian square root as matrix (w.r.t. the flattened outputs)
     if isinstance(loss_func, MSELoss):
-        c = {"sum": 1.0, "mean": 1.0 / output_dim}[reduction]
         hess_sqrt_flat = (
             zeros_like(output_one_datum).fill_(sqrt(2 * c)).flatten().diag()
         )
@@ -142,8 +148,6 @@ def loss_hessian_matrix_sqrt(
         output_flat = output_one_datum.unsqueeze(-1).flatten(start_dim=1)
         C, D = output_flat.shape
         p = output_flat.softmax(dim=0)
-        # Scaling factor from reduction
-        c = {"sum": 1.0, "mean": 1.0 / D}[reduction]
 
         def hess_sqrt_element(p: Tensor) -> Tensor:
             """Compute the Hessian square root for a single element of the sequence.
@@ -154,8 +158,8 @@ def loss_hessian_matrix_sqrt(
             Returns:
                 The Hessian square root matrix. Has shape ``[C, C]``.
             """
-            p_sqrt = p.sqrt()
-            return (diag(p_sqrt) - einsum(p, p_sqrt, "i, j -> i j")).mul_(sqrt(c))
+            p_sqrt = p.sqrt().mul_(sqrt(c))
+            return diag(p_sqrt) - einsum(p, p_sqrt, "i, j -> i j")
 
         # Compute the per-element Hessian square root
         blocks_stacked = vmap(hess_sqrt_element, in_dims=-1)(p)  # [D, C, C]
@@ -172,9 +176,8 @@ def loss_hessian_matrix_sqrt(
         if check_binary_if_BCEWithLogitsLoss:
             _check_binary_if_BCEWithLogitsLoss(target_one_datum, loss_func)
 
-        c = {"sum": 1.0, "mean": 1.0 / output_dim}[reduction]
         p = output_one_datum.flatten().sigmoid()
-        hess_diag = sqrt(c) * (p * (1 - p)).sqrt()
+        hess_diag = (p * (1 - p)).sqrt().mul_(sqrt(c))
         hess_sqrt_flat = hess_diag.diag()
 
     else:
