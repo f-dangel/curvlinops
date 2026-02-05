@@ -26,7 +26,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, TypeVar
 from warnings import warn
 
 from einops import einsum, rearrange, reduce
-from torch import Generator, Tensor, cat, eye, randn
+from torch import Generator, Tensor, cat, eye
 from torch.autograd import grad
 from torch.func import vmap
 from torch.nn import (
@@ -673,56 +673,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
                 f"Invalid fisher_type: {self._fisher_type}. "
                 + f"Supported: {self._SUPPORTED_FISHER_TYPE}."
             )
-
-    def draw_label(self, output: Tensor) -> Tensor:
-        r"""Draw a sample from the model's predictive distribution.
-
-        The model's distribution is implied by the (negative log likelihood) loss
-        function. For instance, ``MSELoss`` implies a Gaussian distribution with
-        constant variance, and ``CrossEntropyLoss`` implies a categorical distribution.
-
-        Args:
-            output: The model's prediction
-                :math:`\{f_\mathbf{\theta}(\mathbf{x}_n)\}_{n=1}^N`.
-
-        Returns:
-            A sample
-            :math:`\{\mathbf{y}_n\}_{n=1}^N` drawn from the model's predictive
-            distribution :math:`p(\mathbf{y} \mid \mathbf{x}, \mathbf{\theta})`. Has
-            the same shape as the labels that would be fed into the loss function
-            together with ``output``.
-
-        Raises:
-            ValueError: If the output is not 2d.
-            NotImplementedError: If the loss function is not supported.
-        """
-        if output.ndim != 2:
-            raise ValueError("Only a 2d output is supported.")
-
-        if isinstance(self._loss_func, MSELoss):
-            std = sqrt(0.5)
-            perturbation = std * randn(
-                output.shape,
-                device=output.device,
-                dtype=output.dtype,
-                generator=self._generator,
-            )
-            return output.clone().detach() + perturbation
-
-        elif isinstance(self._loss_func, CrossEntropyLoss):
-            probs = output.softmax(dim=1)
-            labels = probs.multinomial(
-                num_samples=1, generator=self._generator
-            ).squeeze(-1)
-            return labels
-
-        elif isinstance(self._loss_func, BCEWithLogitsLoss):
-            probs = output.sigmoid()
-            labels = probs.bernoulli(generator=self._generator)
-            return labels
-
-        else:
-            raise NotImplementedError
 
     def _register_tensor_hook_on_output_to_accumulate_gradient_covariance(
         self, module: Module, inputs: Tuple[Tensor], output: Tensor, module_name: str
