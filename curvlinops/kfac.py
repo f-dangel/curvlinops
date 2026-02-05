@@ -46,6 +46,7 @@ from curvlinops.kfac_utils import (
     extract_averaged_patches,
     extract_patches,
     loss_hessian_matrix_sqrt,
+    make_grad_output_sampler,
 )
 
 FactorType = TypeVar(

@@ -126,7 +126,39 @@ def make_batch_fmc_matrix_product(
 
     # NOTE The Binary check is incompatible with vmap.
     # Therefore we have to pull it outside vmap
-    def _fmcmp_with_check(X, y, mc_samples, generator, *M):
+    def _fmcmp_with_check(
+        X: Union[Tensor, MutableMapping],
+        y: Tensor,
+        mc_samples: int,
+        generator: Generator,
+        *M: Tensor,
+    ) -> Tuple[Tensor, ...]:
+        """Multiply MC-Fisher onto a matrix for a batch, with BCEWithLogitsLoss checks.
+
+        This function wraps the vmapped MC-Fisher matrix product with additional
+        validation for BCEWithLogitsLoss to ensure targets are binary.
+        This validation cannot be done inside the vmapped function as it is data-
+        dependent and therefore vmap-incompatible.
+
+        Args:
+            X: Input to the model. Can be a tensor or a mapping (e.g., dict) for
+                models that accept structured inputs.
+            y: Target labels for the batch.
+            mc_samples: Number of Monte Carlo samples to use for the Fisher
+                approximation.
+            generator: Random number generator for sampling.
+            *M: Matrix columns in tensor list format. Each tensor has the same
+                shape as a model parameter plus an additional trailing axis for
+                matrix columns.
+
+        Returns:
+            Result of MC-Fisher matrix multiplication in tensor list format.
+            Each tensor has the same shape as the corresponding input tensor in M.
+
+        Raises:
+            NotImplementedError: If using BCEWithLogitsLoss and targets are not
+                binary.
+        """
         _check_binary_if_BCEWithLogitsLoss(y, loss_func)
         return fmcmp(X, y, mc_samples, generator, *M)
 
