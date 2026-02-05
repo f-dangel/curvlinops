@@ -1,9 +1,10 @@
 """Test KFAC's utility functions."""
 
+from contextlib import nullcontext
 from math import sqrt
 from typing import Tuple, Union
 
-from pytest import mark, raises
+from pytest import mark, raises, warns
 from torch import Generator, Tensor, as_tensor, manual_seed, ones, randint, randn, zeros
 from torch.func import hessian
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
@@ -87,7 +88,19 @@ def test_loss_hessian_matrix_sqrt(
         target_one_datum = randint(0, 2, output_shape).float()
 
     # Compute Hessian square root using the function under test
-    hess_sqrt = loss_hessian_matrix_sqrt(output_one_datum, target_one_datum, loss_func)
+    # Check that the warning is raised for BCEWithLogitsLoss
+    _check_binary_if_BCEWithLogitsLoss(target_one_datum, loss_func)
+    with (
+        warns(
+            UserWarning,
+            match="BCEWithLogitsLoss only supports binary targets.*not being verified",
+        )
+        if loss_func_cls == BCEWithLogitsLoss
+        else nullcontext()
+    ):
+        hess_sqrt = loss_hessian_matrix_sqrt(
+            output_one_datum, target_one_datum, loss_func
+        )
 
     # hess_sqrt has shape [*output_shape, *output_shape] = [C, *seq, C, *seq]
     # Flatten to [C * prod(seq), C * prod(seq)] for matrix multiplication
@@ -154,7 +167,20 @@ def test_grad_output_sampler_convergence(
     # Sample many gradients with fixed generator for reproducibility
     generator = Generator().manual_seed(42)
     mc_samples = 600_000
-    grad_samples = sampler(output_one_datum, mc_samples, target_one_datum, generator)
+
+    # Check that the warning is raised for BCEWithLogitsLoss
+    _check_binary_if_BCEWithLogitsLoss(target_one_datum, loss_func)
+    with (
+        warns(
+            UserWarning,
+            match="BCEWithLogitsLoss only supports binary targets.*not being verified",
+        )
+        if loss_func_cls == BCEWithLogitsLoss
+        else nullcontext()
+    ):
+        grad_samples = sampler(
+            output_one_datum, mc_samples, target_one_datum, generator
+        )
 
     # Compute empirical covariance: E[g g^T]
     # grad_samples has shape [num_samples, 1, *output_shape]

@@ -604,7 +604,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
             _check_binary_if_BCEWithLogitsLoss(y, self._loss_func)
             hessian_sqrts = vmap(
                 partial(
-                    loss_hessian_matrix_sqrt, check_binary_if_BCEWithLogitsLoss=False
+                    loss_hessian_matrix_sqrt,
+                    warn_BCEWithLogitsLoss_targets_unchecked=False,
                 ),
                 in_dims=(0, 0, None),  # Parallelize over data, not over loss function
             )(output, y, self._loss_func)

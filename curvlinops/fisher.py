@@ -10,7 +10,10 @@ from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, Module, MSELoss, Param
 
 from curvlinops._torch_base import CurvatureLinearOperator
 from curvlinops.ggn import make_ggn_vector_product
-from curvlinops.kfac_utils import make_grad_output_sampler
+from curvlinops.kfac_utils import (
+    _check_binary_if_BCEWithLogitsLoss,
+    make_grad_output_sampler,
+)
 from curvlinops.utils import make_functional_flattened_model_and_loss
 
 
@@ -61,7 +64,7 @@ def make_batch_fmc_matrix_product(
 
     # Create the gradient output sampler for this loss function
     sample_grad_output_flat = make_grad_output_sampler(
-        loss_func, check_binary_if_BCEWithLogitsLoss=False
+        loss_func, warn_BCEWithLogitsLoss_targets_unchecked=False
     )
 
     def c_pseudo_flat(
@@ -111,8 +114,7 @@ def make_batch_fmc_matrix_product(
 
     # Parallelize over vectors to multiply onto a matrix in list format
     list_format_vmap_dims = tuple(p.ndim for p in params)  # last axis
-    # TODO Need to check for binary labels here
-    return vmap(
+    fmcmp = vmap(
         fmcvp,
         # X, y, mc_samples, generator are not vmapped, matrix columns are vmapped
         in_dims=(None, None, None, None, *list_format_vmap_dims),
@@ -121,6 +123,14 @@ def make_batch_fmc_matrix_product(
         # We want each vector to be multiplied with the same mini-batch MC Fisher
         randomness="same",
     )
+
+    # NOTE The Binary check is incompatible with vmap.
+    # Therefore we have to pull it outside vmap
+    def _fmcmp_with_check(X, y, mc_samples, generator, *M):
+        _check_binary_if_BCEWithLogitsLoss(y, loss_func)
+        return fmcmp(X, y, mc_samples, generator, *M)
+
+    return _fmcmp_with_check
 
 
 class FisherMCLinearOperator(CurvatureLinearOperator):

@@ -2,6 +2,7 @@
 
 from math import sqrt
 from typing import Callable, Generator, Tuple, Union
+from warnings import warn
 
 from einconv import index_pattern
 from einconv.utils import get_conv_paddings
@@ -20,6 +21,24 @@ from torch.func import vmap
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from torch.nn.functional import one_hot, unfold
 from torch.nn.modules.utils import _pair
+
+
+def _warn_BCEWithLogitsLoss_targets_unchecked(
+    loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
+) -> None:
+    """Warn that BCEWithLogitsLoss targets are not verified to be binary.
+
+    Args:
+        loss_func: The loss function being used.
+    """
+    if isinstance(loss_func, BCEWithLogitsLoss):
+        warn(
+            "BCEWithLogitsLoss only supports binary targets (0, 1), but this is "
+            "not being verified. Ensure your targets are binary to avoid "
+            "incorrect results (using _check_binary_if_BCEWithLogitsLoss).",
+            UserWarning,
+            stacklevel=3,
+        )
 
 
 def _check_binary_if_BCEWithLogitsLoss(
@@ -48,7 +67,7 @@ def loss_hessian_matrix_sqrt(
     output_one_datum: Tensor,
     target_one_datum: Tensor,
     loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
-    check_binary_if_BCEWithLogitsLoss: bool = True,
+    warn_BCEWithLogitsLoss_targets_unchecked: bool = True,
 ) -> Tensor:
     r"""Compute the loss function's matrix square root for a sample's output.
 
@@ -60,8 +79,8 @@ def loss_hessian_matrix_sqrt(
         target_one_datum: The label of the single datum. Has shape ``[*D]``.
             Has no batch axis.
         loss_func: The loss function.
-        check_binary_if_BCEWithLogitsLoss: Whether to check if targets are binary
-            for BCEWithLogitsLoss. Default: ``True``.
+        warn_BCEWithLogitsLoss_targets_unchecked: Whether to warn that targets are
+            not verified to be binary for BCEWithLogitsLoss. Default: ``True``.
 
     Returns:
         The matrix square root
@@ -178,8 +197,8 @@ def loss_hessian_matrix_sqrt(
         hess_sqrt_flat = hess_sqrt_flat.reshape(C * D, C * D)
 
     elif isinstance(loss_func, BCEWithLogitsLoss):
-        if check_binary_if_BCEWithLogitsLoss:
-            _check_binary_if_BCEWithLogitsLoss(target_one_datum, loss_func)
+        if warn_BCEWithLogitsLoss_targets_unchecked:
+            _warn_BCEWithLogitsLoss_targets_unchecked(loss_func)
 
         c = {"sum": 1.0, "mean": 1.0 / output_dim}[reduction]
         p = output_one_datum.flatten().sigmoid()
@@ -196,14 +215,14 @@ def loss_hessian_matrix_sqrt(
 
 def make_grad_output_sampler(
     loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
-    check_binary_if_BCEWithLogitsLoss: bool = True,
+    warn_BCEWithLogitsLoss_targets_unchecked: bool = True,
 ) -> Callable[[Tensor, int, Tensor, Generator], Tensor]:
     """Create a function that samples gradients w.r.t. network outputs.
 
     Args:
         loss_func: The loss function to create the sampler for.
-        check_binary_if_BCEWithLogitsLoss: Whether to check if targets are binary
-            for BCEWithLogitsLoss. Default: ``True``.
+        warn_BCEWithLogitsLoss_targets_unchecked: Whether to warn that targets are
+            not verified to be binary for BCEWithLogitsLoss. Default: ``True``.
 
     Returns:
         A function that samples gradients w.r.t. the model prediction.
@@ -280,9 +299,8 @@ def make_grad_output_sampler(
             return grad_samples_flat.reshape(out_shape)
 
         elif isinstance(loss_func, BCEWithLogitsLoss):
-            # TODO Turn this into a warning that can be turned off
-            if check_binary_if_BCEWithLogitsLoss:
-                _check_binary_if_BCEWithLogitsLoss(target_one_datum, loss_func)
+            if warn_BCEWithLogitsLoss_targets_unchecked:
+                _warn_BCEWithLogitsLoss_targets_unchecked(loss_func)
 
             num_features = output_one_datum.numel()
             # All dimensions after batch are feature dimensions
