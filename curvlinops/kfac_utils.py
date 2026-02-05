@@ -67,7 +67,6 @@ def loss_hessian_matrix_sqrt(
         where :math:`\mathbf{f} := f(\mathbf{x})` is the model's prediction on a single
         datum :math:`\mathbf{x}` and :math:`\mathbf{y}` is the label.
 
-
     Below, we list the Hessian square roots for vector-valued predictions of shape ``[C]``.
 
     Note:
