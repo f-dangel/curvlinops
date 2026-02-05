@@ -286,6 +286,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
         self._input_covariances: Dict[str, Tensor] = {}
         self._gradient_covariances: Dict[str, Tensor] = {}
         self._mapping = self.compute_parameter_mapping(params, model_func)
+        if fisher_type == FisherType.MC:
+            self._grad_output_sampler = make_grad_output_sampler(loss_func)
 
         # Properties of the full matrix KFAC approximation are initialized to `None`
         self._reset_matrix_properties()
@@ -625,11 +627,22 @@ class KFACLinearOperator(CurvatureLinearOperator):
                 )
 
         elif self._fisher_type == FisherType.MC:
+            # The sampled gradient
+            grad_output_samples = self._grad_output_sampler(
+                output.detach(), self._mc_samples, y, self._generator
+            )
+            # NOTE The sampled gradients do not account for reductions over the batch
+            # dimension. We need to add it in manually here.
+            if self._loss_func.reduction == "mean":
+                grad_output_samples = grad_output_samples / output.shape[0]
+
             for mc in range(self._mc_samples):
-                y_sampled = self.draw_label(output)
-                loss = self._loss_func(output, y_sampled)
-                loss = self._maybe_adjust_loss_scale(loss, output)
-                grad(loss, self._params, retain_graph=mc != self._mc_samples - 1)
+                grad(
+                    output,
+                    self._params,
+                    grad_outputs=grad_output_samples[mc],
+                    retain_graph=mc != self._mc_samples - 1,
+                )
 
         elif self._fisher_type == FisherType.EMPIRICAL:
             loss = self._loss_func(output, y)

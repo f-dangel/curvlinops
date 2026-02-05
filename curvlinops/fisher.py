@@ -4,7 +4,7 @@ from collections.abc import MutableMapping
 from functools import cached_property, partial
 from typing import Callable, Iterable, List, Optional, Tuple, Union
 
-from einops import einsum
+from einops import einsum, rearrange
 from torch import Generator, Tensor, vmap
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, Module, MSELoss, Parameter
 
@@ -53,9 +53,16 @@ def make_batch_fmc_matrix_product(
         applied to ``M`` in list format.
     """
     f_flat, _ = make_functional_flattened_model_and_loss(model_func, loss_func, params)
+    label_flattening = (
+        "batch ... -> (batch ...)"
+        if isinstance(loss_func, CrossEntropyLoss)
+        else "batch ... c -> (batch ...) c"
+    )
 
     # Create the gradient output sampler for this loss function
-    sample_grad_output_flat = make_grad_output_sampler(loss_func)
+    sample_grad_output_flat = make_grad_output_sampler(
+        loss_func, check_binary_if_BCEWithLogitsLoss=False
+    )
 
     def c_pseudo_flat(
         output_flat: Tensor, y: Tensor, mc_samples: int, generator: Generator
@@ -78,9 +85,12 @@ def make_batch_fmc_matrix_product(
         Returns:
             The pseudo-loss whose GGN is the MC-Fisher.
         """
+        # Flatten the labels, otherwise vmap of sample_grad_output gets confused
+        # as the batch axes of output_flat and y_flat are different
+        y_flat = rearrange(y, label_flattening)
         # Sample gradients w.r.t. output using the provided generator
         grad_output_samples = sample_grad_output_flat(
-            output_flat.detach(), mc_samples, y, generator
+            output_flat.detach(), mc_samples, y_flat, generator
         )
 
         # Adjust the scale depending on the loss reduction used
@@ -101,6 +111,7 @@ def make_batch_fmc_matrix_product(
 
     # Parallelize over vectors to multiply onto a matrix in list format
     list_format_vmap_dims = tuple(p.ndim for p in params)  # last axis
+    # TODO Need to check for binary labels here
     return vmap(
         fmcvp,
         # X, y, mc_samples, generator are not vmapped, matrix columns are vmapped
