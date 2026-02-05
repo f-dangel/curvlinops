@@ -177,8 +177,8 @@ def loss_hessian_matrix_sqrt(
             _check_binary_if_BCEWithLogitsLoss(target_one_datum, loss_func)
 
         p = output_one_datum.flatten().sigmoid()
-        hess_diag = (p * (1 - p)).sqrt().mul_(sqrt(c))
-        hess_sqrt_flat = hess_diag.diag()
+        hess_sqrt_diag = (p * (1 - p)).sqrt().mul_(sqrt(c))
+        hess_sqrt_flat = hess_sqrt_diag.diag()
 
     else:
         raise NotImplementedError(f"Loss function {loss_func} not supported.")
