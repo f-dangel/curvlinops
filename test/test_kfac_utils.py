@@ -30,6 +30,11 @@ def test_CanonicalLinearOperator(separate_weight_and_bias: bool):
         {"weight": 3},  # layer3: weight at pos 3
     ]
 
+    # Extract param shapes, device, and dtype
+    param_shapes = [p.shape for p in params]  # p.shape is already a Size object
+    device = params[0].device
+    dtype = params[0].dtype
+
     # Verify correct behavior of canonicalization for this case
     x = [rand_like(p) for p in params]
     x_w1, x_b2, x_b1, x_w3, x_w2 = x
@@ -47,7 +52,7 @@ def test_CanonicalLinearOperator(separate_weight_and_bias: bool):
 
     # Multiplication with canonicalization operator should produce x_canonical
     to_canonical = ToCanonicalLinearOperator(
-        params, param_positions, separate_weight_and_bias=separate_weight_and_bias
+        param_shapes, param_positions, separate_weight_and_bias, device, dtype
     )
     to_canonical_x = to_canonical @ x
     assert len(to_canonical_x) == len(x_canonical)
@@ -56,7 +61,7 @@ def test_CanonicalLinearOperator(separate_weight_and_bias: bool):
 
     # Multiplication of x_canonical with from_canonical operator should produce x
     from_canonical = FromCanonicalLinearOperator(
-        params, param_positions, separate_weight_and_bias=separate_weight_and_bias
+        param_shapes, param_positions, separate_weight_and_bias, device, dtype
     )
     from_canonical_x = from_canonical @ x_canonical
     assert len(from_canonical_x) == len(x)

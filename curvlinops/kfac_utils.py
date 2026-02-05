@@ -8,7 +8,7 @@ from typing import Dict, List, Tuple, Union
 from einconv import index_pattern
 from einconv.utils import get_conv_paddings
 from einops import einsum, rearrange, reduce
-from torch import Tensor, cat, diag, eye
+from torch import Size, Tensor, cat, diag, eye, dtype, device
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss, Parameter
 from torch.nn.functional import unfold
 from torch.nn.modules.utils import _pair
@@ -255,18 +255,25 @@ class _CanonicalizationLinearOperator(PyTorchLinearOperator):
 
     def __init__(
         self,
-        params: List[Parameter],
+        param_shapes: List[Size],
         param_positions: List[Dict[str, int]],
         separate_weight_and_bias: bool,
+        device: device,
+        dtype: dtype,
     ):
         """Initialize the canonical form transformation operator.
 
         Args:
-            params: List of model parameters.
+            param_shapes: List of parameter shapes as Size objects.
             param_positions: List of parameter position dictionaries for each layer.
             separate_weight_and_bias: Whether to treat weights and biases separately.
+            device: Device of the parameters.
+            dtype: Data type of the parameters.
         """
-        self._params = params
+        self._param_shapes = param_shapes
+        self._device = device
+        self._dtype = dtype
+
         self._param_positions = param_positions
         self._separate_weight_and_bias = separate_weight_and_bias
 
@@ -295,48 +302,36 @@ class _CanonicalizationLinearOperator(PyTorchLinearOperator):
                 param_pos.keys()
             ):
                 w_pos = param_pos["weight"]
-                w = self._params[w_pos]
+                w_shape = self._param_shapes[w_pos]
                 # Combined weight+bias gets flattened to 1D
-                total_params = w.numel() + w.shape[0]  # weight + bias
+                total_params = self._param_shapes[w_pos].numel() + w_shape[0]  # weight + bias
                 canonical_shapes.append((total_params,))
             else:
                 # Handle separate weight and bias
                 for p_name in param_pos:
                     pos = param_pos[p_name]
                     # Each parameter gets flattened to 1D
-                    canonical_shapes.append((self._params[pos].numel(),))
+                    canonical_shapes.append((self._param_shapes[pos].numel(),))
 
         return canonical_shapes
 
     @property
     def device(self):
-        """Infer device from parameters.
+        """Return the stored device.
 
         Returns:
             The device of the parameters.
-
-        Raises:
-            RuntimeError: If parameters are on different devices.
         """
-        devices = {p.device for p in self._params}
-        if len(devices) != 1:
-            raise RuntimeError(f"Could not infer device. Parameters live on {devices}.")
-        return devices.pop()
+        return self._device
 
     @property
     def dtype(self):
-        """Infer dtype from parameters.
+        """Return the stored dtype.
 
         Returns:
             The dtype of the parameters.
-
-        Raises:
-            RuntimeError: If parameters have different dtypes.
         """
-        dtypes = {p.dtype for p in self._params}
-        if len(dtypes) != 1:
-            raise RuntimeError(f"Could not infer dtype. Parameters have {dtypes}.")
-        return dtypes.pop()
+        return self._dtype
 
 
 class ToCanonicalLinearOperator(_CanonicalizationLinearOperator):
@@ -352,7 +347,7 @@ class ToCanonicalLinearOperator(_CanonicalizationLinearOperator):
         Returns:
             Tuple of (in_shape, out_shape) for original to canonical transformation.
         """
-        in_shape = [tuple(p.shape) for p in self._params]
+        in_shape = [tuple(shape) for shape in self._param_shapes]
         out_shape = self._compute_canonical_shapes()
         return in_shape, out_shape
 
@@ -395,7 +390,11 @@ class ToCanonicalLinearOperator(_CanonicalizationLinearOperator):
             Linear operator that transforms from canonical to parameter form.
         """
         return FromCanonicalLinearOperator(
-            self._params, self._param_positions, self._separate_weight_and_bias
+            self._param_shapes,
+            self._param_positions,
+            self._separate_weight_and_bias,
+            self._device,
+            self._dtype,
         )
 
 
@@ -411,7 +410,7 @@ class FromCanonicalLinearOperator(_CanonicalizationLinearOperator):
         Returns:
             Tuple of (in_shape, out_shape) for canonical to original transformation.
         """
-        out_shape = [tuple(p.shape) for p in self._params]
+        out_shape = [tuple(shape) for shape in self._param_shapes]
         in_shape = self._compute_canonical_shapes()
         return in_shape, out_shape
 
@@ -428,7 +427,7 @@ class FromCanonicalLinearOperator(_CanonicalizationLinearOperator):
             RuntimeError: If parameters were incorrectly processed, likely due
                 to an erroneous `self._param_positions`.
         """
-        original_M = [None] * len(self._params)
+        original_M = [None] * len(self._param_shapes)
         (num_columns,) = {m.shape[-1] for m in M}
         processed = 0
 
@@ -441,15 +440,15 @@ class FromCanonicalLinearOperator(_CanonicalizationLinearOperator):
                 combined = M[processed]
 
                 # Get original weight shape
-                w = self._params[w_pos]
-                w_rows, w_cols = w.shape[0], w.shape[1:].numel()
+                w_shape = self._param_shapes[w_pos]
+                w_rows, w_cols = w_shape[0], self._param_shapes[w_pos].numel() // w_shape[0]
 
                 # Reshape combined tensor back to (weight + bias) matrix
                 combined = combined.reshape(w_rows, w_cols + 1, num_columns)
                 w_part, b_part = combined.split([w_cols, 1], dim=1)
 
                 # Reshape into parameter shape
-                original_M[w_pos] = w_part.reshape(*w.shape, num_columns)
+                original_M[w_pos] = w_part.reshape(*w_shape, num_columns)
                 original_M[b_pos] = b_part.reshape(w_rows, num_columns)
                 processed += 1
             else:
@@ -457,7 +456,7 @@ class FromCanonicalLinearOperator(_CanonicalizationLinearOperator):
                 for p_name in param_pos:
                     pos = param_pos[p_name]
                     original_M[pos] = M[processed].reshape(
-                        *self._params[pos].shape, num_columns
+                        *self._param_shapes[pos], num_columns
                     )
                     processed += 1
 
@@ -473,5 +472,9 @@ class FromCanonicalLinearOperator(_CanonicalizationLinearOperator):
             Linear operator that transforms from parameter to canonical form.
         """
         return ToCanonicalLinearOperator(
-            self._params, self._param_positions, self._separate_weight_and_bias
+            self._param_shapes,
+            self._param_positions,
+            self._separate_weight_and_bias,
+            self._device,
+            self._dtype,
         )
