@@ -99,6 +99,14 @@ match_dir = '^(?!.*(?:test|\.git|docs)).*'
 [tool.ruff]
 line-length = 88
 preview = true
+exclude = [
+    ".eggs",
+    ".git",
+    ".pytest_cache",
+    "docs/rtd",
+    "build",
+    "dist",
+]
 
 [tool.ruff.lint]
 # Enable all rules from flake8 (E, F), plus additional ones including isort (I)
@@ -165,14 +173,6 @@ quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false
 line-ending = "auto"
-exclude = [
-    ".eggs",
-    ".git",
-    ".pytest_cache",
-    "docs/rtd",
-    "build",
-    "dist",
-]
 
 [tool.ruff.lint.per-file-ignores]
 "docs/examples/basic_usage/example_*.py" = [
@@ -183,6 +183,3 @@ exclude = [
     # First line should end with a period, question mark, or exclamation point
     "D415"
 ]
-
-[tool.ruff.lint.flake8-bugbear]
-extend-immutable-calls = ["pytest.raises", "pytest.warns", "pytest.mark.skip"]
