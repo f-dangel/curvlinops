@@ -30,7 +30,6 @@ class EighDecomposedLinearOperator(PyTorchLinearOperator):
         Raises:
             ValueError: If eigenvalues is not 1D or eigenvectors is not 2D.
             ValueError: If eigenvalues and eigenvectors have incompatible shapes.
-
         """
         if eigenvalues.ndim != 1:
             raise ValueError(f"Eigenvalues must be 1D, got shape {eigenvalues.shape}.")
@@ -85,7 +84,6 @@ class EighDecomposedLinearOperator(PyTorchLinearOperator):
 
         Raises:
             RuntimeError: If eigenvalues and eigenvectors are on different devices.
-
         """
         if self._eigenvalues.device != self._eigenvectors.device:
             raise RuntimeError(
@@ -103,7 +101,6 @@ class EighDecomposedLinearOperator(PyTorchLinearOperator):
 
         Raises:
             RuntimeError: If eigenvalues and eigenvectors have different dtypes.
-
         """
         if self._eigenvalues.dtype != self._eigenvectors.dtype:
             raise RuntimeError(

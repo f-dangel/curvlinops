@@ -145,7 +145,6 @@ class _LanczosSpectrumCached:
         Args:
             A: Symmetric linear operator.
             ncv: Number of Lanczos vectors (number of nodes/weights for the quadrature).
-
         """
         self._A = A
         self._ncv = ncv
@@ -185,7 +184,6 @@ class LanczosApproximateSpectrumCached(_LanczosSpectrumCached):
                 Relative accuracy used to estimate the spectral boundary. ``0`` implies
                 machine precision. Default: ``1e-2``, from
                 https://docs.scipy.org/doc/scipy/reference/tutorial/arpack.html#examples.
-
         """
         super().__init__(A, ncv)
         self._boundaries = approximate_boundaries(
@@ -371,7 +369,6 @@ class LanczosApproximateLogSpectrumCached(_LanczosSpectrumCached):
                 Relative accuracy used to estimate the spectral boundary. ``0`` implies
                 machine precision. Default: ``1e-2``, from
                 https://docs.scipy.org/doc/scipy/reference/tutorial/arpack.html#examples.
-
         """
         super().__init__(A, ncv)
         self._boundaries = approximate_boundaries_abs(

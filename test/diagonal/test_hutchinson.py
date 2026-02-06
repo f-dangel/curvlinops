@@ -18,7 +18,6 @@ def test_hutchinson_diag(num_matvecs: int, distribution: str):
     Args:
         num_matvecs: Number of matrix-vector products used per estimate.
         distribution: Distribution of the random vectors used for the trace estimation.
-
     """
     manual_seed(1)
     A = rand(30, 30)

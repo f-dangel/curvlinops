@@ -132,7 +132,6 @@ class EFLinearOperator(CurvatureLinearOperator):
     Attributes:
         SELF_ADJOINT: Whether the linear operator is self-adjoint. ``True`` for
             empirical Fisher.
-
     """
 
     SUPPORTED_LOSSES = (MSELoss, CrossEntropyLoss, BCEWithLogitsLoss)
@@ -154,7 +153,6 @@ class EFLinearOperator(CurvatureLinearOperator):
 
         Raises:
             NotImplementedError: If the loss function is not supported.
-
         """
         if not isinstance(self._loss_func, self.SUPPORTED_LOSSES):
             raise NotImplementedError(

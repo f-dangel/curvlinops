@@ -92,7 +92,6 @@ class MyGPT2(Module):
     Args:
         tokenizer: The tokenizer used for preprocessing the text data. Needed
             since the model needs to know the padding token id.
-
     """
 
     def __init__(self, tokenizer: PreTrainedTokenizer) -> None:

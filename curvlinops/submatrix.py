@@ -23,7 +23,6 @@ class SubmatrixLinearOperator(PyTorchLinearOperator):
             A: A linear operator.
             row_idxs: The sub-matrix's row indices.
             col_idxs: The sub-matrix's column indices.
-
         """
         self._A = A
         self.set_submatrix(row_idxs, col_idxs)
@@ -58,7 +57,6 @@ class SubmatrixLinearOperator(PyTorchLinearOperator):
         Raises:
             ValueError: If the index lists contain duplicate values, non-integers,
                 or out-of-bounds indices.
-
         """
         shape = []
 

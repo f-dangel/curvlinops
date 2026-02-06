@@ -23,7 +23,6 @@ def test_hutchinson_squared_fro(num_matvecs: int, distribution: str):
     Args:
         num_matvecs: Number of matrix-vector products used per estimate.
         distribution: Distribution of the random vectors used for the estimation.
-
     """
     manual_seed(0)
     A = rand(10, 15)

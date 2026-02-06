@@ -99,7 +99,6 @@ def loss_hessian_matrix_sqrt(
         NotImplementedError: If the loss function is not supported.
         NotImplementedError: If the loss function is ``BCEWithLogitsLoss`` but the
             target is not binary.
-
     """
     if output_one_datum.ndim != 2 or output_one_datum.shape[0] != 1:
         raise ValueError(
@@ -170,7 +169,6 @@ def extract_patches(
     Raises:
         NotImplementedError: If ``padding`` is a string that would lead to unequal
             padding along a dimension.
-
     """
     if isinstance(padding, str):  # get padding as integers
         padding_as_int = []

@@ -56,7 +56,6 @@ def hutchinson_squared_fro(
         >>> assert abs(fro2_A - fro2_A_low_prec) > abs(fro2_A - fro2_A_high_prec)
         >>> round(fro2_A, 1), round(fro2_A_low_prec, 1), round(fro2_A_high_prec, 1)
         (530.9, 156.7, 628.9)
-
     """
     if len(A.shape) != 2:
         raise ValueError(f"A must be a matrix. Got shape {A.shape}.")

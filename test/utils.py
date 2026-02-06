@@ -223,7 +223,6 @@ class WeightShareModel(Sequential):
             *args: Modules of the sequential model.
             setting: Weight-sharing setting to use.
             loss: Loss type that determines output handling.
-
         """
         super().__init__(*args)
         self.setting = setting
@@ -238,7 +237,6 @@ class WeightShareModel(Sequential):
 
         Raises:
             ValueError: If ``setting`` property has not been set.
-
         """
         if self._setting is None:
             raise ValueError("WeightShareModel.setting has not been set.")
@@ -254,7 +252,6 @@ class WeightShareModel(Sequential):
         Raises:
             ValueError: If ``setting`` is neither ``'expand'``,``'expand-flatten'``, nor
                 ``'reduce'``.
-
         """
         if setting not in {"expand", "expand-flatten", "reduce"}:
             raise ValueError(
@@ -272,7 +269,6 @@ class WeightShareModel(Sequential):
 
         Raises:
             ValueError: If ``loss`` property has not been set.
-
         """
         if self._loss is None:
             raise ValueError("WeightShareModel.loss has not been set.")
@@ -287,7 +283,6 @@ class WeightShareModel(Sequential):
 
         Raises:
             ValueError: If ``loss`` is not one of ``MSE``, ``CE``, or ``BCE``.
-
         """
         if loss not in {"MSE", "CE", "BCE"}:
             raise ValueError(f"Expected loss to be 'MSE', 'CE', or 'BCE'. Got {loss}.")
@@ -355,7 +350,6 @@ class Conv2dModel(Module):
 
         Raises:
             ValueError: If `setting` property has not been set.
-
         """
         if self._setting is None:
             raise ValueError("Conv2dModel.setting has not been set.")
@@ -371,7 +365,6 @@ class Conv2dModel(Module):
         Raises:
             ValueError: If ``setting`` is neither ``'expand'``, ``'expand-flatten'``,
                 nor ``'reduce'``.
-
         """
         if setting not in {"expand", "expand-flatten", "reduce"}:
             raise ValueError(
@@ -405,7 +398,6 @@ class UnetModel(Module):
 
         Raises:
             ValueError: If ``loss`` is not a supported loss class.
-
         """
         if loss not in {MSELoss, CrossEntropyLoss, BCEWithLogitsLoss}:
             raise ValueError(
@@ -482,7 +474,6 @@ def compare_state_dicts(state_dict: dict, state_dict_new: dict):
     Args:
         state_dict (dict): The first state dict to compare.
         state_dict_new (dict): The second state dict to compare.
-
     """
     assert len(state_dict) == len(state_dict_new)
     for value, value_new in zip(state_dict.values(), state_dict_new.values()):
@@ -557,7 +548,6 @@ def compare_matmat(
         num_vecs: Number of vectors to test matmat. Default: ``2``.
         rtol: Relative tolerance for the comparison. Default: ``1e-5``.
         atol: Absolute tolerance for the comparison. Default: ``1e-8``.
-
     """
     dt = op.dtype
     dev = op.device
@@ -629,7 +619,6 @@ def compare_consecutive_matmats(
         num_vecs: Number of vectors to test on.
         rtol: Relative tolerance for the comparison. Default: ``1e-5``.
         atol: Absolute tolerance for the comparison. Default: ``1e-8``.
-
     """
     tol = {"atol": atol, "rtol": rtol}
 
@@ -674,7 +663,6 @@ def compare_matmat_expectation(
         rtol: Relative tolerance for the comparison. Default: ``1e-5``.
         atol: Absolute tolerance for the comparison. Will be multiplied by the maximum
             absolute value of the ground truth. Default: ``1e-8``.
-
     """
     dt, dev = op.dtype, op.device
     _, x, _ = rand_accepted_formats(
@@ -737,7 +725,6 @@ def check_estimator_convergence(
             Default: ``100``.
         target_rel_error: Relative error for considering the estimator converged.
             Default: ``1e-3``.
-
     """
     used_matvecs, converged = 0, False
 
@@ -787,7 +774,6 @@ def _test_inplace_activations(
     Args:
         linop_cls: The linear operator class to test.
         dev: The device to run the test on.
-
     """
     manual_seed(0)
     model = Sequential(Linear(6, 3), ReLU(inplace=True), Linear(3, 2)).to(dev)
@@ -839,7 +825,6 @@ def _test_property(  # noqa: C901
             operator.
         rtol: Relative tolerance for the comparison. Default: ``1e-5``.
         atol: Absolute tolerance for the comparison. Default: ``1e-8``.
-
     """
     # Create instance of linear operator
     linop = linop_cls(
@@ -902,7 +887,6 @@ def _test_save_and_load_state_dict(
 
     Args:
         linop_cls: The linear operator class to test.
-
     """
     manual_seed(0)
     batch_size, D_in, D_out = 4, 3, 2
@@ -1030,7 +1014,6 @@ def _test_ekfac_closer_to_exact_than_kfac(
         exclude: Parameter to exclude.
         fisher_type: The type of Fisher approximation.
         kfac_approx: THe type of KFAC approximation.
-
     """
     # Compute exact block-wise ground truth quantity.
     linop_cls = {

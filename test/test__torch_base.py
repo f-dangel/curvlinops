@@ -120,7 +120,6 @@ def test_MutableMapping_no_batch_size_fn(case):
 
     Args:
         case: Tuple of model, loss function, parameters, data, and batch size getter.
-
     """
     model_func, loss_func, params, data, _ = case
 
@@ -161,7 +160,6 @@ class PermutedBatchLoader:
 
         Args:
             data: Iterable of input/target batches.
-
         """
         self.data = data
 
@@ -170,7 +168,6 @@ class PermutedBatchLoader:
 
         Yields:
             Permuted batches of inputs and targets.
-
         """
         for X, y in self.data:
             permutation = randperm(y.shape[0])
@@ -190,7 +187,6 @@ def test_check_deterministic_batch(case):
 
     Args:
         case: Tuple of model, loss function, parameters, data, and batch size getter.
-
     """
     model_func, loss_func, params, data, batch_size_fn = case
 

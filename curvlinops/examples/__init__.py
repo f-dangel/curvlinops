@@ -20,7 +20,6 @@ class TensorLinearOperator(PyTorchLinearOperator):
 
         Raises:
             ValueError: If ``A`` is not a 2D tensor.
-
         """
         if A.ndim != 2:
             raise ValueError(f"Input tensor must be 2D. Got {A.ndim}D.")
@@ -115,7 +114,6 @@ class OuterProductLinearOperator(PyTorchLinearOperator):
             A: Matrix of shape ``[D, K]``, where ``D`` is the linear operators
                 dimension, that stores the low-rank vectors columnwise, i.e. ``aᵢ``
                 is stored in ``A[:,i]``.
-
         """
         shape = [(A.shape[0],)]
         super().__init__(shape, shape)
@@ -176,7 +174,6 @@ class IdentityLinearOperator(PyTorchLinearOperator):
             shape: A list of shapes specifying the identity's input and output space.
             device: The device on which the identity operator is defined.
             dtype: The data type of the identity operator.
-
         """
         super().__init__(shape, shape)
         self._device = device

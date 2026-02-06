@@ -109,7 +109,6 @@ class JacobianLinearOperator(CurvatureLinearOperator):
 
     Attributes:
         FIXED_DATA_ORDER: Whether the data order must be fix. ``True`` for Jacobians.
-
     """
 
     FIXED_DATA_ORDER: bool = True
@@ -168,7 +167,6 @@ class JacobianLinearOperator(CurvatureLinearOperator):
             batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
                 needs to be specified. The intended behavior is to consume the first
                 entry of the iterates from ``data`` and return their batch size.
-
         """
         super().__init__(
             model_func,
@@ -234,7 +232,6 @@ class TransposedJacobianLinearOperator(CurvatureLinearOperator):
 
     Attributes:
         FIXED_DATA_ORDER: Whether the data order must be fix. ``True`` for Jacobians.
-
     """
 
     FIXED_DATA_ORDER: bool = True
@@ -295,7 +292,6 @@ class TransposedJacobianLinearOperator(CurvatureLinearOperator):
             batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
                 needs to be specified. The intended behavior is to consume the first
                 entry of the iterates from ``data`` and return their batch size.
-
         """
         super().__init__(
             model_func,

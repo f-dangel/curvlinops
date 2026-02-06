@@ -40,7 +40,6 @@ def xtrace_naive(
         ValueError: If the linear operator is not square or if the number of matrix-
             vector products is not even or is greater than the dimension of the linear
             operator.
-
     """
     if len(A.shape) != 2 or A.shape[0] != A.shape[1]:
         raise ValueError(f"A must be square. Got shape {A.shape}.")
@@ -87,7 +86,6 @@ def test_xtrace(distribution: str, num_matvecs: int):
     Args:
         distribution: Distribution of the random vectors used for the trace estimation.
         num_matvecs: Number of matrix-vector multiplications used by one estimator.
-
     """
     manual_seed(0)
     A = rand(15, 15)
@@ -111,7 +109,6 @@ def test_xtrace_matches_naive(num_matvecs: int, distribution: str, num_seeds: in
         distribution: Distribution of the random vectors used for the trace estimation.
         num_seeds: Number of different seeds to test the estimators with.
             Default: ``5``.
-
     """
     manual_seed(0)
     A = rand(50, 50)

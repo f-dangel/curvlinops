@@ -68,7 +68,6 @@ def hutchinson_diag(
         >>> assert error_low_precision > error_high_precision
         >>> round(error_low_precision, 4), round(error_high_precision, 4)
         (3.2648, 0.9253)
-
     """
     dim = assert_is_square(A)
     assert_matvecs_subseed_dim(A, num_matvecs)

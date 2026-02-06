@@ -42,7 +42,6 @@ class ModelWithDictInput(Module):
         Args:
             num_classes: Number of output classes.
             nonlin: Nonlinear activation constructor.
-
         """
         super().__init__()
         self.net = Sequential(Linear(10, 5), nonlin(), Linear(5, num_classes))

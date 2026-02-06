@@ -24,7 +24,6 @@ def test_example_verification_spectral_density():
 
     Raises:
         CalledProcessError: If the verification example fails.
-
     """
     EXAMPLE_VERIFICATION_SPECTRAL_DENSITY = (
         BASIC_USAGE / "example_verification_spectral_density.py"

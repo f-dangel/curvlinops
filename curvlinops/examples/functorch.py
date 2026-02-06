@@ -334,7 +334,6 @@ def _concatenate_batches(
     Raises:
         ValueError: If ``X`` in ``data`` is a dict-like object and ``input_key`` is
             not provided.
-
     """
     X, y = list(zip(*list(data)))
     device = y[0].device if device is None else device

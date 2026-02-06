@@ -262,7 +262,6 @@ def plot_estimation_results(
         ax: The matplotlib Axes to plot on.
         target: The property that is approximated (used in ylabel).
             Default is ``'trace'``.
-
     """
     ax.set_yscale("log")
 

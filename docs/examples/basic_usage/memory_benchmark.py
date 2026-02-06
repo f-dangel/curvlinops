@@ -41,7 +41,6 @@ def run_peakmem_benchmark(  # noqa: C901, PLR0915
         problem_str: The problem.
         device_str: The device.
         op_str: The operation that is benchmarked.
-
     """
     savepath = benchpath(linop_str, problem_str, device_str, op_str, metric="peakmem")
     if SKIP_EXISTING and path.exists(savepath):

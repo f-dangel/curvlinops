@@ -21,7 +21,6 @@ def test_HessianLinearOperator(
         case: Tuple of model, loss function, parameters, data, and batch size getter.
         block_sizes_fn: The function that generates the block sizes used to define
             block diagonal approximations from the parameters.
-
     """
     model_func, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
     block_sizes = block_sizes_fn(params)

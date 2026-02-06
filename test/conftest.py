@@ -77,7 +77,6 @@ def case(
 
     Yields:
         Tuple of model, loss, parameters, data, and optional batch size function.
-
     """
     case = request.param
     yield initialize_case(case)
@@ -97,7 +96,6 @@ def inv_case(
 
     Yields:
         Tuple of model, loss, parameters, data, and optional batch size function.
-
     """
     case = request.param
     yield initialize_case(case)
@@ -117,7 +115,6 @@ def cnn_case(
 
     Yields:
         Tuple of model, loss, parameters, data, and optional batch size function.
-
     """
     cnn_case = request.param
     yield initialize_case(cnn_case)
@@ -137,7 +134,6 @@ def non_deterministic_case(
 
     Yields:
         Tuple of model, loss, parameters, data, and optional batch size function.
-
     """
     case = request.param
     yield initialize_case(case)
@@ -172,7 +168,6 @@ def kfac_exact_case(
     Yields:
         A neural network, the mean-squared error function, a list of parameters, and
         a data set.
-
     """
     case = request.param
     yield initialize_case(case)
@@ -193,7 +188,6 @@ def kfac_weight_sharing_exact_case(
     Yields:
         A neural network, the mean-squared error function, a list of parameters, and
         a data set.
-
     """
     case = request.param
     yield initialize_case(case)
@@ -214,7 +208,6 @@ def kfac_exact_one_datum_case(
     Yields:
         A neural network, loss function, a list of parameters, and
         a data set with a single datum.
-
     """
     case = request.param
     yield initialize_case(case)
@@ -235,7 +228,6 @@ def single_layer_case(
     Yields:
         A neural network, loss function, a list of parameters, and
         a data set with a single datum.
-
     """
     case = request.param
     yield initialize_case(case)
@@ -256,7 +248,6 @@ def single_layer_weight_sharing_case(
     Yields:
         A neural network, loss function, a list of parameters, and
         a data set with a single datum.
-
     """
     case = request.param
     yield initialize_case(case)

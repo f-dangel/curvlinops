@@ -86,7 +86,6 @@ class FisherType(str, Enum, metaclass=MetaEnum):
             identity matrices, see the FOOF method in
             `Benzing, 2022 <https://arxiv.org/abs/2201.12250>`_ or ISAAC in
             `Petersen et al., 2023 <https://arxiv.org/abs/2305.00604>`_.
-
     """
 
     TYPE2 = "type-2"
@@ -104,7 +103,6 @@ class KFACType(str, Enum, metaclass=MetaEnum):
     Attributes:
         EXPAND (str): ``'expand'`` - KFAC-expand approximation.
         REDUCE (str): ``'reduce'`` - KFAC-reduce approximation.
-
     """
 
     EXPAND = "expand"
@@ -159,7 +157,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
         _SUPPORTED_FISHER_TYPE: Enum of supported Fisher types.
         _SUPPORTED_KFAC_APPROX: Enum of supported KFAC approximation types.
         SELF_ADJOINT: Whether the operator is self-adjoint. ``True`` for KFAC.
-
     """
 
     _SUPPORTED_LOSSES = (MSELoss, CrossEntropyLoss, BCEWithLogitsLoss)
@@ -257,7 +254,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
             ValueError: If the loss function is not supported.
             ValueError: If ``fisher_type != FisherType.MC`` and ``mc_samples != 1``.
             ValueError: If ``X`` is not a tensor and ``batch_size_fn`` is not specified.
-
         """
         if not isinstance(loss_func, self._SUPPORTED_LOSSES):
             raise ValueError(
@@ -321,7 +317,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
         Raises:
             ValueError: If the number of loss terms is not divisible by the number of
                 data points.
-
         """
         if num_per_example_loss_terms is None:
             # Determine the number of per-example loss terms
@@ -408,7 +403,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
             eigenvalues: Eigenvalues of the (E)KFAC approximation when multiplying with
                 the eigendecomposition of the KFAC approximation. ``None`` for the
                 non-decomposed KFAC approximation. Defaults to ``None``.
-
         """
         for p_name, pos in param_pos.items():
             # for weights we need to multiply from the right with aaT
@@ -591,7 +585,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
             ValueError: If ``fisher_type`` is not ``FisherType.TYPE2``,
                 ``FisherType.MC``, ``FisherType.EMPIRICAL``, or
                 ``FisherType.FORWARD_ONLY``.
-
         """
         if output.ndim != 2 or y.ndim not in {1, 2}:
             raise ValueError(
@@ -680,7 +673,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
         Raises:
             ValueError: If the output is not 2d.
             NotImplementedError: If the loss function is not supported.
-
         """
         if output.ndim != 2:
             raise ValueError("Only a 2d output is supported.")
@@ -732,7 +724,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
             inputs: The layer's input tensors.
             output: The layer's output tensor.
             module_name: The name of the layer in the neural network.
-
         """
         tensor_hook = partial(
             self._accumulate_gradient_covariance, module=module, module_name=module_name
@@ -750,7 +741,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
             grad_output: The gradient w.r.t. the output.
             module: The layer whose output's gradient covariance will be accumulated.
             module_name: The name of the layer in the neural network.
-
         """
         g = grad_output.data.detach()
         batch_size = g.shape[0]
@@ -792,7 +782,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
         Raises:
             ValueError: If the module has multiple inputs.
-
         """
         if len(inputs) != 1:
             raise ValueError("Modules with multiple inputs are not supported.")
@@ -851,7 +840,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
         Raises:
             ValueError: If the types of the value and the dictionary entry are
                 incompatible.
-
         """
         if key not in dictionary:
             dictionary[key] = value
@@ -881,7 +869,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
         Raises:
             NotImplementedError: If parameters are found outside supported layers.
-
         """
         param_ids = [p.data_ptr() for p in params]
         positions = {}
@@ -1115,7 +1102,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
         Raises:
             ValueError: If the keys do not match the mapping keys.
-
         """
         dictionary_keys = set(dictionary.keys())
         mapping_keys = set(self._mapping.keys())
@@ -1138,7 +1124,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
         Raises:
             ValueError: If the loss function does not match the state dict.
             ValueError: If the loss function reduction does not match the state dict.
-
         """
         warn(
             "Loading a state dict will overwrite the parameters of the model underlying the linear operator!",

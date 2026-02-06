@@ -44,7 +44,6 @@ class _InversePyTorchLinearOperator(PyTorchLinearOperator):
 
         Raises:
             ValueError: If the passed linear operator is not quadratic.
-
         """
         if A._in_shape != A._out_shape:
             raise ValueError(
@@ -78,7 +77,6 @@ class CGInverseLinearOperator(_InversePyTorchLinearOperator):
 
     Note:
         Internally, this operator uses GPyTorch's implementation of CG.
-
     """
 
     def __init__(self, A: PyTorchLinearOperator, **cg_hyperparameters):
@@ -90,7 +88,6 @@ class CGInverseLinearOperator(_InversePyTorchLinearOperator):
             cg_hyperparameters: Keyword arguments for GPyTorch's CG implementation.
                 For details, see the documentation of the ``linear_cg`` function in
                 https://github.com/cornellius-gp/linear_operator/blob/main/linear_operator/utils/linear_cg.py.
-
         """
         super().__init__(A)
         self._cg_hyperparameters = cg_hyperparameters
@@ -133,7 +130,6 @@ class LSMRInverseLinearOperator(_InversePyTorchLinearOperator):
         Internally, this operator uses SciPy's CPU implementation of LSMR as PyTorch
         currently does not offer an LSMR interface that purely relies on matrix-vector
         products.
-
     """
 
     def __init__(self, A: PyTorchLinearOperator, **lsmr_hyperparameters):
@@ -144,7 +140,6 @@ class LSMRInverseLinearOperator(_InversePyTorchLinearOperator):
             lsmr_hyperparameters: The hyper-parameters that will be passed to the
                 LSMR implementation in SciPy. For more detail, see
                 https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.linalg.lsmr.html.
-
         """
         super().__init__(A)
         self._A_scipy = A.to_scipy()
@@ -262,7 +257,6 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
                 for convergence of Neumann series (details above). Default: ``1.0``.
             check_nan: Whether to check for NaNs while applying the truncated Neumann
                 series. Default: ``True``.
-
         """
         super().__init__(A)
         self._num_terms = num_terms
@@ -280,7 +274,6 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
 
         Raises:
             ValueError: If ``NaN`` check is turned on and ``NaN`` values are detected.
-
         """
         result_list, v_list = [x.clone() for x in X], [x.clone() for x in X]
 
@@ -319,7 +312,6 @@ class KFACInverseLinearOperator(_InversePyTorchLinearOperator):
 
     Attributes:
         SELF_ADJOINT: Whether the operator is self-adjoint. ``True`` for KFAC-inverse.
-
     """
 
     SELF_ADJOINT: bool = True
@@ -371,7 +363,6 @@ class KFACInverseLinearOperator(_InversePyTorchLinearOperator):
             ValueError: If both heuristic and exact damping are selected.
             ValueError: If heuristic or exact damping is used and the damping value is a
                 tuple.
-
         """
         if not isinstance(A, KFACLinearOperator):
             raise ValueError(
@@ -509,7 +500,6 @@ class KFACInverseLinearOperator(_InversePyTorchLinearOperator):
         Raises:
             RuntimeError: If a Cholesky decomposition (and optionally the retry in
                 double precision) fails.
-
         """
         inverse_factors = []
         for factor, damping in zip((aaT, ggT), self._compute_damping(aaT, ggT)):
@@ -682,7 +672,6 @@ class KFACInverseLinearOperator(_InversePyTorchLinearOperator):
 
         Args:
             state_dict: State dictionary.
-
         """
         self._A.load_state_dict(state_dict["A"])
 

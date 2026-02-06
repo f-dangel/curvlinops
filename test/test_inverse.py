@@ -49,7 +49,6 @@ def test_CGInverseLinearOperator_damped_GGN(inv_case, delta_rel: float = 2e-2):
         inv_case: Tuple of model, loss function, parameters, data, batch size getter.
         delta_rel: Relative damping factor that is multiplied onto the average trace
             to obtain the damping value.
-
     """
     model_func, loss_func, params, data, batch_size_fn = change_dtype(inv_case, float64)
     (dev,), (dt,) = {p.device for p in params}, {p.dtype for p in params}
@@ -138,7 +137,6 @@ def test_NeumannInverseLinearOperator_toy():
 
     compare_consecutive_matmats(inv_B_neumann)
     compare_matmat(inv_B_neumann, inv_B, **tols)
-
 
 """KFACInverseLinearOperator with KFACLinearOperator tests."""
 
@@ -548,7 +546,6 @@ def test_KFAC_inverse_from_state_dict(
     compare_state_dicts(inv_kfac.state_dict(), inv_kfac_new.state_dict())
     test_vec = rand(kfac.shape[1])
     assert allclose_report(inv_kfac @ test_vec, inv_kfac_new @ test_vec)
-
 
 """KFACInverseLinearOperator with EKFACLinearOperator tests."""
 
