@@ -106,19 +106,27 @@ exclude = [
     "docs/rtd",
     "build",
     "dist",
+    "proto",
 ]
 
 [tool.ruff.lint]
 # Enable all rules from flake8 (E, F), plus additional ones including isort (I)
-select = ["E", "F", "B", "C", "W", "B9", "PLE", "PLW", "PLR", "I"]
+# and docstrings (D)
+select = ["E", "F", "B", "C", "W", "B9", "PLE", "PLW", "PLR", "I", "D"]
 extend-select = [
-    "D",
+    # Documented parameter is not in the function's signature
     "DOC102",
+    # return is not documented in docstring
     "DOC201",
+    # Docstring should not have a returns section because the function doesn't return anything
     "DOC202",
+    # yield is not documented in docstring
     "DOC402",
+    # Docstring has a "Yields" section but the function doesn't yield anything
     "DOC403",
+    # Raised exception missing from docstring
     "DOC501",
+    # Raised exception is not explicitly raised
     "DOC502",
 ]
 ignore = [
