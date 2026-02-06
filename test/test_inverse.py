@@ -49,6 +49,7 @@ def test_CGInverseLinearOperator_damped_GGN(inv_case, delta_rel: float = 2e-2):
         inv_case: Tuple of model, loss function, parameters, data, batch size getter.
         delta_rel: Relative damping factor that is multiplied onto the average trace
             to obtain the damping value.
+
     """
     model_func, loss_func, params, data, batch_size_fn = change_dtype(inv_case, float64)
     (dev,), (dt,) = {p.device for p in params}, {p.dtype for p in params}
@@ -249,9 +250,7 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901, PLR0912, PLR09
     shuffle: bool,
     delta: float = 1e-2,
 ):
-    """Test matrix-matrix multiplication by an inverse (heuristically) damped KFAC
-    approximation.
-    """
+    """Test matrix-matrix multiplication by a heuristically damped KFAC inverse."""
     model_func, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
     params = maybe_exclude_or_shuffle_parameters(params, model_func, exclude, shuffle)
 

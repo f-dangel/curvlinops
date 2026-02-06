@@ -65,8 +65,8 @@ def functorch_hessian(
     ) -> Tensor:
         """Compute the loss given a mini-batch and the neural network parameters.
 
-        # noqa: DAR101
-        # noqa: DAR201
+        Returns:
+            Scalar loss value.
         """
         output = functional_call(model_func, params_dict, X)
         return functional_call(loss_func, {}, (output, y))
@@ -112,8 +112,8 @@ def functorch_ggn(
     ) -> Tensor:
         """Evaluate the model at params, using its linearization around anchor.
 
-        # noqa: DAR101
-        # noqa: DAR201
+        Returns:
+            Linearized model output at the provided parameters.
         """
 
         def model_fn_params_only(params_dict: Dict[str, Tensor]) -> Tensor:
@@ -182,8 +182,8 @@ def functorch_gradient_and_loss(
     ) -> Tensor:
         """Compute the loss given a mini-batch and the neural network parameters.
 
-        # noqa: DAR101
-        # noqa: DAR201
+        Returns:
+            Scalar loss value.
         """
         output = functional_call(model_func, params_dict, X)
         return functional_call(loss_func, {}, (output, y))
@@ -336,6 +336,7 @@ def _concatenate_batches(
     Raises:
         ValueError: If ``X`` in ``data`` is a dict-like object and ``input_key`` is
             not provided.
+
     """
     X, y = list(zip(*list(data)))
     device = y[0].device if device is None else device

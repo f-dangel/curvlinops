@@ -47,6 +47,7 @@ def random_vector(dim: int, distribution: str, device: device, dtype: dtype) -> 
 
     Raises:
         ValueError: If the distribution is unknown.
+
     """
     if distribution == "rademacher":
         return rademacher(dim, device, dtype)

@@ -160,6 +160,7 @@ class HessianLinearOperator(CurvatureLinearOperator):
             Default is ``True``.
         SELF_ADJOINT: Whether the linear operator is self-adjoint (``True`` for
             Hessians).
+
     """
 
     SELF_ADJOINT: bool = True

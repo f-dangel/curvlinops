@@ -154,6 +154,7 @@ def block_diagonal(
         batch_size_fn: A function that returns the batch size given a dict-like ``X``.
         separate_weight_and_bias: Whether to treat weight and bias of a layer as
             separate blocks in the block-diagonal. Default: ``True``.
+        optional_linop_args: Additional keyword arguments for the linear operator.
 
     Returns:
         The block-diagonal matrix.
@@ -220,6 +221,9 @@ class WeightShareModel(Sequential):
 
         Args:
             *args: Modules of the sequential model.
+            setting: Weight-sharing setting to use.
+            loss: Loss type that determines output handling.
+
         """
         super().__init__(*args)
         self.setting = setting
@@ -234,6 +238,7 @@ class WeightShareModel(Sequential):
 
         Raises:
             ValueError: If ``setting`` property has not been set.
+
         """
         if self._setting is None:
             raise ValueError("WeightShareModel.setting has not been set.")
@@ -249,6 +254,7 @@ class WeightShareModel(Sequential):
         Raises:
             ValueError: If ``setting`` is neither ``'expand'``,``'expand-flatten'``, nor
                 ``'reduce'``.
+
         """
         if setting not in {"expand", "expand-flatten", "reduce"}:
             raise ValueError(
@@ -263,6 +269,10 @@ class WeightShareModel(Sequential):
 
         Returns:
             The type of loss function.
+
+        Raises:
+            ValueError: If ``loss`` property has not been set.
+
         """
         if self._loss is None:
             raise ValueError("WeightShareModel.loss has not been set.")
@@ -277,6 +287,7 @@ class WeightShareModel(Sequential):
 
         Raises:
             ValueError: If ``loss`` is not one of ``MSE``, ``CE``, or ``BCE``.
+
         """
         if loss not in {"MSE", "CE", "BCE"}:
             raise ValueError(f"Expected loss to be 'MSE', 'CE', or 'BCE'. Got {loss}.")
@@ -344,6 +355,7 @@ class Conv2dModel(Module):
 
         Raises:
             ValueError: If `setting` property has not been set.
+
         """
         if self._setting is None:
             raise ValueError("Conv2dModel.setting has not been set.")
@@ -359,6 +371,7 @@ class Conv2dModel(Module):
         Raises:
             ValueError: If ``setting`` is neither ``'expand'``, ``'expand-flatten'``,
                 nor ``'reduce'``.
+
         """
         if setting not in {"expand", "expand-flatten", "reduce"}:
             raise ValueError(
@@ -384,7 +397,16 @@ class UnetModel(Module):
     """Simple Unet-like model where the number of spatial locations varies."""
 
     def __init__(self, loss: Module, flatten: bool = False):
-        """Initialize the model."""
+        """Initialize the model.
+
+        Args:
+            loss: Loss class used to select the output shaping.
+            flatten: Whether to flatten spatial dimensions.
+
+        Raises:
+            ValueError: If ``loss`` is not a supported loss class.
+
+        """
         if loss not in {MSELoss, CrossEntropyLoss, BCEWithLogitsLoss}:
             raise ValueError(
                 "Loss has to be one of MSELoss, CrossEntropyLoss, BCEWithLogitsLoss. "
@@ -421,8 +443,9 @@ class UnetModel(Module):
 def cast_input(
     X: Union[Tensor, MutableMapping], target_dtype: dtype
 ) -> Union[Tensor, MutableMapping]:
-    """Cast an input tensor ``X`` (can be inside a dict-like object under the key "x")
-        into ``target_dtype``.
+    """Cast an input tensor ``X`` into ``target_dtype``.
+
+    The input can be inside a dict-like object under the key ``"x"``.
 
     Args:
         X: The input tensor.
@@ -460,8 +483,6 @@ def compare_state_dicts(state_dict: dict, state_dict_new: dict):
         state_dict (dict): The first state dict to compare.
         state_dict_new (dict): The second state dict to compare.
 
-    Raises:
-        AssertionError: If the state dicts are not equal.
     """
     assert len(state_dict) == len(state_dict_new)
     for value, value_new in zip(state_dict.values(), state_dict_new.values()):
@@ -536,6 +557,7 @@ def compare_matmat(
         num_vecs: Number of vectors to test matmat. Default: ``2``.
         rtol: Relative tolerance for the comparison. Default: ``1e-5``.
         atol: Absolute tolerance for the comparison. Default: ``1e-8``.
+
     """
     dt = op.dtype
     dev = op.device
@@ -591,6 +613,7 @@ def compare_consecutive_matmats(
         num_vecs: Number of vectors to test on.
         rtol: Relative tolerance for the comparison. Default: ``1e-5``.
         atol: Absolute tolerance for the comparison. Default: ``1e-8``.
+
     """
     tol = {"atol": atol, "rtol": rtol}
 
@@ -635,6 +658,7 @@ def compare_matmat_expectation(
         rtol: Relative tolerance for the comparison. Default: ``1e-5``.
         atol: Absolute tolerance for the comparison. Will be multiplied by the maximum
             absolute value of the ground truth. Default: ``1e-8``.
+
     """
     dt, dev = op.dtype, op.device
     _, x, _ = rand_accepted_formats(
@@ -697,6 +721,7 @@ def check_estimator_convergence(
             Default: ``100``.
         target_rel_error: Relative error for considering the estimator converged.
             Default: ``1e-3``.
+
     """
     used_matvecs, converged = 0, False
 
@@ -714,6 +739,9 @@ def check_estimator_convergence(
         Args:
             a_true: The true value.
             a: The estimated value.
+
+        Returns:
+            Relative infinity norm error.
         """
         assert a.shape == a_true.shape
         return (a - a_true).abs().max() / a_true.abs().max()
@@ -743,6 +771,7 @@ def _test_inplace_activations(
     Args:
         linop_cls: The linear operator class to test.
         dev: The device to run the test on.
+
     """
     manual_seed(0)
     model = Sequential(Linear(6, 3), ReLU(inplace=True), Linear(3, 2)).to(dev)
@@ -794,6 +823,7 @@ def _test_property(  # noqa: C901
             operator.
         rtol: Relative tolerance for the comparison. Default: ``1e-5``.
         atol: Absolute tolerance for the comparison. Default: ``1e-8``.
+
     """
     # Create instance of linear operator
     linop = linop_cls(
@@ -856,6 +886,7 @@ def _test_save_and_load_state_dict(
 
     Args:
         linop_cls: The linear operator class to test.
+
     """
     manual_seed(0)
     batch_size, D_in, D_out = 4, 3, 2
@@ -983,6 +1014,7 @@ def _test_ekfac_closer_to_exact_than_kfac(
         exclude: Parameter to exclude.
         fisher_type: The type of Fisher approximation.
         kfac_approx: THe type of KFAC approximation.
+
     """
     # Compute exact block-wise ground truth quantity.
     linop_cls = {

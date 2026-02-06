@@ -39,6 +39,7 @@ class GPTWrapper(Module):
 
         Args:
             gpt: The nanoGPT model.
+
         """
         super().__init__()
         self.gpt = gpt

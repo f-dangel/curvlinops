@@ -12,6 +12,7 @@ def test_GGNLinearOperator_matvec(case):
 
     Args:
         case: Tuple of model, loss function, parameters, data, and batch size getter.
+
     """
     model_func, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
 

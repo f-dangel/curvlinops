@@ -1,4 +1,5 @@
-r"""
+r"""Work with submatrices of linear operators.
+
 Sub-matrices of linear operators
 ================================
 

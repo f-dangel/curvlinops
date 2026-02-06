@@ -1,4 +1,5 @@
-r"""
+r"""Compute matrix-vector products.
+
 Matrix-vector products
 ======================
 

@@ -34,6 +34,14 @@ def initialize_case(
     Iterable[Tuple[Tensor, Tensor]],
     Optional[Callable[[MutableMapping], int]],
 ]:
+    """Instantiate a test case and seed random generators.
+
+    Args:
+        case: Dictionary describing the case configuration.
+
+    Returns:
+        Tuple of model, loss, parameters, data, and optional batch size function.
+    """
     random.seed(case["seed"])
     manual_seed(case["seed"])
 
@@ -65,6 +73,12 @@ def case(
     Iterable[Tuple[Tensor, Tensor]],
     Optional[Callable[[MutableMapping], int]],
 ]:
+    """Provide a parametrized test case.
+
+    Yields:
+        Tuple of model, loss, parameters, data, and optional batch size function.
+
+    """
     case = request.param
     yield initialize_case(case)
 
@@ -79,6 +93,12 @@ def inv_case(
     Iterable[Tuple[Tensor, Tensor]],
     Optional[Callable[[MutableMapping], int]],
 ]:
+    """Provide a parametrized inverse test case.
+
+    Yields:
+        Tuple of model, loss, parameters, data, and optional batch size function.
+
+    """
     case = request.param
     yield initialize_case(case)
 
@@ -93,6 +113,12 @@ def cnn_case(
     Iterable[Tuple[Tensor, Tensor]],
     Optional[Callable[[MutableMapping], int]],
 ]:
+    """Provide a parametrized CNN test case.
+
+    Yields:
+        Tuple of model, loss, parameters, data, and optional batch size function.
+
+    """
     cnn_case = request.param
     yield initialize_case(cnn_case)
 
@@ -107,13 +133,19 @@ def non_deterministic_case(
     Iterable[Tuple[Tensor, Tensor]],
     Optional[Callable[[MutableMapping], int]],
 ]:
+    """Provide a parametrized non-deterministic test case.
+
+    Yields:
+        Tuple of model, loss, parameters, data, and optional batch size function.
+
+    """
     case = request.param
     yield initialize_case(case)
 
 
 @fixture(params=BLOCK_SIZES_FNS.values(), ids=BLOCK_SIZES_FNS.keys())
 def block_sizes_fn(request) -> Callable[[List[Parameter]], Optional[List[int]]]:
-    """Function to generate the ``block_sizes`` argument for a linear operator.
+    """Generate the ``block_sizes`` argument for a linear operator.
 
     Args:
         request: Pytest request object.
@@ -140,6 +172,7 @@ def kfac_exact_case(
     Yields:
         A neural network, the mean-squared error function, a list of parameters, and
         a data set.
+
     """
     case = request.param
     yield initialize_case(case)
@@ -160,6 +193,7 @@ def kfac_weight_sharing_exact_case(
     Yields:
         A neural network, the mean-squared error function, a list of parameters, and
         a data set.
+
     """
     case = request.param
     yield initialize_case(case)
@@ -180,6 +214,7 @@ def kfac_exact_one_datum_case(
     Yields:
         A neural network, loss function, a list of parameters, and
         a data set with a single datum.
+
     """
     case = request.param
     yield initialize_case(case)
@@ -200,6 +235,7 @@ def single_layer_case(
     Yields:
         A neural network, loss function, a list of parameters, and
         a data set with a single datum.
+
     """
     case = request.param
     yield initialize_case(case)
@@ -220,6 +256,7 @@ def single_layer_weight_sharing_case(
     Yields:
         A neural network, loss function, a list of parameters, and
         a data set with a single datum.
+
     """
     case = request.param
     yield initialize_case(case)

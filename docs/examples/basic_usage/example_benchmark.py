@@ -1,4 +1,5 @@
-r"""
+r"""Benchmark linear operators.
+
 Benchmarking linear operators
 =============================
 
@@ -370,6 +371,7 @@ def run_time_benchmark(  # noqa: C901
         op_str: The operation to benchmark.
         num_repeats: The number of repeats. Default is ``1``. Will use the smallest
             run time of all repeats as proxy for run time.
+
     """
     savepath = benchpath(linop_str, problem_str, device_str, op_str)
     if SKIP_EXISTING and path.exists(savepath):
@@ -630,6 +632,7 @@ def run_verbose(cmd: List[str]) -> CompletedProcess:
 
     Raises:
         CalledProcessError: If the command fails.
+
     """
     try:
         job = run(cmd, capture_output=True, text=True, check=True)

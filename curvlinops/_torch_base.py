@@ -55,6 +55,7 @@ class PyTorchLinearOperator:
     Attributes:
         SELF_ADJOINT: Whether the linear operator is self-adjoint. If ``True``,
             ``_adjoint`` does not need to be implemented. Default: ``False``.
+
     """
 
     SELF_ADJOINT: bool = False
@@ -67,6 +68,7 @@ class PyTorchLinearOperator:
         Args:
             in_shape: A list of shapes specifying the linear operator's input space.
             out_shape: A list of shapes specifying the linear operator's output space.
+
         """
         self._in_shape = [Size(s) for s in in_shape]
         self._out_shape = [Size(s) for s in out_shape]
@@ -128,6 +130,7 @@ class PyTorchLinearOperator:
 
         Raises:
             NotImplementedError: Must be implemented by the subclass.
+
         """
         raise NotImplementedError
 
@@ -147,6 +150,7 @@ class PyTorchLinearOperator:
 
         Raises:
             NotImplementedError: Must be implemented by the subclass.
+
         """
         raise NotImplementedError
 
@@ -167,6 +171,7 @@ class PyTorchLinearOperator:
 
         Raises:
             ValueError: If the input format is invalid.
+
         """
         if isinstance(X, Tensor):
             list_format = False
@@ -196,6 +201,7 @@ class PyTorchLinearOperator:
 
         Raises:
             ValueError: If the input tensor has an invalid shape.
+
         """
         if X.ndim > 2 or X.shape[0] != self.shape[1]:
             raise ValueError(
@@ -230,6 +236,7 @@ class PyTorchLinearOperator:
 
         Raises:
             ValueError: If the tensor entries in the list have invalid shapes.
+
         """
         if len(X) != len(self._in_shape):
             raise ValueError(
@@ -276,6 +283,7 @@ class PyTorchLinearOperator:
 
         Raises:
             ValueError: If the output tensor list has an invalid length or shape.
+
         """
         # verify output tensor list format
         if len(AX) != len(self._out_shape):
@@ -386,6 +394,7 @@ class PyTorchLinearOperator:
 
         Raises:
             NotImplementedError: Must be implemented by subclasses.
+
         """
         raise NotImplementedError
 
@@ -398,6 +407,7 @@ class PyTorchLinearOperator:
 
         Raises:
             NotImplementedError: Must be implemented by subclasses.
+
         """
         raise NotImplementedError
 
@@ -449,6 +459,7 @@ class _SumPyTorchLinearOperator(PyTorchLinearOperator):
         Raises:
             ValueError: If the shapes, devices, or dtypes of the two linear
                 operators do not match.
+
         """
         if A._in_shape != B._in_shape:
             raise ValueError(
@@ -521,6 +532,7 @@ class _ScalePyTorchLinearOperator(PyTorchLinearOperator):
         Args:
             A: The linear operator.
             scalar: The scaling factor.
+
         """
         super().__init__(A._in_shape, A._out_shape)
         self._A = A
@@ -578,6 +590,7 @@ class _ChainPyTorchLinearOperator(PyTorchLinearOperator):
         Raises:
             ValueError: If the shapes, devices, or dtypes of the two linear
                 operators are incompatible.
+
         """
         if A._in_shape != B._out_shape:
             raise ValueError(f"{A._in_shape=} does not match {B._out_shape}.")
@@ -646,6 +659,7 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
             Default: ``False``.
         FIXED_DATA_ORDER: Whether the data loader must return the same data
             for every iteration. Default: ``False``.
+
     """
 
     SUPPORTS_BLOCKS: bool = False
@@ -708,6 +722,7 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
             ValueError: If the sum of blocks does not equal the number of parameters.
             ValueError: If any block size is not positive.
             ValueError: If ``X`` is not a tensor and ``batch_size_fn`` is not specified.
+
         """
         if isinstance(next(iter(data))[0], MutableMapping) and batch_size_fn is None:
             raise ValueError(
@@ -803,6 +818,7 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
 
         Raises:
             NotImplementedError: Must be implemented by descendants.
+
         """
         raise NotImplementedError
 
@@ -819,6 +835,7 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
 
         Yields:
             Mini-batches ``(X, y)``.
+
         """
         data_iter = self._data
         dev = self.device
@@ -876,6 +893,7 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
         Yields:
             Tuple of ((input, label), prediction, loss, gradient) for each batch of
             the data.
+
         """
         for X, y in self._loop_over_data(desc=desc):
             prediction = self._model_func(X)
@@ -899,6 +917,7 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
 
         Raises:
             ValueError: If there is no loss function.
+
         """
         if self._loss_func is None:
             raise ValueError("No loss function specified.")
@@ -927,6 +946,7 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
 
         Raises:
             RuntimeError: If non-deterministic behavior is detected.
+
         """
         rtol, atol = 5e-5, 1e-6
 
@@ -999,6 +1019,7 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
 
         Raises:
             RuntimeError: If any of the pairs mismatch.
+
         """
         X1, X2 = Xs
         if isinstance(X1, MutableMapping) and isinstance(X2, MutableMapping):
@@ -1042,6 +1063,7 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
 
         Raises:
             RuntimeError: If the two matrix-vector products yield different results.
+
         """
         v = rand(self.shape[1], device=self.device, dtype=self.dtype)
         Av1 = self @ v
@@ -1062,6 +1084,7 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
 
         Raises:
             RuntimeError: If the device cannot be inferred.
+
         """
         devices = {p.device for p in self._params}
         if len(devices) != 1:
@@ -1077,6 +1100,7 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
 
         Raises:
             RuntimeError: If the data type cannot be inferred.
+
         """
         dtypes = {p.dtype for p in self._params}
         if len(dtypes) != 1:
