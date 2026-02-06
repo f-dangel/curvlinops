@@ -75,6 +75,47 @@ class PyTorchLinearOperator:
         self._out_shape_flat = [s.numel() for s in self._out_shape]
         self.shape = (sum(self._out_shape_flat), sum(self._in_shape_flat))
 
+    def __rmatmul__(
+        self, X: Union[List[Tensor], Tensor]
+    ) -> Union[List[Tensor], Tensor]:
+        """Multiply a tensor from the left onto the linear operator (``X @ A``).
+
+        Args:
+            X: A vector or matrix that left-multiplies the linear operator.
+                Assume the linear operator has total shape ``[M, N]``:
+                ``X`` can be of shape ``[M]`` (vector), or ``[K, M]`` (matrix).
+                The result will have shape ``[N]`` or ``[K, N]``.
+                ``X`` can also be a list of tensors representing vectors of shape
+                ``[*M1], [*M2], ...`` or matrices of shape ``[K, *M1], [K, *M2], ...``,
+                where ``M1, M2, ...`` are the output shapes of the operator.
+
+        Returns:
+            The result of the vector- or matrix-matrix multiplication in the same
+            format as ``X``.
+        """
+        free_dim = "leading"  # position of axis in X to parallelize products over
+        # Check and preprocess input, yielding a matrix in tensor list format with
+        # leading matrix dimension (unsqueezed for the vector case)
+        X, list_format, is_vec, num_vecs = self._check_input_and_preprocess(
+            X, self._out_shape, free_dim
+        )
+
+        # Convert from leading to trailing dimension for compatibility with _matmat
+        # Pre-processing always adds explicit matrix dimension, so always use movedim
+        XH = [x.conj().movedim(0, -1) for x in X]
+
+        # Use that X @ A = (A^H @ X^H)^H
+        AH = self.adjoint()
+        AH_XH = AH._matmat(XH)
+
+        # Apply final conjugate to get (A^H @ X^H)^H
+        AX = [r.conj().movedim(-1, 0) for r in AH_XH]
+
+        # Postprocess output back to original format
+        return self._check_output_and_postprocess(
+            AX, list_format, is_vec, num_vecs, self._in_shape, free_dim
+        )
+
     def __matmul__(
         self, X: Union[List[Tensor], Tensor, PyTorchLinearOperator]
     ) -> Union[List[Tensor], Tensor, _ChainPyTorchLinearOperator]:
