@@ -12,6 +12,7 @@ def test_JacobianLinearOperator(case):
 
     Args:
         case: Tuple of model, loss function, parameters, data, and batch size getter.
+
     """
     model_func, _, params, data, batch_size_fn = change_dtype(case, float64)
 
@@ -27,6 +28,7 @@ def test_TransposedJacobianLinearOperator(case):
 
     Args:
         case: Tuple of model, loss function, parameters, data, and batch size getter.
+
     """
     model_func, _, params, data, batch_size_fn = change_dtype(case, float64)
 

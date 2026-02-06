@@ -21,6 +21,7 @@ def split_list(x: Union[List, Tuple], sizes: List[int]) -> List[List]:
 
     Raises:
         ValueError: If the sum of ``sizes`` does not match the input list's length.
+
     """
     if len(x) != sum(sizes):
         raise ValueError(
@@ -37,7 +38,7 @@ def allclose_report(
     rtol: float = 1e-5,
     atol: float = 1e-8,
 ) -> bool:
-    """Same as ``allclose``, but prints entries that differ.
+    """Compare tensors like ``allclose`` and print entries that differ.
 
     Args:
         tensor1: First tensor for comparison.
@@ -87,6 +88,7 @@ def assert_is_square(A) -> int:
 
     Raises:
         ValueError: If the matrix is not square.
+
     """
     if len(A.shape) != 2 or A.shape[0] != A.shape[1]:
         raise ValueError(f"Operator must be square. Got shape {A.shape}.")
@@ -103,6 +105,7 @@ def assert_matvecs_subseed_dim(A, num_matvecs: int):
 
     Raises:
         ValueError: If the number of matrix-vector products is greater than the dimension.
+
     """
     if any(num_matvecs >= d for d in A.shape):
         raise ValueError(
@@ -120,6 +123,7 @@ def assert_divisible_by(num: int, divisor: int, name: str):
 
     Raises:
         ValueError: If the number is not divisible by the divisor.
+
     """
     if num % divisor != 0:
         raise ValueError(f"{name} ({num}) must be divisible by {divisor}.")

@@ -18,6 +18,7 @@ def test_store_activation(dev: device):
 
     Args:
         dev: Device on which to run the tests.
+
     """
     manual_seed(0)
     layers = [
@@ -70,6 +71,7 @@ def test_ActivationHessianLinearOperator(dev: device):
 
     Args:
         dev: Device on which to run the tests.
+
     """
     manual_seed(0)
     batch_size, num_classes = 2, 10

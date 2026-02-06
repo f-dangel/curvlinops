@@ -58,6 +58,7 @@ def make_grad_output_sampler(
             NotImplementedError: For unsupported loss functions.
             NotImplementedError: If the prediction does not have two dimensions.
             NotImplementedError: If binary classification labels are not binary.
+
         """
         if output.ndim != 2:
             raise NotImplementedError(f"Only 2d outputs supported. Got {output.shape}")
@@ -299,6 +300,7 @@ class FisherMCLinearOperator(CurvatureLinearOperator):
         SELF_ADJOINT: Whether the operator is self-adjoint. ``True`` for the Fisher.
         supported_losses: Supported loss functions.
         FIXED_DATA_ORDER: Whether the data order must be fix. ``True`` for MC-Fisher.
+
     """
 
     SELF_ADJOINT: bool = True
@@ -359,6 +361,7 @@ class FisherMCLinearOperator(CurvatureLinearOperator):
         Raises:
             NotImplementedError: If the loss function differs from ``MSELoss``,
                 BCEWithLogitsLoss, or ``CrossEntropyLoss``.
+
         """
         if not isinstance(loss_func, self.supported_losses):
             raise NotImplementedError(

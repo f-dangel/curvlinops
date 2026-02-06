@@ -142,6 +142,7 @@ class GGNLinearOperator(CurvatureLinearOperator):
 
     Attributes:
         SELF_ADJOINT: Whether the linear operator is self-adjoint. ``True`` for GGNs.
+
     """
 
     SELF_ADJOINT: bool = True

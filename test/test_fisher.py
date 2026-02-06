@@ -27,6 +27,9 @@ def test_FisherMCLinearOperator_expectation(case, max_repeats: int, mc_samples: 
 
     Args:
         case: Tuple of model, loss function, parameters, data, and batch size getter.
+        max_repeats: Number of repetitions for expectation estimation.
+        mc_samples: Number of Monte Carlo samples per estimate.
+
     """
     model_func, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
 

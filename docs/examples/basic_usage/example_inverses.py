@@ -1,4 +1,6 @@
-r"""Inverses (natural gradient)
+r"""Compute inverses for the natural gradient.
+
+Inverses (natural gradient)
 ===============================
 
 This example demonstrates how to work with inverses of linear operators.

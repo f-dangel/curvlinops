@@ -53,6 +53,7 @@ class ActivationHessianLinearOperator(CurvatureLinearOperator):
     Attributes:
         SELF_ADJOINT: Whether the linear operator is self-adjoint. ``True`` for the
             activation Hessian.
+
     """
 
     SELF_ADJOINT: bool = True
@@ -116,6 +117,7 @@ class ActivationHessianLinearOperator(CurvatureLinearOperator):
             >>> I = eye(hessian.shape[1])
             >>> allclose(hessian @ I, hessian2 @ I)
             True
+
         """
         self._activation = activation
 
@@ -208,6 +210,7 @@ class store_activation:
 
     Attributes:
         SUPPORTED_IO_TYPES: Supported types of in/outputs.
+
     """
 
     SUPPORTED_IO_TYPES: Set[str] = {"input", "output"}
@@ -235,6 +238,7 @@ class store_activation:
             ValueError: If the module name is not found in the model.
             ValueError: If the io_type is not supported.
             ValueError: If ``destination`` is not empty.
+
         """
         self._model = model
 
@@ -279,6 +283,7 @@ class store_activation:
             __exc_type: exception type
             __exc_value: exception value
             __traceback: exception traceback
+
         """
         for handle in self._hook_handles:
             handle.remove()
@@ -300,6 +305,7 @@ class store_activation:
 
         Raises:
             ValueError: If the requested in/output index does not exist.
+
         """
         idx, io_type = self._io_idx, self._io_type
 

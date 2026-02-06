@@ -34,7 +34,7 @@ def compute_eigenvalue_correction_linear_weight_sharing(
     aaT_eigvecs: Union[Tensor, None],
     _force_strategy: Optional[str] = None,
 ) -> Tensor:
-    r"""Computes eigenvalue corrections for a linear layer with weight sharing.
+    r"""Compute eigenvalue corrections for a linear layer with weight sharing.
 
     Chooses between two computational strategies depending on memory requirements.
 
@@ -176,6 +176,7 @@ def compute_eigenvalue_correction_linear_weight_sharing(
     compared to the per-example gradient approach. In terms of time, the
     Gramian contraction uses :math:`N (D_1^2 + D_2^2 + D_1 + D_2 + D_1 D_2) < N
     (3 D_1 D_2 + D_1^2 + D_2^2)` compared to the per-example gradient.
+
     """
     strategies = {"gramian", "per_example_gradients", None}
     if _force_strategy not in strategies:
@@ -246,6 +247,7 @@ class EKFACLinearOperator(KFACLinearOperator):
 
     Attributes:
         _SUPPORTED_FISHER_TYPE: Tuple with supported Fisher types.
+
     """
 
     _SUPPORTED_FISHER_TYPE: Tuple[FisherType] = (
@@ -335,6 +337,7 @@ class EKFACLinearOperator(KFACLinearOperator):
             batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
                 needs to be specified. The intended behavior is to consume the first
                 entry of the iterates from ``data`` and return their batch size.
+
         """
         super().__init__(
             model_func=model_func,
@@ -381,6 +384,7 @@ class EKFACLinearOperator(KFACLinearOperator):
 
         Raises:
             ValueError: If the output is not 2d and y is not 1d/2d.
+
         """
         # Our individual gradient implementation for EKFAC does not support computing
         # the individual gradients for any loss terms that might dependent on each other,
@@ -546,6 +550,7 @@ class EKFACLinearOperator(KFACLinearOperator):
 
         Raises:
             ValueError: If the module has multiple inputs.
+
         """
         if len(inputs) != 1:
             raise ValueError("Modules with multiple inputs are not supported.")
@@ -573,6 +578,7 @@ class EKFACLinearOperator(KFACLinearOperator):
             inputs: The layer's input tensors.
             output: The layer's output tensor.
             module_name: The name of the layer in the neural network.
+
         """
         tensor_hook = partial(
             self._accumulate_corrected_eigenvalues,
@@ -599,6 +605,7 @@ class EKFACLinearOperator(KFACLinearOperator):
             grad_output: The gradient w.r.t. the output.
             module: The layer for which corrected eigenvalues will be accumulated.
             module_name: The name of the layer in the neural network.
+
         """
         g = grad_output.data.detach()
         batch_size = g.shape[0]
@@ -801,6 +808,7 @@ class EKFACLinearOperator(KFACLinearOperator):
 
         Args:
             state_dict: State dictionary.
+
         """
         super().load_state_dict(state_dict)
 

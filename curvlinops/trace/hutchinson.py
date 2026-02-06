@@ -67,6 +67,7 @@ def hutchinson_trace(
         >>> assert rel_error_low_precision > rel_error_high_precision
         >>> round(tr_A, 4), round(tr_A_low_precision, 4), round(tr_A_high_precision, 4)
         (23.7836, -10.0279, 20.8427)
+
     """
     dim = assert_is_square(A)
     assert_matvecs_subseed_dim(A, num_matvecs)

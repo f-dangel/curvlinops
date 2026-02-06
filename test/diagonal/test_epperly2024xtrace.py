@@ -31,6 +31,7 @@ def xdiag_naive(A: Union[PyTorchLinearOperator, Tensor], num_matvecs: int) -> Te
         ValueError: If the linear operator is not square or if the number of matrix-
             vector products is not even or is greater than the dimension of the linear
             operator.
+
     """
     if len(A.shape) != 2 or A.shape[0] != A.shape[1]:
         raise ValueError(f"A must be square. Got shape {A.shape}.")
@@ -72,6 +73,7 @@ def test_xdiag(num_matvecs: int):
 
     Args:
         num_matvecs: Number of matrix-vector multiplications used by one estimator.
+
     """
     manual_seed(0)
     A = rand(30, 30)
@@ -88,6 +90,7 @@ def test_xdiag_matches_naive(num_matvecs: int, num_seeds: int = 5):
         num_matvecs: Number of matrix-vector multiplications used by one estimator.
         num_seeds: Number of different seeds to test the estimators with.
             Default: ``5``.
+
     """
     manual_seed(0)
     A = rand(30, 30).double()

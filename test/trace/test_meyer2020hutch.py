@@ -18,6 +18,7 @@ def test_hutchpp_trace(num_matvecs: int, distribution: str):
     Args:
         num_matvecs: Number of matrix-vector products used per estimate.
         distribution: Distribution of the random vectors used for the trace estimation.
+
     """
     manual_seed(0)
     A = rand(10, 10)

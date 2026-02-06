@@ -1,4 +1,5 @@
-r"""
+r"""Visualize curvature matrices.
+
 Visual tour of curvature matrices
 =================================
 
@@ -207,6 +208,11 @@ plot_config = bundles.icml2024(column="full", nrows=1.5 * rows, ncols=columns)
 
 
 def logabs(mat: Tensor, epsilon: float = 1e-6) -> Tensor:
+    """Return the log10 of the clamped absolute values.
+
+    Returns:
+        Transformed matrix.
+    """
     return mat.abs().clamp(min=epsilon).log10()
 
 
@@ -219,7 +225,12 @@ with plt.rc_context(plot_config):
 # That's because it is hard to recognize structure in the unaltered entries:
 
 
-def unchanged(mat):
+def unchanged(mat: Tensor) -> Tensor:
+    """Return the matrix unchanged.
+
+    Returns:
+        Unchanged matrix.
+    """
     return mat
 
 

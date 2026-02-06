@@ -1,4 +1,6 @@
-r"""Fisher-weighted Model Averaging
+r"""Perform Fisher-weighted model averaging.
+
+Fisher-weighted Model Averaging
 ===================================
 
 In this example we implement Fisher-weighted model averaging, a technique
