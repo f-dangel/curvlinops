@@ -246,12 +246,10 @@ def functorch_empirical_fisher(
         flatten_y = "... -> (...)"
         output_flat, y_flat = rearrange(output, flatten_output), rearrange(y, flatten_y)
 
-        return stack(
-            [
-                functional_call(loss_func, {}, (o_el, y_el))
-                for o_el, y_el in zip(output_flat, y_flat)
-            ]
-        )
+        return stack([
+            functional_call(loss_func, {}, (o_el, y_el))
+            for o_el, y_el in zip(output_flat, y_flat)
+        ])
 
     params_argnum = 2
     jac = jacrev(losses, argnums=params_argnum)(X, y, params_dict)

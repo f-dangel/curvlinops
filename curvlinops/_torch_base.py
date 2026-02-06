@@ -300,9 +300,9 @@ class PyTorchLinearOperator:
         if list_format:
             AX_processed = [Ax.squeeze(-1) for Ax in AX] if is_vec else AX
         else:
-            AX_processed = cat(
-                [Ax.reshape(s, num_vecs) for Ax, s in zip(AX, self._out_shape_flat)]
-            )
+            AX_processed = cat([
+                Ax.reshape(s, num_vecs) for Ax, s in zip(AX, self._out_shape_flat)
+            ])
             AX_processed = AX_processed.squeeze(-1) if is_vec else AX_processed
 
         return AX_processed

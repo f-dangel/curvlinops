@@ -602,12 +602,10 @@ class KFACLinearOperator(CurvatureLinearOperator):
         if self._fisher_type == FisherType.TYPE2:
             # Compute per-sample Hessian square root, then concatenate over samples.
             # Result has shape `(batch_size, num_classes, num_classes)`
-            hessian_sqrts = stack(
-                [
-                    loss_hessian_matrix_sqrt(out.detach(), target, self._loss_func)
-                    for out, target in zip(output.split(1), y.split(1))
-                ]
-            )
+            hessian_sqrts = stack([
+                loss_hessian_matrix_sqrt(out.detach(), target, self._loss_func)
+                for out, target in zip(output.split(1), y.split(1))
+            ])
 
             # Fix scaling caused by the batch dimension
             num_loss_terms = output.shape[0]

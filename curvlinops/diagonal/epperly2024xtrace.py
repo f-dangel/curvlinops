@@ -40,9 +40,9 @@ def xdiag(A: Union[PyTorchLinearOperator, Tensor], num_matvecs: int) -> Tensor:
 
     # draw random vectors and compute their matrix-vector products
     num_vecs = num_matvecs // 2
-    W = column_stack(
-        [random_vector(dim, "rademacher", A.device, A.dtype) for _ in range(num_vecs)]
-    )
+    W = column_stack([
+        random_vector(dim, "rademacher", A.device, A.dtype) for _ in range(num_vecs)
+    ])
     A_W = A @ W
 
     # compute the orthogonal basis for all test vectors, and its associated diagonal

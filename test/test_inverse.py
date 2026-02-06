@@ -103,13 +103,11 @@ def test_NeumannInverseLinearOperator_toy():
     https://en.wikipedia.org/w/index.php?title=Neumann_series&oldid=1131424698#Example
     """
     manual_seed(1234)
-    A = Tensor(
-        [
-            [0.0, 1.0 / 2.0, 1.0 / 4.0],
-            [5.0 / 7.0, 0.0, 1.0 / 7.0],
-            [3.0 / 10.0, 3.0 / 5.0, 0.0],
-        ]
-    ).double()
+    A = Tensor([
+        [0.0, 1.0 / 2.0, 1.0 / 4.0],
+        [5.0 / 7.0, 0.0, 1.0 / 7.0],
+        [3.0 / 10.0, 3.0 / 5.0, 0.0],
+    ]).double()
     A += eye_like(A)
     # eigenvalues of A: [1.82122892 0.47963837 0.69913271]
 
