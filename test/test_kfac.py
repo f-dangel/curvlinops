@@ -262,6 +262,9 @@ def test_kfac_mc_weight_sharing(
     Args:
         kfac_weight_sharing_exact_case: A fixture that returns a model, loss function,
             list of parameters, and data.
+        separate_weight_and_bias: Whether to treat weights and biases as separate blocks.
+        exclude: Which parameters to exclude. Can be ``'weight'``, ``'bias'``, or
+            ``None``.
         setting: The weight-sharing setting to use. Can be ``KFACType.EXPAND`` or
             ``KFACType.REDUCE``.
         shuffle: Whether to shuffle the parameters before computing the KFAC matrix.
@@ -322,6 +325,7 @@ def test_kfac_one_datum(
     exclude: str,
     shuffle: bool,
 ):
+    """Test KFAC for the one-datum exact case."""
     model, loss_func, params, data, batch_size_fn = kfac_exact_one_datum_case
     params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
@@ -366,6 +370,7 @@ def test_kfac_mc_one_datum(
     exclude: str,
     shuffle: bool,
 ):
+    """Test KFAC-MC for the one-datum exact case."""
     model, loss_func, params, data, batch_size_fn = change_dtype(
         kfac_exact_one_datum_case, float64
     )
@@ -421,6 +426,7 @@ def test_kfac_ef_one_datum(
     exclude: str,
     shuffle: bool,
 ):
+    """Test empirical Fisher KFAC for the one-datum exact case."""
     model, loss_func, params, data, batch_size_fn = kfac_exact_one_datum_case
     params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
@@ -870,7 +876,7 @@ def test_forward_only_fisher_type_exact_case(
     GGN(W) = 2 * R * [I \otimes (\sum_n x_n x_n^T)] = 2 / C * FOOF(W).
 
     Args:
-        kfac_exact_case: A fixture that returns a model, loss function, list of
+        single_layer_case: A fixture that returns a model, loss function, list of
             parameters, and data.
         shuffle: Whether to shuffle the parameters before computing the KFAC matrix.
         exclude: Which parameters to exclude. Can be ``'weight'``, ``'bias'``,

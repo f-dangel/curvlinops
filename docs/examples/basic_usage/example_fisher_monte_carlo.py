@@ -1,5 +1,4 @@
-r"""
-Monte-Carlo approximation of the Fisher
+r"""Monte-Carlo approximation of the Fisher
 =======================================
 
 In this tutorial, we will compare two approaches to compute the Fisher
@@ -225,7 +224,7 @@ residual_norms = [matrix_norm(res).item() for res in residual_snapshots]
 
 
 def transform(mat: Tensor, epsilon: float = 1e-5) -> Tensor:
-    """Transformation applied to the matrix before plotting.
+    """Transform the matrix before plotting.
 
     Applies element-wise absolute value, shifts by epsilon, then takes the
     element-wise logarithm.
@@ -235,7 +234,7 @@ def transform(mat: Tensor, epsilon: float = 1e-5) -> Tensor:
         epsilon: Small shift to avoid taking the log of 0.
 
     Returns:
-        Transformed matrix
+        Transformed matrix.
     """
     return (mat.abs() + epsilon).log10()
 

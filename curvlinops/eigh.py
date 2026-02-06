@@ -120,7 +120,7 @@ class EighDecomposedLinearOperator(PyTorchLinearOperator):
         return self._eigenvalues.sum()
 
     def det(self) -> Tensor:
-        """Determinant of the eigendecomposition operator.
+        """Return the determinant of the eigendecomposition operator.
 
         For Q diag(λ) Q^T, the determinant is prod(λ).
 
