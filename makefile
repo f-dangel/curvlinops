@@ -29,8 +29,6 @@ help:
 	@echo "        Run ruff check on the project without fixing errors"
 	@echo "conda-env"
 	@echo "        Create conda environment 'curvlinops' with dev setup"
-	@echo "pydocstyle-check"
-	@echo "        Run pydocstyle (docstring check) on the project"
 
 .PHONY: install
 
@@ -88,11 +86,6 @@ ruff:
 ruff-check:
 	@ruff check . --preview
 
-.PHONY: pydocstyle-check
-
-pydocstyle-check:
-	@pydocstyle --count .
-
 .PHONY: conda-env
 
 conda-env:
@@ -103,4 +96,3 @@ conda-env:
 lint:
 	make ruff-format-check
 	make ruff-check
-	make pydocstyle-check

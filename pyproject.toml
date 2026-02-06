@@ -69,7 +69,6 @@ test = [
 # Dependencies needed for linting.
 lint = [
     "ruff",
-    "pydocstyle",
 ]
 
 # Dependencies needed to build/view the documentation.
@@ -88,13 +87,6 @@ docs = [
 #                       Development tool configurations                       #
 ###############################################################################
 [tool.setuptools_scm]
-
-[tool.pydocstyle]
-convention = "google"
-match = '.*\.py$'
-# subdirectories cannot be included or excluded
-# https://github.com/PyCQA/pydocstyle/issues/363
-match_dir = '^(?!.*(?:test|\.git|docs)).*'
 
 [tool.ruff]
 line-length = 88
