@@ -114,6 +114,10 @@ extend-select = [
     "DOC502",
 ]
 ignore = [
+    # Multi-line docstring summary should start on the second line, conflicts D212
+    "D213",
+    # Blank line before a class docstring, conflicts D211
+    "D203",
     # E501 max-line-length (replaced by B950 (max-line-length + 10%))
     "E501",
     # C408 use {} instead of dict() (ignored because pytorch uses dict)
@@ -171,7 +175,7 @@ exclude = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# Add any per-file ignores here if needed
+"docs/examples/basic_usage/example_*.py" = ["D400", "D205"]
 
 [tool.ruff.lint.flake8-bugbear]
 extend-immutable-calls = ["pytest.raises", "pytest.warns", "pytest.mark.skip"]

@@ -1,6 +1,4 @@
-r"""Compute eigenvalues.
-
-Eigenvalues
+r"""Eigenvalues
 ===============
 
 This example demonstrates how to compute a subset of eigenvalues of a linear

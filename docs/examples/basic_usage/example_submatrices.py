@@ -1,6 +1,4 @@
-r"""Work with submatrices of linear operators.
-
-Sub-matrices of linear operators
+r"""Sub-matrices of linear operators
 ================================
 
 This tutorial explains how to create linear operators that correspond to a sub-matrix

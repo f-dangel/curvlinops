@@ -1,6 +1,4 @@
-r"""Use Huggingface LLMs with Curvlinops.
-
-Usage with Huggingface LLMs
+r"""Usage with Huggingface LLMs
 ===============================
 
 This example demonstrates how to work with Huggingface (HF) language models.

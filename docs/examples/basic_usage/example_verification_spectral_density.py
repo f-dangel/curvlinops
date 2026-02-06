@@ -1,6 +1,4 @@
-"""Verify spectral density estimation.
-
-Spectral density estimation (verification)
+"""Spectral density estimation (verification)
 =============================================
 
 In this example we will use the spectral density estimation techniques of

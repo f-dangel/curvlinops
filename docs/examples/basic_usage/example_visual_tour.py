@@ -1,6 +1,4 @@
-r"""Visualize curvature matrices.
-
-Visual tour of curvature matrices
+r"""Visual tour of curvature matrices
 =================================
 
 This tutorial visualizes different curvature matrices for a model with

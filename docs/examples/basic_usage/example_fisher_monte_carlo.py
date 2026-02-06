@@ -1,6 +1,4 @@
-r"""Approximate the Fisher matrix with Monte Carlo.
-
-Monte-Carlo approximation of the Fisher
+r"""Monte-Carlo approximation of the Fisher
 =======================================
 
 In this tutorial, we will compare two approaches to compute the Fisher
