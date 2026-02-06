@@ -146,7 +146,7 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
         return stack([S.trace() for S in self._factors]).prod()
 
     def det(self) -> Tensor:
-        """Determinant of the Kronecker product.
+        """Compute the determinant of the Kronecker product.
 
         For square matrices S_1 (n_1×n_1), S_2 (n_2×n_2), ..., S_k (n_k×n_k):
         det(S_1 ⊗ S_2 ⊗ ... ⊗ S_k) = ∏_i det(S_i)^(∏_{j≠i} n_j)
@@ -190,7 +190,7 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
         use_exact_damping: bool = False,
         retry_double_precision: bool = True,
     ):
-        """Return the inverse of the Kronecker product linear operator.
+        r"""Return the inverse of the Kronecker product linear operator.
 
         Args:
             damping: Damping value applied to all Kronecker factors. Default: ``0.0``.
@@ -200,7 +200,7 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
             min_damping: Minimum damping value. Only used if
                 ``use_heuristic_damping`` is ``True``.
             use_exact_damping: Whether to use exact damping, i.e. to invert
-                :math:`(A \\otimes B) + \\text{damping}\\; \\mathbf{I}`.
+                :math:`(A \otimes B) + \text{damping}\; \mathbf{I}`.
             retry_double_precision: Whether to retry Cholesky decomposition used for
                 inversion in double precision.
 
