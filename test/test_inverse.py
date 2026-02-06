@@ -138,6 +138,7 @@ def test_NeumannInverseLinearOperator_toy():
     compare_consecutive_matmats(inv_B_neumann)
     compare_matmat(inv_B_neumann, inv_B, **tols)
 
+
 """KFACInverseLinearOperator with KFACLinearOperator tests."""
 
 
@@ -546,6 +547,7 @@ def test_KFAC_inverse_from_state_dict(
     compare_state_dicts(inv_kfac.state_dict(), inv_kfac_new.state_dict())
     test_vec = rand(kfac.shape[1])
     assert allclose_report(inv_kfac @ test_vec, inv_kfac_new @ test_vec)
+
 
 """KFACInverseLinearOperator with EKFACLinearOperator tests."""
 
