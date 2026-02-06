@@ -175,7 +175,14 @@ exclude = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"docs/examples/basic_usage/example_*.py" = ["D400", "D205"]
+"docs/examples/basic_usage/example_*.py" = [
+    # First line should end with a period
+    "D400",
+    # 1 blank line required between summary line and description
+    "D205",
+    # First line should end with a period, question mark, or exclamation point
+    "D415"
+]
 
 [tool.ruff.lint.flake8-bugbear]
 extend-immutable-calls = ["pytest.raises", "pytest.warns", "pytest.mark.skip"]
