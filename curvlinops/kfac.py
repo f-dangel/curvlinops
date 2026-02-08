@@ -26,10 +26,8 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, TypeVar
 from warnings import warn
 
 from einops import einsum, rearrange, reduce
-from torch import Generator, Tensor, cat, empty, eye
-from torch.func import grad
-from torch import autograd
-from torch.func import vmap
+from torch import Generator, Tensor, autograd, cat, empty, eye
+from torch.func import grad, vmap
 from torch.nn import (
     BCEWithLogitsLoss,
     Conv2d,
