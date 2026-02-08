@@ -1,13 +1,14 @@
 """Utility functions related to KFAC."""
 
 from math import sqrt
-from typing import Callable, Generator, Tuple, Union
+from typing import Callable, Tuple, Union
 from warnings import warn
 
 from einconv import index_pattern
 from einconv.utils import get_conv_paddings
 from einops import einsum, rearrange, reduce
 from torch import (
+    Generator,
     Tensor,
     as_tensor,
     block_diag,
