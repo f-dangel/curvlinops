@@ -260,25 +260,26 @@ def make_grad_output_sampler(
 
         Raises:
             NotImplementedError: For unsupported loss functions.
-            NotImplementedError: If binary classification labels are not binary.
         """
+        # Number of losses contributed from a datum's sequence-valued prediction
+        num_features = (
+            output_one_datum.numel() / output_one_datum.shape[0]
+            if isinstance(loss_func, CrossEntropyLoss)
+            else output_one_datum.numel()
+        )
+        # Reduction factor from accumulation over losses in a sequence
         reduction = loss_func.reduction
+        c = {"sum": 1.0, "mean": 1.0 / num_features}[reduction]
 
         if isinstance(loss_func, MSELoss):
-            num_features = output_one_datum.numel()
-            c = {"sum": 1.0, "mean": 1.0 / num_features}[reduction]
             dev, dt = output_one_datum.device, output_one_datum.dtype
             std = as_tensor(sqrt(2 * c), device=dev, dtype=dt)
             mean = zeros(num_samples, *output_one_datum.shape, device=dev, dtype=dt)
-            return normal(mean, std, generator=generator)
+            grad_samples = normal(mean, std, generator=generator)
 
         elif isinstance(loss_func, CrossEntropyLoss):
-            # First dim after batch is class dimension, rest are sequence dims
-            C = output_one_datum.shape[0]
-            num_features = output_one_datum.shape[1:].numel()
-            c = {"sum": 1.0, "mean": 1.0 / num_features}[reduction]
-
             # Flatten sequence dimensions: [C, *seq] -> [C, seq_flat]
+            C = output_one_datum.shape[0]
             output_flat = output_one_datum.unsqueeze(-1).flatten(start_dim=1)
             prob = softmax(output_flat, dim=0)  # [C, seq_flat]
 
@@ -299,25 +300,24 @@ def make_grad_output_sampler(
 
             # Reshape back to original sequence dimensions
             out_shape = (num_samples, *output_one_datum.shape)
-            return grad_samples_flat.reshape(out_shape)
+            grad_samples = grad_samples_flat.reshape(out_shape)
 
         elif isinstance(loss_func, BCEWithLogitsLoss):
             if warn_BCEWithLogitsLoss_targets_unchecked:
                 _warn_BCEWithLogitsLoss_targets_unchecked(loss_func)
 
-            num_features = output_one_datum.numel()
-            # All dimensions after batch are feature dimensions
-            c = {"sum": 1.0, "mean": 1.0 / num_features}[reduction]
             prob = output_one_datum.sigmoid()
             # repeat ``num_sample`` times along a new leading axis
             prob = prob.unsqueeze(0).expand(num_samples, *prob.shape)
             sample = prob.bernoulli(generator=generator)
-            return sqrt(c) * (prob - sample)
+            grad_samples = sqrt(c) * (prob - sample)
 
         else:
             raise NotImplementedError(
                 f"Supported losses: {(MSELoss, CrossEntropyLoss, BCEWithLogitsLoss)}"
             )
+
+        return grad_samples
 
     # Parallelize over predictions and targets
     return vmap(
