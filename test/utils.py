@@ -909,6 +909,8 @@ def _test_save_and_load_state_dict(
         CrossEntropyLoss(),
         params,
         [(X, y)],
+        # Avoid computing linop because y has the wrong shape for CE
+        check_deterministic=False,
     )
     with raises(ValueError, match="loss"):
         linop_new.load_state_dict(load(PATH, weights_only=False))
