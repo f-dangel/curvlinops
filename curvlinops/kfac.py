@@ -26,8 +26,9 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, TypeVar
 from warnings import warn
 
 from einops import einsum, rearrange, reduce
-from torch import Generator, Tensor, cat, eye
-from torch.autograd import grad
+from torch import Generator, Tensor, cat, empty, eye
+from torch.func import grad
+from torch import autograd
 from torch.func import vmap
 from torch.nn import (
     BCEWithLogitsLoss,
@@ -48,6 +49,7 @@ from curvlinops.kfac_utils import (
     loss_hessian_matrix_sqrt,
     make_grad_output_sampler,
 )
+from curvlinops.utils import make_functional_call
 
 FactorType = TypeVar(
     "FactorType", Optional[Tensor], Tuple[Optional[Tensor], Optional[Tensor]]
@@ -319,15 +321,49 @@ class KFACLinearOperator(CurvatureLinearOperator):
             A function that computes the gradients to be backpropagated from the
             network's output and labels.
         """
+        # Monte-Carlo case
         grad_output_sampler = make_grad_output_sampler(
             loss_func, warn_BCEWithLogitsLoss_targets_unchecked=False
         )
+        # Type2 case
         hessian_sqrts_computer = vmap(
             partial(
                 loss_hessian_matrix_sqrt, warn_BCEWithLogitsLoss_targets_unchecked=False
             ),
             in_dims=(0, 0, None),  # Parallelize over data, not over loss function
         )
+
+        # Empirical case
+        functional_loss_func = make_functional_call(
+            loss_func, []
+        )  # prediction, y -> loss
+
+        def scaled_datum_loss(prediction: Tensor, y: Tensor) -> Tensor:
+            """Compute a scaled version of the loss for one sample.
+
+            The loss is scaled to adjust for mean reduction over the sequence dimensions.
+
+            Args:
+                prediction: Model prediction for one sample, without batch dimension.
+                y: Target for one sample, without batch dimension.
+
+            Returns:
+                Scaled loss for one sample.
+            """
+            # If reduction is mean, the loss will be divided by C by MSE/BCE, but we
+            # only want it to be divided by sqrt(C)
+            (C,) = prediction.shape
+            scale = (
+                sqrt(C)
+                if (
+                    isinstance(loss_func, (BCEWithLogitsLoss, MSELoss))
+                    and loss_func.reduction == "mean"
+                )
+                else 1.0
+            )
+            return scale * functional_loss_func(prediction.unsqueeze(0), y.unsqueeze(0))
+
+        empirical_grad_computer = vmap(grad(scaled_datum_loss, argnums=0))
 
         def compute_grad_outputs(
             output: Union[MutableMapping, Tensor], y: Tensor
@@ -352,10 +388,16 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
             if self._fisher_type == FisherType.MC:
                 return grad_output_sampler(output, self._mc_samples, y, self._generator)
-            if self._fisher_type == FisherType.TYPE2:
+            elif self._fisher_type == FisherType.TYPE2:
                 return hessian_sqrts_computer(output, y, self._loss_func).movedim(-1, 0)
+            elif self._fisher_type == FisherType.EMPIRICAL:
+                return empirical_grad_computer(output, y).unsqueeze(0)
+            elif self._fisher_type == FisherType.FORWARD_ONLY:
+                return empty(0, *output.shape, dtype=output.dtype, device=output.device)
             else:
-                raise NotImplementedError
+                raise NotImplementedError(
+                    f"Unsupported Fisher type: {self._fisher_type}."
+                )
 
         return compute_grad_outputs
 
@@ -594,30 +636,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
             y = rearrange(y, "batch ... c -> (batch ...) c")
         return output, y
 
-    def _maybe_adjust_loss_scale(self, loss: Tensor, output: Tensor) -> Tensor:
-        """Adjust the scale of the loss tensor if necessary.
-
-        The ``BCEWithLogitsLoss`` and ``MSELoss`` also average over the output dimension
-        in addition to the batch dimension. We adjust the scale of the loss to correct
-        for this.
-
-        Args:
-            loss: The loss tensor to adjust.
-            output: The model's output.
-
-        Returns:
-            The scaled loss tensor.
-        """
-        if (
-            isinstance(self._loss_func, (BCEWithLogitsLoss, MSELoss))
-            and self._loss_func.reduction == "mean"
-        ):
-            # ``BCEWithLogitsLoss`` and ``MSELoss`` also average over non-batch
-            # dimensions. We have to scale the loss to incorporate this scaling.
-            _, C = output.shape
-            loss *= sqrt(C)
-        return loss
-
     def _compute_loss_and_backward(self, output: Tensor, y: Tensor):
         r"""Compute the loss and the backward pass(es) required for KFAC.
 
@@ -638,36 +656,37 @@ class KFACLinearOperator(CurvatureLinearOperator):
                 f"Got {output.ndim=} and {y.ndim=}."
             )
 
-        if self._fisher_type in {FisherType.TYPE2, FisherType.MC}:
-            # Compute the gradients w.r.t. the network's output that will be
-            # backpropagated to compute the KFAC approximation
-            # - TYPE2: Hessian square root columns
-            # - MC: Monte-Carlo approximation of the the Hessian square root
-            grad_outputs = self._grad_outputs_computer(output.detach(), y)
+        if self._fisher_type not in self._SUPPORTED_FISHER_TYPE:
+            raise ValueError(
+                f"Invalid fisher_type: {self._fisher_type}. "
+                + f"Supported: {self._SUPPORTED_FISHER_TYPE}."
+            )
 
-            # Fix scaling caused by the batch dimension
-            num_loss_terms = output.shape[0]
-            reduction = self._loss_func.reduction
-            scale = {"sum": 1.0, "mean": 1.0 / num_loss_terms}[reduction]
-            grad_outputs.mul_(scale)
+        # Compute the gradients w.r.t. the network's output that will be
+        # backpropagated to compute the KFAC approximation
+        # - TYPE2: Hessian square root columns
+        # - MC: Monte-Carlo approximation of the the Hessian square root
+        # - EMPIRICAL: Empirical gradients
+        # - FORWARD_ONLY: No vectors
+        grad_outputs = self._grad_outputs_computer(output.detach(), y)
 
-            # Backpropagate all vectors
-            num_vectors = grad_outputs.shape[0]
-            for v in range(num_vectors):
-                grad(
-                    output,
-                    self._params,
-                    grad_outputs=grad_outputs[v],
-                    retain_graph=v < num_vectors - 1,
-                )
+        # Fix scaling caused by the batch dimension
+        num_loss_terms = output.shape[0]
+        reduction = self._loss_func.reduction
+        scale = {"sum": 1.0, "mean": 1.0 / num_loss_terms}[reduction]
+        grad_outputs.mul_(scale)
 
-        elif self._fisher_type == FisherType.EMPIRICAL:
-            # TODO Implement grad_output sampler and remove _maybe_adjust_loss_scale
-            loss = self._loss_func(output, y)
-            loss = self._maybe_adjust_loss_scale(loss, output)
-            grad(loss, self._params)
+        # Backpropagate all vectors
+        num_vectors = grad_outputs.shape[0]
+        for v in range(num_vectors):
+            autograd.grad(
+                output,
+                self._params,
+                grad_outputs=grad_outputs[v],
+                retain_graph=v < num_vectors - 1,
+            )
 
-        elif self._fisher_type == FisherType.FORWARD_ONLY:
+        if self._fisher_type == FisherType.FORWARD_ONLY:
             # Since FOOF sets the gradient covariance Kronecker factors to the identity,
             # we don't need to do a backward pass. See https://arxiv.org/abs/2201.12250.
             # We choose to set the gradient covariance to the identity explicitly for
@@ -683,12 +702,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
                 self._gradient_covariances[mod_name] = eye(
                     param.shape[0], dtype=param.dtype, device=self.device
                 )
-
-        else:
-            raise ValueError(
-                f"Invalid fisher_type: {self._fisher_type}. "
-                + f"Supported: {self._SUPPORTED_FISHER_TYPE}."
-            )
 
     def _register_tensor_hook_on_output_to_accumulate_gradient_covariance(
         self, module: Module, inputs: Tuple[Tensor], output: Tensor, module_name: str
