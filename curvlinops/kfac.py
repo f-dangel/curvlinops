@@ -526,7 +526,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
             module = self._model_func.get_submodule(mod_name)
 
             # input covariance only required for weights
-            if "weight" in param_pos.keys():
+            if "weight" in param_pos:
                 hook_handles.append(
                     module.register_forward_pre_hook(
                         partial(
@@ -876,10 +876,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
             x = reduce(x, "batch ... d_in -> batch d_in", "mean")
 
         params = self._mapping[module_name]
-        if (
-            "weight" in params.keys()
-            and "bias" in params.keys()
-            and not self._separate_weight_and_bias
+        if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+            params.keys()
         ):
             x = cat([x, x.new_ones(x.shape[0], 1)], dim=1)
 
@@ -977,7 +975,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
             ):
                 _trace += input_covariances[mod_name].trace() * tr_ggT
             else:
-                for p_name in param_pos.keys():
+                for p_name in param_pos:
                     _trace += tr_ggT * (
                         input_covariances[mod_name].trace() if p_name == "weight" else 1
                     )
@@ -1083,7 +1081,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
                 squared_frob_aaT = input_covariances[mod_name].square().sum()
                 _frobenius_norm += squared_frob_aaT * squared_frob_ggT
             else:
-                for p_name in param_pos.keys():
+                for p_name in param_pos:
                     _frobenius_norm += squared_frob_ggT * (
                         input_covariances[mod_name].square().sum()
                         if p_name == "weight"
