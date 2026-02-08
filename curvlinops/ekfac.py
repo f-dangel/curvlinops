@@ -690,7 +690,7 @@ class EKFACLinearOperator(KFACLinearOperator):
         return _trace
 
     def det(self) -> Tensor:
-        r"""Determinant of the EKFAC approximation.
+        r"""Compute the determinant of the EKFAC approximation.
 
         Will call ``compute_kronecker_factors`` and ``compute_eigenvalue_correction`` if
         either of them has not been called before.

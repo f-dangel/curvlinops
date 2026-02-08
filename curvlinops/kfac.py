@@ -918,7 +918,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
         return _trace
 
     def det(self) -> Tensor:
-        r"""Determinant of the KFAC approximation.
+        r"""Compute the determinant of the KFAC approximation.
 
         Will call ``compute_kronecker_factors`` if it has not been called before.
         Uses the property of the Kronecker product that
