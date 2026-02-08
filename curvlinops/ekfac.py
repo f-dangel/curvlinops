@@ -671,8 +671,7 @@ class EKFACLinearOperator(KFACLinearOperator):
         r"""Trace of the EKFAC approximation.
 
         Will call ``compute_kronecker_factors`` and ``compute_eigenvalue_correction`` if
-        either of them has not been called before and will cache the trace until one of
-        them is called again.
+        either of them has not been called before.
 
         Returns:
             Trace of the EKFAC approximation.
@@ -694,8 +693,7 @@ class EKFACLinearOperator(KFACLinearOperator):
         r"""Determinant of the EKFAC approximation.
 
         Will call ``compute_kronecker_factors`` and ``compute_eigenvalue_correction`` if
-        either of them has not been called before and will cache the determinant until
-        one of them is called again.
+        either of them has not been called before.
 
         Returns:
             Determinant of the EKFAC approximation.
@@ -718,8 +716,7 @@ class EKFACLinearOperator(KFACLinearOperator):
 
         More numerically stable than the ``det`` method.
         Will call ``compute_kronecker_factors`` and ``compute_eigenvalue_correction`` if
-        either of them has not been called before and will cache the logdet until one of
-        them is called again.
+        either of them has not been called before.
 
         Returns:
             Log determinant of the EKFAC approximation.
@@ -741,8 +738,7 @@ class EKFACLinearOperator(KFACLinearOperator):
         r"""Frobenius norm of the EKFAC approximation.
 
         Will call ``compute_kronecker_factors`` and ``compute_eigenvalue_correction`` if
-        either of them has not been called before and will cache the Frobenius norm
-        until one of them is called again.
+        either of them has not been called before.
 
         Returns:
             Frobenius norm of the EKFAC approximation.

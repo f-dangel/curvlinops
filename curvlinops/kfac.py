@@ -891,8 +891,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
     def trace(self) -> Tensor:
         r"""Trace of the KFAC approximation.
 
-        Will call ``compute_kronecker_factors`` if it has not been called before and
-        will cache the trace until ``compute_kronecker_factors`` is called again.
+        Will call ``compute_kronecker_factors`` if it has not been called before.
         Uses the property of the Kronecker product that
         :math:`\text{tr}(A \otimes B) = \text{tr}(A) \text{tr}(B)`.
 
@@ -921,8 +920,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
     def det(self) -> Tensor:
         r"""Determinant of the KFAC approximation.
 
-        Will call ``compute_kronecker_factors`` if it has not been called before and
-        will cache the determinant until ``compute_kronecker_factors`` is called again.
+        Will call ``compute_kronecker_factors`` if it has not been called before.
         Uses the property of the Kronecker product that
         :math:`\det(A \otimes B) = \det(A)^{m} \det(B)^{n}`,
         where
@@ -962,9 +960,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
         r"""Log determinant of the KFAC approximation.
 
         More numerically stable than the ``det`` method.
-        Will call ``compute_kronecker_factors`` if it has not been called before and
-        will cache the log determinant until ``compute_kronecker_factors`` is called
-        again. Uses the property of the Kronecker product that
+        Will call ``compute_kronecker_factors`` if it has not been called before.
+        Uses the property of the Kronecker product that
         :math:`\log \det(A \otimes B) = m \log \det(A) + n \log \det(B)`, where
         :math:`A \in \mathbb{R}^{n \times n}` and :math:`B \in \mathbb{R}^{m \times m}`.
 
@@ -1001,8 +998,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
     def frobenius_norm(self) -> Tensor:
         r"""Frobenius norm of the KFAC approximation.
 
-        Will call ``compute_kronecker_factors`` if it has not been called before and
-        will cache the Frobenius norm until ``compute_kronecker_factors`` is called again.
+        Will call ``compute_kronecker_factors`` if it has not been called before.
         Uses the property of the Kronecker product that
         :math:`\|A \otimes B\|_F = \|A\|_F \|B\|_F`.
 
