@@ -287,8 +287,9 @@ class KFACLinearOperator(CurvatureLinearOperator):
         self._input_covariances: Dict[str, Tensor] = {}
         self._gradient_covariances: Dict[str, Tensor] = {}
         self._mapping = self.compute_parameter_mapping(params, model_func)
-        if fisher_type == FisherType.MC:
-            self._grad_output_sampler = make_grad_output_sampler(loss_func)
+
+        # Function (prediction, label) -> grad_outputs for backpropagation
+        self._grad_outputs_computer = self._set_up_grad_outputs_computer(loss_func)
 
         super().__init__(
             model_func,
@@ -305,6 +306,58 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
         if check_deterministic:
             self._check_deterministic()
+
+    def _set_up_grad_outputs_computer(
+        self, loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss]
+    ) -> Callable[[Union[MutableMapping, Tensor], Tensor], Tensor]:
+        """Set up the function that computes network output gradients for KFAC.
+
+        Args:
+            loss_func: The loss function.
+
+        Returns:
+            A function that computes the gradients to be backpropagated from the
+            network's output and labels.
+        """
+        grad_output_sampler = make_grad_output_sampler(
+            loss_func, warn_BCEWithLogitsLoss_targets_unchecked=False
+        )
+        hessian_sqrts_computer = vmap(
+            partial(
+                loss_hessian_matrix_sqrt, warn_BCEWithLogitsLoss_targets_unchecked=False
+            ),
+            in_dims=(0, 0, None),  # Parallelize over data, not over loss function
+        )
+
+        def compute_grad_outputs(
+            output: Union[MutableMapping, Tensor], y: Tensor
+        ) -> Tensor:
+            """Compute the gradients that are backpropagated from the network's output.
+
+            Args:
+                output: Neural network prediction with batch axis.
+                y: Target labels with batch axis.
+
+            Returns:
+                Gradients to be backpropagated from the network's output as a tensor of
+                shape ``[num_vectors, *output.shape]`` where ``num_vectors`` depends on
+                the Fisher type.
+
+            Raises:
+                NotImplementedError: If ``fisher_type`` is not supported.
+            """
+            # NOTE Checking for binary labels is data-dependent and not supported in vmap.
+            # Therefore, we check outside vmap and then turn it off inside vmap
+            _check_binary_if_BCEWithLogitsLoss(y, self._loss_func)
+
+            if self._fisher_type == FisherType.MC:
+                return grad_output_sampler(output, self._mc_samples, y, self._generator)
+            if self._fisher_type == FisherType.TYPE2:
+                return hessian_sqrts_computer(output, y, self._loss_func).movedim(-1, 0)
+            else:
+                raise NotImplementedError
+
+        return compute_grad_outputs
 
     def _set_num_per_example_loss_terms(
         self, num_per_example_loss_terms: Optional[int]
@@ -585,55 +638,31 @@ class KFACLinearOperator(CurvatureLinearOperator):
                 f"Got {output.ndim=} and {y.ndim=}."
             )
 
-        if self._fisher_type == FisherType.TYPE2:
-            # Compute per-sample Hessian square root for each sample.
-            # Result has shape `(batch_size, *output[n].shape, *output[n].shape)`
-            # NOTE Checking for binary labels is data-dependent and not supported in vmap.
-            # Therefore, we check outside vmap and then turn it off inside vmap
-            _check_binary_if_BCEWithLogitsLoss(y, self._loss_func)
-            hessian_sqrts = vmap(
-                partial(
-                    loss_hessian_matrix_sqrt, check_binary_if_BCEWithLogitsLoss=False
-                ),
-                in_dims=(0, 0, None),  # Parallelize over data, not over loss function
-            )(output.detach(), y, self._loss_func)
+        if self._fisher_type in {FisherType.TYPE2, FisherType.MC}:
+            # Compute the gradients w.r.t. the network's output that will be
+            # backpropagated to compute the KFAC approximation
+            # - TYPE2: Hessian square root columns
+            # - MC: Monte-Carlo approximation of the the Hessian square root
+            grad_outputs = self._grad_outputs_computer(output.detach(), y)
 
             # Fix scaling caused by the batch dimension
             num_loss_terms = output.shape[0]
             reduction = self._loss_func.reduction
             scale = {"sum": 1.0, "mean": 1.0 / num_loss_terms}[reduction]
-            hessian_sqrts.mul_(scale)
+            grad_outputs.mul_(scale)
 
-            # For each column `c` of the matrix square root we need to backpropagate,
-            # but we can do this for all samples in parallel
-            num_cols = hessian_sqrts.shape[-1]
-            for c in range(num_cols):
-                batched_column = hessian_sqrts[:, :, c]
-                grad(
-                    (output * batched_column).sum(),
-                    self._params,
-                    retain_graph=c < num_cols - 1,
-                )
-
-        elif self._fisher_type == FisherType.MC:
-            # The sampled gradient
-            grad_output_samples = self._grad_output_sampler(
-                output.detach(), self._mc_samples, y, self._generator
-            )
-            # NOTE The sampled gradients do not account for reductions over the batch
-            # dimension. We need to add it in manually here.
-            if self._loss_func.reduction == "mean":
-                grad_output_samples = grad_output_samples / output.shape[0]
-
-            for mc in range(self._mc_samples):
+            # Backpropagate all vectors
+            num_vectors = grad_outputs.shape[0]
+            for v in range(num_vectors):
                 grad(
                     output,
                     self._params,
-                    grad_outputs=grad_output_samples[mc],
-                    retain_graph=mc != self._mc_samples - 1,
+                    grad_outputs=grad_outputs[v],
+                    retain_graph=v < num_vectors - 1,
                 )
 
         elif self._fisher_type == FisherType.EMPIRICAL:
+            # TODO Implement grad_output sampler and remove _maybe_adjust_loss_scale
             loss = self._loss_func(output, y)
             loss = self._maybe_adjust_loss_scale(loss, output)
             grad(loss, self._params)
