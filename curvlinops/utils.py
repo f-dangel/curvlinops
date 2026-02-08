@@ -37,7 +37,7 @@ def allclose_report(
     rtol: float = 1e-5,
     atol: float = 1e-8,
 ) -> bool:
-    """Same as ``allclose``, but prints entries that differ.
+    """Compare tensors like ``allclose`` and print entries that differ.
 
     Args:
         tensor1: First tensor for comparison.

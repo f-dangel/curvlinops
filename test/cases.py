@@ -34,11 +34,27 @@ DEVICES_IDS = [f"dev={d}" for d in DEVICES]
 
 
 class ModelWithDictInput(Module):
+    """Simple model that consumes a dict-like input."""
+
     def __init__(self, num_classes=2, nonlin=ReLU):
+        """Initialize the model.
+
+        Args:
+            num_classes: Number of output classes.
+            nonlin: Nonlinear activation constructor.
+        """
         super().__init__()
         self.net = Sequential(Linear(10, 5), nonlin(), Linear(5, num_classes))
 
     def forward(self, data: MutableMapping):
+        """Run the model on dict-like input data.
+
+        Args:
+            data: Mapping containing the input tensor under the ``"x"`` key.
+
+        Returns:
+            Model outputs.
+        """
         device = next(self.parameters()).device
         x = data["x"].to(device)
         return self.net(x)
@@ -276,7 +292,11 @@ NON_DETERMINISTIC_CASES_NO_DEVICE = []
 
 
 def _non_deterministic_case_dropout():
-    """Non-deterministic case due to dropout in the model."""
+    """Build a non-deterministic case due to dropout in the model.
+
+    Returns:
+        A case dictionary for dropout-based non-determinism.
+    """
     N, D_in, H, C = 3, 10, 5, 2
     num_batches = 4
     num_samples = N * num_batches
@@ -305,7 +325,11 @@ NON_DETERMINISTIC_CASES_NO_DEVICE += [_non_deterministic_case_dropout()]
 
 
 def _non_deterministic_case_batchnorm():
-    """Non-deterministic case due to Batchnorm in the model and shuffled batches."""
+    """Build a non-deterministic case due to Batchnorm and shuffled batches.
+
+    Returns:
+        A case dictionary for batchnorm-based non-determinism.
+    """
     N, D_in, H, C = 3, 10, 5, 2
     num_batches = 4
     num_samples = N * num_batches
@@ -337,7 +361,11 @@ NON_DETERMINISTIC_CASES_NO_DEVICE += [_non_deterministic_case_batchnorm()]
 
 
 def _non_deterministic_case_drop_last():
-    """Non-deterministic case due discarded samples if last batch is smaller than N."""
+    """Build a non-deterministic case due to dropping the last batch.
+
+    Returns:
+        A case dictionary for drop-last-based non-determinism.
+    """
     N, D_in, H, C = 3, 10, 5, 2
     num_batches = 4
     num_samples = N * num_batches
