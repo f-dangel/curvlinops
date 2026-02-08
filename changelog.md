@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Backward-incompatible:** (E)KFAC's `det, logdet, trace, frobenius_norm` properties are now functions and not in `state_dict` anymore
   ([PR](https://github.com/f-dangel/curvlinops/pull/232))
 
+- **Backward-incompatible** Reduce side effects in (E)KFAC's computation, modifying the entries of `state_dict`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/228))
+
 ### Fixed/Removed
 
 ### Internal
@@ -35,9 +38,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     ([PR](https://github.com/f-dangel/curvlinops/pull/211))
   - `EighDecomposedLinearOperator` for `eigh`-decomposed matrices `Q diag(λ) Q^T` with orthogonal `Q`
     ([PR](https://github.com/f-dangel/curvlinops/pull/210))
-
-- Reduce side effects in (E)KFAC's computation
-  ([PR](https://github.com/f-dangel/curvlinops/pull/228))
 
 - Generalize computing the loss function's Hessian square root for sequence-valued predictions
   ([PR](https://github.com/f-dangel/curvlinops/pull/231))
