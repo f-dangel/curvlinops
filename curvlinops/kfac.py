@@ -480,10 +480,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
             ggT = gradient_covariances[mod_name]
 
             # bias and weights are treated jointly
-            if (
-                not self._separate_weight_and_bias
-                and "weight" in param_pos.keys()
-                and "bias" in param_pos.keys()
+            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+                param_pos.keys()
             ):
                 w_pos, b_pos = param_pos["weight"], param_pos["bias"]
                 # v denotes the free dimension for treating multiple vectors in parallel
@@ -953,6 +951,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
         r"""Trace of the KFAC approximation.
 
         Will call ``compute_kronecker_factors`` if it has not been called before.
+        Uses the property of the Kronecker product that
         :math:`\text{tr}(A \otimes B) = \text{tr}(A) \text{tr}(B)`.
 
         Returns:
@@ -961,24 +960,22 @@ class KFACLinearOperator(CurvatureLinearOperator):
         input_covariances = self.representation["input_covariances"]
         gradient_covariances = self.representation["gradient_covariances"]
 
-        trace = 0.0
+        _trace = 0.0
         for mod_name, param_pos in self._mapping.items():
             tr_ggT = gradient_covariances[mod_name].trace()
-            if (
-                not self._separate_weight_and_bias
-                and "weight" in param_pos.keys()
-                and "bias" in param_pos.keys()
+            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+                param_pos.keys()
             ):
-                trace += input_covariances[mod_name].trace() * tr_ggT
+                _trace += input_covariances[mod_name].trace() * tr_ggT
             else:
                 for p_name in param_pos.keys():
-                    trace += tr_ggT * (
+                    _trace += tr_ggT * (
                         input_covariances[mod_name].trace() if p_name == "weight" else 1
                     )
-        return trace
+        return _trace
 
     def det(self) -> Tensor:
-        r"""Determinant of the KFAC approximation.
+        r"""Compute the determinant of the KFAC approximation.
 
         Will call ``compute_kronecker_factors`` if it has not been called before.
         Uses the property of the Kronecker product that
@@ -992,36 +989,34 @@ class KFACLinearOperator(CurvatureLinearOperator):
         input_covariances = self.representation["input_covariances"]
         gradient_covariances = self.representation["gradient_covariances"]
 
-        det = 1.0
+        _det = 1.0
         for mod_name, param_pos in self._mapping.items():
             m = gradient_covariances[mod_name].shape[0]
             det_ggT = gradient_covariances[mod_name].det()
-            if (
-                not self._separate_weight_and_bias
-                and "weight" in param_pos.keys()
-                and "bias" in param_pos.keys()
+            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+                param_pos.keys()
             ):
                 n = input_covariances[mod_name].shape[0]
                 det_aaT = input_covariances[mod_name].det()
-                det *= det_aaT.pow(m) * det_ggT.pow(n)
+                _det *= det_aaT.pow(m) * det_ggT.pow(n)
             else:
-                for p_name in param_pos.keys():
+                for p_name in param_pos:
                     n = (
                         input_covariances[mod_name].shape[0]
                         if p_name == "weight"
                         else 1
                     )
-                    det *= det_ggT.pow(n) * (
+                    _det *= det_ggT.pow(n) * (
                         input_covariances[mod_name].det().pow(m)
                         if p_name == "weight"
                         else 1
                     )
-        return det
+        return _det
 
     def logdet(self) -> Tensor:
         r"""Log determinant of the KFAC approximation.
 
-        More numerically stable than the ``det`` property.
+        More numerically stable than the ``det`` method.
         Will call ``compute_kronecker_factors`` if it has not been called before.
         Uses the property of the Kronecker product that
         :math:`\log \det(A \otimes B) = m \log \det(A) + n \log \det(B)`, where
@@ -1033,31 +1028,29 @@ class KFACLinearOperator(CurvatureLinearOperator):
         input_covariances = self.representation["input_covariances"]
         gradient_covariances = self.representation["gradient_covariances"]
 
-        logdet = 0.0
+        _logdet = 0.0
         for mod_name, param_pos in self._mapping.items():
             m = gradient_covariances[mod_name].shape[0]
             logdet_ggT = gradient_covariances[mod_name].logdet()
-            if (
-                not self._separate_weight_and_bias
-                and "weight" in param_pos.keys()
-                and "bias" in param_pos.keys()
+            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+                param_pos.keys()
             ):
                 n = input_covariances[mod_name].shape[0]
                 logdet_aaT = input_covariances[mod_name].logdet()
-                logdet += m * logdet_aaT + n * logdet_ggT
+                _logdet += m * logdet_aaT + n * logdet_ggT
             else:
-                for p_name in param_pos.keys():
+                for p_name in param_pos:
                     n = (
                         input_covariances[mod_name].shape[0]
                         if p_name == "weight"
                         else 1
                     )
-                    logdet += n * logdet_ggT + (
+                    _logdet += n * logdet_ggT + (
                         m * input_covariances[mod_name].logdet()
                         if p_name == "weight"
                         else 0
                     )
-        return logdet
+        return _logdet
 
     def frobenius_norm(self) -> Tensor:
         r"""Frobenius norm of the KFAC approximation.
@@ -1072,24 +1065,22 @@ class KFACLinearOperator(CurvatureLinearOperator):
         input_covariances = self.representation["input_covariances"]
         gradient_covariances = self.representation["gradient_covariances"]
 
-        frobenius_norm = 0.0
+        _frobenius_norm = 0.0
         for mod_name, param_pos in self._mapping.items():
             squared_frob_ggT = gradient_covariances[mod_name].square().sum()
-            if (
-                not self._separate_weight_and_bias
-                and "weight" in param_pos.keys()
-                and "bias" in param_pos.keys()
+            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+                param_pos.keys()
             ):
                 squared_frob_aaT = input_covariances[mod_name].square().sum()
-                frobenius_norm += squared_frob_aaT * squared_frob_ggT
+                _frobenius_norm += squared_frob_aaT * squared_frob_ggT
             else:
                 for p_name in param_pos.keys():
-                    frobenius_norm += squared_frob_ggT * (
+                    _frobenius_norm += squared_frob_ggT * (
                         input_covariances[mod_name].square().sum()
                         if p_name == "weight"
                         else 1
                     )
-        return frobenius_norm.sqrt()
+        return _frobenius_norm.sqrt()
 
     def state_dict(self) -> Dict[str, Any]:
         """Return the state of the KFAC linear operator.

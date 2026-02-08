@@ -337,10 +337,8 @@ class EKFACLinearOperator(KFACLinearOperator):
             corrected_eigenvals = corrected_eigenvalues[mod_name]
 
             # bias and weights are treated jointly
-            if (
-                not self._separate_weight_and_bias
-                and "weight" in param_pos.keys()
-                and "bias" in param_pos.keys()
+            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+                param_pos.keys()
             ):
                 w_pos, b_pos = param_pos["weight"], param_pos["bias"]
                 # v denotes the free dimension for treating multiple vectors in parallel
@@ -562,10 +560,9 @@ class EKFACLinearOperator(KFACLinearOperator):
         # ggT_eigenvectors always exists
         ggT_eigenvectors = gradient_covariances_eigenvectors[module_name]
 
-        if not self._separate_weight_and_bias and set(param_pos.keys()) == {
-            "weight",
-            "bias",
-        }:
+        if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+            param_pos.keys()
+        ):
             a_augmented = cat([a, a.new_ones(*a.shape[:-1], 1)], dim=-1)
             eigencorrection = compute_eigenvalue_correction_linear_weight_sharing(
                 g, ggT_eigenvectors, a_augmented, aaT_eigenvectors
@@ -604,18 +601,18 @@ class EKFACLinearOperator(KFACLinearOperator):
         corrected_eigenvalues = self.representation["corrected_eigenvalues"]
 
         # Compute the trace using the corrected eigenvalues
-        trace = 0.0
+        _trace = 0.0
         for corrected_eigenvals in corrected_eigenvalues.values():
             if isinstance(corrected_eigenvals, dict):
                 for val in corrected_eigenvals.values():
-                    trace += val.sum()
+                    _trace += val.sum()
             else:
-                trace += corrected_eigenvals.sum()
+                _trace += corrected_eigenvals.sum()
 
-        return trace
+        return _trace
 
     def det(self) -> Tensor:
-        r"""Determinant of the EKFAC approximation.
+        r"""Compute the determinant of the EKFAC approximation.
 
         Will call ``compute_kronecker_factors`` and ``compute_eigenvalue_correction`` if
         either of them has not been called before.
@@ -626,20 +623,20 @@ class EKFACLinearOperator(KFACLinearOperator):
         corrected_eigenvalues = self.representation["corrected_eigenvalues"]
 
         # Compute the determinant using the corrected eigenvalues
-        det = 1.0
+        _det = 1.0
         for corrected_eigenvals in corrected_eigenvalues.values():
             if isinstance(corrected_eigenvals, dict):
                 for val in corrected_eigenvals.values():
-                    det *= val.prod()
+                    _det *= val.prod()
             else:
-                det *= corrected_eigenvals.prod()
+                _det *= corrected_eigenvals.prod()
 
-        return det
+        return _det
 
     def logdet(self) -> Tensor:
         r"""Log determinant of the EKFAC approximation.
 
-        More numerically stable than the ``det`` property.
+        More numerically stable than the ``det`` method.
         Will call ``compute_kronecker_factors`` and ``compute_eigenvalue_correction`` if
         either of them has not been called before.
 
@@ -649,15 +646,15 @@ class EKFACLinearOperator(KFACLinearOperator):
         corrected_eigenvalues = self.representation["corrected_eigenvalues"]
 
         # Compute the log determinant using the corrected eigenvalues
-        logdet = 0.0
+        _logdet = 0.0
         for corrected_eigenvals in corrected_eigenvalues.values():
             if isinstance(corrected_eigenvals, dict):
                 for val in corrected_eigenvals.values():
-                    logdet += val.log().sum()
+                    _logdet += val.log().sum()
             else:
-                logdet += corrected_eigenvals.log().sum()
+                _logdet += corrected_eigenvals.log().sum()
 
-        return logdet
+        return _logdet
 
     def frobenius_norm(self) -> Tensor:
         r"""Frobenius norm of the EKFAC approximation.
@@ -671,15 +668,15 @@ class EKFACLinearOperator(KFACLinearOperator):
         corrected_eigenvalues = self.representation["corrected_eigenvalues"]
 
         # Compute the Frobenius norm using the corrected eigenvalues
-        frobenius_norm = 0.0
+        _frobenius_norm = 0.0
         for corrected_eigenvals in corrected_eigenvalues.values():
             if isinstance(corrected_eigenvals, dict):
                 for val in corrected_eigenvals.values():
-                    frobenius_norm += val.square().sum()
+                    _frobenius_norm += val.square().sum()
             else:
-                frobenius_norm += corrected_eigenvals.square().sum()
+                _frobenius_norm += corrected_eigenvals.square().sum()
 
-        return frobenius_norm.sqrt()
+        return _frobenius_norm.sqrt()
 
     def state_dict(self) -> Dict[str, Any]:
         """Return the state of the EKFAC linear operator.
@@ -720,4 +717,3 @@ class EKFACLinearOperator(KFACLinearOperator):
         ]
         self._cached_activations = state_dict["cached_activations"]
         self._corrected_eigenvalues = state_dict["corrected_eigenvalues"]
->>>>>>> main
