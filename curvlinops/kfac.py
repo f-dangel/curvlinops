@@ -313,7 +313,16 @@ class KFACLinearOperator(CurvatureLinearOperator):
             self._check_deterministic()
 
     @property
-    def representation(self):
+    def representation(self) -> Dict[str, Dict[str, Tensor]]:
+        """Return the internal representation (Kronecker factors) of the linear operator.
+
+        This attribute is lazily evaluated and cached after the first access.
+
+        Returns:
+            A dictionary containing the Kronecker factors with keys "input_covariances" and
+            "gradient_covariances". Each of those is a dictionary mapping module names to
+            their respective Kronecker factors.
+        """
         if self._representation is None:
             input_covariances, gradient_covariances = self.compute_kronecker_factors()
             self._representation = {
@@ -409,7 +418,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
         param_pos: Dict[str, int],
         aaT: FactorType,
         ggT: FactorType,
-        eigenvalues: Optional[Dict[int, Tensor]] = None,
+        eigenvalues: Optional[Union[Dict[int, Tensor], List[Tensor]]] = None,
     ) -> Tensor:
         """Multiply matrix with Kronecker factors for separated weight and bias.
 

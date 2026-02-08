@@ -246,14 +246,20 @@ class EKFACLinearOperator(KFACLinearOperator):
         _SUPPORTED_FISHER_TYPE: Tuple with supported Fisher types.
     """
 
-    _SUPPORTED_FISHER_TYPE: Tuple[FisherType] = (
+    _SUPPORTED_FISHER_TYPE: Tuple[FisherType, ...] = (
         FisherType.TYPE2,
         FisherType.MC,
         FisherType.EMPIRICAL,
     )
 
     @property
-    def representation(self):
+    def representation(self) -> Dict:
+        """Return EKFAC's internal representation (eigenvectors + corrected eigenvalues).
+
+        Returns:
+            A dictionary containing the eigenvectors of the input and gradient covariances
+            and the corrected eigenvalues for each module.
+        """
         if self._representation is None:
             input_covariances, gradient_covariances = self.compute_kronecker_factors()
             input_covariances_eigenvectors = self._eigenvectors_(input_covariances)
@@ -523,7 +529,7 @@ class EKFACLinearOperator(KFACLinearOperator):
             g = rearrange(g, "batch c o1 o2 -> batch o1 o2 c")
         g = rearrange(g, "batch ... d_out -> batch (...) d_out")
 
-        # We only need layer inputs to extracting information w.r.t. the weights
+        # We only need layer inputs to extract information w.r.t. the weights
         param_pos = self._mapping[module_name]
         a_required = "weight" in param_pos
 
