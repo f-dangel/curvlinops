@@ -97,7 +97,14 @@ def test_loss_hessian_matrix_sqrt(
 
     # Compute true Hessian using torch.func.hessian
     def _loss_fn(pred_flat: Tensor) -> Tensor:
-        """Loss as function of flattened prediction."""
+        """Loss as function of flattened prediction.
+
+        Args:
+            pred_flat: Flattened prediction 1d tensor of shape [C * prod(seq)].
+
+        Returns:
+            Loss value.
+        """
         # NOTE We have to make the batch axis explicit for nn.CrossEntropyLoss
         pred_with_batch_axis = pred_flat.reshape(1, *output_shape)
         target_with_batch_axis = target_one_datum.unsqueeze(0)
