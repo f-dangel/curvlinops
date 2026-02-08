@@ -1,5 +1,4 @@
-"""
-Trace and diagonal estimation
+"""Trace and diagonal estimation
 =============================
 
 In this example we will explore estimators for the trace and diagonal of a matrix.

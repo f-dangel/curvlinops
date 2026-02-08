@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Support left multiplication with linear operators (`X @ A` with `X` a tensor or tensor list)
   ([PR](https://github.com/f-dangel/curvlinops/pull/226))
 
+- **Backward-incompatible:** (E)KFAC's `det, logdet, trace, frobenius_norm` properties are now functions
+  ([PR](https://github.com/f-dangel/curvlinops/pull/232))
+
 ### Fixed/Removed
 
 ### Internal
@@ -35,6 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Generalize computing the loss function's Hessian square root for sequence-valued predictions
   ([PR](https://github.com/f-dangel/curvlinops/pull/231))
+
+- Use `ruff` for docstring linting (remove `darglint` and `pydocstyle`)
+  ([PR](https://github.com/f-dangel/curvlinops/pull/234))
 
 ## [3.0.1] - 2026-01-14
 

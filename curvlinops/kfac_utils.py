@@ -186,7 +186,7 @@ def loss_hessian_matrix_sqrt(
             Returns:
                 The Hessian square root matrix. Has shape ``[C, C]``.
             """
-            p_sqrt = p.sqrt().mul_(sqrt(c))
+            p_sqrt = sqrt(c) * p.sqrt()
             return diag(p_sqrt) - einsum(p, p_sqrt, "i, j -> i j")
 
         # Compute the per-element Hessian square root
@@ -205,7 +205,7 @@ def loss_hessian_matrix_sqrt(
             _warn_BCEWithLogitsLoss_targets_unchecked(loss_func)
 
         p = output_one_datum.flatten().sigmoid()
-        hess_sqrt_diag = (p * (1 - p)).sqrt().mul_(sqrt(c))
+        hess_sqrt_diag = sqrt(c) * (p * (1 - p)).sqrt()
         hess_sqrt_flat = hess_sqrt_diag.diag()
 
     else:

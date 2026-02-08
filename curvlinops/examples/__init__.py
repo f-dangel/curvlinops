@@ -74,7 +74,7 @@ class TensorLinearOperator(PyTorchLinearOperator):
         return self._A.trace()
 
     def det(self) -> Tensor:
-        """Determinant of the matrix.
+        """Compute the determinant of the matrix.
 
         Returns:
             Determinant of the underlying tensor matrix.

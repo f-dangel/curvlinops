@@ -114,7 +114,7 @@ class BlockDiagonalLinearOperator(PyTorchLinearOperator):
         return stack([B.trace() for B in self._blocks]).sum()
 
     def det(self) -> Tensor:
-        """Determinant of the block-diagonal matrix.
+        """Compute the determinant of the block-diagonal matrix.
 
         For a block-diagonal matrix, det(block_diag(B1, B2, ..., Bk)) = ∏ det(Bi).
         Only works if all blocks are square.

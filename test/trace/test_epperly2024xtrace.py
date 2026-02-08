@@ -51,9 +51,9 @@ def xtrace_naive(
         )
     num_vecs = num_matvecs // 2
 
-    W = column_stack(
-        [random_vector(dim, distribution, A.device, A.dtype) for _ in range(num_vecs)]
-    )
+    W = column_stack([
+        random_vector(dim, distribution, A.device, A.dtype) for _ in range(num_vecs)
+    ])
     A_W = A @ W
 
     traces = []
