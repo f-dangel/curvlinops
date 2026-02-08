@@ -271,6 +271,7 @@ def test_ekfac_mc_weight_sharing(
     Args:
         kfac_weight_sharing_exact_case: A fixture that returns a model, loss function,
             list of parameters, and data.
+        separate_weight_and_bias: Whether to treat weights and biases as separate blocks.
         exclude: Which parameters to exclude. Can be ``'weight'``, ``'bias'``, or
             ``None``.
         setting: The weight-sharing setting to use. Can be ``KFACType.EXPAND`` or
@@ -340,6 +341,7 @@ def test_ekfac_one_datum(
     exclude: str,
     shuffle: bool,
 ):
+    """Test EKFAC for the one-datum exact case."""
     model, loss_func, params, data, batch_size_fn = kfac_exact_one_datum_case
     params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
@@ -384,6 +386,7 @@ def test_ekfac_mc_one_datum(
     exclude: str,
     shuffle: bool,
 ):
+    """Test EKFAC-MC for the one-datum exact case."""
     model, loss_func, params, data, batch_size_fn = change_dtype(
         kfac_exact_one_datum_case, float64
     )
@@ -439,6 +442,7 @@ def test_ekfac_ef_one_datum(
     exclude: str,
     shuffle: bool,
 ):
+    """Test EKFAC empirical Fisher for the one-datum exact case."""
     model, loss_func, params, data, batch_size_fn = change_dtype(
         kfac_exact_one_datum_case, float64
     )

@@ -1,5 +1,4 @@
-r"""
-Matrix-vector products
+r"""Matrix-vector products
 ======================
 
 This tutorial contains a basic demonstration how to set up ``LinearOperators``

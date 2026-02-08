@@ -26,8 +26,9 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, TypeVar
 from warnings import warn
 
 from einops import einsum, rearrange, reduce
-from torch import Generator, Tensor, cat, eye, randn, stack
+from torch import Generator, Tensor, cat, eye, randn
 from torch.autograd import grad
+from torch.func import vmap
 from torch.nn import (
     BCEWithLogitsLoss,
     Conv2d,
@@ -41,6 +42,7 @@ from torch.utils.hooks import RemovableHandle
 
 from curvlinops._torch_base import CurvatureLinearOperator
 from curvlinops.kfac_utils import (
+    _check_binary_if_BCEWithLogitsLoss,
     extract_averaged_patches,
     extract_patches,
     loss_hessian_matrix_sqrt,
@@ -581,14 +583,17 @@ class KFACLinearOperator(CurvatureLinearOperator):
             )
 
         if self._fisher_type == FisherType.TYPE2:
-            # Compute per-sample Hessian square root, then concatenate over samples.
-            # Result has shape `(batch_size, num_classes, num_classes)`
-            hessian_sqrts = stack(
-                [
-                    loss_hessian_matrix_sqrt(out.detach(), target, self._loss_func)
-                    for out, target in zip(output.split(1), y.split(1))
-                ]
-            )
+            # Compute per-sample Hessian square root for each sample.
+            # Result has shape `(batch_size, *output[n].shape, *output[n].shape)`
+            # NOTE Checking for binary labels is data-dependent and not supported in vmap.
+            # Therefore, we check outside vmap and then turn it off inside vmap
+            _check_binary_if_BCEWithLogitsLoss(y, self._loss_func)
+            hessian_sqrts = vmap(
+                partial(
+                    loss_hessian_matrix_sqrt, check_binary_if_BCEWithLogitsLoss=False
+                ),
+                in_dims=(0, 0, None),  # Parallelize over data, not over loss function
+            )(output.detach(), y, self._loss_func)
 
             # Fix scaling caused by the batch dimension
             num_loss_terms = output.shape[0]

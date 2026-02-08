@@ -34,7 +34,7 @@ def compute_eigenvalue_correction_linear_weight_sharing(
     aaT_eigvecs: Union[Tensor, None],
     _force_strategy: Optional[str] = None,
 ) -> Tensor:
-    r"""Computes eigenvalue corrections for a linear layer with weight sharing.
+    r"""Compute eigenvalue corrections for a linear layer with weight sharing.
 
     Chooses between two computational strategies depending on memory requirements.
 
@@ -768,14 +768,12 @@ class EKFACLinearOperator(KFACLinearOperator):
         """
         state_dict = super().state_dict()
         # Add quantities specifically for EKFAC (if computed)
-        state_dict.update(
-            {
-                "input_covariances_eigenvectors": self._input_covariances_eigenvectors,
-                "gradient_covariances_eigenvectors": self._gradient_covariances_eigenvectors,
-                "cached_activations": self._cached_activations,
-                "corrected_eigenvalues": self._corrected_eigenvalues,
-            }
-        )
+        state_dict.update({
+            "input_covariances_eigenvectors": self._input_covariances_eigenvectors,
+            "gradient_covariances_eigenvectors": self._gradient_covariances_eigenvectors,
+            "cached_activations": self._cached_activations,
+            "corrected_eigenvalues": self._corrected_eigenvalues,
+        })
         return state_dict
 
     def load_state_dict(self, state_dict: Dict[str, Any]):

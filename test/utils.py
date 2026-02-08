@@ -154,6 +154,7 @@ def block_diagonal(
         batch_size_fn: A function that returns the batch size given a dict-like ``X``.
         separate_weight_and_bias: Whether to treat weight and bias of a layer as
             separate blocks in the block-diagonal. Default: ``True``.
+        optional_linop_args: Additional keyword arguments for the linear operator.
 
     Returns:
         The block-diagonal matrix.
@@ -220,6 +221,8 @@ class WeightShareModel(Sequential):
 
         Args:
             *args: Modules of the sequential model.
+            setting: Weight-sharing setting to use.
+            loss: Loss type that determines output handling.
         """
         super().__init__(*args)
         self.setting = setting
@@ -263,6 +266,9 @@ class WeightShareModel(Sequential):
 
         Returns:
             The type of loss function.
+
+        Raises:
+            ValueError: If ``loss`` property has not been set.
         """
         if self._loss is None:
             raise ValueError("WeightShareModel.loss has not been set.")
@@ -384,7 +390,15 @@ class UnetModel(Module):
     """Simple Unet-like model where the number of spatial locations varies."""
 
     def __init__(self, loss: Module, flatten: bool = False):
-        """Initialize the model."""
+        """Initialize the model.
+
+        Args:
+            loss: Loss class used to select the output shaping.
+            flatten: Whether to flatten spatial dimensions.
+
+        Raises:
+            ValueError: If ``loss`` is not a supported loss class.
+        """
         if loss not in {MSELoss, CrossEntropyLoss, BCEWithLogitsLoss}:
             raise ValueError(
                 "Loss has to be one of MSELoss, CrossEntropyLoss, BCEWithLogitsLoss. "
@@ -421,8 +435,9 @@ class UnetModel(Module):
 def cast_input(
     X: Union[Tensor, MutableMapping], target_dtype: dtype
 ) -> Union[Tensor, MutableMapping]:
-    """Cast an input tensor ``X`` (can be inside a dict-like object under the key "x")
-        into ``target_dtype``.
+    """Cast an input tensor ``X`` into ``target_dtype``.
+
+    The input can be inside a dict-like object under the key ``"x"``.
 
     Args:
         X: The input tensor.
@@ -459,9 +474,6 @@ def compare_state_dicts(state_dict: dict, state_dict_new: dict):
     Args:
         state_dict (dict): The first state dict to compare.
         state_dict_new (dict): The second state dict to compare.
-
-    Raises:
-        AssertionError: If the state dicts are not equal.
     """
     assert len(state_dict) == len(state_dict_new)
     for value, value_new in zip(state_dict.values(), state_dict_new.values()):
@@ -730,6 +742,9 @@ def check_estimator_convergence(
         Args:
             a_true: The true value.
             a: The estimated value.
+
+        Returns:
+            Relative infinity norm error.
         """
         assert a.shape == a_true.shape
         return (a - a_true).abs().max() / a_true.abs().max()
