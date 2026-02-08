@@ -1,5 +1,4 @@
-r"""
-Benchmarking linear operators
+r"""Benchmarking linear operators
 =============================
 
 In this tutorial, we demonstrate how to evaluate the run time and memory performance

@@ -71,11 +71,8 @@ def hutchinson_diag(
     """
     dim = assert_is_square(A)
     assert_matvecs_subseed_dim(A, num_matvecs)
-    G = column_stack(
-        [
-            random_vector(dim, distribution, A.device, A.dtype)
-            for _ in range(num_matvecs)
-        ]
-    )
+    G = column_stack([
+        random_vector(dim, distribution, A.device, A.dtype) for _ in range(num_matvecs)
+    ])
 
     return einsum("ij,ij->i", G, A @ G) / num_matvecs

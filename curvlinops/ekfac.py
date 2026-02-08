@@ -22,7 +22,7 @@ def compute_eigenvalue_correction_linear_weight_sharing(
     aaT_eigvecs: Union[Tensor, None],
     _force_strategy: Optional[str] = None,
 ) -> Tensor:
-    r"""Computes eigenvalue corrections for a linear layer with weight sharing.
+    r"""Compute eigenvalue corrections for a linear layer with weight sharing.
 
     Chooses between two computational strategies depending on memory requirements.
 
@@ -680,3 +680,44 @@ class EKFACLinearOperator(KFACLinearOperator):
                 frobenius_norm += corrected_eigenvals.square().sum()
 
         return frobenius_norm.sqrt()
+
+    def state_dict(self) -> Dict[str, Any]:
+        """Return the state of the EKFAC linear operator.
+
+        Returns:
+            State dictionary.
+        """
+        state_dict = super().state_dict()
+        # Add quantities specifically for EKFAC (if computed)
+        state_dict.update({
+            "input_covariances_eigenvectors": self._input_covariances_eigenvectors,
+            "gradient_covariances_eigenvectors": self._gradient_covariances_eigenvectors,
+            "cached_activations": self._cached_activations,
+            "corrected_eigenvalues": self._corrected_eigenvalues,
+        })
+        return state_dict
+
+    def load_state_dict(self, state_dict: Dict[str, Any]):
+        """Load the state of the EKFAC linear operator.
+
+        Args:
+            state_dict: State dictionary.
+        """
+        super().load_state_dict(state_dict)
+
+        # Set EKFAC-specific quantities
+        self._check_if_keys_match_mapping_keys(
+            state_dict["input_covariances_eigenvectors"]
+        )
+        self._check_if_keys_match_mapping_keys(
+            state_dict["gradient_covariances_eigenvectors"]
+        )
+        self._input_covariances_eigenvectors = state_dict[
+            "input_covariances_eigenvectors"
+        ]
+        self._gradient_covariances_eigenvectors = state_dict[
+            "gradient_covariances_eigenvectors"
+        ]
+        self._cached_activations = state_dict["cached_activations"]
+        self._corrected_eigenvalues = state_dict["corrected_eigenvalues"]
+>>>>>>> main

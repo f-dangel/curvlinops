@@ -156,9 +156,19 @@ class PermutedBatchLoader:
     """Randomly shuffle data points in a batch before returning it."""
 
     def __init__(self, data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]]):
+        """Store data used for permutation.
+
+        Args:
+            data: Iterable of input/target batches.
+        """
         self.data = data
 
     def __iter__(self) -> Iterator[Tuple[Union[Tensor, MutableMapping], Tensor]]:
+        """Iterate over permuted batches.
+
+        Yields:
+            Permuted batches of inputs and targets.
+        """
         for X, y in self.data:
             permutation = randperm(y.shape[0])
 
