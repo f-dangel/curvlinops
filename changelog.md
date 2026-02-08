@@ -33,6 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `EighDecomposedLinearOperator` for `eigh`-decomposed matrices `Q diag(λ) Q^T` with orthogonal `Q`
     ([PR](https://github.com/f-dangel/curvlinops/pull/210))
 
+- Generalize computing the loss function's Hessian square root for sequence-valued predictions
+  ([PR](https://github.com/f-dangel/curvlinops/pull/231))
+
 - Use `ruff` for docstring linting (remove `darglint` and `pydocstyle`)
   ([PR](https://github.com/f-dangel/curvlinops/pull/234))
 
