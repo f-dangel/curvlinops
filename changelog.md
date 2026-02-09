@@ -8,9 +8,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added/New
 
+- Support left multiplication with linear operators (`X @ A` with `X` a tensor or tensor list)
+  ([PR](https://github.com/f-dangel/curvlinops/pull/226))
+
+- **Backward-incompatible:** (E)KFAC's `det, logdet, trace, frobenius_norm` properties are now functions
+  ([PR](https://github.com/f-dangel/curvlinops/pull/232))
+
 ### Fixed/Removed
 
 ### Internal
+
+- Merge tests for testing matrix-matrix & matrix-vector products
+  with the original and transposed operator, reducing number of tests
+  ([PR](https://github.com/f-dangel/curvlinops/pull/222))
+
+- Merge GitHub actions for linting and formatting with `ruff`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/225))
+
+- Execute many tests in `float64`, allowing to lower many tolerances
+  ([PR](https://github.com/f-dangel/curvlinops/pull/224))
+
+- Add linear operators for basic mathematical structures
+  - `BlockDiagonalLinearOperator` for matrices `block_diag(B_1, B_2, ...)`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/212))
+  - `KroneckerProductLinearOperator` for matrices `S_1 ⊗ S_2 ⊗ ...`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/211))
+  - `EighDecomposedLinearOperator` for `eigh`-decomposed matrices `Q diag(λ) Q^T` with orthogonal `Q`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/210))
+
+- Generalize computing the loss function's Hessian square root for sequence-valued predictions
+  ([PR](https://github.com/f-dangel/curvlinops/pull/231))
+
+- Use `ruff` for docstring linting (remove `darglint` and `pydocstyle`)
+  ([PR](https://github.com/f-dangel/curvlinops/pull/234))
+
+- Generalize sampling output gradients for sequence-valued predictions
+  ([PR](https://github.com/f-dangel/curvlinops/pull/235))
 
 ## [3.0.1] - 2026-01-14
 

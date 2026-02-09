@@ -10,14 +10,10 @@ from torch.nn import Module, MSELoss, Parameter
 
 import test.utils
 from test.cases import (
-    ADJOINT_CASES,
-    ADJOINT_IDS,
     BLOCK_SIZES_FNS,
     CASES,
     CNN_CASES,
     INV_CASES,
-    IS_VEC_IDS,
-    IS_VECS,
     NON_DETERMINISTIC_CASES,
 )
 from test.kfac_cases import (
@@ -38,6 +34,14 @@ def initialize_case(
     Iterable[Tuple[Tensor, Tensor]],
     Optional[Callable[[MutableMapping], int]],
 ]:
+    """Instantiate a test case and seed random generators.
+
+    Args:
+        case: Dictionary describing the case configuration.
+
+    Returns:
+        Tuple of model, loss, parameters, data, and optional batch size function.
+    """
     random.seed(case["seed"])
     manual_seed(case["seed"])
 
@@ -69,6 +73,11 @@ def case(
     Iterable[Tuple[Tensor, Tensor]],
     Optional[Callable[[MutableMapping], int]],
 ]:
+    """Provide a parametrized test case.
+
+    Yields:
+        Tuple of model, loss, parameters, data, and optional batch size function.
+    """
     case = request.param
     yield initialize_case(case)
 
@@ -83,6 +92,11 @@ def inv_case(
     Iterable[Tuple[Tensor, Tensor]],
     Optional[Callable[[MutableMapping], int]],
 ]:
+    """Provide a parametrized inverse test case.
+
+    Yields:
+        Tuple of model, loss, parameters, data, and optional batch size function.
+    """
     case = request.param
     yield initialize_case(case)
 
@@ -97,6 +111,11 @@ def cnn_case(
     Iterable[Tuple[Tensor, Tensor]],
     Optional[Callable[[MutableMapping], int]],
 ]:
+    """Provide a parametrized CNN test case.
+
+    Yields:
+        Tuple of model, loss, parameters, data, and optional batch size function.
+    """
     cnn_case = request.param
     yield initialize_case(cnn_case)
 
@@ -111,31 +130,18 @@ def non_deterministic_case(
     Iterable[Tuple[Tensor, Tensor]],
     Optional[Callable[[MutableMapping], int]],
 ]:
+    """Provide a parametrized non-deterministic test case.
+
+    Yields:
+        Tuple of model, loss, parameters, data, and optional batch size function.
+    """
     case = request.param
     yield initialize_case(case)
 
 
-@fixture(params=ADJOINT_CASES, ids=ADJOINT_IDS)
-def adjoint(request) -> bool:
-    return request.param
-
-
-@fixture(params=IS_VECS, ids=IS_VEC_IDS)
-def is_vec(request) -> bool:
-    """Whether to test matrix-vector or matrix-matrix multiplication.
-
-    Args:
-        request: Pytest request object.
-
-    Returns:
-        ``True`` if the test is for matrix-vector multiplication, ``False`` otherwise.
-    """
-    return request.param
-
-
 @fixture(params=BLOCK_SIZES_FNS.values(), ids=BLOCK_SIZES_FNS.keys())
 def block_sizes_fn(request) -> Callable[[List[Parameter]], Optional[List[int]]]:
-    """Function to generate the ``block_sizes`` argument for a linear operator.
+    """Generate the ``block_sizes`` argument for a linear operator.
 
     Args:
         request: Pytest request object.

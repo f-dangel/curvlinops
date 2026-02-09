@@ -15,8 +15,6 @@ help:
 	@echo "        Install curvlinops and documentation tools"
 	@echo "install-test"
 	@echo "        Install curvlinops and testing tools"
-	@echo "test-light"
-	@echo "        Run pytest on the light part of project and report coverage"
 	@echo "test"
 	@echo "        Run pytest on test and report coverage"
 	@echo "install-lint"
@@ -31,10 +29,6 @@ help:
 	@echo "        Run ruff check on the project without fixing errors"
 	@echo "conda-env"
 	@echo "        Create conda environment 'curvlinops' with dev setup"
-	@echo "darglint-check"
-	@echo "        Run darglint (docstring check) on the project"
-	@echo "pydocstyle-check"
-	@echo "        Run pydocstyle (docstring check) on the project"
 
 .PHONY: install
 
@@ -66,12 +60,9 @@ install-docs:
 install-test:
 	@pip install -e .[test]
 
-.PHONY: test test-light
+.PHONY: test
 
 test:
-	@pytest -vx --run-optional-tests=montecarlo --cov=curvlinops --doctest-modules curvlinops test
-
-test-light:
 	@pytest -vx --cov=curvlinops --doctest-modules curvlinops test
 
 .PHONY: install-lint
@@ -90,20 +81,10 @@ ruff-format-check:
 .PHONY: ruff-check
 
 ruff:
-	@ruff check . --fix
+	@ruff check . --fix --preview
 
 ruff-check:
-	@ruff check .
-
-.PHONY: darglint-check
-
-darglint-check:
-	@darglint --verbosity 2 curvlinops
-
-.PHONY: pydocstyle-check
-
-pydocstyle-check:
-	@pydocstyle --count .
+	@ruff check . --preview
 
 .PHONY: conda-env
 
@@ -115,5 +96,3 @@ conda-env:
 lint:
 	make ruff-format-check
 	make ruff-check
-	make darglint-check
-	make pydocstyle-check

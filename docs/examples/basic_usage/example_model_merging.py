@@ -44,8 +44,8 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from curvlinops import (
     CGInverseLinearOperator,
-    GGNLinearOperator,
     GGNDiagonalLinearOperator,
+    GGNLinearOperator,
 )
 from curvlinops.examples import IdentityLinearOperator
 

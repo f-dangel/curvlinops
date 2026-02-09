@@ -65,9 +65,9 @@ class DiagonalLinearOperator(PyTorchLinearOperator):
                 raise ValueError(
                     f"Diagonal shapes differ: {self._in_shape} vs {other._in_shape}."
                 )
-            return DiagonalLinearOperator(
-                [d1 + d2 for d1, d2 in zip(self._diagonal, other._diagonal)]
-            )
+            return DiagonalLinearOperator([
+                d1 + d2 for d1, d2 in zip(self._diagonal, other._diagonal)
+            ])
         return super().__add__(other)
 
     def __mul__(self, scalar: int | float) -> DiagonalLinearOperator:

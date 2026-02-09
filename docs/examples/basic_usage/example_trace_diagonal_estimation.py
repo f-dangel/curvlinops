@@ -1,5 +1,4 @@
-"""
-Trace and diagonal estimation
+"""Trace and diagonal estimation
 =============================
 
 In this example we will explore estimators for the trace and diagonal of a matrix.
@@ -10,6 +9,7 @@ Here are the imports:
 """
 
 from os import getenv
+from shutil import which
 from typing import Dict
 
 import matplotlib.pyplot as plt
@@ -32,13 +32,12 @@ from tueplots import bundles
 from curvlinops import hutchinson_diag, hutchinson_trace, hutchpp_trace, xdiag, xtrace
 from curvlinops.examples import TensorLinearOperator
 
-# LaTeX is not available on RTD and we also want to analyze smaller matrices
-# to reduce build time
+# We want to analyze smaller matrices on RTD to reduce build time
 RTD = getenv("READTHEDOCS")
+# Use LaTeX if available
+USETEX = which("latex") is not None
 
-PLOT_CONFIG = bundles.icml2024(
-    column="full" if RTD else "half", usetex=not RTD, nrows=2
-)
+PLOT_CONFIG = bundles.icml2024(column="full" if RTD else "half", usetex=USETEX, nrows=2)
 
 # Dimension of the matrices whose traces we will estimate
 DIM = 200 if RTD else 1000

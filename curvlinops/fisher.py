@@ -4,13 +4,16 @@ from collections.abc import MutableMapping
 from functools import cached_property, partial
 from typing import Callable, Iterable, List, Optional, Tuple, Union
 
-from einops import einsum
+from einops import einsum, rearrange
 from torch import Generator, Tensor, vmap
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, Module, MSELoss, Parameter
 
 from curvlinops._torch_base import CurvatureLinearOperator
 from curvlinops.ggn import make_ggn_vector_product
-from curvlinops.kfac_utils import make_grad_output_sampler
+from curvlinops.kfac_utils import (
+    _check_binary_if_BCEWithLogitsLoss,
+    make_grad_output_sampler,
+)
 from curvlinops.utils import make_functional_flattened_model_and_loss
 
 
@@ -53,9 +56,16 @@ def make_batch_fmc_matrix_product(
         applied to ``M`` in list format.
     """
     f_flat, _ = make_functional_flattened_model_and_loss(model_func, loss_func, params)
+    label_flattening = (
+        "batch ... -> (batch ...)"
+        if isinstance(loss_func, CrossEntropyLoss)
+        else "batch ... c -> (batch ...) c"
+    )
 
     # Create the gradient output sampler for this loss function
-    sample_grad_output_flat = make_grad_output_sampler(loss_func)
+    sample_grad_output_flat = make_grad_output_sampler(
+        loss_func, warn_BCEWithLogitsLoss_targets_unchecked=False
+    )
 
     def c_pseudo_flat(
         output_flat: Tensor, y: Tensor, mc_samples: int, generator: Generator
@@ -78,21 +88,17 @@ def make_batch_fmc_matrix_product(
         Returns:
             The pseudo-loss whose GGN is the MC-Fisher.
         """
+        # Flatten the labels, otherwise vmap of sample_grad_output gets confused
+        # as the batch axes of output_flat and y_flat are different
+        y_flat = rearrange(y, label_flattening)
         # Sample gradients w.r.t. output using the provided generator
         grad_output_samples = sample_grad_output_flat(
-            output_flat.detach(), mc_samples, y, generator
+            output_flat.detach(), mc_samples, y_flat, generator
         )
 
         # Adjust the scale depending on the loss reduction used
-        num_loss_terms, C = output_flat.shape
-        reduction_factor = {
-            "mean": (
-                num_loss_terms
-                if isinstance(loss_func, CrossEntropyLoss)
-                else num_loss_terms * C
-            ),
-            "sum": 1.0,
-        }[loss_func.reduction]
+        num_loss_terms, _ = output_flat.shape
+        reduction_factor = {"mean": num_loss_terms, "sum": 1.0}[loss_func.reduction]
 
         # Compute the pseudo-loss: 0.5 / (M * c) * sum_n sum_m <f_n, g_nm>^2
         inner_products = einsum(
@@ -108,7 +114,7 @@ def make_batch_fmc_matrix_product(
 
     # Parallelize over vectors to multiply onto a matrix in list format
     list_format_vmap_dims = tuple(p.ndim for p in params)  # last axis
-    return vmap(
+    fmcmp = vmap(
         fmcvp,
         # X, y, mc_samples, generator are not vmapped, matrix columns are vmapped
         in_dims=(None, None, None, None, *list_format_vmap_dims),
@@ -117,6 +123,42 @@ def make_batch_fmc_matrix_product(
         # We want each vector to be multiplied with the same mini-batch MC Fisher
         randomness="same",
     )
+
+    # NOTE The Binary check is incompatible with vmap.
+    # Therefore we have to pull it outside vmap
+    def _fmcmp_with_check(
+        X: Union[Tensor, MutableMapping],
+        y: Tensor,
+        mc_samples: int,
+        generator: Generator,
+        *M: Tensor,
+    ) -> Tuple[Tensor, ...]:
+        """Multiply MC-Fisher onto a matrix for a batch, with BCEWithLogitsLoss checks.
+
+        This function wraps the vmapped MC-Fisher matrix product with additional
+        validation for BCEWithLogitsLoss to ensure targets are binary.
+        This validation cannot be done inside the vmapped function as it is data-
+        dependent and therefore vmap-incompatible.
+
+        Args:
+            X: Input to the model. Can be a tensor or a mapping (e.g., dict) for
+                models that accept structured inputs.
+            y: Target labels for the batch.
+            mc_samples: Number of Monte Carlo samples to use for the Fisher
+                approximation.
+            generator: Random number generator for sampling.
+            *M: Matrix columns in tensor list format. Each tensor has the same
+                shape as a model parameter plus an additional trailing axis for
+                matrix columns.
+
+        Returns:
+            Result of MC-Fisher matrix multiplication in tensor list format.
+            Each tensor has the same shape as the corresponding input tensor in M.
+        """
+        _check_binary_if_BCEWithLogitsLoss(y, loss_func)
+        return fmcmp(X, y, mc_samples, generator, *M)
+
+    return _fmcmp_with_check
 
 
 class FisherMCLinearOperator(CurvatureLinearOperator):

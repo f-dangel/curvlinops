@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Iterable, Iterator, List, MutableMapping, Tuple, Union
 
 from pytest import raises
-from torch import Tensor, linspace, manual_seed, rand, rand_like, randperm, zeros
+from torch import Size, Tensor, linspace, manual_seed, rand, rand_like, randperm, zeros
 
 from curvlinops._torch_base import CurvatureLinearOperator, PyTorchLinearOperator
 from curvlinops.examples import TensorLinearOperator
@@ -42,27 +42,54 @@ class IdentityLinearOperator(PyTorchLinearOperator):
 
 def test_output_formatting():
     """Test format checks of the output of a matrix multiplication."""
-    in_shape = [(2, 3), (4, 5)]
-    out_shape = [(2, 3), (4, 6)]  # NOTE that this will trigger an error
+    shape = [(2, 3), (4, 5)]
 
-    Id = IdentityLinearOperator(in_shape, out_shape)
-    assert Id._in_shape_flat == [6, 20]
-    assert Id._out_shape_flat == [6, 24]
-    assert Id.shape == (30, 26)
+    Id = IdentityLinearOperator(shape, shape)
+    assert Id._in_shape_flat == Id._out_shape_flat == [6, 20]
+    assert Id.shape == (26, 26)
 
-    # using valid input vectors/matrices will trigger errors because we
-    # initialized the identity with different input/output spaces
-    with raises(ValueError):
-        _ = Id @ [zeros(2, 3), zeros(4, 5)]  # valid vector in list format
+    # Verify multiplying onto invalid vectors raises exceptions during input processing
+    invalid_type = [1.0, 2.0, 3.0]
+    with raises(ValueError, match="Input must be tensor or list of tensors."):
+        _ = Id @ invalid_type
 
-    with raises(ValueError):
-        _ = Id @ [zeros(2, 3, 6), zeros(4, 5, 6)]  # valid matrix in list format
+    for invalid_list in [
+        [zeros(2, 3), zeros(4, 6)],
+        [zeros(2, 3, 6), zeros(4, 5, 7)],
+    ]:
+        with raises(ValueError, match="Input list must contain tensors with shapes"):
+            _ = Id @ invalid_list
 
-    with raises(ValueError):
-        _ = Id @ zeros(26)  # valid vector in tensor format
+    for invalid_tensor in [zeros(25), zeros(25, 6)]:
+        with raises(ValueError, match="Input tensor must have shape"):
+            _ = Id @ invalid_tensor
 
-    with raises(ValueError):
-        _ = Id @ zeros(26, 6)  # valid matrix in tensor format
+    too_few_entries = [zeros(2, 3)]
+    with raises(ValueError, match="Input list must have 2 tensors. Got 1."):
+        _ = Id @ too_few_entries
+
+
+def test__check_output_and_postprocess_exceptions():
+    """Trigger the exceptions in output checking and post-processing."""
+    expected_shapes = [Size([1, 2]), Size([3, 4])]
+    list_format, is_vec, num_vecs, free_dim = False, True, 1, "trailing"
+
+    for free_dim in ["trailing", "leading"]:
+        other_args = (list_format, is_vec, num_vecs, expected_shapes, free_dim)
+
+        # NOTE Shape does not really matter as long as we have one tensor
+        too_few_entries = [zeros(1, 2)]
+        with raises(ValueError, match="Output tensor list must have 2 tensors. Got 1."):
+            _ = PyTorchLinearOperator._check_output_and_postprocess(
+                too_few_entries, *other_args
+            )
+
+        # NOTE Shape does not really matter as long as we have two tensors
+        invalid_shapes = [zeros(1, 2, num_vecs), zeros(3, 4, num_vecs + 1)]
+        with raises(ValueError, match="Output tensors must have shapes"):
+            _ = PyTorchLinearOperator._check_output_and_postprocess(
+                invalid_shapes, *other_args
+            )
 
 
 def test_preserve_input_format():
@@ -129,9 +156,19 @@ class PermutedBatchLoader:
     """Randomly shuffle data points in a batch before returning it."""
 
     def __init__(self, data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]]):
+        """Store data used for permutation.
+
+        Args:
+            data: Iterable of input/target batches.
+        """
         self.data = data
 
     def __iter__(self) -> Iterator[Tuple[Union[Tensor, MutableMapping], Tensor]]:
+        """Iterate over permuted batches.
+
+        Yields:
+            Permuted batches of inputs and targets.
+        """
         for X, y in self.data:
             permutation = randperm(y.shape[0])
 
@@ -185,13 +222,8 @@ def test_gradient_and_loss(case):
         assert allclose_report(g, g_functorch)
 
 
-def test_SumPyTorchLinearOperator(adjoint: bool, is_vec: bool):
-    """Test adding two PyTorch linear operators.
-
-    Args:
-        adjoint: Whether to test the adjoint operator.
-        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
-    """
+def test_SumPyTorchLinearOperator():
+    """Test adding two PyTorch linear operators."""
     manual_seed(0)
     A = linspace(1, 10, steps=20).reshape(5, 4)
     B = rand_like(A)
@@ -200,41 +232,35 @@ def test_SumPyTorchLinearOperator(adjoint: bool, is_vec: bool):
     A_plus_B = A + B
     A_linop, B_linop = TensorLinearOperator(A), TensorLinearOperator(B)
     A_plus_B_linop = A_linop + B_linop
-    compare_matmat(A_plus_B_linop, A_plus_B, adjoint, is_vec)
+    compare_matmat(A_plus_B_linop, A_plus_B)
 
     # test subtraction
     A_minus_B = A - B
     A_linop, B_linop = TensorLinearOperator(A), TensorLinearOperator(B)
     A_minus_B_linop = A_linop - B_linop
-    compare_matmat(A_minus_B_linop, A_minus_B, adjoint, is_vec)
+    compare_matmat(A_minus_B_linop, A_minus_B)
 
 
-def test_ScalePyTorchLinearOperator(adjoint: bool, is_vec: bool):
-    """Test scaling a PyTorch linear operator with a scalar.
-
-    Args:
-        adjoint: Whether to test the adjoint operator.
-        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
-    """
+def test_ScalePyTorchLinearOperator():
+    """Test scaling a PyTorch linear operator with a scalar."""
     A = linspace(1, 10, steps=20).reshape(5, 4)
     scalar = 0.1
 
+    # test scaling from the right
     A_scaled = scalar * A
     A_linop = TensorLinearOperator(A)
+    A_scaled_linop = A_linop * scalar
+    compare_matmat(A_scaled_linop, A_scaled)
 
-    # scale from the right
-    compare_matmat(A_linop * scalar, A_scaled, adjoint, is_vec)
-    # scale from the left
-    compare_matmat(scalar * A_linop, A_scaled, adjoint, is_vec)
+    # test scaling from the left
+    A_linop = TensorLinearOperator(A)
+    A_scaled = scalar * A
+    A_scaled_linop = scalar * A_linop
+    compare_matmat(A_scaled_linop, A_scaled)
 
 
-def test_ChainPyTorchLinearOperator(adjoint: bool, is_vec: bool):
-    """Test chaining two PyTorch linear operators.
-
-    Args:
-        adjoint: Whether to test the adjoint operator.
-        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
-    """
+def test_ChainPyTorchLinearOperator():
+    """Test chaining two PyTorch linear operators."""
     manual_seed(0)
     A = linspace(1, 10, steps=20).reshape(5, 4)
     B = rand(4, 3)
@@ -244,4 +270,4 @@ def test_ChainPyTorchLinearOperator(adjoint: bool, is_vec: bool):
     ABC_linop = (
         TensorLinearOperator(A) @ TensorLinearOperator(B) @ TensorLinearOperator(C)
     )
-    compare_matmat(ABC_linop, ABC, adjoint, is_vec)
+    compare_matmat(ABC_linop, ABC)

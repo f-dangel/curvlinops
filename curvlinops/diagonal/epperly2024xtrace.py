@@ -40,14 +40,14 @@ def xdiag(A: Union[PyTorchLinearOperator, Tensor], num_matvecs: int) -> Tensor:
 
     # draw random vectors and compute their matrix-vector products
     num_vecs = num_matvecs // 2
-    W = column_stack(
-        [random_vector(dim, "rademacher", A.device, A.dtype) for _ in range(num_vecs)]
-    )
+    W = column_stack([
+        random_vector(dim, "rademacher", A.device, A.dtype) for _ in range(num_vecs)
+    ])
     A_W = A @ W
 
     # compute the orthogonal basis for all test vectors, and its associated diagonal
     Q, R = qr(A_W)
-    QT_A = (A.adjoint() @ Q).T
+    QT_A = Q.T @ A
     diag_Q_QT_A = einsum("ij,ji->i", Q, QT_A)
 
     # Compute and average the diagonals in the bases {Q_i} that would result had we left

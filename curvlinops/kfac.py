@@ -26,8 +26,8 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, TypeVar
 from warnings import warn
 
 from einops import einsum, rearrange, reduce
-from torch import Generator, Tensor, cat, eye, randn, stack
-from torch.autograd import grad
+from torch import Generator, Tensor, autograd, cat, empty, eye
+from torch.func import grad, vmap
 from torch.nn import (
     BCEWithLogitsLoss,
     Conv2d,
@@ -41,10 +41,13 @@ from torch.utils.hooks import RemovableHandle
 
 from curvlinops._torch_base import CurvatureLinearOperator
 from curvlinops.kfac_utils import (
+    _check_binary_if_BCEWithLogitsLoss,
     extract_averaged_patches,
     extract_patches,
     loss_hessian_matrix_sqrt,
+    make_grad_output_sampler,
 )
+from curvlinops.utils import make_functional_call
 
 FactorType = TypeVar(
     "FactorType", Optional[Tensor], Tuple[Optional[Tensor], Optional[Tensor]]
@@ -285,8 +288,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
         self._gradient_covariances: Dict[str, Tensor] = {}
         self._mapping = self.compute_parameter_mapping(params, model_func)
 
-        # Properties of the full matrix KFAC approximation are initialized to `None`
-        self._reset_matrix_properties()
+        # Function (prediction, label) -> grad_outputs for backpropagation
+        self._grad_outputs_computer = self._set_up_grad_outputs_computer(loss_func)
 
         super().__init__(
             model_func,
@@ -303,6 +306,98 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
         if check_deterministic:
             self._check_deterministic()
+
+    def _set_up_grad_outputs_computer(
+        self, loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss]
+    ) -> Callable[[Union[MutableMapping, Tensor], Tensor], Tensor]:
+        """Set up the function that computes network output gradients for KFAC.
+
+        Args:
+            loss_func: The loss function.
+
+        Returns:
+            A function that computes the gradients to be backpropagated from the
+            network's output and labels.
+        """
+        # Monte-Carlo case
+        grad_output_sampler = make_grad_output_sampler(
+            loss_func, warn_BCEWithLogitsLoss_targets_unchecked=False
+        )
+        # Type2 case
+        hessian_sqrts_computer = vmap(
+            partial(
+                loss_hessian_matrix_sqrt, warn_BCEWithLogitsLoss_targets_unchecked=False
+            ),
+            in_dims=(0, 0, None),  # Parallelize over data, not over loss function
+        )
+
+        # Empirical case
+        functional_loss_func = make_functional_call(
+            loss_func, []
+        )  # prediction, y -> loss
+
+        def scaled_datum_loss(prediction: Tensor, y: Tensor) -> Tensor:
+            """Compute a scaled version of the loss for one sample.
+
+            The loss is scaled to adjust for mean reduction over the sequence dimensions.
+
+            Args:
+                prediction: Model prediction for one sample, without batch dimension.
+                y: Target for one sample, without batch dimension.
+
+            Returns:
+                Scaled loss for one sample.
+            """
+            # If reduction is mean, the loss will be divided by C by MSE/BCE, but we
+            # only want it to be divided by sqrt(C)
+            (C,) = prediction.shape
+            scale = (
+                sqrt(C)
+                if (
+                    isinstance(loss_func, (BCEWithLogitsLoss, MSELoss))
+                    and loss_func.reduction == "mean"
+                )
+                else 1.0
+            )
+            return scale * functional_loss_func(prediction.unsqueeze(0), y.unsqueeze(0))
+
+        empirical_grad_computer = vmap(grad(scaled_datum_loss, argnums=0))
+
+        def compute_grad_outputs(
+            output: Union[MutableMapping, Tensor], y: Tensor
+        ) -> Tensor:
+            """Compute the gradients that are backpropagated from the network's output.
+
+            Args:
+                output: Neural network prediction with batch axis.
+                y: Target labels with batch axis.
+
+            Returns:
+                Gradients to be backpropagated from the network's output as a tensor of
+                shape ``[num_vectors, *output.shape]`` where ``num_vectors`` depends on
+                the Fisher type.
+
+            Raises:
+                NotImplementedError: If ``fisher_type`` is not supported.
+            """
+            # NOTE Checking for binary labels is data-dependent and not supported in vmap.
+            # Therefore, we check outside vmap and then turn it off inside vmap
+            _check_binary_if_BCEWithLogitsLoss(y, self._loss_func)
+
+            if self._fisher_type == FisherType.MC:
+                return grad_output_sampler(output, self._mc_samples, y, self._generator)
+            elif self._fisher_type == FisherType.TYPE2:
+                return hessian_sqrts_computer(output, y, self._loss_func).movedim(-1, 0)
+            elif self._fisher_type == FisherType.EMPIRICAL:
+                return empirical_grad_computer(output, y).unsqueeze(0)
+            elif self._fisher_type == FisherType.FORWARD_ONLY:
+                return empty(0, *output.shape, dtype=output.dtype, device=output.device)
+            else:
+                raise NotImplementedError(
+                    f"Unsupported Fisher type: {self._fisher_type}."
+                )
+
+        return compute_grad_outputs
 
     def _set_num_per_example_loss_terms(
         self, num_per_example_loss_terms: Optional[int]
@@ -336,13 +431,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
             self._num_per_example_loss_terms = num_loss_terms // self._N_data
         else:
             self._num_per_example_loss_terms = num_per_example_loss_terms
-
-    def _reset_matrix_properties(self):
-        """Reset matrix properties."""
-        self._trace = None
-        self._det = None
-        self._logdet = None
-        self._frobenius_norm = None
 
     @staticmethod
     def _left_and_right_multiply(
@@ -483,8 +571,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
     def compute_kronecker_factors(self):
         """Compute and cache KFAC's Kronecker factors for future ``matmat``s."""
-        self._reset_matrix_properties()
-
         # install forward and backward hooks
         hook_handles: List[RemovableHandle] = []
 
@@ -548,30 +634,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
             y = rearrange(y, "batch ... c -> (batch ...) c")
         return output, y
 
-    def _maybe_adjust_loss_scale(self, loss: Tensor, output: Tensor) -> Tensor:
-        """Adjust the scale of the loss tensor if necessary.
-
-        The ``BCEWithLogitsLoss`` and ``MSELoss`` also average over the output dimension
-        in addition to the batch dimension. We adjust the scale of the loss to correct
-        for this.
-
-        Args:
-            loss: The loss tensor to adjust.
-            output: The model's output.
-
-        Returns:
-            The scaled loss tensor.
-        """
-        if (
-            isinstance(self._loss_func, (BCEWithLogitsLoss, MSELoss))
-            and self._loss_func.reduction == "mean"
-        ):
-            # ``BCEWithLogitsLoss`` and ``MSELoss`` also average over non-batch
-            # dimensions. We have to scale the loss to incorporate this scaling.
-            _, C = output.shape
-            loss *= sqrt(C)
-        return loss
-
     def _compute_loss_and_backward(self, output: Tensor, y: Tensor):
         r"""Compute the loss and the backward pass(es) required for KFAC.
 
@@ -592,46 +654,37 @@ class KFACLinearOperator(CurvatureLinearOperator):
                 f"Got {output.ndim=} and {y.ndim=}."
             )
 
-        if self._fisher_type == FisherType.TYPE2:
-            # Compute per-sample Hessian square root, then concatenate over samples.
-            # Result has shape `(batch_size, num_classes, num_classes)`
-            hessian_sqrts = stack(
-                [
-                    loss_hessian_matrix_sqrt(out.detach(), target, self._loss_func)
-                    for out, target in zip(output.split(1), y.split(1))
-                ]
+        if self._fisher_type not in self._SUPPORTED_FISHER_TYPE:
+            raise ValueError(
+                f"Invalid fisher_type: {self._fisher_type}. "
+                + f"Supported: {self._SUPPORTED_FISHER_TYPE}."
             )
 
-            # Fix scaling caused by the batch dimension
-            num_loss_terms = output.shape[0]
-            reduction = self._loss_func.reduction
-            scale = {"sum": 1.0, "mean": 1.0 / num_loss_terms}[reduction]
-            hessian_sqrts.mul_(scale)
+        # Compute the gradients w.r.t. the network's output that will be
+        # backpropagated to compute the KFAC approximation
+        # - TYPE2: Hessian square root columns
+        # - MC: Monte-Carlo approximation of the the Hessian square root
+        # - EMPIRICAL: Empirical gradients
+        # - FORWARD_ONLY: No vectors
+        grad_outputs = self._grad_outputs_computer(output.detach(), y)
 
-            # For each column `c` of the matrix square root we need to backpropagate,
-            # but we can do this for all samples in parallel
-            num_cols = hessian_sqrts.shape[-1]
-            for c in range(num_cols):
-                batched_column = hessian_sqrts[:, :, c]
-                grad(
-                    (output * batched_column).sum(),
-                    self._params,
-                    retain_graph=c < num_cols - 1,
-                )
+        # Fix scaling caused by the batch dimension
+        num_loss_terms = output.shape[0]
+        reduction = self._loss_func.reduction
+        scale = {"sum": 1.0, "mean": 1.0 / num_loss_terms}[reduction]
+        grad_outputs.mul_(scale)
 
-        elif self._fisher_type == FisherType.MC:
-            for mc in range(self._mc_samples):
-                y_sampled = self.draw_label(output)
-                loss = self._loss_func(output, y_sampled)
-                loss = self._maybe_adjust_loss_scale(loss, output)
-                grad(loss, self._params, retain_graph=mc != self._mc_samples - 1)
+        # Backpropagate all vectors
+        num_vectors = grad_outputs.shape[0]
+        for v in range(num_vectors):
+            autograd.grad(
+                output,
+                self._params,
+                grad_outputs=grad_outputs[v],
+                retain_graph=v < num_vectors - 1,
+            )
 
-        elif self._fisher_type == FisherType.EMPIRICAL:
-            loss = self._loss_func(output, y)
-            loss = self._maybe_adjust_loss_scale(loss, output)
-            grad(loss, self._params)
-
-        elif self._fisher_type == FisherType.FORWARD_ONLY:
+        if self._fisher_type == FisherType.FORWARD_ONLY:
             # Since FOOF sets the gradient covariance Kronecker factors to the identity,
             # we don't need to do a backward pass. See https://arxiv.org/abs/2201.12250.
             # We choose to set the gradient covariance to the identity explicitly for
@@ -647,62 +700,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
                 self._gradient_covariances[mod_name] = eye(
                     param.shape[0], dtype=param.dtype, device=self.device
                 )
-
-        else:
-            raise ValueError(
-                f"Invalid fisher_type: {self._fisher_type}. "
-                + f"Supported: {self._SUPPORTED_FISHER_TYPE}."
-            )
-
-    def draw_label(self, output: Tensor) -> Tensor:
-        r"""Draw a sample from the model's predictive distribution.
-
-        The model's distribution is implied by the (negative log likelihood) loss
-        function. For instance, ``MSELoss`` implies a Gaussian distribution with
-        constant variance, and ``CrossEntropyLoss`` implies a categorical distribution.
-
-        Args:
-            output: The model's prediction
-                :math:`\{f_\mathbf{\theta}(\mathbf{x}_n)\}_{n=1}^N`.
-
-        Returns:
-            A sample
-            :math:`\{\mathbf{y}_n\}_{n=1}^N` drawn from the model's predictive
-            distribution :math:`p(\mathbf{y} \mid \mathbf{x}, \mathbf{\theta})`. Has
-            the same shape as the labels that would be fed into the loss function
-            together with ``output``.
-
-        Raises:
-            ValueError: If the output is not 2d.
-            NotImplementedError: If the loss function is not supported.
-        """
-        if output.ndim != 2:
-            raise ValueError("Only a 2d output is supported.")
-
-        if isinstance(self._loss_func, MSELoss):
-            std = sqrt(0.5)
-            perturbation = std * randn(
-                output.shape,
-                device=output.device,
-                dtype=output.dtype,
-                generator=self._generator,
-            )
-            return output.clone().detach() + perturbation
-
-        elif isinstance(self._loss_func, CrossEntropyLoss):
-            probs = output.softmax(dim=1)
-            labels = probs.multinomial(
-                num_samples=1, generator=self._generator
-            ).squeeze(-1)
-            return labels
-
-        elif isinstance(self._loss_func, BCEWithLogitsLoss):
-            probs = output.sigmoid()
-            labels = probs.bernoulli(generator=self._generator)
-            return labels
-
-        else:
-            raise NotImplementedError
 
     def _register_tensor_hook_on_output_to_accumulate_gradient_covariance(
         self, module: Module, inputs: Tuple[Tensor], output: Tensor, module_name: str
@@ -895,48 +892,39 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
         return positions
 
-    @property
     def trace(self) -> Tensor:
         r"""Trace of the KFAC approximation.
 
-        Will call ``compute_kronecker_factors`` if it has not been called before and
-        will cache the trace until ``compute_kronecker_factors`` is called again.
+        Will call ``compute_kronecker_factors`` if it has not been called before.
         Uses the property of the Kronecker product that
         :math:`\text{tr}(A \otimes B) = \text{tr}(A) \text{tr}(B)`.
 
         Returns:
             Trace of the KFAC approximation.
         """
-        if self._trace is not None:
-            return self._trace
-
         if not (self._input_covariances or self._gradient_covariances):
             self.compute_kronecker_factors()
 
-        self._trace = 0.0
+        _trace = 0.0
         for mod_name, param_pos in self._mapping.items():
             tr_ggT = self._gradient_covariances[mod_name].trace()
-            if (
-                not self._separate_weight_and_bias
-                and "weight" in param_pos.keys()
-                and "bias" in param_pos.keys()
+            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+                param_pos.keys()
             ):
-                self._trace += self._input_covariances[mod_name].trace() * tr_ggT
+                _trace += self._input_covariances[mod_name].trace() * tr_ggT
             else:
-                for p_name in param_pos.keys():
-                    self._trace += tr_ggT * (
+                for p_name in param_pos:
+                    _trace += tr_ggT * (
                         self._input_covariances[mod_name].trace()
                         if p_name == "weight"
                         else 1
                     )
-        return self._trace
+        return _trace
 
-    @property
     def det(self) -> Tensor:
-        r"""Determinant of the KFAC approximation.
+        r"""Compute the determinant of the KFAC approximation.
 
-        Will call ``compute_kronecker_factors`` if it has not been called before and
-        will cache the determinant until ``compute_kronecker_factors`` is called again.
+        Will call ``compute_kronecker_factors`` if it has not been called before.
         Uses the property of the Kronecker product that
         :math:`\det(A \otimes B) = \det(A)^{m} \det(B)^{n}`,
         where
@@ -945,121 +933,102 @@ class KFACLinearOperator(CurvatureLinearOperator):
         Returns:
             Determinant of the KFAC approximation.
         """
-        if self._det is not None:
-            return self._det
-
         if not (self._input_covariances or self._gradient_covariances):
             self.compute_kronecker_factors()
 
-        self._det = 1.0
+        _det = 1.0
         for mod_name, param_pos in self._mapping.items():
             m = self._gradient_covariances[mod_name].shape[0]
             det_ggT = self._gradient_covariances[mod_name].det()
-            if (
-                not self._separate_weight_and_bias
-                and "weight" in param_pos.keys()
-                and "bias" in param_pos.keys()
+            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+                param_pos.keys()
             ):
                 n = self._input_covariances[mod_name].shape[0]
                 det_aaT = self._input_covariances[mod_name].det()
-                self._det *= det_aaT.pow(m) * det_ggT.pow(n)
+                _det *= det_aaT.pow(m) * det_ggT.pow(n)
             else:
-                for p_name in param_pos.keys():
+                for p_name in param_pos:
                     n = (
                         self._input_covariances[mod_name].shape[0]
                         if p_name == "weight"
                         else 1
                     )
-                    self._det *= det_ggT.pow(n) * (
+                    _det *= det_ggT.pow(n) * (
                         self._input_covariances[mod_name].det().pow(m)
                         if p_name == "weight"
                         else 1
                     )
-        return self._det
+        return _det
 
-    @property
     def logdet(self) -> Tensor:
         r"""Log determinant of the KFAC approximation.
 
-        More numerically stable than the ``det`` property.
-        Will call ``compute_kronecker_factors`` if it has not been called before and
-        will cache the log determinant until ``compute_kronecker_factors`` is called
-        again. Uses the property of the Kronecker product that
+        More numerically stable than the ``det`` method.
+        Will call ``compute_kronecker_factors`` if it has not been called before.
+        Uses the property of the Kronecker product that
         :math:`\log \det(A \otimes B) = m \log \det(A) + n \log \det(B)`, where
         :math:`A \in \mathbb{R}^{n \times n}` and :math:`B \in \mathbb{R}^{m \times m}`.
 
         Returns:
             Log determinant of the KFAC approximation.
         """
-        if self._logdet is not None:
-            return self._logdet
-
         if not (self._input_covariances or self._gradient_covariances):
             self.compute_kronecker_factors()
 
-        self._logdet = 0.0
+        _logdet = 0.0
         for mod_name, param_pos in self._mapping.items():
             m = self._gradient_covariances[mod_name].shape[0]
             logdet_ggT = self._gradient_covariances[mod_name].logdet()
-            if (
-                not self._separate_weight_and_bias
-                and "weight" in param_pos.keys()
-                and "bias" in param_pos.keys()
+            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+                param_pos.keys()
             ):
                 n = self._input_covariances[mod_name].shape[0]
                 logdet_aaT = self._input_covariances[mod_name].logdet()
-                self._logdet += m * logdet_aaT + n * logdet_ggT
+                _logdet += m * logdet_aaT + n * logdet_ggT
             else:
-                for p_name in param_pos.keys():
+                for p_name in param_pos:
                     n = (
                         self._input_covariances[mod_name].shape[0]
                         if p_name == "weight"
                         else 1
                     )
-                    self._logdet += n * logdet_ggT + (
+                    _logdet += n * logdet_ggT + (
                         m * self._input_covariances[mod_name].logdet()
                         if p_name == "weight"
                         else 0
                     )
-        return self._logdet
+        return _logdet
 
-    @property
     def frobenius_norm(self) -> Tensor:
         r"""Frobenius norm of the KFAC approximation.
 
-        Will call ``compute_kronecker_factors`` if it has not been called before and
-        will cache the Frobenius norm until ``compute_kronecker_factors`` is called again.
+        Will call ``compute_kronecker_factors`` if it has not been called before.
         Uses the property of the Kronecker product that
         :math:`\|A \otimes B\|_F = \|A\|_F \|B\|_F`.
 
         Returns:
             Frobenius norm of the KFAC approximation.
         """
-        if self._frobenius_norm is not None:
-            return self._frobenius_norm
-
         if not (self._input_covariances or self._gradient_covariances):
             self.compute_kronecker_factors()
 
-        self._frobenius_norm = 0.0
+        _frobenius_norm = 0.0
         for mod_name, param_pos in self._mapping.items():
             squared_frob_ggT = self._gradient_covariances[mod_name].square().sum()
-            if (
-                not self._separate_weight_and_bias
-                and "weight" in param_pos.keys()
-                and "bias" in param_pos.keys()
+            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+                param_pos.keys()
             ):
                 squared_frob_aaT = self._input_covariances[mod_name].square().sum()
-                self._frobenius_norm += squared_frob_aaT * squared_frob_ggT
+                _frobenius_norm += squared_frob_aaT * squared_frob_ggT
             else:
-                for p_name in param_pos.keys():
-                    self._frobenius_norm += squared_frob_ggT * (
+                for p_name in param_pos:
+                    _frobenius_norm += squared_frob_ggT * (
                         self._input_covariances[mod_name].square().sum()
                         if p_name == "weight"
                         else 1
                     )
-        self._frobenius_norm.sqrt_()
-        return self._frobenius_norm
+        _frobenius_norm.sqrt_()
+        return _frobenius_norm
 
     def state_dict(self) -> Dict[str, Any]:
         """Return the state of the KFAC linear operator.
@@ -1089,11 +1058,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
             # Kronecker factors (if computed)
             "input_covariances": self._input_covariances,
             "gradient_covariances": self._gradient_covariances,
-            # Properties (not necessarily computed)
-            "trace": self._trace,
-            "det": self._det,
-            "logdet": self._logdet,
-            "frobenius_norm": self._frobenius_norm,
         }
 
     def _check_if_keys_match_mapping_keys(self, dictionary: dict):
@@ -1163,12 +1127,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
         self._check_if_keys_match_mapping_keys(state_dict["gradient_covariances"])
         self._input_covariances = state_dict["input_covariances"]
         self._gradient_covariances = state_dict["gradient_covariances"]
-
-        # Set properties (not necessarily computed)
-        self._trace = state_dict["trace"]
-        self._det = state_dict["det"]
-        self._logdet = state_dict["logdet"]
-        self._frobenius_norm = state_dict["frobenius_norm"]
 
     @classmethod
     def from_state_dict(

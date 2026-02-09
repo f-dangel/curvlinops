@@ -3,30 +3,29 @@
 from typing import Dict
 
 from pytest import mark
+from torch import float64
 
 from curvlinops import GGNLinearOperator
 from curvlinops.examples.functorch import functorch_ggn
 from curvlinops.ggn import GGNDiagonalLinearOperator
-from test.utils import compare_consecutive_matmats, compare_matmat
+from test.utils import change_dtype, compare_consecutive_matmats, compare_matmat
 
 
-def test_GGNLinearOperator_matvec(case, adjoint: bool, is_vec: bool):
+def test_GGNLinearOperator_matvec(case):
     """Test matrix-matrix multiplication with the GGN.
 
     Args:
         case: Tuple of model, loss function, parameters, data, and batch size getter.
-        adjoint: Whether to test the adjoint operator.
-        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
     """
-    model_func, loss_func, params, data, batch_size_fn = case
+    model_func, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
 
     G = GGNLinearOperator(
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn
     )
-    G_mat = functorch_ggn(model_func, loss_func, params, data, input_key="x")
+    G_mat = functorch_ggn(model_func, loss_func, params, data, input_key="x").detach()
 
-    compare_consecutive_matmats(G, adjoint, is_vec)
-    compare_matmat(G, G_mat, adjoint, is_vec, atol=1e-7, rtol=1e-4)
+    compare_consecutive_matmats(G)
+    compare_matmat(G, G_mat, atol=1e-7, rtol=1e-4)
 
 
 DIAGONAL_CASES = [{"mode": "exact"}, {"mode": "mc", "mc_samples": 20_000}]
@@ -36,15 +35,11 @@ DIAGONAL_IDS = [
 
 
 @mark.parametrize("kwargs", DIAGONAL_CASES, ids=DIAGONAL_IDS)
-def test_GGNDiagonalLinearOperator_matvec(
-    case, adjoint: bool, is_vec: bool, kwargs: Dict
-):
+def test_GGNDiagonalLinearOperator_matvec(case, kwargs: Dict):
     """Test matrix-matrix multiplication with the GGN diagonal.
 
     Args:
         case: Tuple of model, loss function, parameters, data, and batch size getter.
-        adjoint: Whether to test the adjoint operator.
-        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
         kwargs: A dictionary containing additional keyword arguments for specifying how
             the GGN diagonal is approximated (either exactly or via Monte-Carlo).
     """
@@ -60,9 +55,9 @@ def test_GGNDiagonalLinearOperator_matvec(
         .diag()  # embed it into a matrix
     )
 
-    compare_consecutive_matmats(G, adjoint, is_vec)
+    compare_consecutive_matmats(G)
     tols = {
         "atol": {"exact": 1e-7, "mc": 1e-4}[kwargs["mode"]],
         "rtol": {"exact": 1e-4, "mc": 2e-2}[kwargs["mode"]],
     }
-    compare_matmat(G, G_mat, adjoint, is_vec, **tols)
+    compare_matmat(G, G_mat, **tols)

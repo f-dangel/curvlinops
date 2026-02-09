@@ -65,6 +65,38 @@ class TensorLinearOperator(PyTorchLinearOperator):
         (M0,) = M
         return [self._A @ M0]
 
+    def trace(self) -> Tensor:
+        """Trace of the matrix.
+
+        Returns:
+            Trace of the underlying tensor matrix.
+        """
+        return self._A.trace()
+
+    def det(self) -> Tensor:
+        """Compute the determinant of the matrix.
+
+        Returns:
+            Determinant of the underlying tensor matrix.
+        """
+        return self._A.det()
+
+    def logdet(self) -> Tensor:
+        """Log determinant of the matrix.
+
+        Returns:
+            Log determinant of the underlying tensor matrix.
+        """
+        return self._A.logdet()
+
+    def frobenius_norm(self) -> Tensor:
+        """Frobenius norm of the matrix.
+
+        Returns:
+            Frobenius norm of the underlying tensor matrix.
+        """
+        return self._A.norm(p="fro")
+
 
 class OuterProductLinearOperator(PyTorchLinearOperator):
     """Linear operator for low-rank matrices of the form ``∑ᵢ cᵢ aᵢ aᵢᵀ``.

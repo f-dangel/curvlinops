@@ -19,7 +19,6 @@ from torch import (
     device,
     dtype,
     eye,
-    from_numpy,
     linalg,
     load,
     logdet,
@@ -156,6 +155,7 @@ def block_diagonal(
         batch_size_fn: A function that returns the batch size given a dict-like ``X``.
         separate_weight_and_bias: Whether to treat weight and bias of a layer as
             separate blocks in the block-diagonal. Default: ``True``.
+        optional_linop_args: Additional keyword arguments for the linear operator.
 
     Returns:
         The block-diagonal matrix.
@@ -280,6 +280,9 @@ class WeightShareModel(Sequential):
 
         Returns:
             The type of loss function.
+
+        Raises:
+            ValueError: If ``loss`` property has not been set.
         """
         if self._loss is None:
             raise ValueError("WeightShareModel.loss has not been set.")
@@ -440,7 +443,15 @@ class UnetModel(Module):
     """Simple Unet-like model where the number of spatial locations varies."""
 
     def __init__(self, loss: Module, flatten: bool = False):
-        """Initialize the model."""
+        """Initialize the model.
+
+        Args:
+            loss: Loss class used to select the output shaping.
+            flatten: Whether to flatten spatial dimensions.
+
+        Raises:
+            ValueError: If ``loss`` is not a supported loss class.
+        """
         if loss not in {MSELoss, CrossEntropyLoss, BCEWithLogitsLoss}:
             raise ValueError(
                 "Loss has to be one of MSELoss, CrossEntropyLoss, BCEWithLogitsLoss. "
@@ -477,8 +488,9 @@ class UnetModel(Module):
 def cast_input(
     X: Union[Tensor, MutableMapping], target_dtype: dtype
 ) -> Union[Tensor, MutableMapping]:
-    """Cast an input tensor ``X`` (can be inside a dict-like object under the key "x")
-        into ``target_dtype``.
+    """Cast an input tensor ``X`` into ``target_dtype``.
+
+    The input can be inside a dict-like object under the key ``"x"``.
 
     Args:
         X: The input tensor.
@@ -515,9 +527,6 @@ def compare_state_dicts(state_dict: dict, state_dict_new: dict):
     Args:
         state_dict (dict): The first state dict to compare.
         state_dict_new (dict): The second state dict to compare.
-
-    Raises:
-        AssertionError: If the state dicts are not equal.
     """
     assert len(state_dict) == len(state_dict_new)
     for value, value_new in zip(state_dict.values(), state_dict_new.values()):
@@ -568,7 +577,7 @@ def rand_accepted_formats(
 
     if is_vec:
         M_tensor_list = [M.squeeze(-1) for M in M_tensor_list]
-        M_tensor.squeeze(-1)
+        M_tensor = M_tensor.squeeze(-1)
 
     M_ndarray = M_tensor.cpu().numpy()
 
@@ -578,63 +587,80 @@ def rand_accepted_formats(
 def compare_matmat(
     op: PyTorchLinearOperator,
     mat: Tensor,
-    adjoint: bool,
-    is_vec: bool,
     num_vecs: int = 2,
     rtol: float = 1e-5,
     atol: float = 1e-8,
 ):
-    """Test the matrix-vector product of a PyTorch linear operator.
+    """Test the matrix-vector/matrix product of a PyTorch linear operator.
 
     Try all accepted formats for the input, as well as the SciPy-exported operator.
 
     Args:
         op: The operator to test.
         mat: The matrix representation of the linear operator.
-        adjoint: Whether to test the adjoint operator.
-        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
-        num_vecs: Number of vectors to test (ignored if ``is_vec`` is ``True``).
-            Default: ``2``.
+        num_vecs: Number of vectors to test matmat. Default: ``2``.
         rtol: Relative tolerance for the comparison. Default: ``1e-5``.
         atol: Absolute tolerance for the comparison. Default: ``1e-8``.
     """
-    if adjoint:
-        op, mat = op.adjoint(), mat.conj().T
-
-    num_vecs = 1 if is_vec else num_vecs
     dt = op.dtype
     dev = op.device
-    x_list, x_tensor, x_numpy = rand_accepted_formats(
-        [tuple(s) for s in op._in_shape], is_vec, dt, dev, num_vecs=num_vecs
-    )
+    in_shape = [tuple(s) for s in op._in_shape]
+    out_shape = [tuple(s) for s in op._out_shape]
 
     tol = {"atol": atol, "rtol": rtol}
-
-    # input in tensor format
-    mat_x = mat @ x_tensor
-    assert allclose_report(op @ x_tensor, mat_x, **tol)
-
-    # input in numpy format
     op_scipy = op.to_scipy()
-    op_x = op_scipy @ x_numpy
-    assert type(op_x) is ndarray
-    assert allclose_report(from_numpy(op_x).to(dev), mat_x, **tol)
 
-    # input in tensor list format
-    mat_x = [
-        m_x.reshape(s if is_vec else (*s, num_vecs))
-        for m_x, s in zip(mat_x.split(op._out_shape_flat), op._out_shape)
-    ]
-    op_x = op @ x_list
-    assert len(op_x) == len(mat_x)
-    for o_x, m_x in zip(op_x, mat_x):
-        assert allclose_report(o_x, m_x, **tol)
+    # Test left- and right-multiplication `y = A @ x` or `y = x @ A`.
+    # Right multiplication internally uses `.adjoint()`.
+    for op_pos, is_vec in product(["left", "right"], [True, False]):
+        shape = {"left": in_shape, "right": out_shape}[op_pos]
+        x_list, x_tensor, x_numpy = rand_accepted_formats(
+            shape, is_vec, dt, dev, num_vecs=num_vecs
+        )
+
+        # Left multiplication (used to generate the xs) uses trailing axis for columns.
+        # Right multiplication uses leading axis for the row dimension.
+        # Move trailing to leading axis for right multiplication
+        if not is_vec:
+            x_list = x_list if op_pos == "left" else [x.movedim(-1, 0) for x in x_list]
+            x_tensor = x_tensor if op_pos == "left" else x_tensor.T
+            x_numpy = x_numpy if op_pos == "left" else x_numpy.T
+
+        # 1) Set up ground truths
+        # In tensor format
+        y_tensor = mat @ x_tensor if op_pos == "left" else x_tensor @ mat
+        # In tensor list format
+        y_list = []
+        split_dim = 0 if is_vec else {"left": 0, "right": -1}[op_pos]
+        shapes = {"left": op._out_shape, "right": op._in_shape}[op_pos]
+        shapes_flat = [s.numel() for s in shapes]
+        for y, s in zip(y_tensor.split(shapes_flat, dim=split_dim), shapes):
+            # Left multiplication uses trailing, right multiplication
+            # uses leading axes for parallel multiplies (columns, rows)
+            s_out = (
+                s
+                if is_vec
+                else {"left": (*s, num_vecs), "right": (num_vecs, *s)}[op_pos]
+            )
+            y_list.append(y.reshape(s_out))
+
+        # 2.1) Test multiplication with input in tensor format
+        y_op_tensor = op @ x_tensor if op_pos == "left" else x_tensor @ op
+        assert allclose_report(y_op_tensor, y_tensor, **tol)
+
+        # 2.2) Test multiplication with input in numpy format
+        y_op_numpy = op_scipy @ x_numpy if op_pos == "left" else x_numpy @ op_scipy
+        assert type(y_op_numpy) is ndarray
+        assert allclose_report(as_tensor(y_op_numpy, device=dev), y_tensor, **tol)
+
+        # 2.3) Test multiplication with input in tensor list format
+        y_op_list = op @ x_list if op_pos == "left" else x_list @ op
+        for y_op, y in zip(y_op_list, y_list, strict=True):
+            assert allclose_report(y_op, y, **tol)
 
 
 def compare_consecutive_matmats(
     op: PyTorchLinearOperator,
-    adjoint: bool,
-    is_vec: bool,
     num_vecs: int = 2,
     rtol: float = 1e-5,
     atol: float = 1e-8,
@@ -643,23 +669,17 @@ def compare_consecutive_matmats(
 
     Args:
         op: The operator to test.
-        adjoint: Whether to test the adjoint operator.
-        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
-        num_vecs: Number of vectors to test (ignored if ``is_vec`` is ``True``).
-            Default: ``2``.
+        num_vecs: Number of vectors to test on.
         rtol: Relative tolerance for the comparison. Default: ``1e-5``.
         atol: Absolute tolerance for the comparison. Default: ``1e-8``.
     """
-    if adjoint:
-        op = op.adjoint()
-
     tol = {"atol": atol, "rtol": rtol}
 
     # Generate the vector using rand_accepted_formats
     dt, dev = op.dtype, op.device
     _, X, _ = rand_accepted_formats(
         [tuple(s) for s in op._in_shape],
-        is_vec=is_vec,
+        is_vec=False,
         dtype=dt,
         device=dev,
         num_vecs=num_vecs,
@@ -676,8 +696,6 @@ def compare_consecutive_matmats(
 def compare_matmat_expectation(
     op: FisherMCLinearOperator,
     mat: Tensor,
-    adjoint: bool,
-    is_vec: bool,
     max_repeats: int,
     check_every: int,
     num_vecs: int = 2,
@@ -689,8 +707,6 @@ def compare_matmat_expectation(
     Args:
         op: The operator to test.
         mat: The matrix representation of the linear operator.
-        adjoint: Whether to test the adjoint operator.
-        is_vec: Whether to test matrix-vector or matrix-matrix multiplication.
         max_repeats: Maximum number of matrix-vector product within which the
             expectation must converge.
         check_every: Check the expectation every ``check_every`` iterations for
@@ -701,21 +717,17 @@ def compare_matmat_expectation(
         atol: Absolute tolerance for the comparison. Will be multiplied by the maximum
             absolute value of the ground truth. Default: ``1e-8``.
     """
-    if adjoint:
-        op, mat = op.adjoint(), mat.conj().T
-
-    num_vecs = 1 if is_vec else num_vecs
-    dt = op.dtype
-    dev = op.device
+    dt, dev = op.dtype, op.device
     _, x, _ = rand_accepted_formats(
-        [tuple(s) for s in op._in_shape], is_vec, dt, dev, num_vecs=num_vecs
+        [tuple(s) for s in op._in_shape], False, dt, dev, num_vecs=num_vecs
     )
 
     op_x = zeros_like(x)
     mat_x = mat @ x
 
-    atol *= mat_x.flatten().abs().max().item()
-    tol = {"atol": atol, "rtol": rtol}
+    # Normalize so we can share tolerances across different loss reductions
+    scale = mat_x.abs().max()
+    tols = {"atol": atol, "rtol": rtol}
 
     for m in range(max_repeats):
         op_x += op @ x
@@ -724,10 +736,10 @@ def compare_matmat_expectation(
         total_samples = (m + 1) * op._mc_samples
         if total_samples % check_every == 0:
             with redirect_stdout(None), suppress(ValueError), suppress(AssertionError):
-                assert allclose_report(op_x / (m + 1), mat_x, **tol)
+                assert allclose_report(op_x / (m + 1) / scale, mat_x / scale, **tols)
                 return
 
-    assert allclose_report(op_x / max_repeats, mat_x, **tol)
+    assert allclose_report(op_x / max_repeats / scale, mat_x / scale, **tols)
 
 
 def eye_like(A: Union[Tensor, PyTorchLinearOperator]) -> Tensor:
@@ -783,6 +795,9 @@ def check_estimator_convergence(
         Args:
             a_true: The true value.
             a: The estimated value.
+
+        Returns:
+            Relative infinity norm error.
         """
         assert a.shape == a_true.shape
         return (a - a_true).abs().max() / a_true.abs().max()
@@ -907,15 +922,10 @@ def _test_property(  # noqa: C901
     }[property_name]
 
     # Check for equivalence of property and naive computation
-    quantity = getattr(linop, property_name)
+    quantity = getattr(linop, property_name)()
     linop_mat = linop @ eye_like(linop)
     quantity_naive = torch_fn(linop_mat)
     assert allclose_report(quantity, quantity_naive, rtol=rtol, atol=atol)
-
-    # Check that the property is properly cached and reset
-    assert getattr(linop, "_" + property_name) == quantity
-    linop.compute_kronecker_factors()
-    assert getattr(linop, "_" + property_name) is None
 
 
 def _test_save_and_load_state_dict(
@@ -952,6 +962,8 @@ def _test_save_and_load_state_dict(
         CrossEntropyLoss(),
         params,
         [(X, y)],
+        # Avoid computing linop because y has the wrong shape for CE
+        check_deterministic=False,
     )
     with raises(ValueError, match="loss"):
         linop_new.load_state_dict(load(PATH, weights_only=False))
@@ -1102,7 +1114,28 @@ def _test_ekfac_closer_to_exact_than_kfac(
     exact_kfac_dist = linalg.matrix_norm(exact - kfac_mat) / exact_norm
     exact_ekfac_dist = linalg.matrix_norm(exact - ekfac_mat) / exact_norm
     assert exact_kfac_dist > exact_ekfac_dist or (
-        allclose_report(exact_kfac_dist, exact_ekfac_dist, atol=1e-6)
+        allclose_report(exact_kfac_dist, exact_ekfac_dist)
         if exclude == "weight"
         else False
     )  # For no_weights the numerical error might dominate.
+
+
+def change_dtype(case: Tuple, dt: dtype) -> Tuple:
+    """Change the data type of a test case.
+
+    Args:
+        case: The test case (model, loss_func, params, data).
+        dt: The target data type.
+
+    Returns:
+        The converted test case with model, loss function, and data casted to ``dt``.
+    """
+    model_func, loss_func, params, data, batch_size_fn = case
+
+    model_func, loss_func = model_func.to(dt), loss_func.to(dt)
+    data = [
+        (cast_input(X, dt), y.to(dt) if isinstance(loss_func, MSELoss) else y)
+        for (X, y) in data
+    ]
+
+    return model_func, loss_func, params, data, batch_size_fn

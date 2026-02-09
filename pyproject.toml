@@ -64,14 +64,11 @@ test = [
     "coveralls",
     "pytest",
     "pytest-cov",
-    "pytest-optional-tests==0.1.1",
 ]
 
 # Dependencies needed for linting.
 lint = [
     "ruff",
-    "darglint",
-    "pydocstyle",
 ]
 
 # Dependencies needed to build/view the documentation.
@@ -91,20 +88,43 @@ docs = [
 ###############################################################################
 [tool.setuptools_scm]
 
-[tool.pydocstyle]
-convention = "google"
-match = '.*\.py$'
-# subdirectories cannot be included or excluded
-# https://github.com/PyCQA/pydocstyle/issues/363
-match_dir = '^(?!.*(?:test|\.git|docs)).*'
-
 [tool.ruff]
 line-length = 88
+preview = true
+exclude = [
+    ".eggs",
+    ".git",
+    ".pytest_cache",
+    "docs/rtd",
+    "build",
+    "dist",
+]
 
 [tool.ruff.lint]
 # Enable all rules from flake8 (E, F), plus additional ones including isort (I)
-select = ["E", "F", "B", "C", "W", "B9", "PLE", "PLW", "PLR", "I"]
+# and docstrings (D)
+select = ["E", "F", "B", "C", "W", "B9", "PLE", "PLW", "PLR", "I", "D"]
+extend-select = [
+    # Documented parameter is not in the function's signature
+    "DOC102",
+    # return is not documented in docstring
+    "DOC201",
+    # Docstring should not have a returns section because the function doesn't return anything
+    "DOC202",
+    # yield is not documented in docstring
+    "DOC402",
+    # Docstring has a "Yields" section but the function doesn't yield anything
+    "DOC403",
+    # Raised exception missing from docstring
+    "DOC501",
+    # Raised exception is not explicitly raised
+    "DOC502",
+]
 ignore = [
+    # Multi-line docstring summary should start on the second line, conflicts D212
+    "D213",
+    # Blank line before a class docstring, conflicts D211
+    "D203",
     # E501 max-line-length (replaced by B950 (max-line-length + 10%))
     "E501",
     # C408 use {} instead of dict() (ignored because pytorch uses dict)
@@ -121,10 +141,28 @@ ignore = [
     "E226",
     # B905 `zip()` without an explicit `strict=` parameter
     "B905",
+    # D413 missing blank line after last section
+    "D413",
     # Too many arguments in function definition (9 > 5)
     "PLR0913",
     # Magic value comparison
     "PLR2004",
+    # Too many positional arguments
+    "PLR0917",
+    # Too many local variables
+    "PLR0914",
+    # Method does not use self
+    "PLR6301",
+    # Unspecified encoding in open()
+    "PLW1514",
+    # Unnecessary lambda
+    "PLW0108",
+    # Non-augmented assignment
+    "PLR6104",
+    # Literal membership
+    "PLR6201",
+    # Bad dunder method name
+    "PLW3201",
     # Loop variable overwritten by assignment target
     "PLW2901",
 ]
@@ -134,17 +172,13 @@ quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false
 line-ending = "auto"
-exclude = [
-    ".eggs",
-    ".git",
-    ".pytest_cache",
-    "docs/rtd",
-    "build",
-    "dist",
-]
 
 [tool.ruff.lint.per-file-ignores]
-# Add any per-file ignores here if needed
-
-[tool.ruff.lint.flake8-bugbear]
-extend-immutable-calls = ["pytest.raises", "pytest.warns", "pytest.mark.skip"]
+"docs/examples/basic_usage/example_*.py" = [
+    # First line should end with a period
+    "D400",
+    # 1 blank line required between summary line and description
+    "D205",
+    # First line should end with a period, question mark, or exclamation point
+    "D415"
+]
