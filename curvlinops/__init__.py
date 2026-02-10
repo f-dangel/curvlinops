@@ -4,7 +4,8 @@ from curvlinops.diagonal.epperly2024xtrace import xdiag
 from curvlinops.diagonal.hutchinson import hutchinson_diag
 from curvlinops.ekfac import EKFACLinearOperator
 from curvlinops.fisher import FisherMCLinearOperator
-from curvlinops.ggn import GGNDiagonalLinearOperator, GGNLinearOperator
+from curvlinops.ggn import GGNLinearOperator
+from curvlinops.ggn_diagonal import GGNDiagonalLinearOperator
 from curvlinops.gradient_moments import EFLinearOperator
 from curvlinops.hessian import HessianLinearOperator
 from curvlinops.inverse import (

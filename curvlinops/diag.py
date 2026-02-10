@@ -29,7 +29,9 @@ class DiagonalLinearOperator(PyTorchLinearOperator):
         shapes = [tuple(d.shape) for d in diagonal]
         super().__init__(shapes, shapes)
         self._diagonal = diagonal
-        self.SELF_ADJOINT = all(d.conj().allclose(d) for d in diagonal)
+        self.SELF_ADJOINT = all(
+            not d.is_complex() or d.conj().allclose(d) for d in diagonal
+        )
 
     def _matmat(self, X: List[Tensor]) -> List[Tensor]:
         """Matrix-matrix multiplication with the diagonal matrix.
