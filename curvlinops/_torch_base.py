@@ -868,9 +868,7 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
             check_deterministic=check_deterministic,
         )
         PyTorchLinearOperator.__init__(
-            self,
-            self._get_in_shape(),
-            self._get_out_shape(),
+            self, self._get_in_shape(), self._get_out_shape()
         )
 
         if check_deterministic:
