@@ -4,6 +4,7 @@ from math import prod, sqrt
 from typing import List, Union
 from warnings import warn
 
+from curvlinops.utils import _infer_device, _infer_dtype
 from einops import einsum
 from torch import (
     Tensor,
@@ -110,14 +111,8 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
 
         Returns:
             Device of the factors.
-
-        Raises:
-            RuntimeError: If factors are on different devices.
         """
-        devices = {factor.device for factor in self._factors}
-        if len(devices) != 1:
-            raise RuntimeError(f"Factors are on different devices: {devices}")
-        return devices.pop()
+        return _infer_device(self._factors)
 
     @property
     def dtype(self) -> dtype:
@@ -125,14 +120,8 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
 
         Returns:
             Data type of the factors.
-
-        Raises:
-            RuntimeError: If factors have different data types.
         """
-        dtypes = {factor.dtype for factor in self._factors}
-        if len(dtypes) != 1:
-            raise RuntimeError(f"Factors have different dtypes: {dtypes}")
-        return dtypes.pop()
+        return _infer_dtype(self._factors)
 
     def trace(self) -> Tensor:
         """Trace of the Kronecker product.

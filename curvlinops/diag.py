@@ -7,6 +7,7 @@ from typing import List, Union
 from torch import Tensor, device, dtype
 
 from curvlinops._torch_base import PyTorchLinearOperator, _SumPyTorchLinearOperator
+from curvlinops.utils import _infer_device, _infer_dtype
 
 
 class DiagonalLinearOperator(PyTorchLinearOperator):
@@ -68,10 +69,7 @@ class DiagonalLinearOperator(PyTorchLinearOperator):
         Returns:
             The linear operator's device.
         """
-        devices = {d.device for d in self._diagonal}
-        if len(devices) != 1:
-            raise ValueError(f"Inconsistent devices detected: {devices}.")
-        return devices.pop()
+        return _infer_device(self._diagonal)
 
     @property
     def dtype(self) -> dtype:
@@ -80,10 +78,7 @@ class DiagonalLinearOperator(PyTorchLinearOperator):
         Returns:
             The linear operator's data type.
         """
-        dtypes = {d.dtype for d in self._diagonal}
-        if len(dtypes) != 1:
-            raise ValueError(f"Inconsistent dtypes detected: {dtypes}.")
-        return dtypes.pop()
+        return _infer_dtype(self._diagonal)
 
     def inverse(self, damping: float) -> DiagonalLinearOperator:
         """Return the inverse of the damped diagonal operator ``(D + damping * I)^{-1}``.

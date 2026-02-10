@@ -16,7 +16,7 @@ from torch.autograd import grad
 from torch.nn import Parameter
 from tqdm import tqdm
 
-from curvlinops.utils import allclose_report
+from curvlinops.utils import _infer_device, _infer_dtype, allclose_report
 
 
 class _EmpiricalRiskMixin:
@@ -211,14 +211,8 @@ class _EmpiricalRiskMixin:
 
         Returns:
             Inferred device.
-
-        Raises:
-            RuntimeError: If the device cannot be inferred.
         """
-        devices = {p.device for p in self._params}
-        if len(devices) != 1:
-            raise RuntimeError(f"Could not infer device. Parameters live on {devices}.")
-        return devices.pop()
+        return _infer_device(self._params)
 
     @property
     def dtype(self) -> dtype:
@@ -226,14 +220,8 @@ class _EmpiricalRiskMixin:
 
         Returns:
             Inferred data type.
-
-        Raises:
-            RuntimeError: If the data type cannot be inferred.
         """
-        dtypes = {p.dtype for p in self._params}
-        if len(dtypes) != 1:
-            raise RuntimeError(f"Could not infer data type. Parameters have {dtypes}.")
-        return dtypes.pop()
+        return _infer_dtype(self._params)
 
     def _loop_over_data(
         self,
