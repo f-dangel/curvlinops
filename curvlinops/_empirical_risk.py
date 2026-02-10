@@ -117,8 +117,8 @@ class _EmpiricalRiskMixin:
             ((X1, y1), pred1, loss1, grad1),
             ((X2, y2), pred2, loss2, grad2),
         ) in zip(
-            self.data_prediction_loss_gradient(),
-            self.data_prediction_loss_gradient(),
+            self._data_prediction_loss_gradient(),
+            self._data_prediction_loss_gradient(),
         ):
             if self.FIXED_DATA_ORDER:
                 self._check_deterministic_batch(
@@ -177,7 +177,7 @@ class _EmpiricalRiskMixin:
         """
         X1, X2 = Xs
         if isinstance(X1, MutableMapping) and isinstance(X2, MutableMapping):
-            for k in X1.keys():
+            for k in X1:
                 v1, v2 = X1[k], X2[k]
                 if isinstance(v1, Tensor) and not allclose_report(
                     v1, v2, rtol=rtol, atol=atol
@@ -269,7 +269,7 @@ class _EmpiricalRiskMixin:
             self._loss_func.reduction
         ]
 
-    def data_prediction_loss_gradient(
+    def _data_prediction_loss_gradient(
         self, desc: str = "batch_prediction_loss_gradient"
     ) -> Iterator[
         Tuple[
@@ -316,7 +316,7 @@ class _EmpiricalRiskMixin:
         total_loss = tensor([0.0], device=self.device, dtype=self.dtype).squeeze()
         total_grad = [zeros_like(p) for p in self._params]
 
-        for _, _, loss, grad_params in self.data_prediction_loss_gradient(
+        for _, _, loss, grad_params in self._data_prediction_loss_gradient(
             desc="gradient_and_loss"
         ):
             total_loss.add_(loss)
