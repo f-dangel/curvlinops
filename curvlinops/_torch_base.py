@@ -838,14 +838,20 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
         self._block_sizes = [len(params)] if block_sizes is None else block_sizes
 
         _EmpiricalRiskMixin.__init__(
-            self, model_func, loss_func, params, data,
+            self,
+            model_func,
+            loss_func,
+            params,
+            data,
             progressbar=progressbar,
             batch_size_fn=batch_size_fn,
             num_data=num_data,
             check_deterministic=check_deterministic,
         )
         PyTorchLinearOperator.__init__(
-            self, self._get_in_shape(), self._get_out_shape(),
+            self,
+            self._get_in_shape(),
+            self._get_out_shape(),
         )
 
         if check_deterministic:
@@ -908,4 +914,3 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
             NotImplementedError: Must be implemented by descendants.
         """
         raise NotImplementedError
-

@@ -4,7 +4,6 @@ from math import prod, sqrt
 from typing import List, Union
 from warnings import warn
 
-from curvlinops.utils import _infer_device, _infer_dtype
 from einops import einsum
 from torch import (
     Tensor,
@@ -20,6 +19,7 @@ from torch.linalg import cholesky, eigh, matrix_norm
 
 from curvlinops._torch_base import PyTorchLinearOperator
 from curvlinops.eigh import EighDecomposedLinearOperator
+from curvlinops.utils import _infer_device, _infer_dtype
 
 
 def ensure_all_square(*tensors_or_operators: Union[Tensor, PyTorchLinearOperator]):

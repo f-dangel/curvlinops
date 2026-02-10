@@ -12,9 +12,7 @@ from curvlinops.utils import allclose_report
 _userdict_pytree_registered = False
 
 
-def _check_deterministic_matvec(
-    linop, rtol: float = 1e-5, atol: float = 1e-8
-):
+def _check_deterministic_matvec(linop, rtol: float = 1e-5, atol: float = 1e-8):
     """Probe whether a linear operator's matrix-vector product is deterministic.
 
     Performs two sequential matrix-vector products and compares them.

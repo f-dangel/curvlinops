@@ -244,7 +244,6 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
 
         Raises:
             ValueError: If mode is not one of the supported modes.
-            ValueError: If ``X`` is a dict-like and ``batch_size_fn`` is not specified.
         """
         if mode not in self.SUPPORTED_MODES:
             raise ValueError(
@@ -276,11 +275,6 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
         Extends the base class check by additionally verifying that the model
         supports both batched and un-batched inputs, which is required for
         ``vmap``.
-
-        Raises:
-            RuntimeError: If non-deterministic behavior is detected.
-            ValueError: If the model does not support batched and un-batched
-                inputs.
         """
         super()._check_deterministic()
         X, _ = next(iter(self._data))
@@ -395,10 +389,6 @@ class GGNDiagonalLinearOperator(DiagonalLinearOperator):
                 Default: ``2147483647``.
             mc_samples: Number of Monte Carlo samples when ``mode='mc'``.
                 Default: ``1``.
-
-        Raises:
-            ValueError: If mode is not one of the supported modes ('exact' or
-                'mc').
         """
         computer = GGNDiagonalComputer(
             model_func,
