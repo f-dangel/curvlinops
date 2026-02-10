@@ -22,12 +22,13 @@ from torch import (
     cat,
     device,
     dtype,
+    rand,
     zeros_like,
 )
 from torch.nn import Parameter
 
-from curvlinops._checks import _check_deterministic_matvec
 from curvlinops._empirical_risk import _EmpiricalRiskMixin
+from curvlinops.utils import allclose_report
 
 
 class PyTorchLinearOperator:
@@ -518,6 +519,24 @@ class PyTorchLinearOperator:
         """
         raise NotImplementedError
 
+    def _check_deterministic_matvec(self, rtol: float = 1e-5, atol: float = 1e-8):
+        """Probe whether the linear operator's matrix-vector product is deterministic.
+
+        Performs two sequential matrix-vector products and compares them.
+
+        Args:
+            rtol: Relative tolerance for comparison. Defaults to ``1e-5``.
+            atol: Absolute tolerance for comparison. Defaults to ``1e-8``.
+
+        Raises:
+            RuntimeError: If the two matrix-vector products yield different results.
+        """
+        v = rand(self.shape[1], device=self.device, dtype=self.dtype)
+        Av1 = self @ v
+        Av2 = self @ v
+        if not allclose_report(Av1, Av2, rtol=rtol, atol=atol):
+            raise RuntimeError("Check for deterministic matvec failed.")
+
     @staticmethod
     def _scipy_compatible(
         f: Callable[[Tensor], Tensor], device: device, dtype: dtype
@@ -855,7 +874,7 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
         )
 
         if check_deterministic:
-            _check_deterministic_matvec(self)
+            self._check_deterministic_matvec()
 
     def _get_in_shape(self) -> List[Tuple[int, ...]]:
         """Return linear operator's input space dimensions.
