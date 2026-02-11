@@ -796,6 +796,7 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
         progressbar: bool = False,
         check_deterministic: bool = True,
         num_data: Optional[int] = None,
+        num_per_example_loss_terms: Optional[int] = None,
         block_sizes: Optional[List[int]] = None,
         batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
     ):
@@ -828,6 +829,10 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
                 safeguard, only turn it off if you know what you are doing.
             num_data: Number of data points. If ``None``, it is inferred from the data
                 at the cost of one traversal through the data loader.
+            num_per_example_loss_terms: Number of per-example loss terms, e.g. the
+                number of tokens in a sequence. Only used by subclasses with
+                ``NEEDS_NUM_PER_EXAMPLE_LOSS_TERMS = True``. If ``None``, it is
+                inferred from the data when needed. Default: ``None``.
             block_sizes: This argument will be ignored if the linear operator does not
                 support blocks. List of integers indicating the number of
                 ``nn.Parameter``s forming a block. Entries must sum to ``len(params)``.
@@ -865,6 +870,7 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
             progressbar=progressbar,
             batch_size_fn=batch_size_fn,
             num_data=num_data,
+            num_per_example_loss_terms=num_per_example_loss_terms,
             check_deterministic=check_deterministic,
         )
         PyTorchLinearOperator.__init__(

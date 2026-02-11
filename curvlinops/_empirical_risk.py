@@ -13,7 +13,7 @@ from typing import (
 
 from torch import Tensor, device, dtype, tensor, zeros_like
 from torch.autograd import grad
-from torch.nn import Parameter
+from torch.nn import CrossEntropyLoss, Parameter
 from tqdm import tqdm
 
 from curvlinops.utils import _infer_device, _infer_dtype, allclose_report
@@ -23,6 +23,7 @@ class _EmpiricalRiskMixin:
     """Mixin for empirical risk computation over a data set."""
 
     FIXED_DATA_ORDER: bool = False
+    NEEDS_NUM_PER_EXAMPLE_LOSS_TERMS: bool = False
 
     def __init__(
         self,
@@ -33,6 +34,7 @@ class _EmpiricalRiskMixin:
         progressbar: bool = False,
         batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
         num_data: Optional[int] = None,
+        num_per_example_loss_terms: Optional[int] = None,
         check_deterministic: bool = True,
     ):
         """Set up the shared state for empirical risk computation.
@@ -51,6 +53,10 @@ class _EmpiricalRiskMixin:
                 ``None``, defaults to ``X.shape[0]``.
             num_data: Number of data points. If ``None``, it is inferred from the data
                 at the cost of one traversal through the data loader.
+            num_per_example_loss_terms: Number of per-example loss terms, e.g. the
+                number of tokens in a sequence. Only used by subclasses with
+                ``NEEDS_NUM_PER_EXAMPLE_LOSS_TERMS = True``. If ``None``, it is
+                inferred from the data when needed. Default: ``None``.
             check_deterministic: Probe that model and data are deterministic, i.e.
                 that the data does not use ``drop_last`` or data augmentation. Also, the
                 model's forward pass could depend on the order in which mini-batches
@@ -60,6 +66,8 @@ class _EmpiricalRiskMixin:
         Raises:
             ValueError: If ``X`` is a ``MutableMapping`` and ``batch_size_fn`` is not
                 specified.
+            ValueError: If the inferred number of loss terms is not divisible by the
+                number of data points.
         """
         if isinstance(next(iter(data))[0], MutableMapping) and batch_size_fn is None:
             raise ValueError(
@@ -75,17 +83,72 @@ class _EmpiricalRiskMixin:
             (lambda X: X.shape[0]) if batch_size_fn is None else batch_size_fn
         )
 
-        self._N_data = (
-            sum(
-                self._batch_size_fn(X)
-                for (X, _) in self._loop_over_data(desc="_N_data")
-            )
-            if num_data is None
-            else num_data
+        self._N_data, self._num_per_example_loss_terms = self._get_data_statistics(
+            num_data, num_per_example_loss_terms
         )
 
         if check_deterministic:
             self._check_deterministic()
+
+    def _get_data_statistics(
+        self,
+        num_data: Optional[int],
+        num_per_example_loss_terms: Optional[int],
+    ) -> Tuple[int, Optional[int]]:
+        """Determine the number of data points and per-example loss terms.
+
+        Traverses the data at most once, computing whichever statistics were not
+        explicitly provided. The number of per-example loss terms is only
+        inferred when ``NEEDS_NUM_PER_EXAMPLE_LOSS_TERMS`` is ``True`` and
+        ``num_per_example_loss_terms`` is ``None``.
+
+        Args:
+            num_data: Number of data points, or ``None`` to infer.
+            num_per_example_loss_terms: Per-example loss terms, or ``None`` to
+                infer when ``NEEDS_NUM_PER_EXAMPLE_LOSS_TERMS`` is ``True``.
+
+        Returns:
+            Tuple of ``(N_data, num_per_example_loss_terms)``. The second
+            element is ``None`` when not required or already provided.
+
+        Raises:
+            ValueError: If the inferred number of loss terms is not divisible
+                by the number of data points.
+        """
+        need_N_data = num_data is None
+        need_loss_terms = (
+            self.NEEDS_NUM_PER_EXAMPLE_LOSS_TERMS
+            and self._loss_func is not None
+            and num_per_example_loss_terms is None
+        )
+        if not need_N_data and not need_loss_terms:
+            return num_data, num_per_example_loss_terms
+
+        # Accumulate number of data points and (maybe) loss terms
+        N_data_acc, num_loss_terms_acc = 0, 0
+        for X, y in self._loop_over_data(desc="data_statistics"):
+            if need_N_data:
+                N_data_acc += self._batch_size_fn(X)
+            if need_loss_terms:
+                num_loss_terms_acc += (
+                    y.numel()
+                    if isinstance(self._loss_func, CrossEntropyLoss)
+                    else y.shape[:-1].numel()
+                )
+
+        # Maybe update number of passed data points and loss terms
+        N_data = N_data_acc if need_N_data else num_data
+
+        if need_loss_terms:
+            if num_loss_terms_acc % N_data != 0:
+                raise ValueError(
+                    "The number of loss terms must be divisible by the number "
+                    f"of data points; num_loss_terms="
+                    f"{num_loss_terms_acc}, N_data={N_data}."
+                )
+            num_per_example_loss_terms = num_loss_terms_acc // N_data
+
+        return N_data, num_per_example_loss_terms
 
     def _check_deterministic(self, rtol: float = 5e-5, atol: float = 1e-6):
         """Check that the data and model are deterministic.

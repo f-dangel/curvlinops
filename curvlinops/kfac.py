@@ -166,6 +166,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
     _SUPPORTED_FISHER_TYPE: FisherType = FisherType
     _SUPPORTED_KFAC_APPROX: KFACType = KFACType
     SELF_ADJOINT: bool = True
+    NEEDS_NUM_PER_EXAMPLE_LOSS_TERMS: bool = True
 
     def __init__(
         self,
@@ -293,48 +294,11 @@ class KFACLinearOperator(CurvatureLinearOperator):
             params,
             data,
             progressbar=progressbar,
-            check_deterministic=False,
+            check_deterministic=check_deterministic,
             num_data=num_data,
+            num_per_example_loss_terms=num_per_example_loss_terms,
             batch_size_fn=batch_size_fn,
         )
-
-        self._set_num_per_example_loss_terms(num_per_example_loss_terms)
-
-        if check_deterministic:
-            self._check_deterministic()
-
-    def _set_num_per_example_loss_terms(
-        self, num_per_example_loss_terms: Optional[int]
-    ):
-        """Set the number of per-example loss terms.
-
-        Args:
-            num_per_example_loss_terms: Number of per-example loss terms. If ``None``,
-                it is inferred from the data at the cost of one traversal through the
-                data loader.
-
-        Raises:
-            ValueError: If the number of loss terms is not divisible by the number of
-                data points.
-        """
-        if num_per_example_loss_terms is None:
-            # Determine the number of per-example loss terms
-            num_loss_terms = sum(
-                (
-                    y.numel()
-                    if isinstance(self._loss_func, CrossEntropyLoss)
-                    else y.shape[:-1].numel()
-                )
-                for (_, y) in self._loop_over_data(desc="_num_per_example_loss_terms")
-            )
-            if num_loss_terms % self._N_data != 0:
-                raise ValueError(
-                    "The number of loss terms must be divisible by the number of data "
-                    f"points; num_loss_terms={num_loss_terms}, N_data={self._N_data}."
-                )
-            self._num_per_example_loss_terms = num_loss_terms // self._N_data
-        else:
-            self._num_per_example_loss_terms = num_per_example_loss_terms
 
     @staticmethod
     def _left_and_right_multiply(
