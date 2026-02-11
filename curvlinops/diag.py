@@ -50,7 +50,7 @@ class DiagonalLinearOperator(PyTorchLinearOperator):
         """
         return [d.unsqueeze(-1) * x for d, x in zip(self._diagonal, X)]
 
-    def adjoint(self) -> DiagonalLinearOperator:
+    def _adjoint(self) -> DiagonalLinearOperator:
         """Return the adjoint (conjugate transpose) of the diagonal operator.
 
         For a diagonal matrix, the adjoint is obtained by taking the complex
