@@ -64,7 +64,15 @@ class PyTorchLinearOperator:
         Args:
             in_shape: A list of shapes specifying the linear operator's input space.
             out_shape: A list of shapes specifying the linear operator's output space.
+
+        Raises:
+            ValueError: If either ``in_shape`` or ``out_shape`` is empty.
         """
+        if not in_shape or not out_shape:
+            raise ValueError(
+                f"In- {in_shape} and output shapes {out_shape} must be non-empty."
+            )
+
         self._in_shape = [Size(s) for s in in_shape]
         self._out_shape = [Size(s) for s in out_shape]
 
