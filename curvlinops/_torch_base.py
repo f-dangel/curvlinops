@@ -440,7 +440,7 @@ class PyTorchLinearOperator:
         Returns:
             A new linear operator representing the difference A - B.
         """
-        return _SumPyTorchLinearOperator(self, -1.0 * other)
+        return self + (-1.0 * other)
 
     def __mul__(self, scalar: Union[int, float]) -> _ScalePyTorchLinearOperator:
         """Multiply the linear operator by a scalar (A * scalar).
@@ -462,7 +462,18 @@ class PyTorchLinearOperator:
         Returns:
             A new linear operator representing the scaled linear operator.
         """
-        return self.__mul__(scalar)
+        return self * scalar
+
+    def __truediv__(self, scalar: Union[int, float]) -> _ScalePyTorchLinearOperator:
+        """Divide the linear operator by a scalar (A / scalar).
+
+        Args:
+            scalar: A scalar to divide the linear operator by.
+
+        Returns:
+            A new linear operator representing the scaled linear operator.
+        """
+        return self * (1.0 / scalar)
 
     ###############################################################################
     #                                 SCIPY EXPORT                                #
