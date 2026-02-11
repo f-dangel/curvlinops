@@ -353,7 +353,9 @@ class KFACLinearOperator(CurvatureLinearOperator):
             if self._fisher_type == FisherType.TYPE2:
                 return hessian_sqrts_computer(output, y, loss_func).movedim(-1, 0)
             else:
-                raise NotImplementedError
+                raise NotImplementedError(
+                    f"Unsupported Fisher type: {self._fisher_type}."
+                )
 
         return compute_grad_outputs
 

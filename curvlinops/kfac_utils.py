@@ -223,6 +223,9 @@ def make_grad_output_sampler(
 ) -> Callable[[Tensor, int, Tensor, Generator], Tensor]:
     """Create a function that samples gradients w.r.t. network outputs.
 
+    The expectation of the sampled gradient outer product is the loss function's
+    Hessian, including scaling from reductions over non-batch axes.
+
     Args:
         loss_func: The loss function to create the sampler for.
         warn_BCEWithLogitsLoss_targets_unchecked: Whether to warn that targets are
@@ -230,7 +233,9 @@ def make_grad_output_sampler(
 
     Returns:
         A function that samples gradients w.r.t. the model prediction.
-        Signature: (output, num_samples, y, generator) -> grad_samples
+        Signature: (output, num_samples, y, generator) -> grad_samples.
+        The predictions (output) and labels (y) both have a batch axis, and the
+        returned gradient samples will have the shape ``[num_samples, *output.shape]``.
     """
 
     def sample_grad_output(
