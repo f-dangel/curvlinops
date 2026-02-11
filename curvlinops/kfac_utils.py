@@ -1,16 +1,45 @@
 """Utility functions related to KFAC."""
 
 from math import sqrt
-from typing import Tuple, Union
+from typing import Callable, Tuple, Union
+from warnings import warn
 
 from einconv import index_pattern
 from einconv.utils import get_conv_paddings
 from einops import einsum, rearrange, reduce
-from torch import Tensor, block_diag, diag, zeros_like
+from torch import (
+    Generator,
+    Tensor,
+    as_tensor,
+    block_diag,
+    diag,
+    normal,
+    softmax,
+    zeros,
+    zeros_like,
+)
 from torch.func import vmap
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
-from torch.nn.functional import unfold
+from torch.nn.functional import one_hot, unfold
 from torch.nn.modules.utils import _pair
+
+
+def _warn_BCEWithLogitsLoss_targets_unchecked(
+    loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
+) -> None:
+    """Warn that BCEWithLogitsLoss targets are not verified to be binary.
+
+    Args:
+        loss_func: The loss function being used.
+    """
+    if isinstance(loss_func, BCEWithLogitsLoss):
+        warn(
+            "BCEWithLogitsLoss only supports binary targets (0, 1), but this is "
+            "not being verified. Ensure your targets are binary to avoid "
+            "incorrect results (using _check_binary_if_BCEWithLogitsLoss).",
+            UserWarning,
+            stacklevel=3,
+        )
 
 
 def _check_binary_if_BCEWithLogitsLoss(
@@ -39,7 +68,7 @@ def loss_hessian_matrix_sqrt(
     output_one_datum: Tensor,
     target_one_datum: Tensor,
     loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
-    check_binary_if_BCEWithLogitsLoss: bool = True,
+    warn_BCEWithLogitsLoss_targets_unchecked: bool = True,
 ) -> Tensor:
     r"""Compute the loss function's matrix square root for a sample's output.
 
@@ -51,8 +80,8 @@ def loss_hessian_matrix_sqrt(
         target_one_datum: The label of the single datum. Has shape ``[*D]``.
             Has no batch axis.
         loss_func: The loss function.
-        check_binary_if_BCEWithLogitsLoss: Whether to check if targets are binary
-            for BCEWithLogitsLoss. Default: ``True``.
+        warn_BCEWithLogitsLoss_targets_unchecked: Whether to warn that targets are
+            not verified to be binary for BCEWithLogitsLoss. Default: ``True``.
 
     Returns:
         The matrix square root
@@ -173,8 +202,8 @@ def loss_hessian_matrix_sqrt(
         hess_sqrt_flat = hess_sqrt_flat.reshape(C * D, C * D)
 
     elif isinstance(loss_func, BCEWithLogitsLoss):
-        if check_binary_if_BCEWithLogitsLoss:
-            _check_binary_if_BCEWithLogitsLoss(target_one_datum, loss_func)
+        if warn_BCEWithLogitsLoss_targets_unchecked:
+            _warn_BCEWithLogitsLoss_targets_unchecked(loss_func)
 
         p = output_one_datum.flatten().sigmoid()
         hess_sqrt_diag = sqrt(c) * (p * (1 - p)).sqrt()
@@ -186,6 +215,123 @@ def loss_hessian_matrix_sqrt(
     # Un-flatten the output dimensions
     output_shape = output_one_datum.shape
     return hess_sqrt_flat.reshape(*output_shape, *output_shape)
+
+
+def make_grad_output_sampler(
+    loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
+    warn_BCEWithLogitsLoss_targets_unchecked: bool = True,
+) -> Callable[[Tensor, int, Tensor, Generator], Tensor]:
+    """Create a function that samples gradients w.r.t. network outputs.
+
+    The expectation of the sampled gradient outer product is the loss function's
+    Hessian, including scaling from reductions over non-batch axes.
+
+    Args:
+        loss_func: The loss function to create the sampler for.
+        warn_BCEWithLogitsLoss_targets_unchecked: Whether to warn that targets are
+            not verified to be binary for BCEWithLogitsLoss. Default: ``True``.
+
+    Returns:
+        A function that samples gradients w.r.t. the model prediction.
+        Signature: (output, num_samples, y, generator) -> grad_samples.
+        The predictions (output) and labels (y) both have a batch axis, and the
+        returned gradient samples will have the shape ``[num_samples, *output.shape]``.
+    """
+
+    def sample_grad_output(
+        output_one_datum: Tensor,
+        num_samples: int,
+        target_one_datum: Tensor,
+        generator: Generator,
+    ) -> Tensor:
+        """Draw would-be gradients ``∇_f log p(·|f)`` with explicit generator.
+
+        Handles a single data point.
+        The would-be gradient's outer product equals the Hessian ``∇²_f log p(·|f)``
+        in expectation.
+        Currently supports ``MSELoss``, ``CrossEntropyLoss``, and
+        ``BCEWithLogitsLoss`` with arbitrary output dimensions.
+        The returned gradients include proper scaling based on the loss function's
+        reduction type over the feature dimensions.
+
+        Args:
+            output_one_datum: model prediction ``f`` for one datum. Has no batch axis.
+            num_samples: Number of samples to draw.
+            target_one_datum: Labels of the datum. Has no batch axis.
+            generator: Random generator for sampling.
+
+        Returns:
+            Samples of the gradient w.r.t. the model prediction for one datum.
+            Has shape ``[num_samples, *output.shape]``.
+
+        Raises:
+            NotImplementedError: For unsupported loss functions.
+        """
+        # Number of losses contributed from a datum's sequence-valued prediction
+        num_features = (
+            output_one_datum.numel() / output_one_datum.shape[0]
+            if isinstance(loss_func, CrossEntropyLoss)
+            else output_one_datum.numel()
+        )
+        # Reduction factor from accumulation over losses in a sequence
+        reduction = loss_func.reduction
+        c = {"sum": 1.0, "mean": 1.0 / num_features}[reduction]
+
+        if isinstance(loss_func, MSELoss):
+            dev, dt = output_one_datum.device, output_one_datum.dtype
+            std = as_tensor(sqrt(2 * c), device=dev, dtype=dt)
+            mean = zeros(num_samples, *output_one_datum.shape, device=dev, dtype=dt)
+            grad_samples = normal(mean, std, generator=generator)
+
+        elif isinstance(loss_func, CrossEntropyLoss):
+            # Flatten sequence dimensions: [C, *seq] -> [C, seq_flat]
+            C = output_one_datum.shape[0]
+            output_flat = output_one_datum.unsqueeze(-1).flatten(start_dim=1)
+            prob = softmax(output_flat, dim=0)  # [C, seq_flat]
+
+            # Sample for each sequence position independently
+            # Rearrange to [seq_flat, C] for multinomial sampling
+            prob_for_sampling = rearrange(prob, "c s -> s c")
+            samples = prob_for_sampling.multinomial(
+                num_samples=num_samples, replacement=True, generator=generator
+            )  # [seq_flat, num_samples]
+            samples = rearrange(samples, "s n -> n s")  # [num_samples, seq_flat]
+            onehot_samples = one_hot(samples, num_classes=C)
+            # [num_samples, seq_flat, C] -> [num_samples, C, seq_flat]
+            onehot_samples = rearrange(onehot_samples, "n s c -> n c s")
+
+            # Expand prob to match: [C, seq_flat] -> [num_samples, C, seq_flat]
+            prob_expanded = prob.unsqueeze(0).expand_as(onehot_samples)
+            grad_samples_flat = sqrt(c) * (prob_expanded - onehot_samples)
+
+            # Reshape back to original sequence dimensions
+            out_shape = (num_samples, *output_one_datum.shape)
+            grad_samples = grad_samples_flat.reshape(out_shape)
+
+        elif isinstance(loss_func, BCEWithLogitsLoss):
+            if warn_BCEWithLogitsLoss_targets_unchecked:
+                _warn_BCEWithLogitsLoss_targets_unchecked(loss_func)
+
+            prob = output_one_datum.sigmoid()
+            # repeat ``num_sample`` times along a new leading axis
+            prob = prob.unsqueeze(0).expand(num_samples, *prob.shape)
+            sample = prob.bernoulli(generator=generator)
+            grad_samples = sqrt(c) * (prob - sample)
+
+        else:
+            raise NotImplementedError(
+                f"Supported losses: {(MSELoss, CrossEntropyLoss, BCEWithLogitsLoss)}"
+            )
+
+        return grad_samples
+
+    # Parallelize over predictions and targets
+    return vmap(
+        sample_grad_output,
+        in_dims=(0, None, 0, None),
+        out_dims=1,
+        randomness="different",
+    )
 
 
 def extract_patches(

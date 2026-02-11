@@ -7,7 +7,7 @@ from functools import partial
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
 from einops import einsum, rearrange
-from torch import Generator, Tensor, cat
+from torch import Tensor, cat
 from torch.linalg import eigh
 from torch.nn import (
     BCEWithLogitsLoss,
@@ -25,6 +25,7 @@ from curvlinops.kfac import (
     KFACType,
 )
 from curvlinops.kfac_utils import extract_patches
+from curvlinops.utils import _seed_generator
 
 
 def compute_eigenvalue_correction_linear_weight_sharing(
@@ -510,9 +511,7 @@ class EKFACLinearOperator(KFACLinearOperator):
                 )
             )
 
-        if self._generator is None or self._generator.device != self.device:
-            self._generator = Generator(device=self.device)
-        self._generator.manual_seed(self._seed)
+        self._generator = _seed_generator(self._generator, self.device, self._seed)
 
         # loop over data set, computing the corrected eigenvalues
         for X, y in self._loop_over_data(desc="Eigenvalue correction"):
