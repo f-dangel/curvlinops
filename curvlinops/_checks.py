@@ -4,32 +4,10 @@ from collections import UserDict
 from typing import Any, Callable, List, MutableMapping, Tuple, Union
 from warnings import warn
 
-from torch import Tensor, allclose, rand, vmap
-
-from curvlinops.utils import allclose_report
+from torch import Tensor, allclose, vmap
 
 # Track whether UserDict has been registered as a PyTree node
 _userdict_pytree_registered = False
-
-
-def _check_deterministic_matvec(linop, rtol: float = 1e-5, atol: float = 1e-8):
-    """Probe whether a linear operator's matrix-vector product is deterministic.
-
-    Performs two sequential matrix-vector products and compares them.
-
-    Args:
-        linop: The linear operator to check.
-        rtol: Relative tolerance for comparison. Defaults to ``1e-5``.
-        atol: Absolute tolerance for comparison. Defaults to ``1e-8``.
-
-    Raises:
-        RuntimeError: If the two matrix-vector products yield different results.
-    """
-    v = rand(linop.shape[1], device=linop.device, dtype=linop.dtype)
-    Av1 = linop @ v
-    Av2 = linop @ v
-    if not allclose_report(Av1, Av2, rtol=rtol, atol=atol):
-        raise RuntimeError("Check for deterministic matvec failed.")
 
 
 def _register_userdict_as_pytree():
