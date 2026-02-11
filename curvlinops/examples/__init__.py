@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import List, Tuple
 
-from torch import Tensor, device, dtype, einsum
+from torch import Tensor, device, dtype, einsum, ones
 
 from curvlinops._torch_base import PyTorchLinearOperator
+from curvlinops.diag import DiagonalLinearOperator
 
 
 class TensorLinearOperator(PyTorchLinearOperator):
@@ -162,7 +163,7 @@ class OuterProductLinearOperator(PyTorchLinearOperator):
         return self._A.device
 
 
-class IdentityLinearOperator(PyTorchLinearOperator):
+class IdentityLinearOperator(DiagonalLinearOperator):
     """Linear operator representing the identity matrix."""
 
     SELF_ADJOINT = True
@@ -175,9 +176,13 @@ class IdentityLinearOperator(PyTorchLinearOperator):
             device: The device on which the identity operator is defined.
             dtype: The data type of the identity operator.
         """
-        super().__init__(shape, shape)
-        self._device = device
-        self._dtype = dtype
+        # Build a memory-efficient version of the diagonal containing ones
+        alloc_shape, expand_shape = [len(s) * (1,) for s in shape], shape
+        diagonal = [
+            ones(*alloc_s, device=device, dtype=dtype).expand(*expand_s)
+            for alloc_s, expand_s in zip(alloc_shape, expand_shape)
+        ]
+        super().__init__(diagonal)
 
     def _matmat(self, M: List[Tensor]) -> List[Tensor]:
         """Apply the linear operator to a matrix in list format.
@@ -189,21 +194,3 @@ class IdentityLinearOperator(PyTorchLinearOperator):
             The result of the matrix multiplication in list format.
         """
         return M
-
-    @property
-    def dtype(self) -> dtype:
-        """Return the data type of the linear operator.
-
-        Returns:
-            The data type of the linear operator.
-        """
-        return self._dtype
-
-    @property
-    def device(self) -> device:
-        """Return the linear operator's device.
-
-        Returns:
-            The device on which the linear operator is defined.
-        """
-        return self._device

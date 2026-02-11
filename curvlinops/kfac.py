@@ -48,6 +48,7 @@ from curvlinops.kfac_utils import (
     loss_hessian_matrix_sqrt,
     make_grad_output_sampler,
 )
+from curvlinops.utils import _seed_generator
 
 FactorType = TypeVar(
     "FactorType", Optional[Tensor], Tuple[Optional[Tensor], Optional[Tensor]]
@@ -167,6 +168,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
     _SUPPORTED_FISHER_TYPE: FisherType = FisherType
     _SUPPORTED_KFAC_APPROX: KFACType = KFACType
     SELF_ADJOINT: bool = True
+    NEEDS_NUM_PER_EXAMPLE_LOSS_TERMS: bool = True
 
     def __init__(
         self,
@@ -297,19 +299,15 @@ class KFACLinearOperator(CurvatureLinearOperator):
             params,
             data,
             progressbar=progressbar,
-            check_deterministic=False,
+            check_deterministic=check_deterministic,
             num_data=num_data,
+            num_per_example_loss_terms=num_per_example_loss_terms,
             batch_size_fn=batch_size_fn,
         )
 
-        self._set_num_per_example_loss_terms(num_per_example_loss_terms)
-
-        if check_deterministic:
-            self._check_deterministic()
-
     def _set_up_grad_outputs_computer(
         self, loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss]
-    ) -> Callable[[Union[MutableMapping, Tensor], Tensor], Tensor]:
+    ) -> Callable[[Tensor, Tensor], Tensor]:
         """Set up the function that computes network output gradients for KFAC.
 
         Args:
@@ -348,12 +346,12 @@ class KFACLinearOperator(CurvatureLinearOperator):
             """
             # NOTE Checking for binary labels is data-dependent and not supported in vmap.
             # Therefore, we check outside vmap and then turn it off inside vmap
-            _check_binary_if_BCEWithLogitsLoss(y, self._loss_func)
+            _check_binary_if_BCEWithLogitsLoss(y, loss_func)
 
             if self._fisher_type == FisherType.MC:
                 return grad_output_sampler(output, self._mc_samples, y, self._generator)
             if self._fisher_type == FisherType.TYPE2:
-                return hessian_sqrts_computer(output, y, self._loss_func).movedim(-1, 0)
+                return hessian_sqrts_computer(output, y, loss_func).movedim(-1, 0)
             else:
                 raise NotImplementedError
 
@@ -558,9 +556,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
             )
 
         # loop over data set, computing the Kronecker factors
-        if self._generator is None or self._generator.device != self.device:
-            self._generator = Generator(device=self.device)
-        self._generator.manual_seed(self._seed)
+        self._generator = _seed_generator(self._generator, self.device, self._seed)
 
         for X, y in self._loop_over_data(desc="KFAC matrices"):
             output = self._model_func(X)

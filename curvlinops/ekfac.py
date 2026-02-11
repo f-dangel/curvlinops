@@ -7,7 +7,7 @@ from functools import partial
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
 from einops import einsum, rearrange
-from torch import Generator, Tensor, cat
+from torch import Tensor, cat
 from torch.linalg import eigh
 from torch.nn import (
     BCEWithLogitsLoss,
@@ -25,6 +25,7 @@ from curvlinops.kfac import (
     KFACType,
 )
 from curvlinops.kfac_utils import extract_patches
+from curvlinops.utils import _seed_generator
 
 
 def compute_eigenvalue_correction_linear_weight_sharing(
@@ -336,13 +337,21 @@ class EKFACLinearOperator(KFACLinearOperator):
                 needs to be specified. The intended behavior is to consume the first
                 entry of the iterates from ``data`` and return their batch size.
         """
+        # Initialize the eigenvectors of the Kronecker factors
+        self._input_covariances_eigenvectors: Dict[str, Tensor] = {}
+        self._gradient_covariances_eigenvectors: Dict[str, Tensor] = {}
+        # Initialize the cache for activations
+        self._cached_activations: Dict[str, Tensor] = {}
+        # Initialize the corrected eigenvalues for EKFAC
+        self._corrected_eigenvalues: Dict[str, Union[Tensor, Dict[str, Tensor]]] = {}
+
         super().__init__(
             model_func=model_func,
             loss_func=loss_func,
             params=params,
             data=data,
             progressbar=progressbar,
-            check_deterministic=False,
+            check_deterministic=check_deterministic,
             seed=seed,
             fisher_type=fisher_type,
             mc_samples=mc_samples,
@@ -352,17 +361,6 @@ class EKFACLinearOperator(KFACLinearOperator):
             num_data=num_data,
             batch_size_fn=batch_size_fn,
         )
-
-        # Initialize the eigenvectors of the Kronecker factors
-        self._input_covariances_eigenvectors: Dict[str, Tensor] = {}
-        self._gradient_covariances_eigenvectors: Dict[str, Tensor] = {}
-        # Initialize the cache for activations
-        self._cached_activations: Dict[str, Tensor] = {}
-        # Initialize the corrected eigenvalues for EKFAC
-        self._corrected_eigenvalues: Dict[str, Union[Tensor, Dict[str, Tensor]]] = {}
-
-        if check_deterministic:
-            self._check_deterministic()
 
     def _rearrange_for_larger_than_2d_output(
         self, output: Tensor, y: Tensor
@@ -513,9 +511,7 @@ class EKFACLinearOperator(KFACLinearOperator):
                 )
             )
 
-        if self._generator is None or self._generator.device != self.device:
-            self._generator = Generator(device=self.device)
-        self._generator.manual_seed(self._seed)
+        self._generator = _seed_generator(self._generator, self.device, self._seed)
 
         # loop over data set, computing the corrected eigenvalues
         for X, y in self._loop_over_data(desc="Eigenvalue correction"):

@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Support left multiplication with linear operators (`X @ A` with `X` a tensor or tensor list)
   ([PR](https://github.com/f-dangel/curvlinops/pull/226))
 
+- Support division of linear operators by scalars (i.e. `A_scaled = A / scale`)
+  ([PR](https://github.com/f-dangel/curvlinops/pull/237))
+
 - **Backward-incompatible:** (E)KFAC's `det, logdet, trace, frobenius_norm` properties are now functions
   ([PR](https://github.com/f-dangel/curvlinops/pull/232))
 
@@ -35,12 +38,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     ([PR](https://github.com/f-dangel/curvlinops/pull/211))
   - `EighDecomposedLinearOperator` for `eigh`-decomposed matrices `Q diag(λ) Q^T` with orthogonal `Q`
     ([PR](https://github.com/f-dangel/curvlinops/pull/210))
+  - `DiagonalLinearOperator` for diagonal matrices `diag(λ)`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/238))
 
 - Generalize computing the loss function's Hessian square root for sequence-valued predictions
   ([PR](https://github.com/f-dangel/curvlinops/pull/231))
 
 - Use `ruff` for docstring linting (remove `darglint` and `pydocstyle`)
   ([PR](https://github.com/f-dangel/curvlinops/pull/234))
+
+- Introduce `_EmpiricalRiskMixin` interface to allow separating deterministic checks and state pre-computation from linear operators
+  ([PR](https://github.com/f-dangel/curvlinops/pull/236))
 
 - Generalize sampling output gradients for sequence-valued predictions
   ([PR](https://github.com/f-dangel/curvlinops/pull/235))
