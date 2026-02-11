@@ -223,51 +223,35 @@ def test_gradient_and_loss(case):
 
 
 def test_SumPyTorchLinearOperator():
-    """Test adding two PyTorch linear operators."""
+    """Test adding and subtracting two PyTorch linear operators."""
     manual_seed(0)
     A = linspace(1, 10, steps=20).reshape(5, 4)
     B = rand_like(A)
-
-    # test addition
-    A_plus_B = A + B
     A_linop, B_linop = TensorLinearOperator(A), TensorLinearOperator(B)
-    A_plus_B_linop = A_linop + B_linop
-    compare_matmat(A_plus_B_linop, A_plus_B)
 
-    # test subtraction
-    A_minus_B = A - B
-    A_linop, B_linop = TensorLinearOperator(A), TensorLinearOperator(B)
-    A_minus_B_linop = A_linop - B_linop
-    compare_matmat(A_minus_B_linop, A_minus_B)
+    # test addition and subtraction
+    compare_matmat(A_linop + B_linop, A + B)
+    compare_matmat(A_linop - B_linop, A - B)
 
 
 def test_ScalePyTorchLinearOperator():
     """Test scaling a PyTorch linear operator with a scalar."""
     A = linspace(1, 10, steps=20).reshape(5, 4)
+    A_linop = TensorLinearOperator(A)
     scalar = 0.1
 
-    # test scaling from the right
-    A_scaled = scalar * A
-    A_linop = TensorLinearOperator(A)
-    A_scaled_linop = A_linop * scalar
-    compare_matmat(A_scaled_linop, A_scaled)
+    # test scaling from the left and right
+    compare_matmat(scalar * A_linop, scalar * A)
+    compare_matmat(A_linop * scalar, A * scalar)
 
-    # test scaling from the left
-    A_linop = TensorLinearOperator(A)
-    A_scaled = scalar * A
-    A_scaled_linop = scalar * A_linop
-    compare_matmat(A_scaled_linop, A_scaled)
+    # test division (internally relies on scaling with the inverse)
+    compare_matmat(A_linop / scalar, A / scalar)
 
 
 def test_ChainPyTorchLinearOperator():
     """Test chaining two PyTorch linear operators."""
     manual_seed(0)
-    A = linspace(1, 10, steps=20).reshape(5, 4)
-    B = rand(4, 3)
-    C = rand(3, 2)
+    A, B, C = linspace(1, 10, steps=20).reshape(5, 4), rand(4, 3), rand(3, 2)
+    A_linop, B_linop, C_linop = [TensorLinearOperator(T) for T in [A, B, C]]
 
-    ABC = A @ B @ C
-    ABC_linop = (
-        TensorLinearOperator(A) @ TensorLinearOperator(B) @ TensorLinearOperator(C)
-    )
-    compare_matmat(ABC_linop, ABC)
+    compare_matmat(A_linop @ B_linop @ C_linop, A @ B @ C)

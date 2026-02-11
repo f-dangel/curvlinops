@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Support left multiplication with linear operators (`X @ A` with `X` a tensor or tensor list)
   ([PR](https://github.com/f-dangel/curvlinops/pull/226))
 
+- Support division of linear operators by scalars (i.e. `A_scaled = A / scale`)
+  ([PR](https://github.com/f-dangel/curvlinops/pull/237))
+
 - **Backward-incompatible:** (E)KFAC's `det, logdet, trace, frobenius_norm` properties are now functions
   ([PR](https://github.com/f-dangel/curvlinops/pull/232))
 
