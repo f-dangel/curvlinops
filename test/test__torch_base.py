@@ -33,18 +33,31 @@ def test_input_formatting():
         _ = L @ [zeros(2, 3, 6), zeros(4, 5, 7)]  # ambiguous number of vectors
 
 
-class IdentityLinearOperator(PyTorchLinearOperator):
-    """Linear operator in PyTorch representing the identity matrix."""
+def test_empty_shapes_exception():
+    """Test that empty input and output shapes raise exceptions."""
+    in_and_out_shapes = [
+        [[], []],
+        [[(1, 2, 3)], []],
+        [[], [(4, 5, 6)]],
+    ]
+    for in_shape, out_shape in in_and_out_shapes:
+        with raises(ValueError, match="must be non-empty."):
+            _ = PyTorchLinearOperator(in_shape, out_shape)
+
+
+class MockLinearOperator(PyTorchLinearOperator):
+    """Dummy linear operator in PyTorch. Implements the zero matrix."""
 
     def _matmat(self, X: List[Tensor]) -> List[Tensor]:
-        return X
+        ((dev, dt, num_vecs),) = {(x.device, x.dtype, x.shape[-1]) for x in X}
+        return [zeros(*x.shape[:-1], num_vecs, device=dev, dtype=dt) for x in X]
 
 
 def test_output_formatting():
     """Test format checks of the output of a matrix multiplication."""
     shape = [(2, 3), (4, 5)]
 
-    Id = IdentityLinearOperator(shape, shape)
+    Id = MockLinearOperator(shape, shape)
     assert Id._in_shape_flat == Id._out_shape_flat == [6, 20]
     assert Id.shape == (26, 26)
 
@@ -95,24 +108,24 @@ def test__check_output_and_postprocess_exceptions():
 def test_preserve_input_format():
     """Test whether the input format is preserved by matrix multiplication."""
     in_shape = out_shape = [(2, 3), (4, 5)]
-    Id = IdentityLinearOperator(in_shape, out_shape)
-    assert Id._in_shape_flat == Id._out_shape_flat == [6, 20]
+    A = MockLinearOperator(in_shape, out_shape)
+    assert A._in_shape_flat == A._out_shape_flat == [6, 20]
 
     X = [zeros(2, 3), zeros(4, 5)]  # vector in tensor list format
-    IdX = Id @ X
-    assert len(IdX) == len(X) and all(Idx.allclose(x) for Idx, x in zip(IdX, X))
+    AX = A @ X
+    assert len(AX) == len(X) and all(Ax.allclose(x) for Ax, x in zip(AX, X))
 
     X = [zeros(2, 3, 6), zeros(4, 5, 6)]  # matrix in tensor list format
-    IdX = Id @ X
-    assert len(IdX) == len(X) and all(Idx.allclose(x) for Idx, x in zip(IdX, X))
+    AX = A @ X
+    assert len(AX) == len(X) and all(Ax.allclose(x) for Ax, x in zip(AX, X))
 
     X = zeros(26)  # vector in tensor format
-    IdX = Id @ X
-    assert IdX.allclose(X)
+    AX = A @ X
+    assert AX.allclose(X)
 
     X = zeros(26, 6)  # matrix in tensor format
-    IdX = Id @ X
-    assert IdX.allclose(X)
+    AX = A @ X
+    assert AX.allclose(X)
 
 
 def test_MutableMapping_no_batch_size_fn(case):
@@ -143,13 +156,14 @@ def test_check_deterministic(non_deterministic_case):
         )
 
 
-class FixedBatchesIdentityLinearOperator(CurvatureLinearOperator):
-    """Linear identity operator which demands deterministic batches."""
+class FixedBatchesMockLinearOperator(CurvatureLinearOperator):
+    """Mock linear operator which demands deterministic batch order."""
 
     FIXED_DATA_ORDER: bool = True
 
     def _matmat(self, X: List[Tensor]) -> List[Tensor]:
-        return X
+        ((dev, dt, num_vecs),) = {(x.device, x.dtype, x.shape[-1]) for x in X}
+        return [zeros(*x.shape[:-1], num_vecs, device=dev, dtype=dt) for x in X]
 
 
 class PermutedBatchLoader:
@@ -192,7 +206,7 @@ def test_check_deterministic_batch(case):
 
     data = PermutedBatchLoader(data)
     with raises(RuntimeError):
-        _ = FixedBatchesIdentityLinearOperator(
+        _ = FixedBatchesMockLinearOperator(
             model_func, loss_func, params, data, batch_size_fn=batch_size_fn
         )
 
@@ -223,51 +237,35 @@ def test_gradient_and_loss(case):
 
 
 def test_SumPyTorchLinearOperator():
-    """Test adding two PyTorch linear operators."""
+    """Test adding and subtracting two PyTorch linear operators."""
     manual_seed(0)
     A = linspace(1, 10, steps=20).reshape(5, 4)
     B = rand_like(A)
-
-    # test addition
-    A_plus_B = A + B
     A_linop, B_linop = TensorLinearOperator(A), TensorLinearOperator(B)
-    A_plus_B_linop = A_linop + B_linop
-    compare_matmat(A_plus_B_linop, A_plus_B)
 
-    # test subtraction
-    A_minus_B = A - B
-    A_linop, B_linop = TensorLinearOperator(A), TensorLinearOperator(B)
-    A_minus_B_linop = A_linop - B_linop
-    compare_matmat(A_minus_B_linop, A_minus_B)
+    # test addition and subtraction
+    compare_matmat(A_linop + B_linop, A + B)
+    compare_matmat(A_linop - B_linop, A - B)
 
 
 def test_ScalePyTorchLinearOperator():
     """Test scaling a PyTorch linear operator with a scalar."""
     A = linspace(1, 10, steps=20).reshape(5, 4)
+    A_linop = TensorLinearOperator(A)
     scalar = 0.1
 
-    # test scaling from the right
-    A_scaled = scalar * A
-    A_linop = TensorLinearOperator(A)
-    A_scaled_linop = A_linop * scalar
-    compare_matmat(A_scaled_linop, A_scaled)
+    # test scaling from the left and right
+    compare_matmat(scalar * A_linop, scalar * A)
+    compare_matmat(A_linop * scalar, A * scalar)
 
-    # test scaling from the left
-    A_linop = TensorLinearOperator(A)
-    A_scaled = scalar * A
-    A_scaled_linop = scalar * A_linop
-    compare_matmat(A_scaled_linop, A_scaled)
+    # test division (internally relies on scaling with the inverse)
+    compare_matmat(A_linop / scalar, A / scalar)
 
 
 def test_ChainPyTorchLinearOperator():
     """Test chaining two PyTorch linear operators."""
     manual_seed(0)
-    A = linspace(1, 10, steps=20).reshape(5, 4)
-    B = rand(4, 3)
-    C = rand(3, 2)
+    A, B, C = linspace(1, 10, steps=20).reshape(5, 4), rand(4, 3), rand(3, 2)
+    A_linop, B_linop, C_linop = [TensorLinearOperator(T) for T in [A, B, C]]
 
-    ABC = A @ B @ C
-    ABC_linop = (
-        TensorLinearOperator(A) @ TensorLinearOperator(B) @ TensorLinearOperator(C)
-    )
-    compare_matmat(ABC_linop, ABC)
+    compare_matmat(A_linop @ B_linop @ C_linop, A @ B @ C)

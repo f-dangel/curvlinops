@@ -64,7 +64,15 @@ class PyTorchLinearOperator:
         Args:
             in_shape: A list of shapes specifying the linear operator's input space.
             out_shape: A list of shapes specifying the linear operator's output space.
+
+        Raises:
+            ValueError: If either ``in_shape`` or ``out_shape`` is empty.
         """
+        if not in_shape or not out_shape:
+            raise ValueError(
+                f"In- {in_shape} and output shapes {out_shape} must be non-empty."
+            )
+
         self._in_shape = [Size(s) for s in in_shape]
         self._out_shape = [Size(s) for s in out_shape]
 
@@ -440,7 +448,7 @@ class PyTorchLinearOperator:
         Returns:
             A new linear operator representing the difference A - B.
         """
-        return _SumPyTorchLinearOperator(self, -1.0 * other)
+        return self + (-1.0 * other)
 
     def __mul__(self, scalar: Union[int, float]) -> _ScalePyTorchLinearOperator:
         """Multiply the linear operator by a scalar (A * scalar).
@@ -462,7 +470,18 @@ class PyTorchLinearOperator:
         Returns:
             A new linear operator representing the scaled linear operator.
         """
-        return self.__mul__(scalar)
+        return self * scalar
+
+    def __truediv__(self, scalar: Union[int, float]) -> _ScalePyTorchLinearOperator:
+        """Divide the linear operator by a scalar (A / scalar).
+
+        Args:
+            scalar: A scalar to divide the linear operator by.
+
+        Returns:
+            A new linear operator representing the scaled linear operator.
+        """
+        return self * (1.0 / scalar)
 
     ###############################################################################
     #                                 SCIPY EXPORT                                #

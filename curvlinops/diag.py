@@ -50,7 +50,7 @@ class DiagonalLinearOperator(PyTorchLinearOperator):
         """
         return [d.unsqueeze(-1) * x for d, x in zip(self._diagonal, X)]
 
-    def adjoint(self) -> DiagonalLinearOperator:
+    def _adjoint(self) -> DiagonalLinearOperator:
         """Return the adjoint (conjugate transpose) of the diagonal operator.
 
         For a diagonal matrix, the adjoint is obtained by taking the complex
@@ -123,6 +123,32 @@ class DiagonalLinearOperator(PyTorchLinearOperator):
             ])
         else:
             return super().__add__(other)
+
+    def __matmul__(
+        self, other: Union[List[Tensor], Tensor, PyTorchLinearOperator]
+    ) -> Union[List[Tensor], Tensor, PyTorchLinearOperator]:
+        """Multiply this operator with a vector, matrix, or another operator.
+
+        If ``other`` is a ``DiagonalLinearOperator`` with matching shapes, the
+        product is computed element-wise on the diagonals, returning a new
+        ``DiagonalLinearOperator``. Otherwise, falls back to the parent class.
+
+        Args:
+            other: A vector/matrix (as tensor or tensor list) or another linear
+                operator.
+
+        Returns:
+            A ``DiagonalLinearOperator`` if both operands are diagonal with matching
+            shapes, otherwise the result from the parent class.
+        """
+        if (
+            isinstance(other, DiagonalLinearOperator)
+            and self._in_shape == other._in_shape
+        ):
+            return DiagonalLinearOperator([
+                d1 * d2 for d1, d2 in zip(self._diagonal, other._diagonal)
+            ])
+        return super().__matmul__(other)
 
     def __mul__(self, scalar: int | float) -> DiagonalLinearOperator:
         """Multiply the diagonal operator by a scalar.
