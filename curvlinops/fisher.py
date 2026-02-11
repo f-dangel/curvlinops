@@ -5,7 +5,8 @@ from functools import cached_property, partial
 from typing import Callable, Iterable, List, Optional, Tuple, Union
 
 from einops import einsum, rearrange
-from torch import Generator, Tensor, vmap
+from torch import Generator, Tensor
+from torch.func import vmap
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, Module, MSELoss, Parameter
 
 from curvlinops._torch_base import CurvatureLinearOperator

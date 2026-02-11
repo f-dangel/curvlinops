@@ -4,7 +4,8 @@ from collections import UserDict
 from typing import Any, Callable, List, MutableMapping, Tuple, Union
 from warnings import warn
 
-from torch import Tensor, vmap
+from torch import Tensor
+from torch.func import vmap
 
 from curvlinops.utils import allclose_report
 

@@ -3,7 +3,8 @@
 from collections import UserDict
 
 from pytest import mark, raises, warns
-from torch import Tensor, manual_seed, rand, vmap
+from torch import Tensor, manual_seed, rand
+from torch.func import vmap
 from torch.nn import Linear, ReLU, Sequential
 
 from curvlinops._checks import (

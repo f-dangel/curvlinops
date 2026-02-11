@@ -5,8 +5,8 @@ from collections.abc import MutableMapping
 from math import sqrt
 from typing import Callable, Iterable, List, Optional, Tuple, Union
 
-from torch import Generator, Tensor, vmap, zeros_like
-from torch.func import vjp
+from torch import Generator, Tensor, zeros_like
+from torch.func import vjp, vmap
 from torch.nn import Module, Parameter
 
 from curvlinops._checks import (
