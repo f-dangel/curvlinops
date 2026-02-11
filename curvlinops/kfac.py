@@ -26,7 +26,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, TypeVar
 from warnings import warn
 
 from einops import einsum, rearrange, reduce
-from torch import Generator, Tensor, cat, eye, randn
+from torch import Generator, Tensor, cat, eye
 from torch.autograd import grad
 from torch.func import vmap
 from torch.nn import (
@@ -46,7 +46,9 @@ from curvlinops.kfac_utils import (
     extract_averaged_patches,
     extract_patches,
     loss_hessian_matrix_sqrt,
+    make_grad_output_sampler,
 )
+from curvlinops.utils import _seed_generator
 
 FactorType = TypeVar(
     "FactorType", Optional[Tensor], Tuple[Optional[Tensor], Optional[Tensor]]
@@ -288,6 +290,9 @@ class KFACLinearOperator(CurvatureLinearOperator):
         self._gradient_covariances: Dict[str, Tensor] = {}
         self._mapping = self.compute_parameter_mapping(params, model_func)
 
+        # Function (prediction, label) -> grad_outputs for backpropagation
+        self._grad_outputs_computer = self._set_up_grad_outputs_computer(loss_func)
+
         super().__init__(
             model_func,
             loss_func,
@@ -299,6 +304,60 @@ class KFACLinearOperator(CurvatureLinearOperator):
             num_per_example_loss_terms=num_per_example_loss_terms,
             batch_size_fn=batch_size_fn,
         )
+
+    def _set_up_grad_outputs_computer(
+        self, loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss]
+    ) -> Callable[[Tensor, Tensor], Tensor]:
+        """Set up the function that computes network output gradients for KFAC.
+
+        Args:
+            loss_func: The loss function.
+
+        Returns:
+            A function that computes the gradients to be backpropagated from the
+            network's output and labels.
+        """
+        grad_output_sampler = make_grad_output_sampler(
+            loss_func, warn_BCEWithLogitsLoss_targets_unchecked=False
+        )
+        hessian_sqrts_computer = vmap(
+            partial(
+                loss_hessian_matrix_sqrt, warn_BCEWithLogitsLoss_targets_unchecked=False
+            ),
+            in_dims=(0, 0, None),  # Parallelize over data, not over loss function
+        )
+
+        def compute_grad_outputs(
+            output: Union[MutableMapping, Tensor], y: Tensor
+        ) -> Tensor:
+            """Compute the gradients that are backpropagated from the network's output.
+
+            Args:
+                output: Neural network prediction with batch axis.
+                y: Target labels with batch axis.
+
+            Returns:
+                Gradients to be backpropagated from the network's output as a tensor of
+                shape ``[num_vectors, *output.shape]`` where ``num_vectors`` depends on
+                the Fisher type.
+
+            Raises:
+                NotImplementedError: If ``fisher_type`` is not supported.
+            """
+            # NOTE Checking for binary labels is data-dependent and not supported in vmap.
+            # Therefore, we check outside vmap and then turn it off inside vmap
+            _check_binary_if_BCEWithLogitsLoss(y, loss_func)
+
+            if self._fisher_type == FisherType.MC:
+                return grad_output_sampler(output, self._mc_samples, y, self._generator)
+            if self._fisher_type == FisherType.TYPE2:
+                return hessian_sqrts_computer(output, y, loss_func).movedim(-1, 0)
+            else:
+                raise NotImplementedError(
+                    f"Unsupported Fisher type: {self._fisher_type}."
+                )
+
+        return compute_grad_outputs
 
     @staticmethod
     def _left_and_right_multiply(
@@ -466,9 +525,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
             )
 
         # loop over data set, computing the Kronecker factors
-        if self._generator is None or self._generator.device != self.device:
-            self._generator = Generator(device=self.device)
-        self._generator.manual_seed(self._seed)
+        self._generator = _seed_generator(self._generator, self.device, self._seed)
 
         for X, y in self._loop_over_data(desc="KFAC matrices"):
             output = self._model_func(X)
@@ -546,44 +603,31 @@ class KFACLinearOperator(CurvatureLinearOperator):
                 f"Got {output.ndim=} and {y.ndim=}."
             )
 
-        if self._fisher_type == FisherType.TYPE2:
-            # Compute per-sample Hessian square root for each sample.
-            # Result has shape `(batch_size, *output[n].shape, *output[n].shape)`
-            # NOTE Checking for binary labels is data-dependent and not supported in vmap.
-            # Therefore, we check outside vmap and then turn it off inside vmap
-            _check_binary_if_BCEWithLogitsLoss(y, self._loss_func)
-            hessian_sqrts = vmap(
-                partial(
-                    loss_hessian_matrix_sqrt, check_binary_if_BCEWithLogitsLoss=False
-                ),
-                in_dims=(0, 0, None),  # Parallelize over data, not over loss function
-            )(output.detach(), y, self._loss_func)
+        if self._fisher_type in {FisherType.TYPE2, FisherType.MC}:
+            # Compute the gradients w.r.t. the network's output that will be
+            # backpropagated to compute the KFAC approximation
+            # - TYPE2: Hessian square root columns
+            # - MC: Monte-Carlo approximation of the the Hessian square root
+            grad_outputs = self._grad_outputs_computer(output.detach(), y)
 
             # Fix scaling caused by the batch dimension
             num_loss_terms = output.shape[0]
             reduction = self._loss_func.reduction
             scale = {"sum": 1.0, "mean": 1.0 / num_loss_terms}[reduction]
-            hessian_sqrts.mul_(scale)
+            grad_outputs.mul_(scale)
 
-            # For each column `c` of the matrix square root we need to backpropagate,
-            # but we can do this for all samples in parallel
-            num_cols = hessian_sqrts.shape[-1]
-            for c in range(num_cols):
-                batched_column = hessian_sqrts[:, :, c]
+            # Backpropagate all vectors
+            num_vectors = grad_outputs.shape[0]
+            for v in range(num_vectors):
                 grad(
-                    (output * batched_column).sum(),
+                    output,
                     self._params,
-                    retain_graph=c < num_cols - 1,
+                    grad_outputs=grad_outputs[v],
+                    retain_graph=v < num_vectors - 1,
                 )
 
-        elif self._fisher_type == FisherType.MC:
-            for mc in range(self._mc_samples):
-                y_sampled = self.draw_label(output)
-                loss = self._loss_func(output, y_sampled)
-                loss = self._maybe_adjust_loss_scale(loss, output)
-                grad(loss, self._params, retain_graph=mc != self._mc_samples - 1)
-
         elif self._fisher_type == FisherType.EMPIRICAL:
+            # TODO Implement grad_output sampler and remove _maybe_adjust_loss_scale
             loss = self._loss_func(output, y)
             loss = self._maybe_adjust_loss_scale(loss, output)
             grad(loss, self._params)
@@ -610,56 +654,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
                 f"Invalid fisher_type: {self._fisher_type}. "
                 + f"Supported: {self._SUPPORTED_FISHER_TYPE}."
             )
-
-    def draw_label(self, output: Tensor) -> Tensor:
-        r"""Draw a sample from the model's predictive distribution.
-
-        The model's distribution is implied by the (negative log likelihood) loss
-        function. For instance, ``MSELoss`` implies a Gaussian distribution with
-        constant variance, and ``CrossEntropyLoss`` implies a categorical distribution.
-
-        Args:
-            output: The model's prediction
-                :math:`\{f_\mathbf{\theta}(\mathbf{x}_n)\}_{n=1}^N`.
-
-        Returns:
-            A sample
-            :math:`\{\mathbf{y}_n\}_{n=1}^N` drawn from the model's predictive
-            distribution :math:`p(\mathbf{y} \mid \mathbf{x}, \mathbf{\theta})`. Has
-            the same shape as the labels that would be fed into the loss function
-            together with ``output``.
-
-        Raises:
-            ValueError: If the output is not 2d.
-            NotImplementedError: If the loss function is not supported.
-        """
-        if output.ndim != 2:
-            raise ValueError("Only a 2d output is supported.")
-
-        if isinstance(self._loss_func, MSELoss):
-            std = sqrt(0.5)
-            perturbation = std * randn(
-                output.shape,
-                device=output.device,
-                dtype=output.dtype,
-                generator=self._generator,
-            )
-            return output.clone().detach() + perturbation
-
-        elif isinstance(self._loss_func, CrossEntropyLoss):
-            probs = output.softmax(dim=1)
-            labels = probs.multinomial(
-                num_samples=1, generator=self._generator
-            ).squeeze(-1)
-            return labels
-
-        elif isinstance(self._loss_func, BCEWithLogitsLoss):
-            probs = output.sigmoid()
-            labels = probs.bernoulli(generator=self._generator)
-            return labels
-
-        else:
-            raise NotImplementedError
 
     def _register_tensor_hook_on_output_to_accumulate_gradient_covariance(
         self, module: Module, inputs: Tuple[Tensor], output: Tensor, module_name: str

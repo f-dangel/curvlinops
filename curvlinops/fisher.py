@@ -14,7 +14,7 @@ from curvlinops.kfac_utils import (
     _check_binary_if_BCEWithLogitsLoss,
     make_grad_output_sampler,
 )
-from curvlinops.utils import make_functional_flattened_model_and_loss
+from curvlinops.utils import _seed_generator, make_functional_flattened_model_and_loss
 
 
 def make_batch_fmc_matrix_product(
@@ -341,9 +341,7 @@ class FisherMCLinearOperator(CurvatureLinearOperator):
         Returns:
             Matrix-multiplication result ``mat @ M`` in tensor list format.
         """
-        if self._generator is None or self._generator.device != self.device:
-            self._generator = Generator(device=self.device)
-        self._generator.manual_seed(self._seed)
+        self._generator = _seed_generator(self._generator, self.device, self._seed)
 
         return super()._matmat(M)
 
