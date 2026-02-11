@@ -4,7 +4,9 @@ from collections import UserDict
 from typing import Any, Callable, List, MutableMapping, Tuple, Union
 from warnings import warn
 
-from torch import Tensor, allclose, vmap
+from torch import Tensor, vmap
+
+from curvlinops.utils import allclose_report
 
 # Track whether UserDict has been registered as a PyTree node
 _userdict_pytree_registered = False
@@ -91,5 +93,5 @@ def _check_supports_batched_and_unbatched_inputs(
     vmapped_f = vmap(f, in_dims=batch_axis, out_dims=batch_axis)
     vmapped_result = vmapped_f(X)
 
-    if not allclose(batched_result, vmapped_result, rtol=rtol, atol=atol):
+    if not allclose_report(batched_result, vmapped_result, rtol=rtol, atol=atol):
         raise ValueError("Function does not support batched and un-batched inputs.")
