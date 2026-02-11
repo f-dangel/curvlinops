@@ -20,7 +20,18 @@ from curvlinops.utils import _infer_device, _infer_dtype, allclose_report
 
 
 class _EmpiricalRiskMixin:
-    """Mixin for empirical risk computation over a data set."""
+    """Mixin for empirical risk computation over a data set.
+
+    Attributes:
+        FIXED_DATA_ORDER: Whether the data loader must return batches in a fixed
+            order. When ``True``, the deterministic check also verifies that
+            each individual mini-batch matches across two passes. Default:
+            ``False``.
+        NEEDS_NUM_PER_EXAMPLE_LOSS_TERMS: Whether the operator requires the
+            number of per-example loss terms (e.g. tokens per sequence). When
+            ``True`` and ``num_per_example_loss_terms`` is not provided, it
+            will be inferred from the data. Default: ``False``.
+    """
 
     FIXED_DATA_ORDER: bool = False
     NEEDS_NUM_PER_EXAMPLE_LOSS_TERMS: bool = False
@@ -66,8 +77,6 @@ class _EmpiricalRiskMixin:
         Raises:
             ValueError: If ``X`` is a ``MutableMapping`` and ``batch_size_fn`` is not
                 specified.
-            ValueError: If the inferred number of loss terms is not divisible by the
-                number of data points.
         """
         if isinstance(next(iter(data))[0], MutableMapping) and batch_size_fn is None:
             raise ValueError(
@@ -109,7 +118,7 @@ class _EmpiricalRiskMixin:
 
         Returns:
             Tuple of ``(N_data, num_per_example_loss_terms)``. The second
-            element is ``None`` when not required or already provided.
+            element is ``None`` when not required.
 
         Raises:
             ValueError: If the inferred number of loss terms is not divisible
@@ -153,9 +162,10 @@ class _EmpiricalRiskMixin:
     def _check_deterministic(self, rtol: float = 5e-5, atol: float = 1e-6):
         """Check that the data and model are deterministic.
 
-        Two independent passes over the data must yield identical predictions,
-        losses, and gradients. If ``FIXED_DATA_ORDER`` is ``True``, also checks
-        that each mini-batch matches.
+        Two independent passes over the data must yield identical total losses
+        and total gradients. If ``FIXED_DATA_ORDER`` is ``True``, also checks
+        that each mini-batch yields identical inputs, predictions, losses, and
+        gradients.
 
         Subclasses can override this method to add additional checks (e.g.
         verifying ``vmap`` compatibility). They should call ``super()`` first.
@@ -167,7 +177,6 @@ class _EmpiricalRiskMixin:
         Raises:
             RuntimeError: If non-deterministic behavior is detected.
         """
-        # Step 1: data determinism
         has_loss = self._loss_func is not None
 
         if has_loss:
@@ -176,12 +185,8 @@ class _EmpiricalRiskMixin:
             total_loss1 = tensor(0.0, device=self.device, dtype=self.dtype)
             total_loss2 = tensor(0.0, device=self.device, dtype=self.dtype)
 
-        for (
-            ((X1, y1), pred1, loss1, grad1),
-            ((X2, y2), pred2, loss2, grad2),
-        ) in zip(
-            self._data_prediction_loss_gradient(),
-            self._data_prediction_loss_gradient(),
+        for ((X1, y1), pred1, loss1, grad1), ((X2, y2), pred2, loss2, grad2) in zip(
+            self._data_prediction_loss_gradient(), self._data_prediction_loss_gradient()
         ):
             if self.FIXED_DATA_ORDER:
                 self._check_deterministic_batch(
@@ -214,11 +219,11 @@ class _EmpiricalRiskMixin:
 
     @staticmethod
     def _check_deterministic_batch(
-        Xs,
-        ys,
-        predictions,
-        losses,
-        gradients,
+        Xs: Tuple[Union[Tensor, MutableMapping], Union[Tensor, MutableMapping]],
+        ys: Tuple[Tensor, Tensor],
+        predictions: Tuple[Tensor, Tensor],
+        losses: Tuple[Optional[Tensor], Optional[Tensor]],
+        gradients: Tuple[Optional[List[Tensor]], Optional[List[Tensor]]],
         has_loss_func: bool,
         rtol: float = 1e-5,
         atol: float = 1e-8,
