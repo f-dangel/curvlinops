@@ -26,8 +26,9 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, TypeVar
 from warnings import warn
 
 from einops import einsum, rearrange, reduce
-from torch import Generator, Tensor, autograd, cat, empty, eye
-from torch.func import grad, vmap
+from torch import Generator, Tensor, cat, eye, randn
+from torch.autograd import grad
+from torch.func import vmap
 from torch.nn import (
     BCEWithLogitsLoss,
     Conv2d,
@@ -45,9 +46,7 @@ from curvlinops.kfac_utils import (
     extract_averaged_patches,
     extract_patches,
     loss_hessian_matrix_sqrt,
-    make_grad_output_sampler,
 )
-from curvlinops.utils import make_functional_call
 
 FactorType = TypeVar(
     "FactorType", Optional[Tensor], Tuple[Optional[Tensor], Optional[Tensor]]
@@ -167,6 +166,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
     _SUPPORTED_FISHER_TYPE: FisherType = FisherType
     _SUPPORTED_KFAC_APPROX: KFACType = KFACType
     SELF_ADJOINT: bool = True
+    NEEDS_NUM_PER_EXAMPLE_LOSS_TERMS: bool = True
 
     def __init__(
         self,
@@ -288,149 +288,17 @@ class KFACLinearOperator(CurvatureLinearOperator):
         self._gradient_covariances: Dict[str, Tensor] = {}
         self._mapping = self.compute_parameter_mapping(params, model_func)
 
-        # Function (prediction, label) -> grad_outputs for backpropagation
-        self._grad_outputs_computer = self._set_up_grad_outputs_computer(loss_func)
-
         super().__init__(
             model_func,
             loss_func,
             params,
             data,
             progressbar=progressbar,
-            check_deterministic=False,
+            check_deterministic=check_deterministic,
             num_data=num_data,
+            num_per_example_loss_terms=num_per_example_loss_terms,
             batch_size_fn=batch_size_fn,
         )
-
-        self._set_num_per_example_loss_terms(num_per_example_loss_terms)
-
-        if check_deterministic:
-            self._check_deterministic()
-
-    def _set_up_grad_outputs_computer(
-        self, loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss]
-    ) -> Callable[[Union[MutableMapping, Tensor], Tensor], Tensor]:
-        """Set up the function that computes network output gradients for KFAC.
-
-        Args:
-            loss_func: The loss function.
-
-        Returns:
-            A function that computes the gradients to be backpropagated from the
-            network's output and labels.
-        """
-        # Monte-Carlo case
-        grad_output_sampler = make_grad_output_sampler(
-            loss_func, warn_BCEWithLogitsLoss_targets_unchecked=False
-        )
-        # Type2 case
-        hessian_sqrts_computer = vmap(
-            partial(
-                loss_hessian_matrix_sqrt, warn_BCEWithLogitsLoss_targets_unchecked=False
-            ),
-            in_dims=(0, 0, None),  # Parallelize over data, not over loss function
-        )
-
-        # Empirical case
-        functional_loss_func = make_functional_call(
-            loss_func, []
-        )  # prediction, y -> loss
-
-        def scaled_datum_loss(prediction: Tensor, y: Tensor) -> Tensor:
-            """Compute a scaled version of the loss for one sample.
-
-            The loss is scaled to adjust for mean reduction over the sequence dimensions.
-
-            Args:
-                prediction: Model prediction for one sample, without batch dimension.
-                y: Target for one sample, without batch dimension.
-
-            Returns:
-                Scaled loss for one sample.
-            """
-            # If reduction is mean, the loss will be divided by C by MSE/BCE, but we
-            # only want it to be divided by sqrt(C)
-            (C,) = prediction.shape
-            scale = (
-                sqrt(C)
-                if (
-                    isinstance(loss_func, (BCEWithLogitsLoss, MSELoss))
-                    and loss_func.reduction == "mean"
-                )
-                else 1.0
-            )
-            return scale * functional_loss_func(prediction.unsqueeze(0), y.unsqueeze(0))
-
-        empirical_grad_computer = vmap(grad(scaled_datum_loss, argnums=0))
-
-        def compute_grad_outputs(
-            output: Union[MutableMapping, Tensor], y: Tensor
-        ) -> Tensor:
-            """Compute the gradients that are backpropagated from the network's output.
-
-            Args:
-                output: Neural network prediction with batch axis.
-                y: Target labels with batch axis.
-
-            Returns:
-                Gradients to be backpropagated from the network's output as a tensor of
-                shape ``[num_vectors, *output.shape]`` where ``num_vectors`` depends on
-                the Fisher type.
-
-            Raises:
-                NotImplementedError: If ``fisher_type`` is not supported.
-            """
-            # NOTE Checking for binary labels is data-dependent and not supported in vmap.
-            # Therefore, we check outside vmap and then turn it off inside vmap
-            _check_binary_if_BCEWithLogitsLoss(y, self._loss_func)
-
-            if self._fisher_type == FisherType.MC:
-                return grad_output_sampler(output, self._mc_samples, y, self._generator)
-            elif self._fisher_type == FisherType.TYPE2:
-                return hessian_sqrts_computer(output, y, self._loss_func).movedim(-1, 0)
-            elif self._fisher_type == FisherType.EMPIRICAL:
-                return empirical_grad_computer(output, y).unsqueeze(0)
-            elif self._fisher_type == FisherType.FORWARD_ONLY:
-                return empty(0, *output.shape, dtype=output.dtype, device=output.device)
-            else:
-                raise NotImplementedError(
-                    f"Unsupported Fisher type: {self._fisher_type}."
-                )
-
-        return compute_grad_outputs
-
-    def _set_num_per_example_loss_terms(
-        self, num_per_example_loss_terms: Optional[int]
-    ):
-        """Set the number of per-example loss terms.
-
-        Args:
-            num_per_example_loss_terms: Number of per-example loss terms. If ``None``,
-                it is inferred from the data at the cost of one traversal through the
-                data loader.
-
-        Raises:
-            ValueError: If the number of loss terms is not divisible by the number of
-                data points.
-        """
-        if num_per_example_loss_terms is None:
-            # Determine the number of per-example loss terms
-            num_loss_terms = sum(
-                (
-                    y.numel()
-                    if isinstance(self._loss_func, CrossEntropyLoss)
-                    else y.shape[:-1].numel()
-                )
-                for (_, y) in self._loop_over_data(desc="_num_per_example_loss_terms")
-            )
-            if num_loss_terms % self._N_data != 0:
-                raise ValueError(
-                    "The number of loss terms must be divisible by the number of data "
-                    f"points; num_loss_terms={num_loss_terms}, N_data={self._N_data}."
-                )
-            self._num_per_example_loss_terms = num_loss_terms // self._N_data
-        else:
-            self._num_per_example_loss_terms = num_per_example_loss_terms
 
     @staticmethod
     def _left_and_right_multiply(
@@ -634,6 +502,30 @@ class KFACLinearOperator(CurvatureLinearOperator):
             y = rearrange(y, "batch ... c -> (batch ...) c")
         return output, y
 
+    def _maybe_adjust_loss_scale(self, loss: Tensor, output: Tensor) -> Tensor:
+        """Adjust the scale of the loss tensor if necessary.
+
+        The ``BCEWithLogitsLoss`` and ``MSELoss`` also average over the output dimension
+        in addition to the batch dimension. We adjust the scale of the loss to correct
+        for this.
+
+        Args:
+            loss: The loss tensor to adjust.
+            output: The model's output.
+
+        Returns:
+            The scaled loss tensor.
+        """
+        if (
+            isinstance(self._loss_func, (BCEWithLogitsLoss, MSELoss))
+            and self._loss_func.reduction == "mean"
+        ):
+            # ``BCEWithLogitsLoss`` and ``MSELoss`` also average over non-batch
+            # dimensions. We have to scale the loss to incorporate this scaling.
+            _, C = output.shape
+            loss *= sqrt(C)
+        return loss
+
     def _compute_loss_and_backward(self, output: Tensor, y: Tensor):
         r"""Compute the loss and the backward pass(es) required for KFAC.
 
@@ -654,37 +546,49 @@ class KFACLinearOperator(CurvatureLinearOperator):
                 f"Got {output.ndim=} and {y.ndim=}."
             )
 
-        if self._fisher_type not in self._SUPPORTED_FISHER_TYPE:
-            raise ValueError(
-                f"Invalid fisher_type: {self._fisher_type}. "
-                + f"Supported: {self._SUPPORTED_FISHER_TYPE}."
-            )
+        if self._fisher_type == FisherType.TYPE2:
+            # Compute per-sample Hessian square root for each sample.
+            # Result has shape `(batch_size, *output[n].shape, *output[n].shape)`
+            # NOTE Checking for binary labels is data-dependent and not supported in vmap.
+            # Therefore, we check outside vmap and then turn it off inside vmap
+            _check_binary_if_BCEWithLogitsLoss(y, self._loss_func)
+            hessian_sqrts = vmap(
+                partial(
+                    loss_hessian_matrix_sqrt, check_binary_if_BCEWithLogitsLoss=False
+                ),
+                in_dims=(0, 0, None),  # Parallelize over data, not over loss function
+            )(output.detach(), y, self._loss_func)
 
-        # Compute the gradients w.r.t. the network's output that will be
-        # backpropagated to compute the KFAC approximation
-        # - TYPE2: Hessian square root columns
-        # - MC: Monte-Carlo approximation of the the Hessian square root
-        # - EMPIRICAL: Empirical gradients
-        # - FORWARD_ONLY: No vectors
-        grad_outputs = self._grad_outputs_computer(output.detach(), y)
+            # Fix scaling caused by the batch dimension
+            num_loss_terms = output.shape[0]
+            reduction = self._loss_func.reduction
+            scale = {"sum": 1.0, "mean": 1.0 / num_loss_terms}[reduction]
+            hessian_sqrts.mul_(scale)
 
-        # Fix scaling caused by the batch dimension
-        num_loss_terms = output.shape[0]
-        reduction = self._loss_func.reduction
-        scale = {"sum": 1.0, "mean": 1.0 / num_loss_terms}[reduction]
-        grad_outputs.mul_(scale)
+            # For each column `c` of the matrix square root we need to backpropagate,
+            # but we can do this for all samples in parallel
+            num_cols = hessian_sqrts.shape[-1]
+            for c in range(num_cols):
+                batched_column = hessian_sqrts[:, :, c]
+                grad(
+                    (output * batched_column).sum(),
+                    self._params,
+                    retain_graph=c < num_cols - 1,
+                )
 
-        # Backpropagate all vectors
-        num_vectors = grad_outputs.shape[0]
-        for v in range(num_vectors):
-            autograd.grad(
-                output,
-                self._params,
-                grad_outputs=grad_outputs[v],
-                retain_graph=v < num_vectors - 1,
-            )
+        elif self._fisher_type == FisherType.MC:
+            for mc in range(self._mc_samples):
+                y_sampled = self.draw_label(output)
+                loss = self._loss_func(output, y_sampled)
+                loss = self._maybe_adjust_loss_scale(loss, output)
+                grad(loss, self._params, retain_graph=mc != self._mc_samples - 1)
 
-        if self._fisher_type == FisherType.FORWARD_ONLY:
+        elif self._fisher_type == FisherType.EMPIRICAL:
+            loss = self._loss_func(output, y)
+            loss = self._maybe_adjust_loss_scale(loss, output)
+            grad(loss, self._params)
+
+        elif self._fisher_type == FisherType.FORWARD_ONLY:
             # Since FOOF sets the gradient covariance Kronecker factors to the identity,
             # we don't need to do a backward pass. See https://arxiv.org/abs/2201.12250.
             # We choose to set the gradient covariance to the identity explicitly for
@@ -700,6 +604,62 @@ class KFACLinearOperator(CurvatureLinearOperator):
                 self._gradient_covariances[mod_name] = eye(
                     param.shape[0], dtype=param.dtype, device=self.device
                 )
+
+        else:
+            raise ValueError(
+                f"Invalid fisher_type: {self._fisher_type}. "
+                + f"Supported: {self._SUPPORTED_FISHER_TYPE}."
+            )
+
+    def draw_label(self, output: Tensor) -> Tensor:
+        r"""Draw a sample from the model's predictive distribution.
+
+        The model's distribution is implied by the (negative log likelihood) loss
+        function. For instance, ``MSELoss`` implies a Gaussian distribution with
+        constant variance, and ``CrossEntropyLoss`` implies a categorical distribution.
+
+        Args:
+            output: The model's prediction
+                :math:`\{f_\mathbf{\theta}(\mathbf{x}_n)\}_{n=1}^N`.
+
+        Returns:
+            A sample
+            :math:`\{\mathbf{y}_n\}_{n=1}^N` drawn from the model's predictive
+            distribution :math:`p(\mathbf{y} \mid \mathbf{x}, \mathbf{\theta})`. Has
+            the same shape as the labels that would be fed into the loss function
+            together with ``output``.
+
+        Raises:
+            ValueError: If the output is not 2d.
+            NotImplementedError: If the loss function is not supported.
+        """
+        if output.ndim != 2:
+            raise ValueError("Only a 2d output is supported.")
+
+        if isinstance(self._loss_func, MSELoss):
+            std = sqrt(0.5)
+            perturbation = std * randn(
+                output.shape,
+                device=output.device,
+                dtype=output.dtype,
+                generator=self._generator,
+            )
+            return output.clone().detach() + perturbation
+
+        elif isinstance(self._loss_func, CrossEntropyLoss):
+            probs = output.softmax(dim=1)
+            labels = probs.multinomial(
+                num_samples=1, generator=self._generator
+            ).squeeze(-1)
+            return labels
+
+        elif isinstance(self._loss_func, BCEWithLogitsLoss):
+            probs = output.sigmoid()
+            labels = probs.bernoulli(generator=self._generator)
+            return labels
+
+        else:
+            raise NotImplementedError
 
     def _register_tensor_hook_on_output_to_accumulate_gradient_covariance(
         self, module: Module, inputs: Tuple[Tensor], output: Tensor, module_name: str

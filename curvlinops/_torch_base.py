@@ -22,12 +22,13 @@ from torch import (
     cat,
     device,
     dtype,
+    rand,
     zeros_like,
 )
 from torch.nn import Parameter
 
-from curvlinops._checks import _check_deterministic_matvec
 from curvlinops._empirical_risk import _EmpiricalRiskMixin
+from curvlinops.utils import allclose_report
 
 
 class PyTorchLinearOperator:
@@ -439,7 +440,7 @@ class PyTorchLinearOperator:
         Returns:
             A new linear operator representing the difference A - B.
         """
-        return self + (-1.0 * other)
+        return _SumPyTorchLinearOperator(self, -1.0 * other)
 
     def __mul__(self, scalar: Union[int, float]) -> _ScalePyTorchLinearOperator:
         """Multiply the linear operator by a scalar (A * scalar).
@@ -517,6 +518,24 @@ class PyTorchLinearOperator:
             NotImplementedError: Must be implemented by subclasses.
         """
         raise NotImplementedError
+
+    def _check_deterministic_matvec(self, rtol: float = 1e-5, atol: float = 1e-8):
+        """Probe whether the linear operator's matrix-vector product is deterministic.
+
+        Performs two sequential matrix-vector products and compares them.
+
+        Args:
+            rtol: Relative tolerance for comparison. Defaults to ``1e-5``.
+            atol: Absolute tolerance for comparison. Defaults to ``1e-8``.
+
+        Raises:
+            RuntimeError: If the two matrix-vector products yield different results.
+        """
+        v = rand(self.shape[1], device=self.device, dtype=self.dtype)
+        Av1 = self @ v
+        Av2 = self @ v
+        if not allclose_report(Av1, Av2, rtol=rtol, atol=atol):
+            raise RuntimeError("Check for deterministic matvec failed.")
 
     @staticmethod
     def _scipy_compatible(
@@ -777,6 +796,7 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
         progressbar: bool = False,
         check_deterministic: bool = True,
         num_data: Optional[int] = None,
+        num_per_example_loss_terms: Optional[int] = None,
         block_sizes: Optional[List[int]] = None,
         batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
     ):
@@ -809,6 +829,10 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
                 safeguard, only turn it off if you know what you are doing.
             num_data: Number of data points. If ``None``, it is inferred from the data
                 at the cost of one traversal through the data loader.
+            num_per_example_loss_terms: Number of per-example loss terms, e.g. the
+                number of tokens in a sequence. Only used by subclasses with
+                ``NEEDS_NUM_PER_EXAMPLE_LOSS_TERMS = True``. If ``None``, it is
+                inferred from the data when needed. Default: ``None``.
             block_sizes: This argument will be ignored if the linear operator does not
                 support blocks. List of integers indicating the number of
                 ``nn.Parameter``s forming a block. Entries must sum to ``len(params)``.
@@ -846,16 +870,15 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
             progressbar=progressbar,
             batch_size_fn=batch_size_fn,
             num_data=num_data,
+            num_per_example_loss_terms=num_per_example_loss_terms,
             check_deterministic=check_deterministic,
         )
         PyTorchLinearOperator.__init__(
-            self,
-            self._get_in_shape(),
-            self._get_out_shape(),
+            self, self._get_in_shape(), self._get_out_shape()
         )
 
         if check_deterministic:
-            _check_deterministic_matvec(self)
+            self._check_deterministic_matvec()
 
     def _get_in_shape(self) -> List[Tuple[int, ...]]:
         """Return linear operator's input space dimensions.

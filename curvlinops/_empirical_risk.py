@@ -13,16 +13,28 @@ from typing import (
 
 from torch import Tensor, device, dtype, tensor, zeros_like
 from torch.autograd import grad
-from torch.nn import Parameter
+from torch.nn import CrossEntropyLoss, Parameter
 from tqdm import tqdm
 
 from curvlinops.utils import _infer_device, _infer_dtype, allclose_report
 
 
 class _EmpiricalRiskMixin:
-    """Mixin for empirical risk computation over a data set."""
+    """Mixin for empirical risk computation over a data set.
+
+    Attributes:
+        FIXED_DATA_ORDER: Whether the data loader must return batches in a fixed
+            order. When ``True``, the deterministic check also verifies that
+            each individual mini-batch matches across two passes. Default:
+            ``False``.
+        NEEDS_NUM_PER_EXAMPLE_LOSS_TERMS: Whether the operator requires the
+            number of per-example loss terms (e.g. tokens per sequence). When
+            ``True`` and ``num_per_example_loss_terms`` is not provided, it
+            will be inferred from the data. Default: ``False``.
+    """
 
     FIXED_DATA_ORDER: bool = False
+    NEEDS_NUM_PER_EXAMPLE_LOSS_TERMS: bool = False
 
     def __init__(
         self,
@@ -33,6 +45,7 @@ class _EmpiricalRiskMixin:
         progressbar: bool = False,
         batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
         num_data: Optional[int] = None,
+        num_per_example_loss_terms: Optional[int] = None,
         check_deterministic: bool = True,
     ):
         """Set up the shared state for empirical risk computation.
@@ -51,6 +64,10 @@ class _EmpiricalRiskMixin:
                 ``None``, defaults to ``X.shape[0]``.
             num_data: Number of data points. If ``None``, it is inferred from the data
                 at the cost of one traversal through the data loader.
+            num_per_example_loss_terms: Number of per-example loss terms, e.g. the
+                number of tokens in a sequence. Only used by subclasses with
+                ``NEEDS_NUM_PER_EXAMPLE_LOSS_TERMS = True``. If ``None``, it is
+                inferred from the data when needed. Default: ``None``.
             check_deterministic: Probe that model and data are deterministic, i.e.
                 that the data does not use ``drop_last`` or data augmentation. Also, the
                 model's forward pass could depend on the order in which mini-batches
@@ -75,24 +92,80 @@ class _EmpiricalRiskMixin:
             (lambda X: X.shape[0]) if batch_size_fn is None else batch_size_fn
         )
 
-        self._N_data = (
-            sum(
-                self._batch_size_fn(X)
-                for (X, _) in self._loop_over_data(desc="_N_data")
-            )
-            if num_data is None
-            else num_data
+        self._N_data, self._num_per_example_loss_terms = self._get_data_statistics(
+            num_data, num_per_example_loss_terms
         )
 
         if check_deterministic:
             self._check_deterministic()
 
+    def _get_data_statistics(
+        self,
+        num_data: Optional[int],
+        num_per_example_loss_terms: Optional[int],
+    ) -> Tuple[int, Optional[int]]:
+        """Determine the number of data points and per-example loss terms.
+
+        Traverses the data at most once, computing whichever statistics were not
+        explicitly provided. The number of per-example loss terms is only
+        inferred when ``NEEDS_NUM_PER_EXAMPLE_LOSS_TERMS`` is ``True`` and
+        ``num_per_example_loss_terms`` is ``None``.
+
+        Args:
+            num_data: Number of data points, or ``None`` to infer.
+            num_per_example_loss_terms: Per-example loss terms, or ``None`` to
+                infer when ``NEEDS_NUM_PER_EXAMPLE_LOSS_TERMS`` is ``True``.
+
+        Returns:
+            Tuple of ``(N_data, num_per_example_loss_terms)``. The second
+            element is ``None`` when not required.
+
+        Raises:
+            ValueError: If the inferred number of loss terms is not divisible
+                by the number of data points.
+        """
+        need_N_data = num_data is None
+        need_loss_terms = (
+            self.NEEDS_NUM_PER_EXAMPLE_LOSS_TERMS
+            and self._loss_func is not None
+            and num_per_example_loss_terms is None
+        )
+        if not need_N_data and not need_loss_terms:
+            return num_data, num_per_example_loss_terms
+
+        # Accumulate number of data points and (maybe) loss terms
+        N_data_acc, num_loss_terms_acc = 0, 0
+        for X, y in self._loop_over_data(desc="data_statistics"):
+            if need_N_data:
+                N_data_acc += self._batch_size_fn(X)
+            if need_loss_terms:
+                num_loss_terms_acc += (
+                    y.numel()
+                    if isinstance(self._loss_func, CrossEntropyLoss)
+                    else y.shape[:-1].numel()
+                )
+
+        # Maybe update number of passed data points and loss terms
+        N_data = N_data_acc if need_N_data else num_data
+
+        if need_loss_terms:
+            if num_loss_terms_acc % N_data != 0:
+                raise ValueError(
+                    "The number of loss terms must be divisible by the number "
+                    f"of data points; num_loss_terms="
+                    f"{num_loss_terms_acc}, N_data={N_data}."
+                )
+            num_per_example_loss_terms = num_loss_terms_acc // N_data
+
+        return N_data, num_per_example_loss_terms
+
     def _check_deterministic(self, rtol: float = 5e-5, atol: float = 1e-6):
         """Check that the data and model are deterministic.
 
-        Two independent passes over the data must yield identical predictions,
-        losses, and gradients. If ``FIXED_DATA_ORDER`` is ``True``, also checks
-        that each mini-batch matches.
+        Two independent passes over the data must yield identical total losses
+        and total gradients. If ``FIXED_DATA_ORDER`` is ``True``, also checks
+        that each mini-batch yields identical inputs, predictions, losses, and
+        gradients.
 
         Subclasses can override this method to add additional checks (e.g.
         verifying ``vmap`` compatibility). They should call ``super()`` first.
@@ -104,7 +177,6 @@ class _EmpiricalRiskMixin:
         Raises:
             RuntimeError: If non-deterministic behavior is detected.
         """
-        # Step 1: data determinism
         has_loss = self._loss_func is not None
 
         if has_loss:
@@ -113,12 +185,8 @@ class _EmpiricalRiskMixin:
             total_loss1 = tensor(0.0, device=self.device, dtype=self.dtype)
             total_loss2 = tensor(0.0, device=self.device, dtype=self.dtype)
 
-        for (
-            ((X1, y1), pred1, loss1, grad1),
-            ((X2, y2), pred2, loss2, grad2),
-        ) in zip(
-            self.data_prediction_loss_gradient(),
-            self.data_prediction_loss_gradient(),
+        for ((X1, y1), pred1, loss1, grad1), ((X2, y2), pred2, loss2, grad2) in zip(
+            self._data_prediction_loss_gradient(), self._data_prediction_loss_gradient()
         ):
             if self.FIXED_DATA_ORDER:
                 self._check_deterministic_batch(
@@ -151,11 +219,11 @@ class _EmpiricalRiskMixin:
 
     @staticmethod
     def _check_deterministic_batch(
-        Xs,
-        ys,
-        predictions,
-        losses,
-        gradients,
+        Xs: Tuple[Union[Tensor, MutableMapping], Union[Tensor, MutableMapping]],
+        ys: Tuple[Tensor, Tensor],
+        predictions: Tuple[Tensor, Tensor],
+        losses: Tuple[Optional[Tensor], Optional[Tensor]],
+        gradients: Tuple[Optional[List[Tensor]], Optional[List[Tensor]]],
         has_loss_func: bool,
         rtol: float = 1e-5,
         atol: float = 1e-8,
@@ -177,7 +245,7 @@ class _EmpiricalRiskMixin:
         """
         X1, X2 = Xs
         if isinstance(X1, MutableMapping) and isinstance(X2, MutableMapping):
-            for k in X1.keys():
+            for k in X1:
                 v1, v2 = X1[k], X2[k]
                 if isinstance(v1, Tensor) and not allclose_report(
                     v1, v2, rtol=rtol, atol=atol
@@ -269,7 +337,7 @@ class _EmpiricalRiskMixin:
             self._loss_func.reduction
         ]
 
-    def data_prediction_loss_gradient(
+    def _data_prediction_loss_gradient(
         self, desc: str = "batch_prediction_loss_gradient"
     ) -> Iterator[
         Tuple[
@@ -316,7 +384,7 @@ class _EmpiricalRiskMixin:
         total_loss = tensor([0.0], device=self.device, dtype=self.dtype).squeeze()
         total_grad = [zeros_like(p) for p in self._params]
 
-        for _, _, loss, grad_params in self.data_prediction_loss_gradient(
+        for _, _, loss, grad_params in self._data_prediction_loss_gradient(
             desc="gradient_and_loss"
         ):
             total_loss.add_(loss)
