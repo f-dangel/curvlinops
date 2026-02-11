@@ -5,7 +5,7 @@ from collections.abc import MutableMapping
 from math import sqrt
 from typing import Callable, Iterable, List, Optional, Tuple, Union
 
-from torch import Generator, Tensor, device, vmap, zeros_like
+from torch import Generator, Tensor, vmap, zeros_like
 from torch.func import vjp
 from torch.nn import Module, Parameter
 
@@ -19,7 +19,7 @@ from curvlinops.kfac_utils import (
     loss_hessian_matrix_sqrt,
     make_grad_output_sampler,
 )
-from curvlinops.utils import make_functional_model_and_loss, _seed_generator
+from curvlinops.utils import _seed_generator, make_functional_model_and_loss
 
 
 def make_batch_ggn_diagonal_func(
