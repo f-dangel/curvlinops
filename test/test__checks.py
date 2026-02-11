@@ -59,5 +59,7 @@ def test_check_supports_batched_and_unbatched_inputs_detects_violation():
     def batch_dependent(x: Tensor) -> Tensor:
         return x - x.mean(dim=0)
 
-    with raises(ValueError, match="Function does not support batched and un-batched inputs"):
+    with raises(
+        ValueError, match="Function does not support batched and un-batched inputs"
+    ):
         _check_supports_batched_and_unbatched_inputs(X, batch_dependent)
