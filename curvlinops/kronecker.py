@@ -19,6 +19,7 @@ from torch.linalg import cholesky, eigh, matrix_norm
 
 from curvlinops._torch_base import PyTorchLinearOperator
 from curvlinops.eigh import EighDecomposedLinearOperator
+from curvlinops.utils import _infer_device, _infer_dtype
 
 
 def ensure_all_square(*tensors_or_operators: Union[Tensor, PyTorchLinearOperator]):
@@ -110,14 +111,8 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
 
         Returns:
             Device of the factors.
-
-        Raises:
-            RuntimeError: If factors are on different devices.
         """
-        devices = {factor.device for factor in self._factors}
-        if len(devices) != 1:
-            raise RuntimeError(f"Factors are on different devices: {devices}")
-        return devices.pop()
+        return _infer_device(self._factors)
 
     @property
     def dtype(self) -> dtype:
@@ -125,14 +120,8 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
 
         Returns:
             Data type of the factors.
-
-        Raises:
-            RuntimeError: If factors have different data types.
         """
-        dtypes = {factor.dtype for factor in self._factors}
-        if len(dtypes) != 1:
-            raise RuntimeError(f"Factors have different dtypes: {dtypes}")
-        return dtypes.pop()
+        return _infer_dtype(self._factors)
 
     def trace(self) -> Tensor:
         """Trace of the Kronecker product.
