@@ -49,7 +49,7 @@ class MockLinearOperator(PyTorchLinearOperator):
     """Dummy linear operator in PyTorch. Implements the zero matrix."""
 
     def _matmat(self, X: List[Tensor]) -> List[Tensor]:
-        ((dev, dt, num_vecs),) = set((x.device, x.dtype, x.shape[-1]) for x in X)
+        ((dev, dt, num_vecs),) = {(x.device, x.dtype, x.shape[-1]) for x in X}
         return [zeros(*x.shape[:-1], num_vecs, device=dev, dtype=dt) for x in X]
 
 
@@ -162,7 +162,7 @@ class FixedBatchesMockLinearOperator(CurvatureLinearOperator):
     FIXED_DATA_ORDER: bool = True
 
     def _matmat(self, X: List[Tensor]) -> List[Tensor]:
-        ((dev, dt, num_vecs),) = set((x.device, x.dtype, x.shape[-1]) for x in X)
+        ((dev, dt, num_vecs),) = {(x.device, x.dtype, x.shape[-1]) for x in X}
         return [zeros(*x.shape[:-1], num_vecs, device=dev, dtype=dt) for x in X]
 
 
