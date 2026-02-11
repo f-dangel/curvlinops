@@ -33,6 +33,18 @@ def test_input_formatting():
         _ = L @ [zeros(2, 3, 6), zeros(4, 5, 7)]  # ambiguous number of vectors
 
 
+def test_empty_shapes_exception():
+    """Test that empty input and output shapes raise exceptions."""
+    in_and_out_shapes = [
+        [[], []],
+        [[(1, 2, 3)], []],
+        [[], [(4, 5, 6)]],
+    ]
+    for in_shape, out_shape in in_and_out_shapes:
+        with raises(ValueError, match="must be non-empty."):
+            _ = PyTorchLinearOperator(in_shape, out_shape)
+
+
 class MockLinearOperator(PyTorchLinearOperator):
     """Dummy linear operator in PyTorch. Implements the zero matrix."""
 
