@@ -2,7 +2,6 @@
 
 from collections import UserDict
 from collections.abc import MutableMapping
-from math import sqrt
 from typing import Callable, Iterable, List, Optional, Tuple, Union
 
 from torch import Generator, Tensor, zeros_like
@@ -16,8 +15,7 @@ from curvlinops._checks import (
 from curvlinops._empirical_risk import _EmpiricalRiskMixin
 from curvlinops.kfac_utils import (
     _check_binary_if_BCEWithLogitsLoss,
-    loss_hessian_matrix_sqrt,
-    make_grad_output_sampler,
+    make_grad_output_fn,
 )
 from curvlinops.utils import _seed_generator, make_functional_model_and_loss
 
@@ -52,58 +50,10 @@ def make_batch_ggn_diagonal_func(
     # Create functional version of the model: (*params, x) -> prediction
     f, _ = make_functional_model_and_loss(model_func, loss_func, params)
 
-    # Set up vector generation
-    # Disable binary target check since it's performed outside the vmapped function
-    # to avoid unsupported operations within vmap
-    sample_grad_output = make_grad_output_sampler(
-        loss_func, warn_BCEWithLogitsLoss_targets_unchecked=False
-    )
+    # Set up gradient output vector computation (binary target check is disabled
+    # inside because it is incompatible with vmap; checked in batch_ggn_diagonal)
+    grad_output_fn = make_grad_output_fn(loss_func, mode, mc_samples)
     reduction = loss_func.reduction
-
-    def grad_outputs_generator_func(
-        f_x: Tensor, y: Tensor, generator: Optional[Generator] = None
-    ) -> Tensor:
-        """Generate vectors for backpropagation from the net's output.
-
-        The number of vectors depends on the computation mode.
-
-        Args:
-            f_x: Model prediction for a single datum.
-            y: Label for the datum.
-            generator: Random generator (used for MC mode, ignored in exact mode).
-
-        Returns:
-            Vectors for backpropagation. For exact mode, returns Hessian square
-            root vectors. For MC mode, returns Monte Carlo sampled gradient
-            vectors. Has shape ``[num_vectors, *f_x.shape]`` where ``num_vectors``
-            is either the number of MC samples, or ``f_x.numel()``.
-
-        Raises:
-            ValueError: If mode is not 'exact' or 'mc'.
-        """
-        if mode == "exact":
-            # Detach f_x: we only need values for the Hessian square root;
-            # actual gradients are computed via f_vjp.
-            # Disable binary check to avoid incompatibility during vmap.
-            # This check is run by the vmapped function.
-            hessian_sqrt = loss_hessian_matrix_sqrt(
-                f_x.detach(),
-                y,
-                loss_func,
-                warn_BCEWithLogitsLoss_targets_unchecked=False,
-            )
-            return hessian_sqrt.reshape(*f_x.shape, f_x.numel()).movedim(-1, 0)
-        elif mode == "mc":
-            # Add batch dim for the vmapped sample_grad_output, then remove it
-            f_x_batch = f_x.detach().unsqueeze(0)
-            y_batch = y.unsqueeze(0)
-            grad_output_samples = sample_grad_output(
-                f_x_batch, mc_samples, y_batch, generator
-            ).squeeze(1)
-            # Apply scaling to average over MC samples
-            return grad_output_samples.div_(sqrt(mc_samples))
-        else:
-            raise ValueError(f"Unknown mode: {mode}.")
 
     def ggn_diagonal_datum(
         x: Union[Tensor, MutableMapping],
@@ -122,7 +72,9 @@ def make_batch_ggn_diagonal_func(
             Items have the same shape as the neural network's parameters.
         """
         f_x, f_vjp = vjp(lambda *p: f(*p, x), *params)
-        grad_outputs = grad_outputs_generator_func(f_x, y, generator)
+        # Detach f_x: only values are needed for the grad output vectors;
+        # actual parameter gradients are computed via f_vjp.
+        grad_outputs = grad_output_fn(f_x.detach(), y, generator)
         grad_params = vmap(f_vjp)(grad_outputs)
         return [(g**2).sum(0) for g in grad_params]
 
