@@ -23,11 +23,10 @@ def test_register_userdict_as_pytree():
     manual_seed(0)
 
     net = Sequential(Linear(4, 3), ReLU(), Linear(3, 2))
+    X = UserDict({"x": rand(5, 4)})
 
     def model(data: UserDict) -> Tensor:
         return net(data["x"])
-
-    X = UserDict({"x": rand(5, 4)})
 
     # 1) Before registration, the flag must be False
     assert not _userdict_pytree_registered
@@ -58,7 +57,18 @@ def test_check_supports_batched_and_unbatched_inputs_detects_violation():
 
     # This function normalizes by the batch mean, so f(X) != vmap(f)(X)
     def batch_dependent(x: Tensor) -> Tensor:
-        return x - x.mean(dim=0)
+        """Handle unbatched and batched data differently.
+
+        Args:
+            x: Input tensor.
+
+        Returns:
+            Output tensor.
+        """
+        # Mean is over all axes. This includes the batch axis in the batched case, but
+        # does not in the un-batched case. Hence this function operates differently
+        # on batched and unbatched inputs.
+        return x - x.mean()
 
     with raises(
         ValueError, match="Function does not support batched and un-batched inputs"

@@ -46,8 +46,8 @@ def _register_userdict_as_pytree():
             A tuple of (list of values, tuple of keys).
         """
         keys = tuple(ud.data.keys())
-        values = tuple(ud.data[k] for k in keys)
-        return list(values), keys
+        values = [ud.data[k] for k in keys]
+        return values, keys
 
     def userdict_unflatten(values: List[Any], keys: Tuple[str, ...]) -> UserDict:
         """Unflatten a list of values and keys back into a UserDict.
@@ -67,7 +67,7 @@ def _register_userdict_as_pytree():
 
 def _check_supports_batched_and_unbatched_inputs(
     X: Union[Tensor, MutableMapping],
-    f: Callable[[Tensor], Tensor],
+    f: Callable[[Union[Tensor, MutableMapping]], Tensor],
     batch_axis: int = 0,
     rtol: float = 1e-5,
     atol: float = 1e-8,
@@ -91,6 +91,7 @@ def _check_supports_batched_and_unbatched_inputs(
 
     if isinstance(X, UserDict):
         _register_userdict_as_pytree()
+
     vmapped_f = vmap(f, in_dims=batch_axis, out_dims=batch_axis)
     vmapped_result = vmapped_f(X)
 

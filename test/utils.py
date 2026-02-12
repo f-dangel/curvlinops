@@ -28,9 +28,9 @@ from torch import (
     randperm,
     save,
     trace,
-    vmap,
     zeros_like,
 )
+from torch.func import vmap
 from torch.nn import (
     AdaptiveAvgPool2d,
     BCEWithLogitsLoss,
@@ -235,7 +235,8 @@ class WeightShareModel(Sequential):
             num_output_feature_dims: Number of feature dimensions in the output
                 (excluding batch dimension). For example, if the sequential model
                 outputs ``(batch, seq, classes)``, the value should be 2. Used to
-                detect whether a batch dimension is present.
+                detect whether a batch dimension is present. This is necessary to
+                make the model behave consistently for batched and un-batched inputs.
         """
         super().__init__(*args)
         self.setting = setting
@@ -351,24 +352,20 @@ class WeightShareModel(Sequential):
         has_batch = sequential_output.ndim > self._num_output_feature_dims
 
         # Validate that the output has the expected shape
-        expected_ndim_no_batch = self._num_output_feature_dims
-        expected_ndim_with_batch = self._num_output_feature_dims + 1
+        ndim_no_batch = self._num_output_feature_dims
+        ndim_with_batch = self._num_output_feature_dims + 1
 
-        if sequential_output.ndim not in [
-            expected_ndim_no_batch,
-            expected_ndim_with_batch,
-        ]:
+        if sequential_output.ndim not in [ndim_no_batch, ndim_with_batch]:
             raise ValueError(
                 f"Sequential output has unexpected shape {sequential_output.shape}. "
-                f"Expected {expected_ndim_no_batch} dimensions (no batch) or "
-                f"{expected_ndim_with_batch} dimensions (with batch), "
-                f"but got {sequential_output.ndim} dimensions."
+                f"Expected {ndim_no_batch} dimensions (no batch) or {ndim_with_batch} "
+                f"dimensions (with batch), but got {sequential_output.ndim} dimensions."
             )
 
-        if has_batch:
-            return vmap(postprocess_one_datum)(sequential_output)
-        else:
-            return postprocess_one_datum(sequential_output)
+        postprocess_fn = (
+            vmap(postprocess_one_datum) if has_batch else postprocess_one_datum
+        )
+        return postprocess_fn(sequential_output)
 
 
 class Conv2dModel(Module):

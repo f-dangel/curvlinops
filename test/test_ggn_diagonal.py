@@ -27,10 +27,9 @@ def test_GGNDiagonalComputer(case, kwargs: Dict):
     """
     model_func, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
 
-    computer = GGNDiagonalComputer(
+    diag = GGNDiagonalComputer(
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn, **kwargs
-    )
-    diag = computer.compute_ggn_diagonal()
+    ).compute_ggn_diagonal()
     assert len(diag) == len(params)
     for d, p in zip(diag, params):
         assert d.shape == p.shape
@@ -42,10 +41,7 @@ def test_GGNDiagonalComputer(case, kwargs: Dict):
         .diag()
     )
 
-    tols = {
-        "exact": {},
-        "mc": {"atol": 1e-4, "rtol": 2e-2},
-    }[kwargs["mode"]]
+    tols = {"exact": {}, "mc": {"atol": 1e-4, "rtol": 2e-2}}[kwargs["mode"]]
     assert allclose_report(diag_flat, diag_ref, **tols)
 
 
