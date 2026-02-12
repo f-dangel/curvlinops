@@ -60,10 +60,12 @@ def make_batch_ggn_diagonal_func(
     )
     reduction = loss_func.reduction
 
-    def backpropagation_vector_generator_func(
+    def grad_outputs_generator_func(
         f_x: Tensor, y: Tensor, generator: Optional[Generator] = None
     ) -> Tensor:
-        """Generate vectors for backpropagation based on the computation mode.
+        """Generate vectors for backpropagation from the net's output.
+
+        The number of vectors depends on the computation mode.
 
         Args:
             f_x: Model prediction for a single datum.
@@ -73,7 +75,8 @@ def make_batch_ggn_diagonal_func(
         Returns:
             Vectors for backpropagation. For exact mode, returns Hessian square
             root vectors. For MC mode, returns Monte Carlo sampled gradient
-            vectors.
+            vectors. Has shape ``[num_vectors, *f_x.shape]`` where ``num_vectors``
+            is either the number of MC samples, or ``f_x.numel()``.
 
         Raises:
             ValueError: If mode is not 'exact' or 'mc'.
@@ -100,7 +103,7 @@ def make_batch_ggn_diagonal_func(
             # Apply scaling to average over MC samples
             return grad_output_samples.div_(sqrt(mc_samples))
         else:
-            raise ValueError(f"Unknown mode: {mode}")
+            raise ValueError(f"Unknown mode: {mode}.")
 
     def ggn_diagonal_datum(
         x: Union[Tensor, MutableMapping],
@@ -117,25 +120,16 @@ def make_batch_ggn_diagonal_func(
         Returns:
             List of tensors containing the diagonal elements for each parameter.
             Items have the same shape as the neural network's parameters.
-
-        Raises:
-            RuntimeError: If the backpropagated vectors have incorrect shape.
         """
         f_x, f_vjp = vjp(lambda *p: f(*p, x), *params)
-        vectors = backpropagation_vector_generator_func(f_x, y, generator)
-        if vectors.shape[1:] != f_x.shape:
-            raise RuntimeError(
-                f"Expected vectors of shape[1:] {f_x.shape}. Got {vectors.shape[1:]}."
-            )
+        grad_outputs = grad_outputs_generator_func(f_x, y, generator)
+        grad_params = vmap(f_vjp)(grad_outputs)
+        return [(g**2).sum(0) for g in grad_params]
 
-        gs = vmap(f_vjp)(vectors)
-        return [(g**2).sum(0) for g in gs]
-
+    randomness = {"mc": "different", "exact": "same"}[mode]
     # Parallelize over data points
     ggn_diagonal_batched = vmap(
-        ggn_diagonal_datum,
-        in_dims=(0, 0, None),
-        randomness="different" if mode == "mc" else "same",
+        ggn_diagonal_datum, in_dims=(0, 0, None), randomness=randomness
     )
 
     def batch_ggn_diagonal(
