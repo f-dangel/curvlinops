@@ -122,8 +122,8 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
     """Computes the diagonal of the Generalized Gauss-Newton matrix.
 
     This class handles data iteration, deterministic checks, and the actual
-    computation of the GGN diagonal. Call ``.compute()`` to obtain the diagonal
-    as a list of tensors.
+    computation of the GGN diagonal. Call ``.compute_ggn_diagonal()`` to obtain the
+    diagonal as a list of tensors.
 
     Attributes:
         SUPPORTED_MODES: Supported computation modes.
