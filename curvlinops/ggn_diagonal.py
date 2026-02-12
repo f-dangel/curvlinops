@@ -219,7 +219,7 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
         ``vmap``.
         """
         super()._check_deterministic()
-        X, _ = next(iter(self._data))
+        X, _ = next(self._loop_over_data())
         _check_supports_batched_and_unbatched_inputs(X, self._model_func)
 
     def compute_ggn_diagonal(self) -> List[Tensor]:
