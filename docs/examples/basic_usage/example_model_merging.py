@@ -30,7 +30,8 @@ matrices :math:`\mathbf{F}_t` of each task (given by the data set
 This requires multiplying with the inverse of the sum of Fisher matrices
 (extended with a damping term). If we approximate each Fisher with its diagonal,
 this is easy, without this approximation, we will use
-:py:class:`curvlinops.CGInverseLinearOperator` for inversion.
+:py:class:`curvlinops.CGInverseLinearOperator` for inversion. Naive averaging
+corresponds to the special case where the Fisher is the identity.
 
 Let's start with the imports.
 """
@@ -131,33 +132,44 @@ for task_idx in range(T):
 # Linear operators
 # ----------------
 #
-# We are now ready to set up the linear operators for the per-task Fishers:
+# We are now ready to set up the linear operators for the per-task Fishers.
+# We collect the per-task Fisher operators for all three strategies in a
+# dictionary. Naive averaging corresponds to using the identity as Fisher:
 
-# full Fisher matrices
-fishers = [
-    GGNLinearOperator(
-        model,
-        loss_function,
-        [p for p in model.parameters() if p.requires_grad],
-        data_loader,
-    )
-    for model, loss_function, data_loader in zip(models, loss_functions, data_loaders)
-]
+param_shapes = [tuple(p.shape) for p in models[0].parameters() if p.requires_grad]
+identity = IdentityLinearOperator(
+    param_shapes, DEVICE, next(models[0].parameters()).dtype
+)
 
-# Diagonal approximation as used in the seminal paper
-# (Precisely speaking, the seminal paper uses a randomized approximation of the Fisher
-# based on sampling that can be achieved with `fisher_type='mc'` and `mc_samples=1`.
-# For simplicity we compute the exact GGN/Fisher diagonal here.)
-diagonal_fishers = [
-    GGNDiagonalLinearOperator(
-        model,
-        loss_function,
-        [p for p in model.parameters() if p.requires_grad],
-        data_loader,
-    )
-    for model, loss_function, data_loader in zip(models, loss_functions, data_loaders)
-]
-
+per_task_fishers = {
+    "Naive": [identity for _ in range(T)],
+    # Diagonal approximation as used in the seminal paper
+    # (Precisely speaking, the seminal paper uses a randomized approximation of the
+    # Fisher based on sampling that can be achieved with `fisher_type='mc'` and
+    # `mc_samples=1`. For simplicity we compute the exact GGN/Fisher diagonal here.)
+    "diag(F)": [
+        GGNDiagonalLinearOperator(
+            model,
+            loss_function,
+            [p for p in model.parameters() if p.requires_grad],
+            data_loader,
+        )
+        for model, loss_function, data_loader in zip(
+            models, loss_functions, data_loaders
+        )
+    ],
+    "F": [
+        GGNLinearOperator(
+            model,
+            loss_function,
+            [p for p in model.parameters() if p.requires_grad],
+            data_loader,
+        )
+        for model, loss_function, data_loader in zip(
+            models, loss_functions, data_loaders
+        )
+    ],
+}
 
 # %%
 #
@@ -175,101 +187,68 @@ thetas = [
 # %%
 #
 # We are ready to compute the sum of Fisher-weighted parameters (the right-hand
-# side in the above equation):
+# side in the above equation) for each strategy:
 
-rhs = sum(fisher @ theta for fisher, theta in zip(fishers, thetas))
-diagonal_rhs = sum(fisher @ theta for fisher, theta in zip(diagonal_fishers, thetas))
+rhs = {
+    key: sum(F @ theta for F, theta in zip(Fs, thetas))
+    for key, Fs in per_task_fishers.items()
+}
 
 # %%
 #
 # In the last step we need to normalize by multiplying with the inverse of the
-# summed Fishers. Let's first create the linear operator and add a damping
-# term:
+# summed Fishers. Let's first sum the per-task Fishers for each strategy:
 
-dim = fishers[0].shape[0]
-param_shapes = [p.shape for p in models[0].parameters() if p.requires_grad]
-identity = IdentityLinearOperator(param_shapes, fishers[0].device, rhs.dtype)
-damping = 1e-3
-
-fisher_sum = damping * identity
-for fisher in fishers:
-    fisher_sum += fisher
+fisher_sums = {}
+for key, Fs in per_task_fishers.items():
+    fisher_sums[key] = Fs[0]
+    for F in Fs[1:]:
+        fisher_sums[key] = F + fisher_sums[key]
 
 # %%
 #
-# Finally, we define a linear operator for the inverse of the damped Fisher sum:
-
-fisher_sum_inv = CGInverseLinearOperator(fisher_sum)
-
-# %%
+# Finally, we compute the merged parameters by applying the inverse of the
+# damped Fisher sum. For diagonal operators (naive and ``diag(F)``), the inverse
+# is analytical. For the full Fisher, we use
+# :py:class:`curvlinops.CGInverseLinearOperator`:
 #
 # .. note::
-#    You may want to tweak the convergence criterion of CG using
-#    :py:func:`curvlinops.CGInverseLinearOperator.set_cg_hyperparameters`. before
-#    applying the matrix-vector product.
+#    For the full Fisher, you may want to tweak the convergence criterion of CG
+#    using :py:func:`curvlinops.CGInverseLinearOperator.set_cg_hyperparameters`
+#    before applying the matrix-vector product.
 
-fisher_weighted_params = fisher_sum_inv @ rhs
+damping = 1e-3
 
-
-# %%
-#
-# Summing the diagonal Fishers then inverting their damped version is even simpler:
-
-diagonal_fisher_sum = diagonal_fishers[0]
-for diagonal_fisher in diagonal_fishers[1:]:
-    diagonal_fisher_sum = diagonal_fisher + diagonal_fisher_sum
-
-diagonal_fisher_sum_inv = diagonal_fisher_sum.inverse(damping)
-
-diagonal_fisher_weighted_params = diagonal_fisher_sum_inv @ diagonal_rhs
+merged_params = {}
+for key in per_task_fishers:
+    F_sum = fisher_sums[key]
+    if hasattr(F_sum, "inverse"):
+        fisher_sum_inv = F_sum.inverse(damping)
+    else:
+        fisher_sum_inv = CGInverseLinearOperator(F_sum + damping * identity)
+    merged_params[key] = fisher_sum_inv @ rhs[key]
 
 # %%
 #
 # Comparison
 # ----------
 #
-# Let's compare the performance of the Fisher-averaged parameters with a naive
-# average.
+# Let's compare the performance of the different strategies. We initialize a
+# neural network for each:
 
-average_params = sum(thetas) / len(thetas)
-
-# %%
-#
-# We initialize three neural networks with those parameters
-
-# Using the full Fisher
-fisher_model = make_architecture()
-
-params = [p for p in fisher_model.parameters() if p.requires_grad]
-theta_fisher = vector_to_parameter_list(fisher_weighted_params, params)
-for theta, param in zip(theta_fisher, params):
-    param.data = theta.to(param.device, param.dtype).data
-
-# Using the diagonal Fisher
-diagonal_fisher_model = make_architecture()
-
-params = [p for p in diagonal_fisher_model.parameters() if p.requires_grad]
-theta_diagonal_fisher = vector_to_parameter_list(
-    diagonal_fisher_weighted_params, params
-)
-for theta, param in zip(theta_diagonal_fisher, params):
-    param.data = theta.to(param.device, param.dtype).data
-
-
-# Using averages (setting the Fisher matrix to be identity)
-average_model = make_architecture()
-
-params = [p for p in average_model.parameters() if p.requires_grad]
-theta_average = vector_to_parameter_list(average_params, params)
-for theta, param in zip(theta_average, params):
-    param.data = theta.to(param.device, param.dtype).data
+merged_models = {}
+for key, params_vec in merged_params.items():
+    model = make_architecture()
+    params = [p for p in model.parameters() if p.requires_grad]
+    for theta, param in zip(vector_to_parameter_list(params_vec, params), params):
+        param.data = theta.to(param.device, param.dtype).data
+    merged_models[key] = model
 
 # %%
 #
 # and probe them on one batch of each task:
 
-
-losses = {"Naive": [], "diag(F)": [], "F": []}
+losses = {key: [] for key in merged_params}
 header = "\t" + "\t".join(losses.keys())
 print(header)
 
@@ -278,19 +257,18 @@ for task_idx in range(T):
     loss_function = loss_functions[task_idx]
     X, y = next(iter(data_loader))
 
-    losses["F"].append(loss_function(fisher_model(X), y).item())
-    losses["diag(F)"].append(loss_function(diagonal_fisher_model(X), y).item())
-    losses["Naive"].append(loss_function(average_model(X), y).item())
+    for key, model in merged_models.items():
+        losses[key].append(loss_function(model(X), y).item())
     assert losses["F"][-1] < losses["Naive"][-1]
 
     print(
-        f"Task {task_idx}\t{losses['Naive'][-1]:.3f}\t{losses['diag(F)'][-1]:.3f}\t{losses['F'][-1]:.3f}"
+        "\t".join(
+            [f"Task {task_idx}"] + [f"{losses[key][-1]:.3f}" for key in merged_params]
+        )
     )
 
 mean_losses = {key: sum(loss) / len(loss) for key, loss in losses.items()}
-print(
-    f"Avg\t{mean_losses['Naive']:.3f}\t{mean_losses['diag(F)']:.3f}\t{mean_losses['F']:.3f}"
-)
+print("\t".join(["Avg"] + [f"{mean_losses[key]:.3f}" for key in merged_params]))
 
 # %%
 #
