@@ -4,7 +4,7 @@ from collections import UserDict
 from collections.abc import MutableMapping
 from typing import Callable, Iterable, List, Optional, Tuple, Union
 
-from torch import Generator, Tensor, zeros_like
+from torch import Generator, Tensor, no_grad, zeros_like
 from torch.func import vjp, vmap
 from torch.nn import Module, Parameter
 
@@ -84,6 +84,7 @@ def make_batch_ggn_diagonal_func(
         ggn_diagonal_datum, in_dims=(0, 0, None), randomness=randomness
     )
 
+    @no_grad()
     def batch_ggn_diagonal(
         X: Union[Tensor, MutableMapping],
         y: Tensor,
