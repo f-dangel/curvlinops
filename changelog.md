@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added/New
 
+- Add a linear operator for the exact or Monte-Carlo-approximated GGN diagonal
+  ([PR](https://github.com/f-dangel/curvlinops/pull/241))
+
 - Support left multiplication with linear operators (`X @ A` with `X` a tensor or tensor list)
   ([PR](https://github.com/f-dangel/curvlinops/pull/226))
 

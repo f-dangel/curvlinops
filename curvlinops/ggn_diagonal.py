@@ -1,4 +1,4 @@
-"""Contains a computer class for the diagonal of the GGN matrix."""
+"""Contains a computer and linear operator class for the diagonal of the GGN matrix."""
 
 from collections import UserDict
 from collections.abc import MutableMapping
@@ -13,6 +13,7 @@ from curvlinops._checks import (
     _register_userdict_as_pytree,
 )
 from curvlinops._empirical_risk import _EmpiricalRiskMixin
+from curvlinops.diag import DiagonalLinearOperator
 from curvlinops.kfac_utils import (
     _check_binary_if_BCEWithLogitsLoss,
     make_grad_output_fn,
@@ -218,12 +219,8 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
         ``vmap``.
         """
         super()._check_deterministic()
-        X, _ = next(iter(self._data))
+        X, _ = next(self._loop_over_data())
         _check_supports_batched_and_unbatched_inputs(X, self._model_func)
-
-    ###########################################################################
-    #                        GGN DIAGONAL COMPUTATION                         #
-    ###########################################################################
 
     def compute_ggn_diagonal(self) -> List[Tensor]:
         """Compute the GGN diagonal on the entire data set.
@@ -255,3 +252,79 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
                 res_p.add_(batch_p, alpha=normalization_factor)
 
         return result
+
+
+class GGNDiagonalLinearOperator(DiagonalLinearOperator):
+    """Diagonal linear operator representing the GGN diagonal.
+
+    Internally uses a :class:`GGNDiagonalComputer` to compute the diagonal,
+    then initializes the parent :class:`DiagonalLinearOperator` with the result.
+    """
+
+    def __init__(
+        self,
+        model_func: Callable[[Union[Tensor, MutableMapping]], Tensor],
+        loss_func: Callable[[Tensor, Tensor], Tensor],
+        params: List[Parameter],
+        data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
+        progressbar: bool = False,
+        check_deterministic: bool = True,
+        num_data: Optional[int] = None,
+        batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
+        mode: str = "exact",
+        seed: int = 2_147_483_647,
+        mc_samples: int = 1,
+    ):
+        """Initialize the GGN diagonal linear operator.
+
+        Constructs a :class:`GGNDiagonalComputer` with the given arguments,
+        computes the diagonal, and passes it to the parent class.
+
+        Args:
+            model_func: A function that maps the mini-batch input X to predictions.
+                Could be a PyTorch module representing a neural network.
+            loss_func: Loss function criterion. Maps predictions and mini-batch labels
+                to a scalar value.
+            params: List of differentiable parameters used by the prediction function.
+            data: Source from which mini-batches can be drawn, for instance a list of
+                mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``. Note that ``X``
+                could be a ``dict`` or ``UserDict``; this is useful for custom models.
+                In this case, you must (i) specify the ``batch_size_fn`` argument, and
+                (ii) take care of preprocessing like ``X.to(device)`` inside of your
+                ``model.forward()`` function.
+            progressbar: Show a progressbar during computation.
+                Default: ``False``.
+            check_deterministic: Probe that model and data are deterministic, i.e.
+                that the data does not use ``drop_last`` or data augmentation. Also, the
+                model's forward pass could depend on the order in which mini-batches
+                are presented (BatchNorm, Dropout). Default: ``True``. This is a
+                safeguard, only turn it off if you know what you are doing.
+            num_data: Number of data points. If ``None``, it is inferred from the data
+                at the cost of one traversal through the data loader.
+            batch_size_fn: Function that computes the batch size from input data. For
+                ``torch.Tensor`` inputs, this should typically return ``X.shape[0]``.
+                For ``dict``/``UserDict`` inputs, this should return the batch size of
+                the contained tensors.
+            mode: Computation mode for the GGN diagonal. ``'exact'`` computes the
+                exact diagonal using the loss Hessian's square root. ``'mc'`` uses
+                Monte Carlo approximation with sampled gradients. Default: ``'exact'``.
+            seed: Random seed for Monte Carlo sampling when ``mode='mc'``.
+                Default: ``2147483647``.
+            mc_samples: Number of Monte Carlo samples when ``mode='mc'``.
+                Default: ``1``.
+        """
+        computer = GGNDiagonalComputer(
+            model_func,
+            loss_func,
+            params,
+            data,
+            progressbar=progressbar,
+            check_deterministic=check_deterministic,
+            num_data=num_data,
+            batch_size_fn=batch_size_fn,
+            mode=mode,
+            seed=seed,
+            mc_samples=mc_samples,
+        )
+        diagonal = computer.compute_ggn_diagonal()
+        super().__init__(diagonal)

@@ -6,14 +6,34 @@ from pytest import mark
 from torch import allclose, cat, float64, zeros_like
 
 from curvlinops.examples.functorch import functorch_ggn
-from curvlinops.ggn_diagonal import GGNDiagonalComputer
+from curvlinops.ggn_diagonal import GGNDiagonalComputer, GGNDiagonalLinearOperator
 from curvlinops.utils import allclose_report
-from test.utils import change_dtype
+from test.utils import change_dtype, compare_matmat
 
 DIAGONAL_CASES = [{"mode": "exact"}, {"mode": "mc", "mc_samples": 20_000}]
 DIAGONAL_IDS = [
     "_".join(f"{k}_{v}" for k, v in case.items()) for case in DIAGONAL_CASES
 ]
+
+
+def test_GGNDiagonalLinearOperator_matvec(case):
+    """Verify the GGN diagonal linear operator's matrix multiplication routine.
+
+    Args:
+        case: Tuple of model, loss function, parameters, data, and batch size getter.
+    """
+    model_func, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
+
+    G_op = GGNDiagonalLinearOperator(
+        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
+    )
+    G_mat = (
+        functorch_ggn(model_func, loss_func, params, data, input_key="x")
+        .detach()
+        .diag()  # extract the diagonal
+        .diag()  # embed it back into a matrix
+    )
+    compare_matmat(G_op, G_mat)
 
 
 @mark.parametrize("kwargs", DIAGONAL_CASES, ids=DIAGONAL_IDS)
@@ -74,11 +94,8 @@ def test_GGNDiagonalComputer_mc_different_seed(case):
     args = (model_func, loss_func, params, data)
     kwargs = {"batch_size_fn": batch_size_fn, "mode": "mc", "mc_samples": 1}
 
-    comp1 = GGNDiagonalComputer(*args, **kwargs, seed=0)
-    diag1 = comp1.compute_ggn_diagonal()
-
-    comp2 = GGNDiagonalComputer(*args, **kwargs, seed=1)
-    diag2 = comp2.compute_ggn_diagonal()
+    diag1 = GGNDiagonalComputer(*args, **kwargs, seed=0).compute_ggn_diagonal()
+    diag2 = GGNDiagonalComputer(*args, **kwargs, seed=1).compute_ggn_diagonal()
 
     assert all(
         not allclose(d1, d2) or allclose(d1, zeros_like(d1))
