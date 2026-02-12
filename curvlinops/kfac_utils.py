@@ -1,7 +1,7 @@
 """Utility functions related to KFAC."""
 
 from math import sqrt
-from typing import Callable, Tuple, Union
+from typing import Callable, Optional, Tuple, Union
 from warnings import warn
 
 from einconv import index_pattern
@@ -217,11 +217,11 @@ def loss_hessian_matrix_sqrt(
     return hess_sqrt_flat.reshape(*output_shape, *output_shape)
 
 
-def make_grad_output_sampler(
+def _make_single_datum_sampler(
     loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
     warn_BCEWithLogitsLoss_targets_unchecked: bool = True,
 ) -> Callable[[Tensor, int, Tensor, Generator], Tensor]:
-    """Create a function that samples gradients w.r.t. network outputs.
+    """Create a function that samples gradients w.r.t. a single datum's output.
 
     The expectation of the sampled gradient outer product is the loss function's
     Hessian, including scaling from reductions over non-batch axes.
@@ -232,10 +232,9 @@ def make_grad_output_sampler(
             not verified to be binary for BCEWithLogitsLoss. Default: ``True``.
 
     Returns:
-        A function that samples gradients w.r.t. the model prediction.
-        Signature: (output, num_samples, y, generator) -> grad_samples.
-        The predictions (output) and labels (y) both have a batch axis, and the
-        returned gradient samples will have the shape ``[num_samples, *output.shape]``.
+        A function that samples gradients w.r.t. the model prediction for one datum.
+        Signature: ``(output, num_samples, target, generator) -> grad_samples``.
+        The returned gradient samples have shape ``[num_samples, *output.shape]``.
     """
 
     def sample_grad_output(
@@ -325,13 +324,78 @@ def make_grad_output_sampler(
 
         return grad_samples
 
-    # Parallelize over predictions and targets
-    return vmap(
-        sample_grad_output,
-        in_dims=(0, None, 0, None),
-        out_dims=1,
-        randomness="different",
+    return sample_grad_output
+
+
+def make_grad_output_fn(
+    loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
+    mode: str,
+    mc_samples: int = 1,
+) -> Callable[[Tensor, Tensor, Optional[Generator]], Tensor]:
+    """Create a function computing gradient output vectors for a single datum.
+
+    For exact mode, returns the columns of the loss Hessian's matrix square root.
+    For MC mode, returns Monte-Carlo sampled gradient vectors.
+
+    Note:
+        The binary target check for ``BCEWithLogitsLoss`` is disabled inside this
+        function (incompatible with ``vmap``). Callers must run
+        ``_check_binary_if_BCEWithLogitsLoss`` themselves before entering ``vmap``.
+
+    Note:
+        For MC mode, the returned vectors are scaled by ``1 / sqrt(mc_samples)``
+        so that the sum of their outer products approximates the Hessian, matching
+        the exact mode contract.
+
+    Args:
+        loss_func: The loss function.
+        mode: ``'exact'`` for Hessian square root, ``'mc'`` for Monte-Carlo sampling.
+        mc_samples: Number of Monte-Carlo samples (only used when ``mode='mc'``).
+            Default: ``1``.
+
+    Returns:
+        A function with signature
+        ``(output, target, generator=None) -> [num_vectors, *output.shape]``
+        operating on a single datum (no batch axis). ``num_vectors`` is
+        ``output.numel()`` for exact mode or ``mc_samples`` for MC mode.
+
+    Raises:
+        ValueError: If ``mode`` is not ``'exact'`` or ``'mc'``.
+    """
+    if mode not in ("exact", "mc"):
+        raise ValueError(f"Invalid mode {mode!r}. Must be 'exact' or 'mc'.")
+
+    sample_grad_output = _make_single_datum_sampler(
+        loss_func, warn_BCEWithLogitsLoss_targets_unchecked=False
     )
+
+    def grad_output_fn(
+        output: Tensor, target: Tensor, generator: Optional[Generator] = None
+    ) -> Tensor:
+        """Compute gradient output vectors for a single datum.
+
+        Args:
+            output: Model prediction for one datum (no batch axis).
+            target: Label for the datum (no batch axis).
+            generator: Random generator (used for MC mode, ignored in exact mode).
+
+        Returns:
+            Gradient vectors of shape ``[num_vectors, *output.shape]``.
+        """
+        if mode == "exact":
+            hessian_sqrt = loss_hessian_matrix_sqrt(
+                output,
+                target,
+                loss_func,
+                warn_BCEWithLogitsLoss_targets_unchecked=False,
+            )
+            return hessian_sqrt.reshape(*output.shape, output.numel()).movedim(-1, 0)
+        else:  # mode == "mc"
+            return sample_grad_output(output, mc_samples, target, generator).div_(
+                sqrt(mc_samples)
+            )
+
+    return grad_output_fn
 
 
 def extract_patches(

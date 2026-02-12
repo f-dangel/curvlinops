@@ -6,13 +6,13 @@ from typing import Tuple, Union
 
 from pytest import mark, raises, warns
 from torch import Generator, Tensor, as_tensor, manual_seed, ones, randint, randn, zeros
-from torch.func import hessian
+from torch.func import hessian, vmap
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 
 from curvlinops.kfac_utils import (
     _check_binary_if_BCEWithLogitsLoss,
+    _make_single_datum_sampler,
     loss_hessian_matrix_sqrt,
-    make_grad_output_sampler,
 )
 from curvlinops.utils import allclose_report
 
@@ -168,8 +168,13 @@ def test_grad_output_sampler_convergence(
     else:
         raise NotImplementedError(f"Unsupported loss function: {loss_func_cls}")
 
-    # Create gradient sampler
-    sampler = make_grad_output_sampler(loss_func)
+    # Create gradient sampler (vmapped over batch)
+    sampler = vmap(
+        _make_single_datum_sampler(loss_func),
+        in_dims=(0, None, 0, None),
+        out_dims=1,
+        randomness="different",
+    )
 
     # Sample many gradients with fixed generator for reproducibility
     generator = Generator().manual_seed(42)

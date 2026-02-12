@@ -45,8 +45,7 @@ from curvlinops.kfac_utils import (
     _check_binary_if_BCEWithLogitsLoss,
     extract_averaged_patches,
     extract_patches,
-    loss_hessian_matrix_sqrt,
-    make_grad_output_sampler,
+    make_grad_output_fn,
 )
 from curvlinops.utils import _seed_generator
 
@@ -290,8 +289,14 @@ class KFACLinearOperator(CurvatureLinearOperator):
         self._gradient_covariances: Dict[str, Tensor] = {}
         self._mapping = self.compute_parameter_mapping(params, model_func)
 
-        # Function (prediction, label) -> grad_outputs for backpropagation
-        self._grad_outputs_computer = self._set_up_grad_outputs_computer(loss_func)
+        # Function (prediction_batch, label_batch) -> grad_outputs for backpropagation
+        self._grad_outputs_computer = (
+            self._set_up_grad_outputs_computer(loss_func, fisher_type, mc_samples)
+            # TODO Implement grad_output sampler for empirical case and remove
+            # _maybe_adjust_loss_scale
+            if fisher_type in {FisherType.MC, FisherType.TYPE2}
+            else None
+        )
 
         super().__init__(
             model_func,
@@ -305,57 +310,51 @@ class KFACLinearOperator(CurvatureLinearOperator):
             batch_size_fn=batch_size_fn,
         )
 
+    @staticmethod
     def _set_up_grad_outputs_computer(
-        self, loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss]
-    ) -> Callable[[Tensor, Tensor], Tensor]:
+        loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
+        fisher_type: FisherType,
+        mc_samples: int,
+    ) -> Callable[[Tensor, Tensor, Optional[Generator]], Tensor]:
         """Set up the function that computes network output gradients for KFAC.
 
         Args:
             loss_func: The loss function.
+            fisher_type: The Fisher type (``TYPE2`` or ``MC``).
+            mc_samples: Number of MC samples (used when ``fisher_type`` is ``MC``).
 
         Returns:
-            A function that computes the gradients to be backpropagated from the
-            network's output and labels.
+            A function ``(output_batch, y_batch, generator) -> grad_outputs``
+            that computes the gradients to be backpropagated from the network's
+            output, with shape ``[num_vectors, batch, *output_shape]``.
         """
-        grad_output_sampler = make_grad_output_sampler(
-            loss_func, warn_BCEWithLogitsLoss_targets_unchecked=False
-        )
-        hessian_sqrts_computer = vmap(
-            partial(
-                loss_hessian_matrix_sqrt, warn_BCEWithLogitsLoss_targets_unchecked=False
-            ),
-            in_dims=(0, 0, None),  # Parallelize over data, not over loss function
+        mode = {FisherType.MC: "mc", FisherType.TYPE2: "exact"}[fisher_type]
+
+        grad_output_fn = make_grad_output_fn(loss_func, mode, mc_samples)
+        randomness = {"mc": "different", "exact": "same"}[mode]
+        batched_grad_output_fn = vmap(
+            grad_output_fn, in_dims=(0, 0, None), out_dims=1, randomness=randomness
         )
 
         def compute_grad_outputs(
-            output: Union[MutableMapping, Tensor], y: Tensor
+            output: Tensor, y: Tensor, generator: Optional[Generator] = None
         ) -> Tensor:
             """Compute the gradients that are backpropagated from the network's output.
 
             Args:
                 output: Neural network prediction with batch axis.
                 y: Target labels with batch axis.
+                generator: Random generator (used for MC mode).
 
             Returns:
                 Gradients to be backpropagated from the network's output as a tensor of
                 shape ``[num_vectors, *output.shape]`` where ``num_vectors`` depends on
                 the Fisher type.
-
-            Raises:
-                NotImplementedError: If ``fisher_type`` is not supported.
             """
-            # NOTE Checking for binary labels is data-dependent and not supported in vmap.
-            # Therefore, we check outside vmap and then turn it off inside vmap
+            # Binary label check is data-dependent and not supported in vmap,
+            # so we check outside and disable it inside (via make_grad_output_fn).
             _check_binary_if_BCEWithLogitsLoss(y, loss_func)
-
-            if self._fisher_type == FisherType.MC:
-                return grad_output_sampler(output, self._mc_samples, y, self._generator)
-            if self._fisher_type == FisherType.TYPE2:
-                return hessian_sqrts_computer(output, y, loss_func).movedim(-1, 0)
-            else:
-                raise NotImplementedError(
-                    f"Unsupported Fisher type: {self._fisher_type}."
-                )
+            return batched_grad_output_fn(output, y, generator)
 
         return compute_grad_outputs
 
@@ -608,7 +607,10 @@ class KFACLinearOperator(CurvatureLinearOperator):
             # backpropagated to compute the KFAC approximation
             # - TYPE2: Hessian square root columns
             # - MC: Monte-Carlo approximation of the the Hessian square root
-            grad_outputs = self._grad_outputs_computer(output.detach(), y)
+            # Detach output: we only need values for the backpropagated vectors.
+            grad_outputs = self._grad_outputs_computer(
+                output.detach(), y, self._generator
+            )
 
             # Fix scaling caused by the batch dimension
             num_loss_terms = output.shape[0]
@@ -627,7 +629,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
                 )
 
         elif self._fisher_type == FisherType.EMPIRICAL:
-            # TODO Implement grad_output sampler and remove _maybe_adjust_loss_scale
             loss = self._loss_func(output, y)
             loss = self._maybe_adjust_loss_scale(loss, output)
             grad(loss, self._params)
@@ -707,13 +708,13 @@ class KFACLinearOperator(CurvatureLinearOperator):
             # KFAC-reduce approximation
             g = reduce(g, "batch ... d_out -> batch d_out", "sum")
 
-        # Compute correction for the loss scaling depending on the loss reduction used
+        # Compute correction for the loss scaling depending on the loss reduction used.
+        # Note: mc_samples scaling is already handled inside make_grad_output_fn.
         num_loss_terms = batch_size * self._num_per_example_loss_terms
-        # self._mc_samples will be 1 if fisher_type != FisherType.MC
         correction = {
-            "sum": 1.0 / self._mc_samples,
+            "sum": 1.0,
             "mean": num_loss_terms**2
-            / (self._N_data * self._mc_samples * self._num_per_example_loss_terms),
+            / (self._N_data * self._num_per_example_loss_terms),
         }[self._loss_func.reduction]
 
         covariance = einsum(g, g, "b i,b j->i j").mul_(correction)
