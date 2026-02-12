@@ -50,9 +50,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Use `ruff` for docstring linting (remove `darglint` and `pydocstyle`)
   ([PR](https://github.com/f-dangel/curvlinops/pull/234))
 
-- Generalize sampling output gradients for sequence-valued predictions
-  ([PR](https://github.com/f-dangel/curvlinops/pull/235))
-
 - Introduce `_EmpiricalRiskMixin` interface to allow separating deterministic checks and state pre-computation from linear operators
   ([PR](https://github.com/f-dangel/curvlinops/pull/236))
 
