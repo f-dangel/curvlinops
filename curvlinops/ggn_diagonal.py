@@ -1,12 +1,11 @@
-"""Contains diagonal approximation of the GGN matrix."""
+"""Contains a computer and linear operator class for the diagonal of the GGN matrix."""
 
 from collections import UserDict
 from collections.abc import MutableMapping
-from math import sqrt
 from typing import Callable, Iterable, List, Optional, Tuple, Union
 
-from torch import Generator, Tensor, device, vmap, zeros_like
-from torch.func import vjp
+from torch import Generator, Tensor, no_grad, zeros_like
+from torch.func import vjp, vmap
 from torch.nn import Module, Parameter
 
 from curvlinops._checks import (
@@ -17,10 +16,9 @@ from curvlinops._empirical_risk import _EmpiricalRiskMixin
 from curvlinops.diag import DiagonalLinearOperator
 from curvlinops.kfac_utils import (
     _check_binary_if_BCEWithLogitsLoss,
-    loss_hessian_matrix_sqrt,
-    make_grad_output_sampler,
+    make_grad_output_fn,
 )
-from curvlinops.utils import make_functional_model_and_loss
+from curvlinops.utils import _seed_generator, make_functional_model_and_loss
 
 
 def make_batch_ggn_diagonal_func(
@@ -53,55 +51,10 @@ def make_batch_ggn_diagonal_func(
     # Create functional version of the model: (*params, x) -> prediction
     f, _ = make_functional_model_and_loss(model_func, loss_func, params)
 
-    # Set up vector generation
-    # Disable binary target check since it's performed outside the vmapped function
-    # to avoid unsupported operations within vmap
-    sample_grad_output = make_grad_output_sampler(
-        loss_func, warn_BCEWithLogitsLoss_targets_unchecked=False
-    )
+    # Set up gradient output vector computation (binary target check is disabled
+    # inside because it is incompatible with vmap; checked in batch_ggn_diagonal)
+    grad_output_fn = make_grad_output_fn(loss_func, mode, mc_samples)
     reduction = loss_func.reduction
-
-    def backpropagation_vector_generator_func(
-        f_x: Tensor, y: Tensor, generator: Optional[Generator] = None
-    ) -> Tensor:
-        """Generate vectors for backpropagation based on the computation mode.
-
-        Args:
-            f_x: Model prediction for a single datum.
-            y: Label for the datum.
-            generator: Random generator (used for MC mode, ignored in exact mode).
-
-        Returns:
-            Vectors for backpropagation. For exact mode, returns Hessian square
-            root vectors. For MC mode, returns Monte Carlo sampled gradient
-            vectors.
-
-        Raises:
-            ValueError: If mode is not 'exact' or 'mc'.
-        """
-        if mode == "exact":
-            # Detach f_x: we only need values for the Hessian square root;
-            # actual gradients are computed via f_vjp.
-            # Disable binary check to avoid incompatibility during vmap.
-            # This check is run by the vmapped function.
-            hessian_sqrt = loss_hessian_matrix_sqrt(
-                f_x.detach(),
-                y,
-                loss_func,
-                warn_BCEWithLogitsLoss_targets_unchecked=False,
-            )
-            return hessian_sqrt.reshape(*f_x.shape, f_x.numel()).movedim(-1, 0)
-        elif mode == "mc":
-            # Add batch dim for the vmapped sample_grad_output, then remove it
-            f_x_batch = f_x.detach().unsqueeze(0)
-            y_batch = y.unsqueeze(0)
-            grad_output_samples = sample_grad_output(
-                f_x_batch, mc_samples, y_batch, generator
-            ).squeeze(1)
-            # Apply scaling to average over MC samples
-            return grad_output_samples.div_(sqrt(mc_samples))
-        else:
-            raise ValueError(f"Unknown mode: {mode}")
 
     def ggn_diagonal_datum(
         x: Union[Tensor, MutableMapping],
@@ -118,27 +71,21 @@ def make_batch_ggn_diagonal_func(
         Returns:
             List of tensors containing the diagonal elements for each parameter.
             Items have the same shape as the neural network's parameters.
-
-        Raises:
-            RuntimeError: If the backpropagated vectors have incorrect shape.
         """
         f_x, f_vjp = vjp(lambda *p: f(*p, x), *params)
-        vectors = backpropagation_vector_generator_func(f_x, y, generator)
-        if vectors.shape[1:] != f_x.shape:
-            raise RuntimeError(
-                f"Expected vectors of shape[1:] {f_x.shape}. Got {vectors.shape[1:]}."
-            )
+        # Detach f_x: only values are needed for the grad output vectors;
+        # actual parameter gradients are computed via f_vjp.
+        grad_outputs = grad_output_fn(f_x.detach(), y, generator)
+        grad_params = vmap(f_vjp)(grad_outputs)
+        return [(g**2).sum(0) for g in grad_params]
 
-        gs = vmap(f_vjp)(vectors)
-        return [(g**2).sum(0) for g in gs]
-
+    randomness = {"mc": "different", "exact": "same"}[mode]
     # Parallelize over data points
     ggn_diagonal_batched = vmap(
-        ggn_diagonal_datum,
-        in_dims=(0, 0, None),
-        randomness="different" if mode == "mc" else "same",
+        ggn_diagonal_datum, in_dims=(0, 0, None), randomness=randomness
     )
 
+    @no_grad()
     def batch_ggn_diagonal(
         X: Union[Tensor, MutableMapping],
         y: Tensor,
@@ -176,8 +123,8 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
     """Computes the diagonal of the Generalized Gauss-Newton matrix.
 
     This class handles data iteration, deterministic checks, and the actual
-    computation of the GGN diagonal. Call ``.compute()`` to obtain the diagonal
-    as a list of tensors.
+    computation of the GGN diagonal. Call ``.compute_ggn_diagonal()`` to obtain the
+    diagonal as a list of tensors.
 
     Attributes:
         SUPPORTED_MODES: Supported computation modes.
@@ -186,7 +133,6 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
     """
 
     SUPPORTED_MODES: Tuple[str, ...] = ("exact", "mc")
-    FIXED_DATA_ORDER: bool = True
 
     def __init__(
         self,
@@ -249,7 +195,7 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
             raise ValueError(
                 f"Invalid mode {mode!r}. Must be one of {self.SUPPORTED_MODES}."
             )
-
+        self.FIXED_DATA_ORDER = {"exact": False, "mc": True}[mode]
         self._mode = mode
         self._seed = seed
         self._mc_samples = mc_samples
@@ -265,10 +211,6 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
             check_deterministic=check_deterministic,
         )
 
-    ###########################################################################
-    #                        DETERMINISTIC CHECKS                             #
-    ###########################################################################
-
     def _check_deterministic(self):
         """Check determinism and verify ``vmap`` compatibility.
 
@@ -280,11 +222,7 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
         X, _ = next(iter(self._data))
         _check_supports_batched_and_unbatched_inputs(X, self._model_func)
 
-    ###########################################################################
-    #                        GGN DIAGONAL COMPUTATION                         #
-    ###########################################################################
-
-    def compute(self) -> List[Tensor]:
+    def compute_ggn_diagonal(self) -> List[Tensor]:
         """Compute the GGN diagonal on the entire data set.
 
         Returns:
@@ -302,7 +240,7 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
         generator = (
             None
             if self._mode == "exact"
-            else self._setup_generator(self.device, self._seed)
+            else _seed_generator(None, self.device, self._seed)
         )
 
         result = [zeros_like(p) for p in self._params]
@@ -314,21 +252,6 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
                 res_p.add_(batch_p, alpha=normalization_factor)
 
         return result
-
-    @staticmethod
-    def _setup_generator(dev: device, seed: int) -> Generator:
-        """Set up a seeded generator on the specified device.
-
-        Args:
-            dev: Device to create the generator on.
-            seed: Random seed for the generator.
-
-        Returns:
-            Seeded generator instance on the specified device.
-        """
-        generator = Generator(dev)
-        generator.manual_seed(seed)
-        return generator
 
 
 class GGNDiagonalLinearOperator(DiagonalLinearOperator):
@@ -403,5 +326,5 @@ class GGNDiagonalLinearOperator(DiagonalLinearOperator):
             seed=seed,
             mc_samples=mc_samples,
         )
-        diagonal = computer.compute()
+        diagonal = computer.compute_ggn_diagonal()
         super().__init__(diagonal)

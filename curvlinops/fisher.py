@@ -5,14 +5,15 @@ from functools import cached_property, partial
 from typing import Callable, Iterable, List, Optional, Tuple, Union
 
 from einops import einsum, rearrange
-from torch import Generator, Tensor, vmap
+from torch import Generator, Tensor
+from torch.func import vmap
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, Module, MSELoss, Parameter
 
 from curvlinops._torch_base import CurvatureLinearOperator
 from curvlinops.ggn import make_ggn_vector_product
 from curvlinops.kfac_utils import (
     _check_binary_if_BCEWithLogitsLoss,
-    make_grad_output_sampler,
+    _make_single_datum_sampler,
 )
 from curvlinops.utils import _seed_generator, make_functional_flattened_model_and_loss
 
@@ -62,9 +63,14 @@ def make_batch_fmc_matrix_product(
         else "batch ... c -> (batch ...) c"
     )
 
-    # Create the gradient output sampler for this loss function
-    sample_grad_output_flat = make_grad_output_sampler(
-        loss_func, warn_BCEWithLogitsLoss_targets_unchecked=False
+    # Create the gradient output sampler for this loss function (vmapped over batch)
+    sample_grad_output_flat = vmap(
+        _make_single_datum_sampler(
+            loss_func, warn_BCEWithLogitsLoss_targets_unchecked=False
+        ),
+        in_dims=(0, None, 0, None),
+        out_dims=1,
+        randomness="different",
     )
 
     def c_pseudo_flat(

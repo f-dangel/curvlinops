@@ -4,8 +4,8 @@ from collections.abc import MutableMapping
 from functools import cached_property, partial
 from typing import Callable, List, Optional, Tuple, Union
 
-from torch import Tensor, no_grad, vmap
-from torch.func import jacrev, jvp
+from torch import Tensor, no_grad
+from torch.func import jacrev, jvp, vmap
 from torch.nn import Module, Parameter
 
 from curvlinops._torch_base import CurvatureLinearOperator

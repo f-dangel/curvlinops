@@ -79,10 +79,10 @@ KFAC_WEIGHT_SHARING_EXACT_CASES_NO_DEVICE_NO_LOSS_FUNC = [
     ###############################################################################
     # deep linear network with vector output and weight-sharing dimensions
     {
+        # Sequential output shape: (batch, seq1=4, seq2=8 seq3=3)
+        # -> num_output_feature_dims=3
         "model_func": lambda: WeightShareModel(
-            Linear(5, 4),
-            Linear(4, 3),
-            num_output_feature_dims=3,
+            Linear(5, 4), Linear(4, 3), num_output_feature_dims=3
         ),
         "data": lambda: {
             KFACType.EXPAND: [
@@ -214,10 +214,9 @@ SINGLE_LAYER_WEIGHT_SHARING_CASES_NO_DEVICE_NO_LOSS_FUNC = [
     ###############################################################################
     # single linear layer with vector output and weight-sharing dimensions
     {
-        "model_func": lambda: WeightShareModel(
-            Linear(5, 3),
-            num_output_feature_dims=3,
-        ),
+        # Sequential output shape: (batch, seq1=4, seq2=8 seq3=3)
+        # -> num_output_feature_dims=3
+        "model_func": lambda: WeightShareModel(Linear(5, 3), num_output_feature_dims=3),
         "data": lambda: {
             KFACType.EXPAND: [
                 (rand(7, 4, 8, 5), regression_targets((7, 4, 8, 3))),
