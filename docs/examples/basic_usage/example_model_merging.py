@@ -136,13 +136,7 @@ for task_idx in range(T):
 # We collect the per-task Fisher operators for all three strategies in a
 # dictionary. Naive averaging corresponds to using the identity as Fisher:
 
-param_shapes = [tuple(p.shape) for p in models[0].parameters() if p.requires_grad]
-identity = IdentityLinearOperator(
-    param_shapes, DEVICE, next(models[0].parameters()).dtype
-)
-
 per_task_fishers = {
-    "Naive": [identity for _ in range(T)],
     # Diagonal approximation as used in the seminal paper
     # (Precisely speaking, the seminal paper uses a randomized approximation of the
     # Fisher based on sampling that can be achieved with `fisher_type='mc'` and
@@ -219,12 +213,17 @@ for key, Fs in per_task_fishers.items():
 
 damping = 1e-3
 
-merged_params = {}
+merged_params = {"Naive": sum(thetas) / len(thetas)}
 for key in per_task_fishers:
     F_sum = fisher_sums[key]
     if hasattr(F_sum, "inverse"):
         fisher_sum_inv = F_sum.inverse(damping)
     else:
+        identity = IdentityLinearOperator(
+            [tuple(p.shape) for p in models[0].parameters() if p.requires_grad],
+            DEVICE,
+            next(models[0].parameters()).dtype,
+        )
         fisher_sum_inv = CGInverseLinearOperator(F_sum + damping * identity)
     merged_params[key] = fisher_sum_inv @ rhs[key]
 
