@@ -5,6 +5,7 @@ from typing import List, Union
 from torch import Tensor, device, dtype
 
 from curvlinops._torch_base import PyTorchLinearOperator
+from curvlinops.utils import _infer_device, _infer_dtype
 
 
 class EighDecomposedLinearOperator(PyTorchLinearOperator):
@@ -81,16 +82,8 @@ class EighDecomposedLinearOperator(PyTorchLinearOperator):
 
         Returns:
             Device of the eigenvalues and eigenvectors.
-
-        Raises:
-            RuntimeError: If eigenvalues and eigenvectors are on different devices.
         """
-        if self._eigenvalues.device != self._eigenvectors.device:
-            raise RuntimeError(
-                f"Eigenvalues and eigenvectors on different devices: "
-                f"{self._eigenvalues.device} vs {self._eigenvectors.device}"
-            )
-        return self._eigenvalues.device
+        return _infer_device([self._eigenvalues, self._eigenvectors])
 
     @property
     def dtype(self) -> dtype:
@@ -98,16 +91,8 @@ class EighDecomposedLinearOperator(PyTorchLinearOperator):
 
         Returns:
             Data type of the eigenvalues and eigenvectors.
-
-        Raises:
-            RuntimeError: If eigenvalues and eigenvectors have different dtypes.
         """
-        if self._eigenvalues.dtype != self._eigenvectors.dtype:
-            raise RuntimeError(
-                f"Eigenvalues and eigenvectors have different dtypes: "
-                f"{self._eigenvalues.dtype} vs {self._eigenvectors.dtype}"
-            )
-        return self._eigenvalues.dtype
+        return _infer_dtype([self._eigenvalues, self._eigenvectors])
 
     def trace(self) -> Tensor:
         """Trace of the eigendecomposition operator.

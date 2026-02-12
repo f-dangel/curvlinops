@@ -6,13 +6,14 @@ from functools import partial
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from einops import einsum, rearrange
-from torch import Generator, Tensor, cat
+from torch import Tensor, cat
 from torch.linalg import eigh
 from torch.nn import Conv2d, Module
 from torch.utils.hooks import RemovableHandle
 
 from curvlinops.kfac import FisherType, KFACLinearOperator
 from curvlinops.kfac_utils import extract_patches
+from curvlinops.utils import _seed_generator
 
 
 def compute_eigenvalue_correction_linear_weight_sharing(
@@ -426,9 +427,7 @@ class EKFACLinearOperator(KFACLinearOperator):
                 )
             )
 
-        if self._generator is None or self._generator.device != self.device:
-            self._generator = Generator(device=self.device)
-        self._generator.manual_seed(self._seed)
+        self._generator = _seed_generator(self._generator, self.device, self._seed)
 
         # loop over data set, computing the corrected eigenvalues
         for X, y in self._loop_over_data(desc="Eigenvalue correction"):
@@ -553,11 +552,10 @@ class EKFACLinearOperator(KFACLinearOperator):
 
         # Compute correction for the loss scaling depending on the loss reduction used
         num_loss_terms = batch_size * self._num_per_example_loss_terms
-        # self._mc_samples will be 1 if fisher_type != FisherType.MC
         correction = {
-            "sum": 1.0 / self._mc_samples,
+            "sum": 1.0,
             "mean": num_loss_terms**2
-            / (self._N_data * self._mc_samples * self._num_per_example_loss_terms),
+            / (self._N_data * self._num_per_example_loss_terms),
         }[self._loss_func.reduction]
 
         # Compute the corrected eigenvalues for the EKFAC approximation

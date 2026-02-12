@@ -30,6 +30,7 @@ from torch import (
     trace,
     zeros_like,
 )
+from torch.func import vmap
 from torch.nn import (
     AdaptiveAvgPool2d,
     BCEWithLogitsLoss,
@@ -216,17 +217,31 @@ class WeightShareModel(Sequential):
     ``(batch, ..., out_dim)``.
     """
 
-    def __init__(self, *args: Module, setting: str = "expand", loss: str = "MSE"):
+    def __init__(
+        self,
+        *args: Module,
+        setting: str = "expand",
+        loss: str = "MSE",
+        num_output_feature_dims: int = 1,
+    ):
         """Initialize the model.
 
         Args:
             *args: Modules of the sequential model.
-            setting: Weight-sharing setting to use.
-            loss: Loss type that determines output handling.
+            setting: The weight-sharing setting of the model. One of ``'expand'``,
+                ``'expand-flatten'``, or ``'reduce'``.
+            loss: The type of loss function the model is used with. One of ``'MSE'``,
+                ``'CE'``, or ``'BCE'``.
+            num_output_feature_dims: Number of feature dimensions in the output
+                (excluding batch dimension). For example, if the sequential model
+                outputs ``(batch, seq, classes)``, the value should be 2. Used to
+                detect whether a batch dimension is present. This is necessary to
+                make the model behave consistently for batched and un-batched inputs.
         """
         super().__init__(*args)
         self.setting = setting
         self.loss = loss
+        self._num_output_feature_dims = num_output_feature_dims
 
     @property
     def setting(self) -> str:
@@ -293,29 +308,64 @@ class WeightShareModel(Sequential):
 
         Assumes MSELoss. The output would have to be transposed to be used with
         the CrossEntropyLoss.
+        Handles both batched inputs (with batch dimension) and unbatched inputs
+        (without batch dimension, e.g., when called via vmap).
 
         Args:
             x: Input to the forward pass.
 
         Returns:
             Output of the sequential model with processed weight-sharing dimension.
+
+        Raises:
+            ValueError: If the output of the sequential model has an unexpected shape.
         """
-        x = super().forward(x)
-        if self.setting == "reduce":
-            # Example: Vision transformer for image classification.
-            # (batch, image_patches, c) -> (batch, c)
-            return reduce(x, "batch ... c -> batch c", "mean")
-        # if self.setting == "expand":
-        # Example: Transformer for translation: (batch, sequence_length, c)
-        # (although second and third dimension would have to be transposed for
-        # classification)
-        if self.setting == "expand-flatten":
-            # Example: Pixel-wise MSE loss for diffusion model:
-            # (batch, hight, width, c) -> (batch, hight * width * c)
-            x = rearrange(x, "batch ... c -> batch (... c)")
-        elif x.ndim > 2 and self.loss == "CE":
-            x = rearrange(x, "batch ... c -> batch c ...")
-        return x
+        # Run the sequential model first
+        sequential_output = super().forward(x)
+
+        def postprocess_one_datum(x_n: Tensor) -> Tensor:
+            """Post-process a single datum's output.
+
+            Args:
+                x_n: Output tensor for a single datum (no batch dimension).
+
+            Returns:
+                Post-processed output tensor.
+            """
+            if self.setting == "reduce":
+                # Example: Vision transformer for image classification.
+                # (image_patches, c) -> (c,)
+                return reduce(x_n, "... c -> c", "mean")
+            # Example: Transformer for translation: (sequence_length, c)
+            # (although second and third dimension would have to be transposed for
+            # classification)
+            if self.setting == "expand-flatten":
+                # Example: Pixel-wise MSE loss for diffusion model:
+                # (height, width, c) -> (height * width * c)
+                x_n = rearrange(x_n, "... c -> (... c)")
+            elif x_n.ndim > 1 and self.loss == "CE":
+                x_n = rearrange(x_n, "... c -> c ...")
+
+            return x_n
+
+        # Detect if batch dimension is present by comparing output ndim
+        has_batch = sequential_output.ndim > self._num_output_feature_dims
+
+        # Validate that the output has the expected shape
+        ndim_no_batch = self._num_output_feature_dims
+        ndim_with_batch = self._num_output_feature_dims + 1
+
+        if sequential_output.ndim not in [ndim_no_batch, ndim_with_batch]:
+            raise ValueError(
+                f"Sequential output has unexpected shape {sequential_output.shape}. "
+                f"Expected {ndim_no_batch} dimensions (no batch) or {ndim_with_batch} "
+                f"dimensions (with batch), but got {sequential_output.ndim} dimensions."
+            )
+
+        postprocess_fn = (
+            vmap(postprocess_one_datum) if has_batch else postprocess_one_datum
+        )
+        return postprocess_fn(sequential_output)
 
 
 class Conv2dModel(Module):
@@ -906,6 +956,8 @@ def _test_save_and_load_state_dict(
         CrossEntropyLoss(),
         params,
         [(X, y)],
+        # Avoid computing linop because y has the wrong shape for CE
+        check_deterministic=False,
     )
     with raises(ValueError, match="loss"):
         linop_new.load_state_dict(load(PATH, weights_only=False))

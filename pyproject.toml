@@ -64,6 +64,7 @@ test = [
     "coveralls",
     "pytest",
     "pytest-cov",
+    "pytest-order",
 ]
 
 # Dependencies needed for linting.
@@ -98,6 +99,7 @@ exclude = [
     "docs/rtd",
     "build",
     "dist",
+    "proto",
 ]
 
 [tool.ruff.lint]

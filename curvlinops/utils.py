@@ -1,12 +1,71 @@
 """General utility functions."""
 
-from typing import Callable, List, MutableMapping, Tuple, Union
+from typing import Callable, Iterable, List, MutableMapping, Optional, Tuple, Union
 
 from einops import rearrange
 from numpy import cumsum, ndarray
-from torch import Tensor, as_tensor
+from torch import Generator, Tensor, as_tensor, device, dtype
 from torch.func import functional_call
 from torch.nn import CrossEntropyLoss, Module, Parameter
+
+
+def _infer_device(objects: Iterable) -> device:
+    """Infer a single device from objects that have a ``.device`` attribute.
+
+    Args:
+        objects: Iterable of objects with a ``.device`` attribute (e.g. tensors,
+            parameters, or linear operators).
+
+    Returns:
+        The common device.
+
+    Raises:
+        RuntimeError: If the objects live on different devices.
+    """
+    devices = {obj.device for obj in objects}
+    if len(devices) != 1:
+        raise RuntimeError(f"Expected single device, got {devices}.")
+    return devices.pop()
+
+
+def _infer_dtype(objects: Iterable) -> dtype:
+    """Infer a single data type from objects that have a ``.dtype`` attribute.
+
+    Args:
+        objects: Iterable of objects with a ``.dtype`` attribute (e.g. tensors,
+            parameters, or linear operators).
+
+    Returns:
+        The common data type.
+
+    Raises:
+        RuntimeError: If the objects have different data types.
+    """
+    dtypes = {obj.dtype for obj in objects}
+    if len(dtypes) != 1:
+        raise RuntimeError(f"Expected single dtype, got {dtypes}.")
+    return dtypes.pop()
+
+
+def _seed_generator(
+    generator: Optional[Generator], dev: device, seed: int
+) -> Generator:
+    """Create (if needed) and seed a random number generator on the given device.
+
+    Re-uses an existing generator when it already lives on the correct device.
+
+    Args:
+        generator: An existing generator, or ``None`` to create a new one.
+        dev: The device the generator must live on.
+        seed: The seed to set on the generator.
+
+    Returns:
+        A seeded generator on ``dev``.
+    """
+    if generator is None or generator.device != dev:
+        generator = Generator(device=dev)
+    generator.manual_seed(seed)
+    return generator
 
 
 def split_list(x: Union[List, Tuple], sizes: List[int]) -> List[List]:
