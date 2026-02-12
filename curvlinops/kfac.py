@@ -290,8 +290,12 @@ class KFACLinearOperator(CurvatureLinearOperator):
         self._mapping = self.compute_parameter_mapping(params, model_func)
 
         # Function (prediction_batch, label_batch) -> grad_outputs for backpropagation
-        self._grad_outputs_computer = self._set_up_grad_outputs_computer(
-            loss_func, fisher_type, mc_samples
+        self._grad_outputs_computer = (
+            self._set_up_grad_outputs_computer(loss_func, fisher_type, mc_samples)
+            # TODO Implement grad_output sampler for empirical case and remove
+            # _maybe_adjust_loss_scale
+            if fisher_type in {FisherType.MC, FisherType.TYPE2}
+            else None
         )
 
         super().__init__(
@@ -625,7 +629,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
                 )
 
         elif self._fisher_type == FisherType.EMPIRICAL:
-            # TODO Implement grad_output sampler and remove _maybe_adjust_loss_scale
             loss = self._loss_func(output, y)
             loss = self._maybe_adjust_loss_scale(loss, output)
             grad(loss, self._params)
