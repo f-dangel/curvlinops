@@ -623,7 +623,6 @@ class ToCanonicalLinearOperator(_CanonicalizationLinearOperator):
         Returns:
             Parameter tensors in canonical form (flattened and reordered).
         """
-        print([m.shape for m in M])
         canonical_M = []
 
         for param_pos in self._param_positions:
