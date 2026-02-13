@@ -21,6 +21,9 @@ def test_example_verification_spectral_density():
 
     It is hard to test the spectral density estimation techniques. This test
     uses the verification example from the documentation.
+
+    Raises:
+        CalledProcessError: If the verification example fails.
     """
     EXAMPLE_VERIFICATION_SPECTRAL_DENSITY = (
         BASIC_USAGE / "example_verification_spectral_density.py"

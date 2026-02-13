@@ -42,9 +42,9 @@ def xdiag_naive(A: Union[PyTorchLinearOperator, Tensor], num_matvecs: int) -> Te
         )
     num_vecs = num_matvecs // 2
 
-    W = column_stack(
-        [random_vector(dim, "rademacher", A.device, A.dtype) for _ in range(num_vecs)]
-    )
+    W = column_stack([
+        random_vector(dim, "rademacher", A.device, A.dtype) for _ in range(num_vecs)
+    ])
     A_W = A @ W
 
     diagonals = []

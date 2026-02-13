@@ -30,6 +30,7 @@ from torch import (
     trace,
     zeros_like,
 )
+from torch.func import vmap
 from torch.nn import (
     AdaptiveAvgPool2d,
     BCEWithLogitsLoss,
@@ -154,6 +155,7 @@ def block_diagonal(
         batch_size_fn: A function that returns the batch size given a dict-like ``X``.
         separate_weight_and_bias: Whether to treat weight and bias of a layer as
             separate blocks in the block-diagonal. Default: ``True``.
+        optional_linop_args: Additional keyword arguments for the linear operator.
 
     Returns:
         The block-diagonal matrix.
@@ -215,15 +217,31 @@ class WeightShareModel(Sequential):
     ``(batch, ..., out_dim)``.
     """
 
-    def __init__(self, *args: Module, setting: str = "expand", loss: str = "MSE"):
+    def __init__(
+        self,
+        *args: Module,
+        setting: str = "expand",
+        loss: str = "MSE",
+        num_output_feature_dims: int = 1,
+    ):
         """Initialize the model.
 
         Args:
             *args: Modules of the sequential model.
+            setting: The weight-sharing setting of the model. One of ``'expand'``,
+                ``'expand-flatten'``, or ``'reduce'``.
+            loss: The type of loss function the model is used with. One of ``'MSE'``,
+                ``'CE'``, or ``'BCE'``.
+            num_output_feature_dims: Number of feature dimensions in the output
+                (excluding batch dimension). For example, if the sequential model
+                outputs ``(batch, seq, classes)``, the value should be 2. Used to
+                detect whether a batch dimension is present. This is necessary to
+                make the model behave consistently for batched and un-batched inputs.
         """
         super().__init__(*args)
         self.setting = setting
         self.loss = loss
+        self._num_output_feature_dims = num_output_feature_dims
 
     @property
     def setting(self) -> str:
@@ -263,6 +281,9 @@ class WeightShareModel(Sequential):
 
         Returns:
             The type of loss function.
+
+        Raises:
+            ValueError: If ``loss`` property has not been set.
         """
         if self._loss is None:
             raise ValueError("WeightShareModel.loss has not been set.")
@@ -287,29 +308,64 @@ class WeightShareModel(Sequential):
 
         Assumes MSELoss. The output would have to be transposed to be used with
         the CrossEntropyLoss.
+        Handles both batched inputs (with batch dimension) and unbatched inputs
+        (without batch dimension, e.g., when called via vmap).
 
         Args:
             x: Input to the forward pass.
 
         Returns:
             Output of the sequential model with processed weight-sharing dimension.
+
+        Raises:
+            ValueError: If the output of the sequential model has an unexpected shape.
         """
-        x = super().forward(x)
-        if self.setting == "reduce":
-            # Example: Vision transformer for image classification.
-            # (batch, image_patches, c) -> (batch, c)
-            return reduce(x, "batch ... c -> batch c", "mean")
-        # if self.setting == "expand":
-        # Example: Transformer for translation: (batch, sequence_length, c)
-        # (although second and third dimension would have to be transposed for
-        # classification)
-        if self.setting == "expand-flatten":
-            # Example: Pixel-wise MSE loss for diffusion model:
-            # (batch, hight, width, c) -> (batch, hight * width * c)
-            x = rearrange(x, "batch ... c -> batch (... c)")
-        elif x.ndim > 2 and self.loss == "CE":
-            x = rearrange(x, "batch ... c -> batch c ...")
-        return x
+        # Run the sequential model first
+        sequential_output = super().forward(x)
+
+        def postprocess_one_datum(x_n: Tensor) -> Tensor:
+            """Post-process a single datum's output.
+
+            Args:
+                x_n: Output tensor for a single datum (no batch dimension).
+
+            Returns:
+                Post-processed output tensor.
+            """
+            if self.setting == "reduce":
+                # Example: Vision transformer for image classification.
+                # (image_patches, c) -> (c,)
+                return reduce(x_n, "... c -> c", "mean")
+            # Example: Transformer for translation: (sequence_length, c)
+            # (although second and third dimension would have to be transposed for
+            # classification)
+            if self.setting == "expand-flatten":
+                # Example: Pixel-wise MSE loss for diffusion model:
+                # (height, width, c) -> (height * width * c)
+                x_n = rearrange(x_n, "... c -> (... c)")
+            elif x_n.ndim > 1 and self.loss == "CE":
+                x_n = rearrange(x_n, "... c -> c ...")
+
+            return x_n
+
+        # Detect if batch dimension is present by comparing output ndim
+        has_batch = sequential_output.ndim > self._num_output_feature_dims
+
+        # Validate that the output has the expected shape
+        ndim_no_batch = self._num_output_feature_dims
+        ndim_with_batch = self._num_output_feature_dims + 1
+
+        if sequential_output.ndim not in [ndim_no_batch, ndim_with_batch]:
+            raise ValueError(
+                f"Sequential output has unexpected shape {sequential_output.shape}. "
+                f"Expected {ndim_no_batch} dimensions (no batch) or {ndim_with_batch} "
+                f"dimensions (with batch), but got {sequential_output.ndim} dimensions."
+            )
+
+        postprocess_fn = (
+            vmap(postprocess_one_datum) if has_batch else postprocess_one_datum
+        )
+        return postprocess_fn(sequential_output)
 
 
 class Conv2dModel(Module):
@@ -384,7 +440,15 @@ class UnetModel(Module):
     """Simple Unet-like model where the number of spatial locations varies."""
 
     def __init__(self, loss: Module, flatten: bool = False):
-        """Initialize the model."""
+        """Initialize the model.
+
+        Args:
+            loss: Loss class used to select the output shaping.
+            flatten: Whether to flatten spatial dimensions.
+
+        Raises:
+            ValueError: If ``loss`` is not a supported loss class.
+        """
         if loss not in {MSELoss, CrossEntropyLoss, BCEWithLogitsLoss}:
             raise ValueError(
                 "Loss has to be one of MSELoss, CrossEntropyLoss, BCEWithLogitsLoss. "
@@ -421,8 +485,9 @@ class UnetModel(Module):
 def cast_input(
     X: Union[Tensor, MutableMapping], target_dtype: dtype
 ) -> Union[Tensor, MutableMapping]:
-    """Cast an input tensor ``X`` (can be inside a dict-like object under the key "x")
-        into ``target_dtype``.
+    """Cast an input tensor ``X`` into ``target_dtype``.
+
+    The input can be inside a dict-like object under the key ``"x"``.
 
     Args:
         X: The input tensor.
@@ -459,9 +524,6 @@ def compare_state_dicts(state_dict: dict, state_dict_new: dict):
     Args:
         state_dict (dict): The first state dict to compare.
         state_dict_new (dict): The second state dict to compare.
-
-    Raises:
-        AssertionError: If the state dicts are not equal.
     """
     assert len(state_dict) == len(state_dict_new)
     for value, value_new in zip(state_dict.values(), state_dict_new.values()):
@@ -730,6 +792,9 @@ def check_estimator_convergence(
         Args:
             a_true: The true value.
             a: The estimated value.
+
+        Returns:
+            Relative infinity norm error.
         """
         assert a.shape == a_true.shape
         return (a - a_true).abs().max() / a_true.abs().max()
@@ -891,6 +956,8 @@ def _test_save_and_load_state_dict(
         CrossEntropyLoss(),
         params,
         [(X, y)],
+        # Avoid computing linop because y has the wrong shape for CE
+        check_deterministic=False,
     )
     with raises(ValueError, match="loss"):
         linop_new.load_state_dict(load(PATH, weights_only=False))

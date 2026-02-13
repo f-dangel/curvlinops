@@ -19,6 +19,7 @@ from torch.linalg import cholesky, eigh, matrix_norm
 
 from curvlinops._torch_base import PyTorchLinearOperator
 from curvlinops.eigh import EighDecomposedLinearOperator
+from curvlinops.utils import _infer_device, _infer_dtype
 
 
 def ensure_all_square(*tensors_or_operators: Union[Tensor, PyTorchLinearOperator]):
@@ -110,14 +111,8 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
 
         Returns:
             Device of the factors.
-
-        Raises:
-            RuntimeError: If factors are on different devices.
         """
-        devices = {factor.device for factor in self._factors}
-        if len(devices) != 1:
-            raise RuntimeError(f"Factors are on different devices: {devices}")
-        return devices.pop()
+        return _infer_device(self._factors)
 
     @property
     def dtype(self) -> dtype:
@@ -125,14 +120,8 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
 
         Returns:
             Data type of the factors.
-
-        Raises:
-            RuntimeError: If factors have different data types.
         """
-        dtypes = {factor.dtype for factor in self._factors}
-        if len(dtypes) != 1:
-            raise RuntimeError(f"Factors have different dtypes: {dtypes}")
-        return dtypes.pop()
+        return _infer_dtype(self._factors)
 
     def trace(self) -> Tensor:
         """Trace of the Kronecker product.
@@ -146,7 +135,7 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
         return stack([S.trace() for S in self._factors]).prod()
 
     def det(self) -> Tensor:
-        """Determinant of the Kronecker product.
+        """Compute the determinant of the Kronecker product.
 
         For square matrices S_1 (n_1×n_1), S_2 (n_2×n_2), ..., S_k (n_k×n_k):
         det(S_1 ⊗ S_2 ⊗ ... ⊗ S_k) = ∏_i det(S_i)^(∏_{j≠i} n_j)
@@ -190,7 +179,7 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
         use_exact_damping: bool = False,
         retry_double_precision: bool = True,
     ):
-        """Return the inverse of the Kronecker product linear operator.
+        r"""Return the inverse of the Kronecker product linear operator.
 
         Args:
             damping: Damping value applied to all Kronecker factors. Default: ``0.0``.
@@ -200,7 +189,7 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
             min_damping: Minimum damping value. Only used if
                 ``use_heuristic_damping`` is ``True``.
             use_exact_damping: Whether to use exact damping, i.e. to invert
-                :math:`(A \\otimes B) + \\text{damping}\\; \\mathbf{I}`.
+                :math:`(A \otimes B) + \text{damping}\; \mathbf{I}`.
             retry_double_precision: Whether to retry Cholesky decomposition used for
                 inversion in double precision.
 

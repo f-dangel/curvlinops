@@ -8,11 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added/New
 
+- Add a linear operator for the exact or Monte-Carlo-approximated GGN diagonal
+  ([PR](https://github.com/f-dangel/curvlinops/pull/241))
+
 - Support left multiplication with linear operators (`X @ A` with `X` a tensor or tensor list)
   ([PR](https://github.com/f-dangel/curvlinops/pull/226))
 
-- **Backward-incompatible**: Change (E)KFAC's `det, log, logdet, frobenius_norm` properties into functions and modify (E)KFAC's output of `state_dict`
-  ([PR](https://github.com/f-dangel/curvlinops/pull/227))
+- Support division of linear operators by scalars (i.e. `A_scaled = A / scale`)
+  ([PR](https://github.com/f-dangel/curvlinops/pull/237))
+
+- **Backward-incompatible:** (E)KFAC's `det, logdet, trace, frobenius_norm` properties are now functions
+  ([PR](https://github.com/f-dangel/curvlinops/pull/232))
+
+- **Backward-incompatible** Reduce side effects in (E)KFAC's computation, modifying the entries of `state_dict`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/228))
 
 ### Fixed/Removed
 
@@ -35,13 +44,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     ([PR](https://github.com/f-dangel/curvlinops/pull/211))
   - `EighDecomposedLinearOperator` for `eigh`-decomposed matrices `Q diag(λ) Q^T` with orthogonal `Q`
     ([PR](https://github.com/f-dangel/curvlinops/pull/210))
+  - `DiagonalLinearOperator` for diagonal matrices `diag(λ)`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/238))
 
-- Major simplification of KFACLinearOperator and EKFACLinearOperator
+- Major simplification of `KFACLinearOperator` and `EKFACLinearOperator`
   - Reduce side effects in (E)KFAC's computation and reduce caching logic
     ([PR1](https://github.com/f-dangel/curvlinops/pull/227) (**backward-incompatible**),
      [PR2](https://github.com/f-dangel/curvlinops/pull/228))
   - Introduce canonicalization operators that convert from parameter space (determined by order of parameters) to KFAC's canonical space (block-diagonal Kronecker-factored matrix) and back
     ([PR](https://github.com/f-dangel/curvlinops/pull/229))
+
+- Generalize computing the loss function's Hessian square root for sequence-valued predictions
+  ([PR](https://github.com/f-dangel/curvlinops/pull/231))
+
+- Use `ruff` for docstring linting (remove `darglint` and `pydocstyle`)
+  ([PR](https://github.com/f-dangel/curvlinops/pull/234))
+
+- Introduce `_EmpiricalRiskMixin` interface to allow separating deterministic checks and state pre-computation from linear operators
+  ([PR](https://github.com/f-dangel/curvlinops/pull/236))
+
+- Generalize sampling output gradients for sequence-valued predictions
+  ([PR](https://github.com/f-dangel/curvlinops/pull/235))
+
+- Introduce a computer class for the GGN diagonal
+  ([PR](https://github.com/f-dangel/curvlinops/pull/240))
+>>>>>>> main
 
 ## [3.0.1] - 2026-01-14
 

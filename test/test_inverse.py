@@ -102,13 +102,11 @@ def test_NeumannInverseLinearOperator_toy():
     https://en.wikipedia.org/w/index.php?title=Neumann_series&oldid=1131424698#Example
     """
     manual_seed(1234)
-    A = Tensor(
-        [
-            [0.0, 1.0 / 2.0, 1.0 / 4.0],
-            [5.0 / 7.0, 0.0, 1.0 / 7.0],
-            [3.0 / 10.0, 3.0 / 5.0, 0.0],
-        ]
-    ).double()
+    A = Tensor([
+        [0.0, 1.0 / 2.0, 1.0 / 4.0],
+        [5.0 / 7.0, 0.0, 1.0 / 7.0],
+        [3.0 / 10.0, 3.0 / 5.0, 0.0],
+    ]).double()
     A += eye_like(A)
     # eigenvalues of A: [1.82122892 0.47963837 0.69913271]
 
@@ -243,9 +241,7 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901, PLR0912, PLR09
     shuffle: bool,
     delta: float = 1e-2,
 ):
-    """Test matrix-matrix multiplication by an inverse (heuristically) damped KFAC
-    approximation.
-    """
+    """Test matrix-matrix multiplication by a heuristically damped KFAC inverse."""
     model_func, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
     params = maybe_exclude_or_shuffle_parameters(params, model_func, exclude, shuffle)
 
@@ -479,7 +475,14 @@ def test_KFAC_inverse_save_and_load_state_dict(
     save(state_dict, INV_KFAC_PATH)
 
     # create new inverse KFAC with different linop input and try to load state dict
-    wrong_kfac = KFACLinearOperator(model, CrossEntropyLoss(), params, [(X, y)])
+    wrong_kfac = KFACLinearOperator(
+        model,
+        CrossEntropyLoss(),
+        params,
+        [(X, y)],
+        # Avoid computing linop because y has the wrong shape for CE
+        check_deterministic=False,
+    )
     inv_kfac_wrong = KFACInverseLinearOperator(wrong_kfac)
     with raises(ValueError, match="mismatch"):
         inv_kfac_wrong.load_state_dict(load(INV_KFAC_PATH, weights_only=False))

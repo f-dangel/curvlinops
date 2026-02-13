@@ -6,7 +6,7 @@ from torch import Tensor, device, dtype, stack
 
 from curvlinops._torch_base import PyTorchLinearOperator
 from curvlinops.kronecker import ensure_all_square
-from curvlinops.utils import split_list
+from curvlinops.utils import _infer_device, _infer_dtype, split_list
 
 
 class BlockDiagonalLinearOperator(PyTorchLinearOperator):
@@ -77,14 +77,8 @@ class BlockDiagonalLinearOperator(PyTorchLinearOperator):
 
         Returns:
             Device of the blocks.
-
-        Raises:
-            RuntimeError: If blocks have inconsistent devices.
         """
-        devices = {block.device for block in self._blocks}
-        if len(devices) > 1:
-            raise RuntimeError(f"Blocks have inconsistent devices: {devices}")
-        return devices.pop()
+        return _infer_device(self._blocks)
 
     @property
     def dtype(self) -> dtype:
@@ -92,14 +86,8 @@ class BlockDiagonalLinearOperator(PyTorchLinearOperator):
 
         Returns:
             Data type of the blocks.
-
-        Raises:
-            RuntimeError: If blocks have inconsistent dtypes.
         """
-        dtypes = {block.dtype for block in self._blocks}
-        if len(dtypes) > 1:
-            raise RuntimeError(f"Blocks have inconsistent dtypes: {dtypes}")
-        return dtypes.pop()
+        return _infer_dtype(self._blocks)
 
     def trace(self) -> Tensor:
         """Trace of the block-diagonal matrix.
@@ -114,7 +102,7 @@ class BlockDiagonalLinearOperator(PyTorchLinearOperator):
         return stack([B.trace() for B in self._blocks]).sum()
 
     def det(self) -> Tensor:
-        """Determinant of the block-diagonal matrix.
+        """Compute the determinant of the block-diagonal matrix.
 
         For a block-diagonal matrix, det(block_diag(B1, B2, ..., Bk)) = ∏ det(Bi).
         Only works if all blocks are square.
