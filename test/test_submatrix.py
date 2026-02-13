@@ -23,14 +23,29 @@ CURVATURE_CASES = CURVATURE_IN_FUNCTORCH.keys()
 
 
 def even_idxs(dim: int) -> List[int]:
+    """Return even indices below ``dim``.
+
+    Returns:
+        Even indices up to ``dim``.
+    """
     return list(range(0, dim, 2))
 
 
 def odd_idxs(dim: int) -> List[int]:
+    """Return odd indices below ``dim``.
+
+    Returns:
+        Odd indices up to ``dim``.
+    """
     return list(range(1, dim, 2))
 
 
 def every_third_idxs(dim: int):
+    """Return every third index below ``dim``.
+
+    Returns:
+        Every third index up to ``dim``.
+    """
     return list(range(0, dim, 3))
 
 
@@ -58,6 +73,11 @@ SUBMATRIX_IDS = [
 
 
 def setup_submatrix_linear_operator(case, operator_case, submatrix_case):
+    """Build a submatrix operator alongside its dense reference.
+
+    Returns:
+        Tuple of the SubmatrixLinearOperator, dense submatrix, and index lists.
+    """
     model_func, loss_func, params, data, batch_size_fn = case
     dim = sum(p.numel() for p in params)
     row_idxs = submatrix_case["row_idx_fn"](dim)
@@ -77,6 +97,7 @@ def setup_submatrix_linear_operator(case, operator_case, submatrix_case):
 @mark.parametrize("operator_case", CURVATURE_CASES)
 @mark.parametrize("submatrix_case", SUBMATRIX_CASES)
 def test_SubmatrixLinearOperator_on_curvatures(case, operator_case, submatrix_case):
+    """Test submatrix extraction for curvature linear operators."""
     case = change_dtype(case, float64)
     A_sub, A_sub_functorch, row_idxs, col_idxs = setup_submatrix_linear_operator(
         case, operator_case, submatrix_case

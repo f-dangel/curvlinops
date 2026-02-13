@@ -65,8 +65,8 @@ def functorch_hessian(
     ) -> Tensor:
         """Compute the loss given a mini-batch and the neural network parameters.
 
-        # noqa: DAR101
-        # noqa: DAR201
+        Returns:
+            Scalar loss value.
         """
         output = functional_call(model_func, params_dict, X)
         return functional_call(loss_func, {}, (output, y))
@@ -112,8 +112,8 @@ def functorch_ggn(
     ) -> Tensor:
         """Evaluate the model at params, using its linearization around anchor.
 
-        # noqa: DAR101
-        # noqa: DAR201
+        Returns:
+            Linearized model output at the provided parameters.
         """
 
         def model_fn_params_only(params_dict: Dict[str, Tensor]) -> Tensor:
@@ -182,8 +182,8 @@ def functorch_gradient_and_loss(
     ) -> Tensor:
         """Compute the loss given a mini-batch and the neural network parameters.
 
-        # noqa: DAR101
-        # noqa: DAR201
+        Returns:
+            Scalar loss value.
         """
         output = functional_call(model_func, params_dict, X)
         return functional_call(loss_func, {}, (output, y))
@@ -246,12 +246,10 @@ def functorch_empirical_fisher(
         flatten_y = "... -> (...)"
         output_flat, y_flat = rearrange(output, flatten_output), rearrange(y, flatten_y)
 
-        return stack(
-            [
-                functional_call(loss_func, {}, (o_el, y_el))
-                for o_el, y_el in zip(output_flat, y_flat)
-            ]
-        )
+        return stack([
+            functional_call(loss_func, {}, (o_el, y_el))
+            for o_el, y_el in zip(output_flat, y_flat)
+        ])
 
     params_argnum = 2
     jac = jacrev(losses, argnums=params_argnum)(X, y, params_dict)

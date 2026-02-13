@@ -6,7 +6,7 @@ from functools import partial
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from einops import einsum, rearrange
-from torch import Generator, Tensor, cat
+from torch import Tensor, cat
 from torch.linalg import eigh
 from torch.nn import Conv2d, Module
 from torch.utils.hooks import RemovableHandle
@@ -16,6 +16,9 @@ from curvlinops.eigh import EighDecomposedLinearOperator
 from curvlinops.kfac import FisherType, KFACLinearOperator
 from curvlinops.kfac_utils import extract_patches
 from curvlinops.kronecker import KroneckerProductLinearOperator
+from curvlinops.kfac import FisherType, KFACLinearOperator
+from curvlinops.kfac_utils import extract_patches
+from curvlinops.utils import _seed_generator
 
 
 def compute_eigenvalue_correction_linear_weight_sharing(
@@ -25,7 +28,7 @@ def compute_eigenvalue_correction_linear_weight_sharing(
     aaT_eigvecs: Union[Tensor, None],
     _force_strategy: Optional[str] = None,
 ) -> Tensor:
-    r"""Computes eigenvalue corrections for a linear layer with weight sharing.
+    r"""Compute eigenvalue corrections for a linear layer with weight sharing.
 
     Chooses between two computational strategies depending on memory requirements.
 
@@ -249,7 +252,7 @@ class EKFACLinearOperator(KFACLinearOperator):
         _SUPPORTED_FISHER_TYPE: Tuple with supported Fisher types.
     """
 
-    _SUPPORTED_FISHER_TYPE: Tuple[FisherType] = (
+    _SUPPORTED_FISHER_TYPE: Tuple[FisherType, ...] = (
         FisherType.TYPE2,
         FisherType.MC,
         FisherType.EMPIRICAL,
@@ -257,6 +260,12 @@ class EKFACLinearOperator(KFACLinearOperator):
 
     @property
     def representation(self):
+        """Return EKFAC's internal representation (eigenvectors + corrected eigenvalues).
+
+        Returns:
+            A dictionary containing the eigenvectors of the input and gradient covariances
+            and the corrected eigenvalues for each module.
+        """
         if self._representation is None:
             input_covariances_eigenvectors, gradient_covariances_eigenvectors = [
                 self._eigenvectors_(covariances)
@@ -410,9 +419,7 @@ class EKFACLinearOperator(KFACLinearOperator):
                 )
             )
 
-        if self._generator is None or self._generator.device != self.device:
-            self._generator = Generator(device=self.device)
-        self._generator.manual_seed(self._seed)
+        self._generator = _seed_generator(self._generator, self.device, self._seed)
 
         # loop over data set, computing the corrected eigenvalues
         for X, y in self._loop_over_data(desc="Eigenvalue correction"):
@@ -513,7 +520,7 @@ class EKFACLinearOperator(KFACLinearOperator):
             g = rearrange(g, "batch c o1 o2 -> batch o1 o2 c")
         g = rearrange(g, "batch ... d_out -> batch (...) d_out")
 
-        # We only need layer inputs to extracting information w.r.t. the weights
+        # We only need layer inputs to extract information w.r.t. the weights
         param_pos = self._mapping[module_name]
         a_required = "weight" in param_pos
 
@@ -537,11 +544,10 @@ class EKFACLinearOperator(KFACLinearOperator):
 
         # Compute correction for the loss scaling depending on the loss reduction used
         num_loss_terms = batch_size * self._num_per_example_loss_terms
-        # self._mc_samples will be 1 if fisher_type != FisherType.MC
         correction = {
-            "sum": 1.0 / self._mc_samples,
+            "sum": 1.0,
             "mean": num_loss_terms**2
-            / (self._N_data * self._mc_samples * self._num_per_example_loss_terms),
+            / (self._N_data * self._num_per_example_loss_terms),
         }[self._loss_func.reduction]
 
         # Compute the corrected eigenvalues for the EKFAC approximation
@@ -550,10 +556,9 @@ class EKFACLinearOperator(KFACLinearOperator):
         # ggT_eigenvectors always exists
         ggT_eigenvectors = gradient_covariances_eigenvectors[module_name]
 
-        if not self._separate_weight_and_bias and set(param_pos.keys()) == {
-            "weight",
-            "bias",
-        }:
+        if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+            param_pos.keys()
+        ):
             a_augmented = cat([a, a.new_ones(*a.shape[:-1], 1)], dim=-1)
             eigencorrection = compute_eigenvalue_correction_linear_weight_sharing(
                 g, ggT_eigenvectors, a_augmented, aaT_eigenvectors
