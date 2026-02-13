@@ -906,7 +906,7 @@ def _test_property(  # noqa: C901
         for block in linop.representation["canonical_op"]._blocks:
             if type(linop) is KFACLinearOperator:
                 for idx, factor in enumerate(block._factors):
-                    block._factors[idx] = factor * DELTA * eye_like(factor)
+                    block._factors[idx] = factor + DELTA * eye_like(factor)
             elif type(linop) is EKFACLinearOperator:
                 block._eigenvalues = block._eigenvalues + DELTA
 
