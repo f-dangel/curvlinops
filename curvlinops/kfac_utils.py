@@ -3,22 +3,22 @@
 from __future__ import annotations
 
 from math import sqrt
-from typing import Dict, List, Tuple, Union
-from typing import Callable, Optional, Tuple, Union
+from typing import Callable, Dict, List, Optional, Tuple, Union
 from warnings import warn
 
 from einconv import index_pattern
 from einconv.utils import get_conv_paddings
 from einops import einsum, rearrange, reduce
-from torch import Size, Tensor, cat, diag, eye, dtype, device
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss, Parameter
-from torch.nn.functional import unfold
 from torch import (
     Generator,
+    Size,
     Tensor,
     as_tensor,
     block_diag,
+    cat,
+    device,
     diag,
+    dtype,
     normal,
     softmax,
     zeros,
@@ -565,7 +565,9 @@ class _CanonicalizationLinearOperator(PyTorchLinearOperator):
                 w_pos = param_pos["weight"]
                 w_shape = self._param_shapes[w_pos]
                 # Combined weight+bias gets flattened to 1D
-                total_params = self._param_shapes[w_pos].numel() + w_shape[0]  # weight + bias
+                total_params = (
+                    self._param_shapes[w_pos].numel() + w_shape[0]
+                )  # weight + bias
                 canonical_shapes.append((total_params,))
             else:
                 # Handle separate weight and bias
@@ -702,7 +704,10 @@ class FromCanonicalLinearOperator(_CanonicalizationLinearOperator):
 
                 # Get original weight shape
                 w_shape = self._param_shapes[w_pos]
-                w_rows, w_cols = w_shape[0], self._param_shapes[w_pos].numel() // w_shape[0]
+                w_rows, w_cols = (
+                    w_shape[0],
+                    self._param_shapes[w_pos].numel() // w_shape[0],
+                )
 
                 # Reshape combined tensor back to (weight + bias) matrix
                 combined = combined.reshape(w_rows, w_cols + 1, num_columns)

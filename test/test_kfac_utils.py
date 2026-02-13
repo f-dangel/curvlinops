@@ -1,23 +1,35 @@
 """Test utility functions related to KFAC."""
 
-from pytest import mark
-from torch import cat, manual_seed, rand_like
-from torch.nn import Conv2d, Linear, Sequential
-
-from curvlinops.kfac_utils import FromCanonicalLinearOperator, ToCanonicalLinearOperator
-from curvlinops.utils import allclose_report
-
-
 from contextlib import nullcontext
 from math import sqrt
 from typing import Tuple, Union
 
 from pytest import mark, raises, warns
-from torch import Generator, Tensor, as_tensor, manual_seed, ones, randint, randn, zeros
+from torch import (
+    Generator,
+    Tensor,
+    as_tensor,
+    cat,
+    manual_seed,
+    ones,
+    rand_like,
+    randint,
+    randn,
+    zeros,
+)
 from torch.func import hessian, vmap
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
+from torch.nn import (
+    BCEWithLogitsLoss,
+    Conv2d,
+    CrossEntropyLoss,
+    Linear,
+    MSELoss,
+    Sequential,
+)
 
 from curvlinops.kfac_utils import (
+    FromCanonicalLinearOperator,
+    ToCanonicalLinearOperator,
     _check_binary_if_BCEWithLogitsLoss,
     _make_single_datum_sampler,
     loss_hessian_matrix_sqrt,
@@ -231,6 +243,7 @@ def test_grad_output_sampler_convergence(
     assert allclose_report(
         empirical_cov / scale, true_hess / scale, rtol=1e-3, atol=5e-3
     )
+
 
 @mark.parametrize("separate_weight_and_bias", [True, False], ids=["separate", "joint"])
 def test_CanonicalLinearOperator(separate_weight_and_bias: bool):

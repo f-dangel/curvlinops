@@ -99,6 +99,7 @@ exclude = [
     "docs/rtd",
     "build",
     "dist",
+    "proto",
 ]
 
 [tool.ruff.lint]
