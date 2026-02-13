@@ -24,10 +24,7 @@ from memory_profiler import memory_usage
 from torch import cuda, device, manual_seed, rand
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
-from curvlinops import (
-    EKFACLinearOperator,
-    KFACLinearOperator,
-)
+from curvlinops import EKFACLinearOperator, KFACLinearOperator
 
 
 def run_peakmem_benchmark(  # noqa: C901, PLR0915
