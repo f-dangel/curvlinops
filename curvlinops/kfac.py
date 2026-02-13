@@ -22,17 +22,7 @@ from collections.abc import MutableMapping
 from enum import Enum, EnumMeta
 from functools import partial
 from math import sqrt
-from typing import (
-    Any,
-    Callable,
-    Dict,
-    Iterable,
-    List,
-    Optional,
-    Tuple,
-    TypeVar,
-    Union,
-)
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 from warnings import warn
 
 from einops import einsum, rearrange, reduce
@@ -65,10 +55,6 @@ from curvlinops.kfac_utils import (
 )
 from curvlinops.kronecker import KroneckerProductLinearOperator
 from curvlinops.utils import _seed_generator
-
-FactorType = TypeVar(
-    "FactorType", Optional[Tensor], Tuple[Optional[Tensor], Optional[Tensor]]
-)
 
 
 class MetaEnum(EnumMeta):
