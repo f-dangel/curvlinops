@@ -55,6 +55,7 @@ from curvlinops._torch_base import (
     PyTorchLinearOperator,
     _ChainPyTorchLinearOperator,
 )
+from curvlinops._torch_base import CurvatureLinearOperator
 from curvlinops.blockdiagonal import BlockDiagonalLinearOperator
 from curvlinops.kfac_utils import (
     ToCanonicalLinearOperator,
