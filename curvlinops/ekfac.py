@@ -16,8 +16,6 @@ from curvlinops.eigh import EighDecomposedLinearOperator
 from curvlinops.kfac import FisherType, KFACLinearOperator
 from curvlinops.kfac_utils import extract_patches
 from curvlinops.kronecker import KroneckerProductLinearOperator
-from curvlinops.kfac import FisherType, KFACLinearOperator
-from curvlinops.kfac_utils import extract_patches
 from curvlinops.utils import _seed_generator
 
 
@@ -298,9 +296,12 @@ class EKFACLinearOperator(KFACLinearOperator):
         """Set up the canonical EKFAC operator from Kronecker factors.
 
         Args:
-            input_covariances: Dictionary mapping module names to input covariances.
-            gradient_covariances: Dictionary mapping module names to gradient
-                covariances.
+            input_covariances_eigenvectors: Dictionary mapping module names to input
+                covariance eigenvectors.
+            gradient_covariances_eigenvectors: Dictionary mapping module names to
+                gradient covariance eigenvectors.
+            corrected_eigenvalues: Dictionary mapping module names to eigenvalue
+                corrections.
 
         Returns:
             Block diagonal linear operator representing KFAC in canonical basis.
