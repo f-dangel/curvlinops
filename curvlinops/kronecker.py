@@ -185,7 +185,7 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
             damping: Damping value applied to all Kronecker factors. Default: ``0.0``.
             use_heuristic_damping: Whether to use a heuristic damping strategy by
                 `Martens and Grosse, 2015 <https://arxiv.org/abs/1503.05671>`_
-                (Section 6.3). Only supported for exactly two factors.
+                (Section 6.3). Only supported for one or two factors.
             min_damping: Minimum damping value. Only used if
                 ``use_heuristic_damping`` is ``True``.
             use_exact_damping: Whether to use exact damping, i.e. to invert

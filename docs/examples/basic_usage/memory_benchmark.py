@@ -79,10 +79,7 @@ def run_peakmem_benchmark(  # noqa: C901, PLR0915
         if isinstance(base_linop, (KFACLinearOperator, EKFACLinearOperator)):
             base_linop.refresh_representation()
         if is_inverse:
-            if isinstance(base_linop, EKFACLinearOperator):
-                base_linop.inverse(damping=1e-3)
-            else:
-                base_linop.inverse(damping=1e-3, use_exact_damping=True)
+            base_linop.inverse(damping=1e-3)
 
         if is_cuda:
             cuda.synchronize()
@@ -98,13 +95,7 @@ def run_peakmem_benchmark(  # noqa: C901, PLR0915
 
         if isinstance(base_linop, (KFACLinearOperator, EKFACLinearOperator)):
             base_linop.refresh_representation()
-        if is_inverse:
-            if isinstance(base_linop, EKFACLinearOperator):
-                linop = base_linop.inverse(damping=1e-3)
-            else:
-                linop = base_linop.inverse(damping=1e-3, use_exact_damping=True)
-        else:
-            linop = base_linop
+        linop = base_linop.inverse(damping=1e-3) if is_inverse else base_linop
 
         v = rand(linop.shape[1], device=dev)
 

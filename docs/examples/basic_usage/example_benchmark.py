@@ -379,13 +379,8 @@ def run_time_benchmark(  # noqa: C901
         linop_str, model, loss_function, params, data, check_deterministic=False
     )
     is_inverse = linop_str in {"KFAC inverse", "EKFAC inverse"}
-    if is_inverse:
-        if isinstance(base_linop, EKFACLinearOperator):
-            linop = base_linop.inverse(damping=1e-3)
-        else:
-            linop = base_linop.inverse(damping=1e-3, use_exact_damping=True)
-    else:
-        linop = base_linop
+    linop = base_linop.inverse(damping=1e-3) if is_inverse else base_linop
+
     v = rand(linop.shape[1], device=dev)
 
     # Select function that will be profiled
@@ -397,10 +392,7 @@ def run_time_benchmark(  # noqa: C901
         if isinstance(base_linop, (KFACLinearOperator, EKFACLinearOperator)):
             base_linop.refresh_representation()
         if is_inverse:
-            if isinstance(base_linop, EKFACLinearOperator):
-                linop = base_linop.inverse(damping=1e-3)
-            else:
-                linop = base_linop.inverse(damping=1e-3, use_exact_damping=True)
+            linop = base_linop.inverse(damping=1e-3)
 
     def f_matvec():
         # Double-backward through efficient attention is unsupported, disable fused kernels
