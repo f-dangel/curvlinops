@@ -47,6 +47,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `DiagonalLinearOperator` for diagonal matrices `diag(λ)`
     ([PR](https://github.com/f-dangel/curvlinops/pull/238))
 
+- Major simplification of `KFACLinearOperator` and `EKFACLinearOperator`
+  - Reduce side effects in (E)KFAC's computation and reduce caching logic
+    ([PR1](https://github.com/f-dangel/curvlinops/pull/227) (**backward-incompatible**),
+     [PR2](https://github.com/f-dangel/curvlinops/pull/228))
+  - Introduce canonicalization operators that convert from parameter space (determined by order of parameters) to KFAC's canonical space (block-diagonal Kronecker-factored matrix) and back
+    ([PR](https://github.com/f-dangel/curvlinops/pull/229))
+
 - Generalize computing the loss function's Hessian square root for sequence-valued predictions
   ([PR](https://github.com/f-dangel/curvlinops/pull/231))
 
