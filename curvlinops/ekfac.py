@@ -257,7 +257,7 @@ class EKFACLinearOperator(KFACLinearOperator):
     )
 
     @property
-    def representation(self):
+    def representation(self) -> Dict:
         """Return EKFAC's internal representation (eigenvectors + corrected eigenvalues).
 
         Returns:
