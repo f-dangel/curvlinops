@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Backward-incompatible:** (E)KFAC's `det, logdet, trace, frobenius_norm` properties are now functions
   ([PR](https://github.com/f-dangel/curvlinops/pull/232))
 
+- **Backward-incompatible** Reduce side effects in (E)KFAC's computation, modifying the entries of `state_dict`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/228))
+
 ### Fixed/Removed
 
 ### Internal

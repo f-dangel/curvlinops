@@ -22,7 +22,17 @@ from collections.abc import MutableMapping
 from enum import Enum, EnumMeta
 from functools import partial
 from math import sqrt
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, TypeVar, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Tuple,
+    TypeVar,
+    Union,
+)
 from warnings import warn
 
 from einops import einsum, rearrange, reduce
@@ -285,9 +295,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
         self._fisher_type = fisher_type
         self._mc_samples = mc_samples
         self._kfac_approx = kfac_approx
-        self._input_covariances: Dict[str, Tensor] = {}
-        self._gradient_covariances: Dict[str, Tensor] = {}
         self._mapping = self.compute_parameter_mapping(params, model_func)
+        self._representation = None
 
         # Function (prediction_batch, label_batch) -> grad_outputs for backpropagation
         self._grad_outputs_computer = (
@@ -309,6 +318,34 @@ class KFACLinearOperator(CurvatureLinearOperator):
             num_per_example_loss_terms=num_per_example_loss_terms,
             batch_size_fn=batch_size_fn,
         )
+
+    @property
+    def representation(self) -> Dict[str, Dict[str, Tensor]]:
+        """Return the internal representation (Kronecker factors) of the linear operator.
+
+        This attribute is lazily evaluated and cached after the first access.
+
+        Returns:
+            A dictionary containing the Kronecker factors with keys "input_covariances" and
+            "gradient_covariances". Each of those is a dictionary mapping module names to
+            their respective Kronecker factors.
+        """
+        if self._representation is None:
+            input_covariances, gradient_covariances = self.compute_kronecker_factors()
+            self._representation = {
+                "input_covariances": input_covariances,
+                "gradient_covariances": gradient_covariances,
+            }
+        return self._representation
+
+    def refresh_representation(self):
+        """Refresh the internal representation of the linear operator.
+
+        Re-computes the Kronecker factors.
+        """
+        self._representation = None
+        # Accessing the property triggers the re-computation
+        _ = self.representation
 
     @staticmethod
     def _set_up_grad_outputs_computer(
@@ -403,7 +440,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
         param_pos: Dict[str, int],
         aaT: FactorType,
         ggT: FactorType,
-        eigenvalues: Optional[List[Tensor]] = None,
+        eigenvalues: Optional[Union[Dict[int, Tensor], List[Tensor]]] = None,
     ) -> Tensor:
         """Multiply matrix with Kronecker factors for separated weight and bias.
 
@@ -416,7 +453,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
             ggT: Gradient covariance Kronecker factor or its eigenvectors.
             eigenvalues: Eigenvalues of the (E)KFAC approximation when multiplying with
                 the eigendecomposition of the KFAC approximation. ``None`` for the
-                non-decomposed KFAC approximation. Defaults to ``None``.
+                non-decomposed KFAC approximation. Can be a list of tensors or a
+                dictionary mapping parameter positions to tensors. Defaults to ``None``.
         """
         for p_name, pos in param_pos.items():
             # for weights we need to multiply from the right with aaT
@@ -456,8 +494,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
             Matrix-multiplication result ``KFAC @ M`` in tensor list format. Has the same
             shapes as the input.
         """
-        if not (self._input_covariances or self._gradient_covariances):
-            self.compute_kronecker_factors()
+        input_covariances = self.representation["input_covariances"]
+        gradient_covariances = self.representation["gradient_covariances"]
 
         KM: List[Tensor | None] = [None] * len(M)
 
@@ -468,15 +506,13 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
             # get the Kronecker factors for the current module
             # aaT does not exist when weight matrix is excluded
-            aaT = self._input_covariances.get(mod_name)
+            aaT = input_covariances.get(mod_name)
             # ggT always exists
-            ggT = self._gradient_covariances[mod_name]
+            ggT = gradient_covariances[mod_name]
 
             # bias and weights are treated jointly
-            if (
-                not self._separate_weight_and_bias
-                and "weight" in param_pos.keys()
-                and "bias" in param_pos.keys()
+            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+                param_pos.keys()
             ):
                 w_pos, b_pos = param_pos["weight"], param_pos["bias"]
                 # v denotes the free dimension for treating multiple vectors in parallel
@@ -495,8 +531,16 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
         return KM
 
-    def compute_kronecker_factors(self):
-        """Compute and cache KFAC's Kronecker factors for future ``matmat``s."""
+    def compute_kronecker_factors(self) -> Tuple[Dict[str, Tensor], Dict[str, Tensor]]:
+        """Compute KFAC's Kronecker factors.
+
+        Returns:
+            Tuple containing (input_covariances, gradient_covariances) dictionaries.
+        """
+        # Create empty dictionaries to be populated by hooks
+        input_covariances: Dict[str, Tensor] = {}
+        gradient_covariances: Dict[str, Tensor] = {}
+
         # install forward and backward hooks
         hook_handles: List[RemovableHandle] = []
 
@@ -504,11 +548,13 @@ class KFACLinearOperator(CurvatureLinearOperator):
             module = self._model_func.get_submodule(mod_name)
 
             # input covariance only required for weights
-            if "weight" in param_pos.keys():
+            if "weight" in param_pos:
                 hook_handles.append(
                     module.register_forward_pre_hook(
                         partial(
-                            self._hook_accumulate_input_covariance, module_name=mod_name
+                            self._hook_accumulate_input_covariance,
+                            module_name=mod_name,
+                            input_covariances=input_covariances,
                         )
                     )
                 )
@@ -519,6 +565,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
                     partial(
                         self._register_tensor_hook_on_output_to_accumulate_gradient_covariance,
                         module_name=mod_name,
+                        gradient_covariances=gradient_covariances,
                     )
                 )
             )
@@ -534,6 +581,25 @@ class KFACLinearOperator(CurvatureLinearOperator):
         # clean up
         for handle in hook_handles:
             handle.remove()
+
+        # Handle FORWARD_ONLY case by setting gradient covariances to identity
+        if self._fisher_type == FisherType.FORWARD_ONLY:
+            # We choose to set the gradient covariance to the identity explicitly
+            # for the sake of simplicity, such that the rest of the code here and
+            # for `KFACInverseLinearOperator` does not have to be adapted. This
+            # could be changed to decrease the memory costs.
+            for mod_name, param_pos in self._mapping.items():
+                # We iterate over _mapping to get the module names corresponding
+                # to the parameters. We only need the output dimension of the
+                # module, but don't know whether the parameter is a weight or
+                # bias; therefore, we just call `next(iter(param_pos.values()))`
+                # to get the first parameter.
+                param = self._params[next(iter(param_pos.values()))]
+                gradient_covariances[mod_name] = eye(
+                    param.shape[0], dtype=param.dtype, device=self.device
+                )
+
+        return input_covariances, gradient_covariances
 
     def _rearrange_for_larger_than_2d_output(
         self, output: Tensor, y: Tensor
@@ -634,21 +700,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
             grad(loss, self._params)
 
         elif self._fisher_type == FisherType.FORWARD_ONLY:
-            # Since FOOF sets the gradient covariance Kronecker factors to the identity,
-            # we don't need to do a backward pass. See https://arxiv.org/abs/2201.12250.
-            # We choose to set the gradient covariance to the identity explicitly for
-            # the sake of simplicity, such that the rest of the code here and for
-            # `KFACInverseLinearOperator` does not have to be adapted. This could be
-            # changed to decrease the memory costs.
-            for mod_name, param_pos in self._mapping.items():
-                # We iterate over _mapping to get the module names corresponding to the
-                # parameters. We only need the output dimension of the module, but
-                # don't know whether the parameter is a weight or bias; therefore, we
-                # just call `next(iter(param_pos.values()))` to get the first parameter.
-                param = self._params[next(iter(param_pos.values()))]
-                self._gradient_covariances[mod_name] = eye(
-                    param.shape[0], dtype=param.dtype, device=self.device
-                )
+            # No backward passes required for forward-only KFAC
+            pass
 
         else:
             raise ValueError(
@@ -657,7 +710,12 @@ class KFACLinearOperator(CurvatureLinearOperator):
             )
 
     def _register_tensor_hook_on_output_to_accumulate_gradient_covariance(
-        self, module: Module, inputs: Tuple[Tensor], output: Tensor, module_name: str
+        self,
+        module: Module,
+        inputs: Tuple[Tensor],
+        output: Tensor,
+        module_name: str,
+        gradient_covariances: Dict[str, Tensor],
     ):
         """Register tensor hook on layer's output to accumulate the grad. covariance.
 
@@ -678,23 +736,32 @@ class KFACLinearOperator(CurvatureLinearOperator):
             inputs: The layer's input tensors.
             output: The layer's output tensor.
             module_name: The name of the layer in the neural network.
+            gradient_covariances: Dictionary to store gradient covariances.
         """
         tensor_hook = partial(
-            self._accumulate_gradient_covariance, module=module, module_name=module_name
+            self._accumulate_gradient_covariance,
+            module=module,
+            module_name=module_name,
+            gradient_covariances=gradient_covariances,
         )
         output.register_hook(tensor_hook)
 
     def _accumulate_gradient_covariance(
-        self, grad_output: Tensor, module: Module, module_name: str
+        self,
+        grad_output: Tensor,
+        module: Module,
+        module_name: str,
+        gradient_covariances: Dict[str, Tensor],
     ):
         """Accumulate the gradient covariance for a layer's output.
 
-        Updates ``self._gradient_covariances``.
+        Updates the provided ``gradient_covariances`` dictionary.
 
         Args:
             grad_output: The gradient w.r.t. the output.
             module: The layer whose output's gradient covariance will be accumulated.
             module_name: The name of the layer in the neural network.
+            gradient_covariances: Dictionary to store gradient covariances.
         """
         g = grad_output.data.detach()
         batch_size = g.shape[0]
@@ -718,21 +785,24 @@ class KFACLinearOperator(CurvatureLinearOperator):
         }[self._loss_func.reduction]
 
         covariance = einsum(g, g, "b i,b j->i j").mul_(correction)
-        self._gradient_covariances = self._set_or_add_(
-            self._gradient_covariances, module_name, covariance
-        )
+        self._set_or_add_(gradient_covariances, module_name, covariance)
 
     def _hook_accumulate_input_covariance(
-        self, module: Module, inputs: Tuple[Tensor], module_name: str
+        self,
+        module: Module,
+        inputs: Tuple[Tensor],
+        module_name: str,
+        input_covariances: Dict[str, Tensor],
     ):
         """Pre-forward hook that accumulates the input covariance of a layer.
 
-        Updates ``self._input_covariances``.
+        Updates the provided ``input_covariances`` dictionary.
 
         Args:
             module: Module on which the hook is called.
             inputs: Inputs to the module.
             module_name: Name of the module in the neural network.
+            input_covariances: Dictionary to store input covariances.
 
         Raises:
             ValueError: If the module has multiple inputs.
@@ -765,21 +835,17 @@ class KFACLinearOperator(CurvatureLinearOperator):
             x = reduce(x, "batch ... d_in -> batch d_in", "mean")
 
         params = self._mapping[module_name]
-        if (
-            "weight" in params.keys()
-            and "bias" in params.keys()
-            and not self._separate_weight_and_bias
+        if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+            params.keys()
         ):
             x = cat([x, x.new_ones(x.shape[0], 1)], dim=1)
 
         covariance = einsum(x, x, "b i,b j -> i j").div_(self._N_data * scale)
-        self._input_covariances = self._set_or_add_(
-            self._input_covariances, module_name, covariance
-        )
+        self._set_or_add_(input_covariances, module_name, covariance)
 
     @staticmethod
     def _set_or_add_(
-        dictionary: Dict[str, Tensor], key: str, value: Tensor
+        dictionary: Dict[Any, Tensor], key: Any, value: Tensor
     ) -> Dict[str, Tensor]:
         """Set or add a value to a dictionary entry.
 
@@ -857,22 +923,20 @@ class KFACLinearOperator(CurvatureLinearOperator):
         Returns:
             Trace of the KFAC approximation.
         """
-        if not (self._input_covariances or self._gradient_covariances):
-            self.compute_kronecker_factors()
+        input_covariances = self.representation["input_covariances"]
+        gradient_covariances = self.representation["gradient_covariances"]
 
         _trace = 0.0
         for mod_name, param_pos in self._mapping.items():
-            tr_ggT = self._gradient_covariances[mod_name].trace()
+            tr_ggT = gradient_covariances[mod_name].trace()
             if not self._separate_weight_and_bias and {"weight", "bias"} == set(
                 param_pos.keys()
             ):
-                _trace += self._input_covariances[mod_name].trace() * tr_ggT
+                _trace += input_covariances[mod_name].trace() * tr_ggT
             else:
                 for p_name in param_pos:
                     _trace += tr_ggT * (
-                        self._input_covariances[mod_name].trace()
-                        if p_name == "weight"
-                        else 1
+                        input_covariances[mod_name].trace() if p_name == "weight" else 1
                     )
         return _trace
 
@@ -888,28 +952,28 @@ class KFACLinearOperator(CurvatureLinearOperator):
         Returns:
             Determinant of the KFAC approximation.
         """
-        if not (self._input_covariances or self._gradient_covariances):
-            self.compute_kronecker_factors()
+        input_covariances = self.representation["input_covariances"]
+        gradient_covariances = self.representation["gradient_covariances"]
 
         _det = 1.0
         for mod_name, param_pos in self._mapping.items():
-            m = self._gradient_covariances[mod_name].shape[0]
-            det_ggT = self._gradient_covariances[mod_name].det()
+            m = gradient_covariances[mod_name].shape[0]
+            det_ggT = gradient_covariances[mod_name].det()
             if not self._separate_weight_and_bias and {"weight", "bias"} == set(
                 param_pos.keys()
             ):
-                n = self._input_covariances[mod_name].shape[0]
-                det_aaT = self._input_covariances[mod_name].det()
+                n = input_covariances[mod_name].shape[0]
+                det_aaT = input_covariances[mod_name].det()
                 _det *= det_aaT.pow(m) * det_ggT.pow(n)
             else:
                 for p_name in param_pos:
                     n = (
-                        self._input_covariances[mod_name].shape[0]
+                        input_covariances[mod_name].shape[0]
                         if p_name == "weight"
                         else 1
                     )
                     _det *= det_ggT.pow(n) * (
-                        self._input_covariances[mod_name].det().pow(m)
+                        input_covariances[mod_name].det().pow(m)
                         if p_name == "weight"
                         else 1
                     )
@@ -927,28 +991,28 @@ class KFACLinearOperator(CurvatureLinearOperator):
         Returns:
             Log determinant of the KFAC approximation.
         """
-        if not (self._input_covariances or self._gradient_covariances):
-            self.compute_kronecker_factors()
+        input_covariances = self.representation["input_covariances"]
+        gradient_covariances = self.representation["gradient_covariances"]
 
         _logdet = 0.0
         for mod_name, param_pos in self._mapping.items():
-            m = self._gradient_covariances[mod_name].shape[0]
-            logdet_ggT = self._gradient_covariances[mod_name].logdet()
+            m = gradient_covariances[mod_name].shape[0]
+            logdet_ggT = gradient_covariances[mod_name].logdet()
             if not self._separate_weight_and_bias and {"weight", "bias"} == set(
                 param_pos.keys()
             ):
-                n = self._input_covariances[mod_name].shape[0]
-                logdet_aaT = self._input_covariances[mod_name].logdet()
+                n = input_covariances[mod_name].shape[0]
+                logdet_aaT = input_covariances[mod_name].logdet()
                 _logdet += m * logdet_aaT + n * logdet_ggT
             else:
                 for p_name in param_pos:
                     n = (
-                        self._input_covariances[mod_name].shape[0]
+                        input_covariances[mod_name].shape[0]
                         if p_name == "weight"
                         else 1
                     )
                     _logdet += n * logdet_ggT + (
-                        m * self._input_covariances[mod_name].logdet()
+                        m * input_covariances[mod_name].logdet()
                         if p_name == "weight"
                         else 0
                     )
@@ -964,26 +1028,25 @@ class KFACLinearOperator(CurvatureLinearOperator):
         Returns:
             Frobenius norm of the KFAC approximation.
         """
-        if not (self._input_covariances or self._gradient_covariances):
-            self.compute_kronecker_factors()
+        input_covariances = self.representation["input_covariances"]
+        gradient_covariances = self.representation["gradient_covariances"]
 
         _frobenius_norm = 0.0
         for mod_name, param_pos in self._mapping.items():
-            squared_frob_ggT = self._gradient_covariances[mod_name].square().sum()
+            squared_frob_ggT = gradient_covariances[mod_name].square().sum()
             if not self._separate_weight_and_bias and {"weight", "bias"} == set(
                 param_pos.keys()
             ):
-                squared_frob_aaT = self._input_covariances[mod_name].square().sum()
+                squared_frob_aaT = input_covariances[mod_name].square().sum()
                 _frobenius_norm += squared_frob_aaT * squared_frob_ggT
             else:
                 for p_name in param_pos:
                     _frobenius_norm += squared_frob_ggT * (
-                        self._input_covariances[mod_name].square().sum()
+                        input_covariances[mod_name].square().sum()
                         if p_name == "weight"
                         else 1
                     )
-        _frobenius_norm.sqrt_()
-        return _frobenius_norm
+        return _frobenius_norm.sqrt()
 
     def state_dict(self) -> Dict[str, Any]:
         """Return the state of the KFAC linear operator.
@@ -1010,9 +1073,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
             "num_per_example_loss_terms": self._num_per_example_loss_terms,
             "separate_weight_and_bias": self._separate_weight_and_bias,
             "num_data": self._N_data,
-            # Kronecker factors (if computed)
-            "input_covariances": self._input_covariances,
-            "gradient_covariances": self._gradient_covariances,
+            # Representation (Kronecker factors), if computed
+            "_representation": self._representation,
         }
 
     def _check_if_keys_match_mapping_keys(self, dictionary: dict):
@@ -1076,12 +1138,11 @@ class KFACLinearOperator(CurvatureLinearOperator):
         self._num_per_example_loss_terms = state_dict["num_per_example_loss_terms"]
         self._separate_weight_and_bias = state_dict["separate_weight_and_bias"]
         self._N_data = state_dict["num_data"]
+        self._representation = state_dict["_representation"]
 
-        # Set Kronecker factors (if computed)
-        self._check_if_keys_match_mapping_keys(state_dict["input_covariances"])
-        self._check_if_keys_match_mapping_keys(state_dict["gradient_covariances"])
-        self._input_covariances = state_dict["input_covariances"]
-        self._gradient_covariances = state_dict["gradient_covariances"]
+        # Check representation dictionaries
+        for rep in state_dict["_representation"].values():
+            self._check_if_keys_match_mapping_keys(rep)
 
     @classmethod
     def from_state_dict(

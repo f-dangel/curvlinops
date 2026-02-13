@@ -541,9 +541,12 @@ class KFACInverseLinearOperator(_InversePyTorchLinearOperator):
             biases).
         """
         if isinstance(self._A, EKFACLinearOperator):
-            aaT_eigenvectors = self._A._input_covariances_eigenvectors.get(name)
-            ggT_eigenvectors = self._A._gradient_covariances_eigenvectors.get(name)
-            eigenvalues = self._A._corrected_eigenvalues[name]
+            representation = self._A.representation
+            aaT_eigenvectors = representation["input_covariances_eigenvectors"].get(
+                name
+            )
+            ggT_eigenvectors = representation["gradient_covariances_eigenvectors"][name]
+            eigenvalues = representation["corrected_eigenvalues"][name]
             if isinstance(eigenvalues, dict):
                 inv_damped_eigenvalues = {
                     k: v.add(self._damping).pow_(-1) for k, v in eigenvalues.items()
@@ -564,8 +567,9 @@ class KFACInverseLinearOperator(_InversePyTorchLinearOperator):
                 return aaT_eigenvectors, ggT_eigenvectors, inv_damped_eigenvalues
             return aaT_inv, ggT_inv, None
 
-        aaT = self._A._input_covariances.get(name)
-        ggT = self._A._gradient_covariances.get(name)
+        representation = self._A.representation
+        aaT = representation["input_covariances"].get(name)
+        ggT = representation["gradient_covariances"][name]
         if self._use_exact_damping:
             (
                 (aaT_eigenvalues, aaT_eigenvectors),
@@ -601,11 +605,8 @@ class KFACInverseLinearOperator(_InversePyTorchLinearOperator):
         Returns:
             Matrix-multiplication result ``KFAC⁻¹ @ X``. Has same shape as ``X``.
         """
-        # Maybe compute (E)KFAC if not already done.
-        if isinstance(self._A, EKFACLinearOperator):
-            self._A._maybe_compute_ekfac()
-        elif not (self._A._input_covariances or self._A._gradient_covariances):
-            self._A.compute_kronecker_factors()
+        # Accessing representation triggers computation if not already done
+        _ = self._A.representation
 
         KX: List[Tensor | None] = [None] * len(X)
 

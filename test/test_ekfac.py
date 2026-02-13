@@ -27,10 +27,9 @@ from torch.nn import (
 from curvlinops import EFLinearOperator, GGNLinearOperator
 from curvlinops.ekfac import (
     EKFACLinearOperator,
-    FisherType,
-    KFACType,
     compute_eigenvalue_correction_linear_weight_sharing,
 )
+from curvlinops.kfac import FisherType, KFACType
 from curvlinops.utils import allclose_report
 from test.cases import DEVICES, DEVICES_IDS
 from test.test_kfac import MC_SAMPLES, MC_TOLS
@@ -108,7 +107,7 @@ def test_ekfac_type2(
 
     # Check that input covariances were not computed
     if exclude == "weight":
-        assert len(ekfac._input_covariances_eigenvectors) == 0
+        assert len(ekfac.representation["input_covariances_eigenvectors"]) == 0
 
 
 @mark.parametrize("setting", [KFACType.EXPAND, KFACType.REDUCE])
@@ -186,7 +185,7 @@ def test_ekfac_type2_weight_sharing(
 
     # Check that input covariances were not computed
     if exclude == "weight":
-        assert len(ekfac._input_covariances_eigenvectors) == 0
+        assert len(ekfac.representation["input_covariances_eigenvectors"]) == 0
 
 
 @mark.parametrize(
@@ -611,7 +610,7 @@ def test_expand_setting_scaling(
         # MSE loss averages over number of output channels
         loss_term_factor *= output_random_variable_size
     correction = ekfac_sum._N_data * loss_term_factor
-    for eigenvalues in ekfac_sum._corrected_eigenvalues.values():
+    for eigenvalues in ekfac_sum.representation["corrected_eigenvalues"].values():
         if isinstance(eigenvalues, dict):
             for eigenvals in eigenvalues.values():
                 eigenvals /= correction
@@ -784,8 +783,7 @@ def test_ekfac_does_not_affect_grad():
         # suppress computation of EKFAC matrices
         check_deterministic=False,
     )
-    ekfac.compute_kronecker_factors()
-    ekfac.compute_eigenvalue_correction()
+    _ = ekfac.representation
 
     # make sure gradients are unchanged
     for grad_before, p in zip(grads_before, params):
@@ -899,4 +897,12 @@ def test_compute_eigenvalue_correction_linear_weight_sharing():
     with raises(ValueError, match="Invalid _force_strategy"):
         compute_eigenvalue_correction_linear_weight_sharing(
             g, ggT_eigvecs, a, aaT_eigvecs, _force_strategy="invalid_strategy"
+        )
+
+    # Test exception is raised if a and aaT_eigvecs do not have the same type
+    with raises(ValueError, match=r"Both \(a, aaT_eigvecs\) must be None or Tensor"):
+        compute_eigenvalue_correction_linear_weight_sharing(g, ggT_eigvecs, a, None)
+    with raises(ValueError, match=r"Both \(a, aaT_eigvecs\) must be None or Tensor"):
+        compute_eigenvalue_correction_linear_weight_sharing(
+            g, ggT_eigvecs, None, aaT_eigvecs
         )

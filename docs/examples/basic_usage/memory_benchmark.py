@@ -80,13 +80,9 @@ def run_peakmem_benchmark(  # noqa: C901, PLR0915
         )
 
         if isinstance(linop, (KFACLinearOperator, EKFACLinearOperator)):
-            linop.compute_kronecker_factors()
-        if isinstance(linop, EKFACLinearOperator):
-            linop.compute_eigenvalue_correction()
+            linop.refresh_representation()
         if isinstance(linop, KFACInverseLinearOperator):
-            linop._A.compute_kronecker_factors()
-            if isinstance(linop._A, EKFACLinearOperator):
-                linop._A.compute_eigenvalue_correction()
+            linop._A.refresh_representation()
             # damp and invert the Kronecker matrices
             for mod_name in linop._A._mapping:
                 linop._compute_or_get_cached_inverse(mod_name)
@@ -105,13 +101,9 @@ def run_peakmem_benchmark(  # noqa: C901, PLR0915
         v = rand(linop.shape[1], device=dev)
 
         if isinstance(linop, (KFACLinearOperator, EKFACLinearOperator)):
-            linop.compute_kronecker_factors()
-        if isinstance(linop, EKFACLinearOperator):
-            linop.compute_eigenvalue_correction()
+            linop.refresh_representation()
         if isinstance(linop, KFACInverseLinearOperator):
-            linop._A.compute_kronecker_factors()
-            if isinstance(linop._A, EKFACLinearOperator):
-                linop._A.compute_eigenvalue_correction()
+            linop._A.refresh_representation()
             # damp and invert the Kronecker matrices
             for mod_name in linop._A._mapping:
                 linop._compute_or_get_cached_inverse(mod_name)
