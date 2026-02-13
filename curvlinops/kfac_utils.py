@@ -725,7 +725,7 @@ class FromCanonicalLinearOperator(_CanonicalizationLinearOperator):
                     )
                     processed += 1
 
-        if any(M is None for M in original_M) or processed != len(M):
+        if any(m is None for m in original_M) or processed != len(M):
             raise RuntimeError("Mismatch in number of processed parameters.")
 
         return original_M
