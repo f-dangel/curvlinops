@@ -826,6 +826,13 @@ def test_forward_only_fisher_type(
     # Manually set all gradient covariances to the identity to simulate FOOF
     for name, block in foof_simulated.representation["gradient_covariances"].items():
         foof_simulated.representation["gradient_covariances"][name] = eye_like(block)
+    # Re-construct the canonical operator
+    foof_simulated.representation["canonical_op"] = (
+        foof_simulated._setup_canonical_operator(
+            foof_simulated.representation["input_covariances"],
+            foof_simulated.representation["gradient_covariances"],
+        )
+    )
     simulated_foof_mat = foof_simulated @ eye_like(foof_simulated)
 
     # Compute KFAC with `fisher_type=FisherType.FORWARD_ONLY`
