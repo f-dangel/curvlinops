@@ -53,7 +53,6 @@ from curvlinops import (
     FisherMCLinearOperator,
     GGNLinearOperator,
     HessianLinearOperator,
-    KFACInverseLinearOperator,
     KFACLinearOperator,
 )
 from curvlinops._torch_base import PyTorchLinearOperator
@@ -294,14 +293,6 @@ def setup_linop(
     with sdpa_kernel(SDPBackend.MATH) if attention_double_backward else nullcontext():
         linop = linop_cls(*args, **kwargs)
 
-    if linop_str in {"KFAC inverse", "EKFAC inverse"}:
-        linop = KFACInverseLinearOperator(
-            linop,
-            damping=1e-3,
-            cache=True,
-            use_exact_damping=linop_str == "EKFAC inverse",
-        )
-
     return linop
 
 
@@ -384,26 +375,32 @@ def run_time_benchmark(  # noqa: C901
     dev = device(device_str)
     is_cuda = "cuda" in str(dev)
     model, loss_function, params, data = setup_problem(problem_str, linop_str, dev)
-    linop = setup_linop(
+    base_linop = setup_linop(
         linop_str, model, loss_function, params, data, check_deterministic=False
     )
+    is_inverse = linop_str in {"KFAC inverse", "EKFAC inverse"}
+    if is_inverse:
+        if isinstance(base_linop, EKFACLinearOperator):
+            linop = base_linop.inverse(damping=1e-3)
+        else:
+            linop = base_linop.inverse(damping=1e-3, use_exact_damping=True)
+    else:
+        linop = base_linop
     v = rand(linop.shape[1], device=dev)
 
     # Select function that will be profiled
     def f_gradient_and_loss():
-        if isinstance(linop, KFACInverseLinearOperator):
-            _ = linop._A.gradient_and_loss()
-        else:
-            _ = linop.gradient_and_loss()
+        _ = base_linop.gradient_and_loss()
 
     def f_precompute():
-        if isinstance(linop, (KFACLinearOperator, EKFACLinearOperator)):
-            linop.refresh_representation()
-        if isinstance(linop, KFACInverseLinearOperator):
-            linop._A.refresh_representation()
-            # damp and invert the Kronecker matrices
-            for mod_name in linop._A._mapping:
-                linop._compute_or_get_cached_inverse(mod_name)
+        nonlocal linop
+        if isinstance(base_linop, (KFACLinearOperator, EKFACLinearOperator)):
+            base_linop.refresh_representation()
+        if is_inverse:
+            if isinstance(base_linop, EKFACLinearOperator):
+                linop = base_linop.inverse(damping=1e-3)
+            else:
+                linop = base_linop.inverse(damping=1e-3, use_exact_damping=True)
 
     def f_matvec():
         # Double-backward through efficient attention is unsupported, disable fused kernels

@@ -50,7 +50,11 @@ from torch.nn import (
 )
 from torch.utils.hooks import RemovableHandle
 
-from curvlinops._torch_base import CurvatureLinearOperator
+from curvlinops._torch_base import (
+    CurvatureLinearOperator,
+    PyTorchLinearOperator,
+    _ChainPyTorchLinearOperator,
+)
 from curvlinops.blockdiagonal import BlockDiagonalLinearOperator
 from curvlinops.kfac_utils import (
     ToCanonicalLinearOperator,
@@ -323,15 +327,15 @@ class KFACLinearOperator(CurvatureLinearOperator):
         )
 
     @property
-    def representation(self) -> Dict[str, Dict[str, Tensor]]:
-        """Return the internal representation (Kronecker factors) of the linear operator.
+    def representation(self) -> Dict[str, PyTorchLinearOperator]:
+        """Return the internal representation of the linear operator.
 
         This attribute is lazily evaluated and cached after the first access.
 
         Returns:
-            A dictionary containing the Kronecker factors with keys "input_covariances" and
-            "gradient_covariances". Each of those is a dictionary mapping module names to
-            their respective Kronecker factors.
+            A dictionary containing the linear operators converting from parameter to
+            canonical space and back, as well as the canonical KFAC operator (block-
+            diagonal Kronecker-factored).
         """
         if self._representation is None:
             input_covariances, gradient_covariances = self.compute_kronecker_factors()
@@ -351,10 +355,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
             from_canonical_op = to_canonical_op.adjoint()
 
             self._representation = {
-                # NOTE We should remove the covariance dictionaries in the final refactoring.
-                # They are still in here now to keep KFACInverseLinearOperator functioning.
-                "input_covariances": input_covariances,
-                "gradient_covariances": gradient_covariances,
                 "canonical_op": canonical_op,
                 "to_canonical_op": to_canonical_op,
                 "from_canonical_op": from_canonical_op,
@@ -417,89 +417,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
             return batched_grad_output_fn(output, y, generator)
 
         return compute_grad_outputs
-
-    @staticmethod
-    def _left_and_right_multiply(
-        M: Tensor,
-        aaT: FactorType,
-        ggT: FactorType,
-        eigenvalues: Optional[Tensor] = None,
-    ) -> Tensor:
-        """Left and right multiply matrix with Kronecker factors.
-
-        Args:
-            M: (Batched) Matrix for multiplication. Shape will be
-                (ggT.shape[0], aaT.shape[0], K), where K is the number of vectors/the
-                batch dimension of the batched matrix product.
-            aaT: Input covariance Kronecker factor or its eigenvectors. ``None`` for
-                biases.
-            ggT: Gradient covariance Kronecker factor or its eigenvectors.
-            eigenvalues: Eigenvalues of the (E)KFAC approximation when multiplying with
-                the eigendecomposition of the KFAC approximation. ``None`` for the
-                non-decomposed KFAC approximation. Defaults to ``None``.
-
-        Returns:
-            Matrix-multiplication result.
-        """
-        if eigenvalues is None:
-            M = einsum(ggT, M, aaT, "i j, j k v, k l -> i l v")
-        else:
-            # Perform preconditioning in KFE, e.g. see equation (21) in
-            # https://arxiv.org/abs/2308.03296.
-            aaT_eigvecs = aaT
-            ggT_eigvecs = ggT
-            # Transform in eigenbasis.
-            M = einsum(ggT_eigvecs, M, aaT_eigvecs, "i j, i k v, k l -> j l v")
-            # Multiply (broadcasted) by eigenvalues.
-            M.mul_(eigenvalues.unsqueeze(-1))
-            # Transform back to standard basis.
-            M = einsum(ggT_eigvecs, M, aaT_eigvecs, "i j, j k v, l k -> i l v")
-        return M
-
-    @staticmethod
-    def _separate_left_and_right_multiply(
-        KM: List[Tensor],
-        M: List[Tensor],
-        param_pos: Dict[str, int],
-        aaT: FactorType,
-        ggT: FactorType,
-        eigenvalues: Optional[Union[Dict[int, Tensor], List[Tensor]]] = None,
-    ) -> Tensor:
-        """Multiply matrix with Kronecker factors for separated weight and bias.
-
-        Args:
-            KM: List to write the matrix-multiplication result to.
-            M: List of matrices for multiplication.
-            param_pos: Dictionary with positions of the weight and bias parameters.
-            aaT: Input covariance Kronecker factor or its eigenvectors. ``None`` for
-                biases.
-            ggT: Gradient covariance Kronecker factor or its eigenvectors.
-            eigenvalues: Eigenvalues of the (E)KFAC approximation when multiplying with
-                the eigendecomposition of the KFAC approximation. ``None`` for the
-                non-decomposed KFAC approximation. Can be a list of tensors or a
-                dictionary mapping parameter positions to tensors. Defaults to ``None``.
-        """
-        for p_name, pos in param_pos.items():
-            # for weights we need to multiply from the right with aaT
-            # for weights and biases we need to multiply from the left with ggT
-            if p_name == "weight":
-                M_w = rearrange(M[pos], "c_out ... v -> c_out (...) v")
-                # If `eigenvalues` is not `None`, we transform to eigenbasis here
-                KM[pos] = einsum(M_w, aaT, "c_out j v, j k -> c_out k v")
-            else:
-                KM[pos] = M[pos]
-
-            # If `eigenvalues` is not `None`, we convert to eigenbasis here
-            KM[pos] = einsum(
-                ggT.T if eigenvalues else ggT, KM[pos], "j k, k ... v -> j ... v"
-            )
-
-            if eigenvalues is not None:
-                # Multiply (broadcasted) by eigenvalues, convert back to original basis
-                KM[pos].mul_(eigenvalues[pos].unsqueeze(-1))
-                if p_name == "weight":
-                    KM[pos] = einsum(KM[pos], aaT, "c_out j v, k j -> c_out k v")
-                KM[pos] = einsum(ggT, KM[pos], "j k, k ... v -> j ... v")
 
     def _matmat(self, M: List[Tensor]) -> List[Tensor]:
         """Apply KFAC to a matrix (multiple vectors) in tensor list format.
@@ -577,9 +494,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
         # Handle FORWARD_ONLY case by setting gradient covariances to identity
         if self._fisher_type == FisherType.FORWARD_ONLY:
             # We choose to set the gradient covariance to the identity explicitly
-            # for the sake of simplicity, such that the rest of the code here and
-            # for `KFACInverseLinearOperator` does not have to be adapted. This
-            # could be changed to decrease the memory costs.
+            # for the sake of simplicity, but this could be done more efficiently.
             for mod_name, param_pos in self._mapping.items():
                 # We iterate over _mapping to get the module names corresponding
                 # to the parameters. We only need the output dimension of the
@@ -978,6 +893,49 @@ class KFACLinearOperator(CurvatureLinearOperator):
         """
         return self.representation["canonical_op"].frobenius_norm()
 
+    def inverse(
+        self,
+        damping: float = 0.0,
+        use_heuristic_damping: bool = False,
+        min_damping: float = 1e-8,
+        use_exact_damping: bool = False,
+        retry_double_precision: bool = True,
+    ) -> _ChainPyTorchLinearOperator:
+        r"""Return the inverse of the KFAC approximation.
+
+        Inverts each Kronecker-factored block of the canonical operator
+        and returns the result in parameter space.
+
+        Args:
+            damping: Damping value applied to all Kronecker factors. Default: ``0.0``.
+            use_heuristic_damping: Whether to use a heuristic damping strategy by
+                `Martens and Grosse, 2015 <https://arxiv.org/abs/1503.05671>`_
+                (Section 6.3). Only supported for exactly two factors.
+            min_damping: Minimum damping value. Only used if
+                ``use_heuristic_damping`` is ``True``.
+            use_exact_damping: Whether to use exact damping, i.e. to invert
+                :math:`(A \\otimes B) + \\text{damping}\\; \\mathbf{I}`.
+            retry_double_precision: Whether to retry Cholesky decomposition used for
+                inversion in double precision.
+
+        Returns:
+            Inverse of the KFAC approximation as a linear operator ``P @ K^-1 @ PT``.
+        """
+        P = self.representation["from_canonical_op"]
+        PT = self.representation["to_canonical_op"]
+        K = self.representation["canonical_op"]
+        K_inv = BlockDiagonalLinearOperator([
+            block.inverse(
+                damping=damping,
+                use_heuristic_damping=use_heuristic_damping,
+                min_damping=min_damping,
+                use_exact_damping=use_exact_damping,
+                retry_double_precision=retry_double_precision,
+            )
+            for block in K._blocks
+        ])
+        return P @ K_inv @ PT
+
     def state_dict(self) -> Dict[str, Any]:
         """Return the state of the KFAC linear operator.
 
@@ -1006,23 +964,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
             # Representation (Kronecker factors), if computed
             "_representation": self._representation,
         }
-
-    def _check_if_keys_match_mapping_keys(self, dictionary: dict):
-        """Check if the keys of a dictionary match the mapping keys of the linear operator.
-
-        Args:
-            dictionary: Dictionary to check.
-
-        Raises:
-            ValueError: If the keys do not match the mapping keys.
-        """
-        dictionary_keys = set(dictionary.keys())
-        mapping_keys = set(self._mapping.keys())
-        if dictionary_keys and dictionary_keys != mapping_keys:
-            raise ValueError(
-                "Keys in dictionary do not match mapping keys of linear operator. "
-                f"Difference: {dictionary_keys - mapping_keys}."
-            )
 
     def load_state_dict(self, state_dict: Dict[str, Any]):
         """Load the state of the KFAC linear operator.
@@ -1069,11 +1010,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
         self._separate_weight_and_bias = state_dict["separate_weight_and_bias"]
         self._N_data = state_dict["num_data"]
         self._representation = state_dict["_representation"]
-
-        # Check representation dictionaries
-        for key, rep in state_dict["_representation"].items():
-            if "covariances" in key:
-                self._check_if_keys_match_mapping_keys(rep)
 
     @classmethod
     def from_state_dict(

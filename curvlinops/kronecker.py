@@ -198,7 +198,7 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
 
         Raises:
             ValueError: If both heuristic and exact damping are selected.
-            ValueError: If heuristic damping is used with number of factors != 2.
+            ValueError: If heuristic damping is used with number of factors > 2.
             RuntimeError: If negative mean eigenvalues are detected during
                 heuristic damping.
         """
@@ -207,9 +207,9 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
         if use_heuristic_damping and use_exact_damping:
             raise ValueError("Either use heuristic damping or exact damping, not both.")
 
-        if use_heuristic_damping and len(self._factors) != 2:
+        if use_heuristic_damping and len(self._factors) > 2:
             raise ValueError(
-                f"Heuristic damping only implemented for two factors. "
+                f"Heuristic damping only implemented for at most two factors. "
                 f"Got {len(self._factors)}"
             )
 
@@ -225,7 +225,10 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
 
         else:
             # Martens and Grosse, 2015 (https://arxiv.org/abs/1503.05671) (Section 6.3)
-            if use_heuristic_damping and len(self._factors) == 2:
+            if use_heuristic_damping and len(self._factors) == 1:
+                individual_damping = (max(damping, min_damping),)
+
+            elif use_heuristic_damping and len(self._factors) == 2:
                 S1, S2 = self._factors
                 mean_eig1, mean_eig2 = S1.diag().mean(), S2.diag().mean()
                 if any(mean_eig < 0 for mean_eig in [mean_eig1, mean_eig2]):
@@ -236,6 +239,7 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
                 damping1 = max(sqrt_damping / sqrt_eig_mean_ratio, min_damping)
                 damping2 = max(sqrt_damping * sqrt_eig_mean_ratio, min_damping)
                 individual_damping = (damping1, damping2)
+
             else:
                 individual_damping = tuple(len(self._factors) * [damping])
 
