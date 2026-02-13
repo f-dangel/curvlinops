@@ -1213,7 +1213,7 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901
             factors[0] = S1 + damping1 * eye_like(S1)
             factors[1] = S2 + damping2 * eye_like(S2)
         else:
-            factors[0].add_(eye_like(factors[0]), alpha=delta)
+            factors[0] = factors[0] + delta * eye_like(factors[0])
 
     inv_KFAC_naive = inv(KFAC @ eye_like(KFAC))
 
