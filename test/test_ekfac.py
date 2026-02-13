@@ -46,6 +46,12 @@ from test.utils import (
 )
 
 
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+@mark.parametrize(
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_ekfac_type2(
     kfac_exact_case: Tuple[
