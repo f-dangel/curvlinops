@@ -11,8 +11,11 @@ from torch.linalg import eigh
 from torch.nn import Conv2d, Module
 from torch.utils.hooks import RemovableHandle
 
+from curvlinops.blockdiagonal import BlockDiagonalLinearOperator
+from curvlinops.eigh import EighDecomposedLinearOperator
 from curvlinops.kfac import FisherType, KFACLinearOperator
-from curvlinops.kfac_utils import extract_patches
+from curvlinops.kfac_utils import ToCanonicalLinearOperator, extract_patches
+from curvlinops.kronecker import KroneckerProductLinearOperator
 from curvlinops.utils import _seed_generator
 
 
@@ -262,20 +265,92 @@ class EKFACLinearOperator(KFACLinearOperator):
             and the corrected eigenvalues for each module.
         """
         if self._representation is None:
-            input_covariances, gradient_covariances = self.compute_kronecker_factors()
-            input_covariances_eigenvectors = self._eigenvectors_(input_covariances)
-            gradient_covariances_eigenvectors = self._eigenvectors_(
-                gradient_covariances
-            )
+            input_covariances_eigenvectors, gradient_covariances_eigenvectors = [
+                self._eigenvectors_(covariances)
+                for covariances in self.compute_kronecker_factors()
+            ]
             corrected_eigenvalues = self.compute_eigenvalue_correction(
                 input_covariances_eigenvectors, gradient_covariances_eigenvectors
             )
+            # EKFAC in the canonical basis
+            canonical_op = self._setup_canonical_operator(
+                input_covariances_eigenvectors,
+                gradient_covariances_eigenvectors,
+                corrected_eigenvalues,
+            )
+
+            # Set up converters from parameter to canonical space and back
+            to_canonical_op = ToCanonicalLinearOperator(
+                [p.shape for p in self._params],
+                list(self._mapping.values()),
+                self._separate_weight_and_bias,
+                self.device,
+                self.dtype,
+            )
+            from_canonical_op = to_canonical_op.adjoint()
+
             self._representation = {
+                # NOTE We should remove the covariance dictionaries in the final refactoring.
+                # They are still in here now to keep KFACInverseLinearOperator functioning.
                 "input_covariances_eigenvectors": input_covariances_eigenvectors,
                 "gradient_covariances_eigenvectors": gradient_covariances_eigenvectors,
                 "corrected_eigenvalues": corrected_eigenvalues,
+                "canonical_op": canonical_op,
+                "to_canonical_op": to_canonical_op,
+                "from_canonical_op": from_canonical_op,
             }
         return self._representation
+
+    def _setup_canonical_operator(
+        self,
+        input_covariances_eigenvectors: Dict[str, Tensor],
+        gradient_covariances_eigenvectors: Dict[str, Tensor],
+        corrected_eigenvalues: Dict[str, Union[Tensor, Dict[int, Tensor]]],
+    ) -> BlockDiagonalLinearOperator:
+        """Set up the canonical EKFAC operator from Kronecker factors.
+
+        Args:
+            input_covariances_eigenvectors: Dictionary mapping module names to input
+                covariance eigenvectors.
+            gradient_covariances_eigenvectors: Dictionary mapping module names to
+                gradient covariance eigenvectors.
+            corrected_eigenvalues: Dictionary mapping module names to eigenvalue
+                corrections.
+
+        Returns:
+            Block diagonal linear operator representing KFAC in canonical basis.
+        """
+        # Set up operators for each block
+        bases = []
+        corrections = []
+
+        for mod_name, param_pos in self._mapping.items():
+            Q_a = input_covariances_eigenvectors.get(mod_name, None)
+            Q_g = gradient_covariances_eigenvectors[mod_name]
+            lambdas = corrected_eigenvalues[mod_name]
+
+            # Handle joint weight+bias case
+            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+                param_pos.keys()
+            ):
+                # Single Kronecker product block for weight+bias
+                bases.append([Q_g, Q_a])
+                corrections.append(lambdas)
+            else:
+                # Separate blocks for weight and bias
+                for p_name, p_pos in param_pos.items():
+                    bases.append([Q_g, Q_a] if p_name == "weight" else [Q_g])
+                    corrections.append(lambdas[p_pos])
+
+        # Create Kronecker product linear operators for each block
+        blocks = [
+            EighDecomposedLinearOperator(
+                correction.flatten(), KroneckerProductLinearOperator(*basis)
+            )
+            for basis, correction in zip(bases, corrections)
+        ]
+        # EKFAC in the canonical basis
+        return BlockDiagonalLinearOperator(blocks)
 
     def _rearrange_for_larger_than_2d_output(
         self, output: Tensor, y: Tensor
@@ -305,7 +380,7 @@ class EKFACLinearOperator(KFACLinearOperator):
             )
         return output, y
 
-    def _matmat(self, M: list[Tensor]) -> list[Tensor]:
+def _matmat(self, M: list[Tensor]) -> list[Tensor]:
         """Apply EKFAC to a matrix (multiple vectors) in tensor list format.
 
         This allows for matrix-matrix products with the EKFAC approximation in PyTorch
@@ -372,7 +447,6 @@ class EKFACLinearOperator(KFACLinearOperator):
                 KM[param_pos["weight"]] = KM[param_pos["weight"]].view(weight_shape)
 
         return KM
-
     @staticmethod
     def _eigenvectors_(dictionary: dict[Any, Tensor]) -> dict[Any, Tensor]:
         """Replace all matrix values with their eigenvalues (inplace).
@@ -592,92 +666,3 @@ class EKFACLinearOperator(KFACLinearOperator):
                     pos,
                     eigencorrection.mul_(correction),
                 )
-
-    def trace(self) -> Tensor:
-        r"""Trace of the EKFAC approximation.
-
-        Will call ``compute_kronecker_factors`` and ``compute_eigenvalue_correction`` if
-        either of them has not been called before.
-
-        Returns:
-            Trace of the EKFAC approximation.
-        """
-        corrected_eigenvalues = self.representation["corrected_eigenvalues"]
-
-        # Compute the trace using the corrected eigenvalues
-        _trace = 0.0
-        for corrected_eigenvals in corrected_eigenvalues.values():
-            if isinstance(corrected_eigenvals, dict):
-                for val in corrected_eigenvals.values():
-                    _trace += val.sum()
-            else:
-                _trace += corrected_eigenvals.sum()
-
-        return _trace
-
-    def det(self) -> Tensor:
-        r"""Compute the determinant of the EKFAC approximation.
-
-        Will call ``compute_kronecker_factors`` and ``compute_eigenvalue_correction`` if
-        either of them has not been called before.
-
-        Returns:
-            Determinant of the EKFAC approximation.
-        """
-        corrected_eigenvalues = self.representation["corrected_eigenvalues"]
-
-        # Compute the determinant using the corrected eigenvalues
-        _det = 1.0
-        for corrected_eigenvals in corrected_eigenvalues.values():
-            if isinstance(corrected_eigenvals, dict):
-                for val in corrected_eigenvals.values():
-                    _det *= val.prod()
-            else:
-                _det *= corrected_eigenvals.prod()
-
-        return _det
-
-    def logdet(self) -> Tensor:
-        r"""Log determinant of the EKFAC approximation.
-
-        More numerically stable than the ``det`` method.
-        Will call ``compute_kronecker_factors`` and ``compute_eigenvalue_correction`` if
-        either of them has not been called before.
-
-        Returns:
-            Log determinant of the EKFAC approximation.
-        """
-        corrected_eigenvalues = self.representation["corrected_eigenvalues"]
-
-        # Compute the log determinant using the corrected eigenvalues
-        _logdet = 0.0
-        for corrected_eigenvals in corrected_eigenvalues.values():
-            if isinstance(corrected_eigenvals, dict):
-                for val in corrected_eigenvals.values():
-                    _logdet += val.log().sum()
-            else:
-                _logdet += corrected_eigenvals.log().sum()
-
-        return _logdet
-
-    def frobenius_norm(self) -> Tensor:
-        r"""Frobenius norm of the EKFAC approximation.
-
-        Will call ``compute_kronecker_factors`` and ``compute_eigenvalue_correction`` if
-        either of them has not been called before.
-
-        Returns:
-            Frobenius norm of the EKFAC approximation.
-        """
-        corrected_eigenvalues = self.representation["corrected_eigenvalues"]
-
-        # Compute the Frobenius norm using the corrected eigenvalues
-        _frobenius_norm = 0.0
-        for corrected_eigenvals in corrected_eigenvalues.values():
-            if isinstance(corrected_eigenvals, dict):
-                for val in corrected_eigenvals.values():
-                    _frobenius_norm += val.square().sum()
-            else:
-                _frobenius_norm += corrected_eigenvals.square().sum()
-
-        return _frobenius_norm.sqrt()

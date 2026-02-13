@@ -51,12 +51,15 @@ from torch.nn import (
 from torch.utils.hooks import RemovableHandle
 
 from curvlinops._torch_base import CurvatureLinearOperator
+from curvlinops.blockdiagonal import BlockDiagonalLinearOperator
 from curvlinops.kfac_utils import (
+    ToCanonicalLinearOperator,
     _check_binary_if_BCEWithLogitsLoss,
     extract_averaged_patches,
     extract_patches,
     make_grad_output_fn,
 )
+from curvlinops.kronecker import KroneckerProductLinearOperator
 from curvlinops.utils import _seed_generator
 
 FactorType = TypeVar(
@@ -332,9 +335,29 @@ class KFACLinearOperator(CurvatureLinearOperator):
         """
         if self._representation is None:
             input_covariances, gradient_covariances = self.compute_kronecker_factors()
+            # KFAC in the canonical basis
+            canonical_op = self._setup_canonical_operator(
+                input_covariances, gradient_covariances
+            )
+
+            # Set up converters from parameter to canonical space and back
+            to_canonical_op = ToCanonicalLinearOperator(
+                [p.shape for p in self._params],
+                list(self._mapping.values()),
+                self._separate_weight_and_bias,
+                self.device,
+                self.dtype,
+            )
+            from_canonical_op = to_canonical_op.adjoint()
+
             self._representation = {
+                # NOTE We should remove the covariance dictionaries in the final refactoring.
+                # They are still in here now to keep KFACInverseLinearOperator functioning.
                 "input_covariances": input_covariances,
                 "gradient_covariances": gradient_covariances,
+                "canonical_op": canonical_op,
+                "to_canonical_op": to_canonical_op,
+                "from_canonical_op": from_canonical_op,
             }
         return self._representation
 
@@ -494,42 +517,11 @@ class KFACLinearOperator(CurvatureLinearOperator):
             Matrix-multiplication result ``KFAC @ M`` in tensor list format. Has the same
             shapes as the input.
         """
-        input_covariances = self.representation["input_covariances"]
-        gradient_covariances = self.representation["gradient_covariances"]
-
-        KM: list[Tensor | None] = [None] * len(M)
-
-        for mod_name, param_pos in self._mapping.items():
-            # cache the weight shape to ensure correct shapes are returned
-            if "weight" in param_pos:
-                weight_shape = M[param_pos["weight"]].shape
-
-            # get the Kronecker factors for the current module
-            # aaT does not exist when weight matrix is excluded
-            aaT = input_covariances.get(mod_name)
-            # ggT always exists
-            ggT = gradient_covariances[mod_name]
-
-            # bias and weights are treated jointly
-            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
-                param_pos.keys()
-            ):
-                w_pos, b_pos = param_pos["weight"], param_pos["bias"]
-                # v denotes the free dimension for treating multiple vectors in parallel
-                M_w = rearrange(M[w_pos], "c_out ... v -> c_out (...) v")
-                M_joint = cat([M_w, M[b_pos].unsqueeze(-2)], dim=-2)
-                M_joint = self._left_and_right_multiply(M_joint, aaT, ggT)
-                w_cols = M_w.shape[1]
-                KM[w_pos], KM[b_pos] = M_joint.split([w_cols, 1], dim=-2)
-                KM[b_pos].squeeze_(1)
-            else:
-                self._separate_left_and_right_multiply(KM, M, param_pos, aaT, ggT)
-
-            # restore original shapes
-            if "weight" in param_pos:
-                KM[param_pos["weight"]] = KM[param_pos["weight"]].view(weight_shape)
-
-        return KM
+P = self.representation["from_canonical_op"]
+        PT = self.representation["to_canonical_op"]
+        K = self.representation["canonical_op"]
+        kfac = P @ K @ PT
+        return kfac @ M
 
     def compute_kronecker_factors(self) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
         """Compute KFAC's Kronecker factors.
@@ -913,140 +905,78 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
         return positions
 
-    def trace(self) -> Tensor:
-        r"""Trace of the KFAC approximation.
+    def _setup_canonical_operator(
+        self,
+        input_covariances: Dict[str, Tensor],
+        gradient_covariances: Dict[str, Tensor],
+    ) -> BlockDiagonalLinearOperator:
+        """Set up the canonical KFAC operator from Kronecker factors.
 
-        Will call ``compute_kronecker_factors`` if it has not been called before.
-        Uses the property of the Kronecker product that
-        :math:`\text{tr}(A \otimes B) = \text{tr}(A) \text{tr}(B)`.
+        Args:
+            input_covariances: Dictionary mapping module names to input covariances.
+            gradient_covariances: Dictionary mapping module names to gradient
+                covariances.
+
+        Returns:
+            Block diagonal linear operator representing KFAC in canonical basis.
+        """
+        # Set up Kronecker operators for each block
+        factors = []
+
+        for mod_name, param_pos in self._mapping.items():
+            aaT = input_covariances.get(mod_name, None)
+            ggT = gradient_covariances[mod_name]
+
+            # Handle joint weight+bias case
+            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+                param_pos.keys()
+            ):
+                # Single Kronecker product block for weight+bias
+                factors.append([ggT, aaT])
+            else:
+                # Separate blocks for weight and bias
+                for p_name in param_pos:
+                    factors.append([ggT, aaT] if p_name == "weight" else [ggT])
+
+        # Create Kronecker product linear operators for each block
+        blocks = [KroneckerProductLinearOperator(*fs) for fs in factors]
+
+        # KFAC in the canonical basis
+        return BlockDiagonalLinearOperator(blocks)
+
+    def trace(self) -> Tensor:
+        """Trace of the KFAC approximation.
 
         Returns:
             Trace of the KFAC approximation.
         """
-        input_covariances = self.representation["input_covariances"]
-        gradient_covariances = self.representation["gradient_covariances"]
-
-        _trace = 0.0
-        for mod_name, param_pos in self._mapping.items():
-            tr_ggT = gradient_covariances[mod_name].trace()
-            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
-                param_pos.keys()
-            ):
-                _trace += input_covariances[mod_name].trace() * tr_ggT
-            else:
-                for p_name in param_pos:
-                    _trace += tr_ggT * (
-                        input_covariances[mod_name].trace() if p_name == "weight" else 1
-                    )
-        return _trace
+        return self.representation["canonical_op"].trace()
 
     def det(self) -> Tensor:
-        r"""Compute the determinant of the KFAC approximation.
-
-        Will call ``compute_kronecker_factors`` if it has not been called before.
-        Uses the property of the Kronecker product that
-        :math:`\det(A \otimes B) = \det(A)^{m} \det(B)^{n}`,
-        where
-        :math:`A \in \mathbb{R}^{n \times n}` and :math:`B \in \mathbb{R}^{m \times m}`.
+        """Compute the determinant of the KFAC approximation.
 
         Returns:
             Determinant of the KFAC approximation.
         """
-        input_covariances = self.representation["input_covariances"]
-        gradient_covariances = self.representation["gradient_covariances"]
-
-        _det = 1.0
-        for mod_name, param_pos in self._mapping.items():
-            m = gradient_covariances[mod_name].shape[0]
-            det_ggT = gradient_covariances[mod_name].det()
-            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
-                param_pos.keys()
-            ):
-                n = input_covariances[mod_name].shape[0]
-                det_aaT = input_covariances[mod_name].det()
-                _det *= det_aaT.pow(m) * det_ggT.pow(n)
-            else:
-                for p_name in param_pos:
-                    n = (
-                        input_covariances[mod_name].shape[0]
-                        if p_name == "weight"
-                        else 1
-                    )
-                    _det *= det_ggT.pow(n) * (
-                        input_covariances[mod_name].det().pow(m)
-                        if p_name == "weight"
-                        else 1
-                    )
-        return _det
+        return self.representation["canonical_op"].det()
 
     def logdet(self) -> Tensor:
-        r"""Log determinant of the KFAC approximation.
+        """Log determinant of the KFAC approximation.
 
         More numerically stable than the ``det`` method.
-        Will call ``compute_kronecker_factors`` if it has not been called before.
-        Uses the property of the Kronecker product that
-        :math:`\log \det(A \otimes B) = m \log \det(A) + n \log \det(B)`, where
-        :math:`A \in \mathbb{R}^{n \times n}` and :math:`B \in \mathbb{R}^{m \times m}`.
 
         Returns:
             Log determinant of the KFAC approximation.
         """
-        input_covariances = self.representation["input_covariances"]
-        gradient_covariances = self.representation["gradient_covariances"]
-
-        _logdet = 0.0
-        for mod_name, param_pos in self._mapping.items():
-            m = gradient_covariances[mod_name].shape[0]
-            logdet_ggT = gradient_covariances[mod_name].logdet()
-            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
-                param_pos.keys()
-            ):
-                n = input_covariances[mod_name].shape[0]
-                logdet_aaT = input_covariances[mod_name].logdet()
-                _logdet += m * logdet_aaT + n * logdet_ggT
-            else:
-                for p_name in param_pos:
-                    n = (
-                        input_covariances[mod_name].shape[0]
-                        if p_name == "weight"
-                        else 1
-                    )
-                    _logdet += n * logdet_ggT + (
-                        m * input_covariances[mod_name].logdet()
-                        if p_name == "weight"
-                        else 0
-                    )
-        return _logdet
+        return self.representation["canonical_op"].logdet()
 
     def frobenius_norm(self) -> Tensor:
-        r"""Frobenius norm of the KFAC approximation.
-
-        Will call ``compute_kronecker_factors`` if it has not been called before.
-        Uses the property of the Kronecker product that
-        :math:`\|A \otimes B\|_F = \|A\|_F \|B\|_F`.
+        """Frobenius norm of the KFAC approximation.
 
         Returns:
             Frobenius norm of the KFAC approximation.
         """
-        input_covariances = self.representation["input_covariances"]
-        gradient_covariances = self.representation["gradient_covariances"]
-
-        _frobenius_norm = 0.0
-        for mod_name, param_pos in self._mapping.items():
-            squared_frob_ggT = gradient_covariances[mod_name].square().sum()
-            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
-                param_pos.keys()
-            ):
-                squared_frob_aaT = input_covariances[mod_name].square().sum()
-                _frobenius_norm += squared_frob_aaT * squared_frob_ggT
-            else:
-                for p_name in param_pos:
-                    _frobenius_norm += squared_frob_ggT * (
-                        input_covariances[mod_name].square().sum()
-                        if p_name == "weight"
-                        else 1
-                    )
-        return _frobenius_norm.sqrt()
+        return self.representation["canonical_op"].frobenius_norm()
 
     def state_dict(self) -> dict[str, Any]:
         """Return the state of the KFAC linear operator.
@@ -1141,8 +1071,9 @@ class KFACLinearOperator(CurvatureLinearOperator):
         self._representation = state_dict["_representation"]
 
         # Check representation dictionaries
-        for rep in state_dict["_representation"].values():
-            self._check_if_keys_match_mapping_keys(rep)
+        for key, rep in state_dict["_representation"].items():
+            if "covariances" in key:
+                self._check_if_keys_match_mapping_keys(rep)
 
     @classmethod
     def from_state_dict(
