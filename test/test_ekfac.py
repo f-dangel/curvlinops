@@ -4,15 +4,7 @@ from typing import Dict, Iterable, List, Tuple, Union
 
 from einops.layers.torch import Rearrange
 from pytest import mark, raises
-from torch import (
-    Tensor,
-    allclose,
-    device,
-    float64,
-    manual_seed,
-    rand,
-    rand_like,
-)
+from torch import Tensor, device, float64, manual_seed, rand
 from torch.linalg import inv, qr
 from torch.nn import (
     BCEWithLogitsLoss,
@@ -32,7 +24,7 @@ from curvlinops.ekfac import (
 from curvlinops.kfac import FisherType, KFACType
 from curvlinops.utils import allclose_report
 from test.cases import DEVICES, DEVICES_IDS
-from test.test_kfac import MC_SAMPLES, MC_TOLS
+from test.test_kfac import MC_SAMPLES, MC_TOLS, _check_does_not_affect_grad
 from test.utils import (
     Conv2dModel,
     UnetModel,
@@ -54,12 +46,6 @@ from test.utils import (
 )
 
 
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_ekfac_type2(
     kfac_exact_case: Tuple[
@@ -307,7 +293,6 @@ def test_ekfac_mc_weight_sharing(
         mc_samples=MC_SAMPLES,
         kfac_approx=setting,  # choose EKFAC approximation consistent with setting
         separate_weight_and_bias=separate_weight_and_bias,
-        check_deterministic=False,
     )
     ekfac_mat = ekfac @ eye_like(ekfac)
 
@@ -751,33 +736,7 @@ def test_logdet(
 
 def test_ekfac_does_not_affect_grad():
     """Make sure EKFAC computation does not write to `.grad`."""
-    manual_seed(0)
-    batch_size, D_in, D_out = 4, 3, 2
-    X = rand(batch_size, D_in)
-    y = rand(batch_size, D_out)
-    model = Linear(D_in, D_out)
-
-    params = list(model.parameters())
-    # set gradients to random numbers
-    for p in params:
-        p.grad = rand_like(p)
-    # make independent copies
-    grads_before = [p.grad.clone() for p in params]
-
-    # create and compute EKFAC
-    ekfac = EKFACLinearOperator(
-        model,
-        MSELoss(),
-        params,
-        [(X, y)],
-        # suppress computation of EKFAC matrices
-        check_deterministic=False,
-    )
-    _ = ekfac.representation
-
-    # make sure gradients are unchanged
-    for grad_before, p in zip(grads_before, params):
-        assert allclose(grad_before, p.grad)
+    _check_does_not_affect_grad(EKFACLinearOperator)
 
 
 def test_save_and_load_state_dict():
@@ -931,12 +890,10 @@ def test_EKFAC_inverse_exactly_damped_matmat(
         data,
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
-        check_deterministic=False,
     )
 
     # Exact damped inverse: inv(EKFAC + delta * I)
     inv_EKFAC_naive = inv(EKFAC @ eye_like(EKFAC) + delta * eye_like(EKFAC))
-
     inv_EKFAC = EKFAC.inverse(damping=delta)
 
     compare_consecutive_matmats(inv_EKFAC)

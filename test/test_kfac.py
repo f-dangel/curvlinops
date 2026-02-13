@@ -1,7 +1,7 @@
 """Contains tests for ``curvlinops.kfac``."""
 
 from math import sqrt
-from typing import Dict, Iterable, List, Tuple, Union
+from typing import Dict, Iterable, List, Tuple, Type, Union
 
 from einops.layers.torch import Rearrange
 from pytest import mark
@@ -27,6 +27,7 @@ from torch.nn import (
 )
 
 from curvlinops import EFLinearOperator, GGNLinearOperator
+from curvlinops._torch_base import CurvatureLinearOperator
 from curvlinops.kfac import FisherType, KFACLinearOperator, KFACType
 from curvlinops.utils import allclose_report
 from test.cases import DEVICES, DEVICES_IDS
@@ -1009,8 +1010,12 @@ def test_forward_only_fisher_type_exact_weight_sharing_case(
     assert allclose_report(ggn, 2 * scale * foof_mat, rtol=1e-4)
 
 
-def test_kfac_does_not_affect_grad():
-    """Make sure KFAC computation does not write to `.grad`."""
+def _check_does_not_affect_grad(linop_cls: Type[CurvatureLinearOperator]):
+    """Make sure that computing a linear operator does not affect `.grad`.
+
+    Args:
+        linop_cls: The linear operator class to test.
+    """
     manual_seed(0)
     batch_size, D_in, D_out = 4, 3, 2
     X = rand(batch_size, D_in)
@@ -1024,20 +1029,17 @@ def test_kfac_does_not_affect_grad():
     # make independent copies
     grads_before = [p.grad.clone() for p in params]
 
-    # create and compute KFAC
-    kfac = KFACLinearOperator(
-        model,
-        MSELoss(),
-        params,
-        [(X, y)],
-        # suppress computation of KFAC matrices
-        check_deterministic=False,
-    )
-    kfac.compute_kronecker_factors()
+    # create and compute the linear operator
+    _ = linop_cls(model, MSELoss(), params, [(X, y)])
 
     # make sure gradients are unchanged
     for grad_before, p in zip(grads_before, params):
         assert allclose(grad_before, p.grad)
+
+
+def test_kfac_does_not_affect_grad():
+    """Make sure KFAC computation does not write to `.grad`."""
+    _check_does_not_affect_grad(KFACLinearOperator)
 
 
 def test_save_and_load_state_dict():
