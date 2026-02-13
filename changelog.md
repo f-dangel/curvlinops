@@ -20,8 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Backward-incompatible:** (E)KFAC's `det, logdet, trace, frobenius_norm` properties are now functions
   ([PR](https://github.com/f-dangel/curvlinops/pull/232))
 
-- **Backward-incompatible** Reduce side effects in (E)KFAC's computation, modifying the entries of `state_dict`
+- **Backward-incompatible:** Reduce side effects in (E)KFAC's computation, modifying the entries of `state_dict`
   ([PR](https://github.com/f-dangel/curvlinops/pull/228))
+
+- **Backward-incompatible:** Remove `KFACInverseLinearOperator`, replace with `(E)KFACLinearOperator.inverse()`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/244))
 
 ### Fixed/Removed
 
@@ -55,7 +58,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     ([PR](https://github.com/f-dangel/curvlinops/pull/229))
   - Implement (E)KFAC using structured operators, i.e. `P @ K @ PT` with `P, PT` converters to and back from the canonical basis and `K` block-diagonal Kronecker-factored. Modifies the entries of `state_dict`.
     ([PR](https://github.com/f-dangel/curvlinops/pull/230)) (**backward-incompatible**)
-
 
 - Generalize computing the loss function's Hessian square root for sequence-valued predictions
   ([PR](https://github.com/f-dangel/curvlinops/pull/231))
