@@ -293,8 +293,7 @@ def test_CanonicalLinearOperator(separate_weight_and_bias: bool):
     )
     to_canonical_x = to_canonical @ x
     assert len(to_canonical_x) == len(x_canonical)
-    for x1, x2 in zip(to_canonical_x, x_canonical):
-        assert allclose_report(x1, x2)
+    assert all(allclose_report(x1, x2) for x1, x2 in zip(to_canonical_x, x_canonical))
 
     # Multiplication of x_canonical with from_canonical operator should produce x
     from_canonical = FromCanonicalLinearOperator(
@@ -302,5 +301,10 @@ def test_CanonicalLinearOperator(separate_weight_and_bias: bool):
     )
     from_canonical_x = from_canonical @ x_canonical
     assert len(from_canonical_x) == len(x)
-    for x1, x2 in zip(from_canonical_x, x):
-        assert allclose_report(x1, x2)
+    assert all(allclose_report(x1, x2) for x1, x2 in zip(from_canonical_x, x))
+
+    # Check that the transpose operator is the inverse
+    for P, v in zip([to_canonical, from_canonical], [x, x_canonical]):
+        PTP_v = P.adjoint() @ (P @ v)
+        assert len(PTP_v) == len(v)
+        assert all(allclose_report(v1, v2) for v1, v2 in zip(PTP_v, v))
