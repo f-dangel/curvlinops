@@ -14,7 +14,7 @@ from torch.utils.hooks import RemovableHandle
 from curvlinops.blockdiagonal import BlockDiagonalLinearOperator
 from curvlinops.eigh import EighDecomposedLinearOperator
 from curvlinops.kfac import FisherType, KFACLinearOperator
-from curvlinops.kfac_utils import extract_patches
+from curvlinops.kfac_utils import ToCanonicalLinearOperator, extract_patches
 from curvlinops.kronecker import KroneckerProductLinearOperator
 from curvlinops.utils import _seed_generator
 
@@ -272,11 +272,23 @@ class EKFACLinearOperator(KFACLinearOperator):
             corrected_eigenvalues = self.compute_eigenvalue_correction(
                 input_covariances_eigenvectors, gradient_covariances_eigenvectors
             )
+            # EKFAC in the canonical basis
             canonical_op = self._setup_canonical_operator(
                 input_covariances_eigenvectors,
                 gradient_covariances_eigenvectors,
                 corrected_eigenvalues,
             )
+
+            # Set up converters from parameter to canonical space and back
+            to_canonical_op = ToCanonicalLinearOperator(
+                [p.shape for p in self._params],
+                list(self._mapping.values()),
+                self._separate_weight_and_bias,
+                self.device,
+                self.dtype,
+            )
+            from_canonical_op = to_canonical_op.adjoint()
+
             self._representation = {
                 # NOTE We should remove the covariance dictionaries in the final refactoring.
                 # They are still in here now to keep KFACInverseLinearOperator functioning.
@@ -284,6 +296,8 @@ class EKFACLinearOperator(KFACLinearOperator):
                 "gradient_covariances_eigenvectors": gradient_covariances_eigenvectors,
                 "corrected_eigenvalues": corrected_eigenvalues,
                 "canonical_op": canonical_op,
+                "to_canonical_op": to_canonical_op,
+                "from_canonical_op": from_canonical_op,
             }
         return self._representation
 

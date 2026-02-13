@@ -299,11 +299,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
         self._mc_samples = mc_samples
         self._kfac_approx = kfac_approx
         self._mapping = self.compute_parameter_mapping(params, model_func)
-        # Set up converters from parameter to canonical space and back
-        self._to_canonical_op = ToCanonicalLinearOperator(
-            params, list(self._mapping.values()), self._separate_weight_and_bias
-        )
-        self._from_canonical_op = self._to_canonical_op.adjoint()
         self._representation = None
 
         # Function (prediction_batch, label_batch) -> grad_outputs for backpropagation
@@ -344,12 +339,25 @@ class KFACLinearOperator(CurvatureLinearOperator):
             canonical_op = self._setup_canonical_operator(
                 input_covariances, gradient_covariances
             )
+
+            # Set up converters from parameter to canonical space and back
+            to_canonical_op = ToCanonicalLinearOperator(
+                [p.shape for p in self._params],
+                list(self._mapping.values()),
+                self._separate_weight_and_bias,
+                self.device,
+                self.dtype,
+            )
+            from_canonical_op = to_canonical_op.adjoint()
+
             self._representation = {
                 # NOTE We should remove the covariance dictionaries in the final refactoring.
                 # They are still in here now to keep KFACInverseLinearOperator functioning.
                 "input_covariances": input_covariances,
                 "gradient_covariances": gradient_covariances,
                 "canonical_op": canonical_op,
+                "to_canonical_op": to_canonical_op,
+                "from_canonical_op": from_canonical_op,
             }
         return self._representation
 
@@ -509,9 +517,11 @@ class KFACLinearOperator(CurvatureLinearOperator):
             Matrix-multiplication result ``KFAC @ M`` in tensor list format. Has the same
             shapes as the input.
         """
-        return self._from_canonical_op @ (
-            self.representation["canonical_op"] @ (self._to_canonical_op @ M)
-        )
+        P = self.representation["from_canonical_op"]
+        PT = self.representation["to_canonical_op"]
+        K = self.representation["canonical_op"]
+        kfac = P @ K @ PT
+        return kfac @ M
 
     def compute_kronecker_factors(self) -> Tuple[Dict[str, Tensor], Dict[str, Tensor]]:
         """Compute KFAC's Kronecker factors.
