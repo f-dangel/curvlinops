@@ -27,7 +27,6 @@ from torch.nn import (
 )
 
 from curvlinops import EFLinearOperator, GGNLinearOperator
-from curvlinops._torch_base import CurvatureLinearOperator
 from curvlinops.kfac import FisherType, KFACLinearOperator, KFACType
 from curvlinops.utils import allclose_report
 from test.cases import DEVICES, DEVICES_IDS
@@ -607,11 +606,11 @@ def test_expand_setting_scaling(
             # MSE loss averages over number of output channels
             loss_term_factor *= output_random_variable_size
 
-        for block in kfac_sum.representation["canonical_op"]._blocks:
+        num_data = sum(X.shape[0] for X, _ in data)
+        _, K, _ = kfac_sum
+        for block in K:
             # Gradient covariance is always the first Kronecker factor
-            block._factors[0] = block._factors[0] / (
-                kfac_sum._N_data * loss_term_factor
-            )
+            block[0] = block[0] / (num_data * loss_term_factor)
     kfac_simulated_mean_mat = kfac_sum @ eye_like(kfac_sum)
 
     # KFAC with mean reduction
@@ -823,9 +822,10 @@ def test_forward_only_fisher_type(
         fisher_type=FisherType.EMPIRICAL,
     )
     # Manually set all gradient covariances to the identity to simulate FOOF
-    for block in foof_simulated.representation["canonical_op"]._blocks:
+    _, K, _ = foof_simulated
+    for block in K:
         # Gradient covariance is always the first Kronecker factor
-        block._factors[0] = eye_like(block._factors[0])
+        block[0] = eye_like(block[0])
     simulated_foof_mat = foof_simulated @ eye_like(foof_simulated)
 
     # Compute KFAC with `fisher_type=FisherType.FORWARD_ONLY`
@@ -1010,7 +1010,7 @@ def test_forward_only_fisher_type_exact_weight_sharing_case(
     assert allclose_report(ggn, 2 * scale * foof_mat, rtol=1e-4)
 
 
-def _check_does_not_affect_grad(linop_cls: Type[CurvatureLinearOperator]):
+def _check_does_not_affect_grad(linop_cls):
     """Make sure that computing a linear operator does not affect `.grad`.
 
     Args:
@@ -1145,12 +1145,12 @@ def test_KFAC_inverse_damped_matmat(
     inv_KFAC = KFAC.inverse(damping=delta)
 
     # Manually add damping to each Kronecker factor, materialize, invert
-    K = KFAC.representation["canonical_op"]
-    for block in K._blocks:
-        for idx, factor in enumerate(block._factors):
+    _, K, _ = KFAC
+    for block in K:
+        for idx in range(len(block)):
             # NOTE Needs out-of-place addition because some factors correspond to
             # the same tensors that would otherwise be damped multiple times
-            block._factors[idx] = factor + delta * eye_like(factor)
+            block[idx] = block[idx] + delta * eye_like(block[idx])
     inv_KFAC_naive = inv(KFAC @ eye_like(KFAC))
 
     compare_consecutive_matmats(inv_KFAC)
@@ -1197,11 +1197,10 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901
     # Manually add heuristic damping to each Kronecker factor
     # NOTE We cannot use in-place operations for this because some Kronecker factors
     # may correspond to identical tensors that would otherwise be damped multiple times.
-    K = KFAC.representation["canonical_op"]
-    for block in K._blocks:
-        factors = block._factors
-        if len(factors) == 2:
-            S1, S2 = factors  # ggT, aaT
+    _, K, _ = KFAC
+    for block in K:
+        if len(block) == 2:
+            S1, S2 = block[0], block[1]  # ggT, aaT
             mean_eig1, mean_eig2 = S1.diag().mean(), S2.diag().mean()
             if mean_eig1 > 0 and mean_eig2 >= 0:
                 sqrt_eig_mean_ratio = (mean_eig2 / mean_eig1).sqrt()
@@ -1210,10 +1209,10 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901
                 damping2 = max(sqrt_damping * sqrt_eig_mean_ratio, KFAC_MIN_DAMPING)
             else:
                 damping1, damping2 = delta, delta
-            factors[0] = S1 + damping1 * eye_like(S1)
-            factors[1] = S2 + damping2 * eye_like(S2)
+            block[0] = S1 + damping1 * eye_like(S1)
+            block[1] = S2 + damping2 * eye_like(S2)
         else:
-            factors[0] = factors[0] + delta * eye_like(factors[0])
+            block[0] = block[0] + delta * eye_like(block[0])
 
     inv_KFAC_naive = inv(KFAC @ eye_like(KFAC))
 

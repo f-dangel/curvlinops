@@ -594,9 +594,11 @@ def test_expand_setting_scaling(
         output_random_variable_size = 3
         # MSE loss averages over number of output channels
         loss_term_factor *= output_random_variable_size
-    correction = ekfac_sum._N_data * loss_term_factor
-    for block in ekfac_sum.representation["canonical_op"]._blocks:
-        block._eigenvalues = block._eigenvalues / correction
+    num_data = sum(X.shape[0] for X, _ in data)
+    correction = num_data * loss_term_factor
+    _, K, _ = ekfac_sum
+    for block in K:
+        block.eigenvalues = block.eigenvalues / correction
     ekfac_simulated_mean_mat = ekfac_sum @ eye_like(ekfac_sum)
 
     # EKFAC with mean reduction
