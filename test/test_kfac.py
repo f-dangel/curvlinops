@@ -1,6 +1,7 @@
 """Contains tests for ``curvlinops.kfac``."""
 
-from typing import Dict, Iterable, List, Tuple, Union
+from math import sqrt
+from typing import Dict, Iterable, List, Tuple, Type, Union
 
 from einops.layers.torch import Rearrange
 from pytest import mark
@@ -13,6 +14,7 @@ from torch import (
     rand,
     rand_like,
 )
+from torch.linalg import inv
 from torch.nn import (
     BCEWithLogitsLoss,
     CrossEntropyLoss,
@@ -25,6 +27,7 @@ from torch.nn import (
 )
 
 from curvlinops import EFLinearOperator, GGNLinearOperator
+from curvlinops._torch_base import CurvatureLinearOperator
 from curvlinops.kfac import FisherType, KFACLinearOperator, KFACType
 from curvlinops.utils import allclose_report
 from test.cases import DEVICES, DEVICES_IDS
@@ -103,10 +106,6 @@ def test_kfac_type2(
 
     assert allclose_report(ggn, kfac_mat)
 
-    # Check that input covariances were not computed
-    if exclude == "weight":
-        assert len(kfac.representation["input_covariances"]) == 0
-
 
 @mark.parametrize("setting", [KFACType.EXPAND, KFACType.REDUCE])
 @mark.parametrize(
@@ -174,10 +173,6 @@ def test_kfac_type2_weight_sharing(
     kfac_mat = kfac @ eye_like(kfac)
 
     assert allclose_report(ggn, kfac_mat)
-
-    # Check that input covariances were not computed
-    if exclude == "weight":
-        assert len(kfac.representation["input_covariances"]) == 0
 
 
 @mark.parametrize(
@@ -611,8 +606,12 @@ def test_expand_setting_scaling(
             output_random_variable_size = 3
             # MSE loss averages over number of output channels
             loss_term_factor *= output_random_variable_size
-        for ggT in kfac_sum.representation["gradient_covariances"].values():
-            ggT.div_(kfac_sum._N_data * loss_term_factor)
+
+        for block in kfac_sum.representation["canonical_op"]._blocks:
+            # Gradient covariance is always the first Kronecker factor
+            block._factors[0] = block._factors[0] / (
+                kfac_sum._N_data * loss_term_factor
+            )
     kfac_simulated_mean_mat = kfac_sum @ eye_like(kfac_sum)
 
     # KFAC with mean reduction
@@ -824,15 +823,9 @@ def test_forward_only_fisher_type(
         fisher_type=FisherType.EMPIRICAL,
     )
     # Manually set all gradient covariances to the identity to simulate FOOF
-    for name, block in foof_simulated.representation["gradient_covariances"].items():
-        foof_simulated.representation["gradient_covariances"][name] = eye_like(block)
-    # Re-construct the canonical operator
-    foof_simulated.representation["canonical_op"] = (
-        foof_simulated._setup_canonical_operator(
-            foof_simulated.representation["input_covariances"],
-            foof_simulated.representation["gradient_covariances"],
-        )
-    )
+    for block in foof_simulated.representation["canonical_op"]._blocks:
+        # Gradient covariance is always the first Kronecker factor
+        block._factors[0] = eye_like(block._factors[0])
     simulated_foof_mat = foof_simulated @ eye_like(foof_simulated)
 
     # Compute KFAC with `fisher_type=FisherType.FORWARD_ONLY`
@@ -847,19 +840,7 @@ def test_forward_only_fisher_type(
     )
     foof_mat = foof @ eye_like(foof)
 
-    # Check for equivalence
-    assert len(foof_simulated.representation["input_covariances"]) == len(
-        foof.representation["input_covariances"]
-    )
-    assert len(foof_simulated.representation["gradient_covariances"]) == len(
-        foof.representation["gradient_covariances"]
-    )
     assert allclose_report(simulated_foof_mat, foof_mat)
-
-    # Check that input covariances were not computed
-    if exclude == "weight":
-        assert len(foof_simulated.representation["input_covariances"]) == 0
-        assert len(foof.representation["input_covariances"]) == 0
 
 
 @mark.parametrize(
@@ -928,10 +909,6 @@ def test_forward_only_fisher_type_exact_case(
     # See the docstring for the explanation of the scale
     scale = num_data if loss_func.reduction == "sum" else 1 / out_dim
     assert allclose_report(ggn, 2 * scale * foof_mat)
-
-    # Check that input covariances were not computed
-    if exclude == "weight":
-        assert len(foof.representation["input_covariances"]) == 0
 
 
 @mark.parametrize("setting", [KFACType.EXPAND, KFACType.REDUCE])
@@ -1032,13 +1009,13 @@ def test_forward_only_fisher_type_exact_weight_sharing_case(
         scale *= sequence_length
     assert allclose_report(ggn, 2 * scale * foof_mat, rtol=1e-4)
 
-    # Check that input covariances were not computed
-    if exclude == "weight":
-        assert len(foof.representation["input_covariances"]) == 0
 
+def _check_does_not_affect_grad(linop_cls: Type[CurvatureLinearOperator]):
+    """Make sure that computing a linear operator does not affect `.grad`.
 
-def test_kfac_does_not_affect_grad():
-    """Make sure KFAC computation does not write to `.grad`."""
+    Args:
+        linop_cls: The linear operator class to test.
+    """
     manual_seed(0)
     batch_size, D_in, D_out = 4, 3, 2
     X = rand(batch_size, D_in)
@@ -1052,20 +1029,17 @@ def test_kfac_does_not_affect_grad():
     # make independent copies
     grads_before = [p.grad.clone() for p in params]
 
-    # create and compute KFAC
-    kfac = KFACLinearOperator(
-        model,
-        MSELoss(),
-        params,
-        [(X, y)],
-        # suppress computation of KFAC matrices
-        check_deterministic=False,
-    )
-    kfac.compute_kronecker_factors()
+    # create and compute the linear operator
+    _ = linop_cls(model, MSELoss(), params, [(X, y)])
 
     # make sure gradients are unchanged
     for grad_before, p in zip(grads_before, params):
         assert allclose(grad_before, p.grad)
+
+
+def test_kfac_does_not_affect_grad():
+    """Make sure KFAC computation does not write to `.grad`."""
+    _check_does_not_affect_grad(KFACLinearOperator)
 
 
 def test_save_and_load_state_dict():
@@ -1125,3 +1099,163 @@ def test_bug_132_dtype_deterministic_checks(dev: device):
 
     # run deterministic checks
     KFACLinearOperator(model, loss_func, params, data, check_deterministic=True)
+
+
+"""KFACLinearOperator.inverse() tests."""
+
+KFAC_MIN_DAMPING = 1e-8
+
+
+@mark.parametrize("fisher_type", KFACLinearOperator._SUPPORTED_FISHER_TYPE)
+@mark.parametrize(
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
+def test_KFAC_inverse_damped_matmat(
+    case: Tuple[
+        Module,
+        Union[MSELoss, CrossEntropyLoss],
+        List[Parameter],
+        Iterable[Tuple[Tensor, Tensor]],
+    ],
+    fisher_type: str,
+    exclude: str,
+    separate_weight_and_bias: bool,
+    shuffle: bool,
+    delta: float = 1e-2,
+):
+    """Test matrix-matrix multiplication by an inverse damped KFAC approximation."""
+    model_func, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
+    params = maybe_exclude_or_shuffle_parameters(params, model_func, exclude, shuffle)
+
+    KFAC = KFACLinearOperator(
+        model_func,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        separate_weight_and_bias=separate_weight_and_bias,
+        fisher_type=fisher_type,
+    )
+
+    # Invert KFAC linear operators
+    inv_KFAC = KFAC.inverse(damping=delta)
+
+    # Manually add damping to each Kronecker factor, materialize, invert
+    K = KFAC.representation["canonical_op"]
+    for block in K._blocks:
+        for idx, factor in enumerate(block._factors):
+            # NOTE Needs out-of-place addition because some factors correspond to
+            # the same tensors that would otherwise be damped multiple times
+            block._factors[idx] = factor + delta * eye_like(factor)
+    inv_KFAC_naive = inv(KFAC @ eye_like(KFAC))
+
+    compare_consecutive_matmats(inv_KFAC)
+    compare_matmat(inv_KFAC, inv_KFAC_naive)
+
+
+@mark.parametrize(
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
+def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901
+    case: Tuple[
+        Module,
+        Union[MSELoss, CrossEntropyLoss],
+        List[Parameter],
+        Iterable[Tuple[Tensor, Tensor]],
+    ],
+    exclude: str,
+    separate_weight_and_bias: bool,
+    shuffle: bool,
+    delta: float = 1e-2,
+):
+    """Test matrix-matrix multiplication by a heuristically damped KFAC inverse."""
+    model_func, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
+    params = maybe_exclude_or_shuffle_parameters(params, model_func, exclude, shuffle)
+
+    KFAC = KFACLinearOperator(
+        model_func,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        separate_weight_and_bias=separate_weight_and_bias,
+        check_deterministic=False,
+    )
+
+    inv_KFAC = KFAC.inverse(
+        damping=delta, use_heuristic_damping=True, min_damping=KFAC_MIN_DAMPING
+    )
+
+    # Manually add heuristic damping to each Kronecker factor
+    # NOTE We cannot use in-place operations for this because some Kronecker factors
+    # may correspond to identical tensors that would otherwise be damped multiple times.
+    K = KFAC.representation["canonical_op"]
+    for block in K._blocks:
+        factors = block._factors
+        if len(factors) == 2:
+            S1, S2 = factors  # ggT, aaT
+            mean_eig1, mean_eig2 = S1.diag().mean(), S2.diag().mean()
+            if mean_eig1 > 0 and mean_eig2 >= 0:
+                sqrt_eig_mean_ratio = (mean_eig2 / mean_eig1).sqrt()
+                sqrt_damping = sqrt(delta)
+                damping1 = max(sqrt_damping / sqrt_eig_mean_ratio, KFAC_MIN_DAMPING)
+                damping2 = max(sqrt_damping * sqrt_eig_mean_ratio, KFAC_MIN_DAMPING)
+            else:
+                damping1, damping2 = delta, delta
+            factors[0] = S1 + damping1 * eye_like(S1)
+            factors[1] = S2 + damping2 * eye_like(S2)
+        else:
+            factors[0] = factors[0] + delta * eye_like(factors[0])
+
+    inv_KFAC_naive = inv(KFAC @ eye_like(KFAC))
+
+    compare_consecutive_matmats(inv_KFAC)
+    compare_matmat(inv_KFAC, inv_KFAC_naive)
+
+
+@mark.parametrize(
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
+def test_KFAC_inverse_exactly_damped_matmat(
+    case: Tuple[
+        Module,
+        Union[MSELoss, CrossEntropyLoss],
+        List[Parameter],
+        Iterable[Tuple[Tensor, Tensor]],
+    ],
+    exclude: str,
+    separate_weight_and_bias: bool,
+    shuffle: bool,
+    delta: float = 1e-2,
+):
+    """Test matrix-matrix multiplication by an inverse (exactly) damped KFAC approximation."""
+    model_func, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
+    params = maybe_exclude_or_shuffle_parameters(params, model_func, exclude, shuffle)
+
+    KFAC = KFACLinearOperator(
+        model_func,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        separate_weight_and_bias=separate_weight_and_bias,
+    )
+
+    # Exact damped inverse: inv(KFAC + delta * I)
+    inv_KFAC_naive = inv(KFAC @ eye_like(KFAC) + delta * eye_like(KFAC))
+    inv_KFAC = KFAC.inverse(damping=delta, use_exact_damping=True)
+
+    compare_consecutive_matmats(inv_KFAC)
+    compare_matmat(inv_KFAC, inv_KFAC_naive)
