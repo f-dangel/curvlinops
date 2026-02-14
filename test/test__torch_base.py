@@ -272,6 +272,7 @@ def test_ChainPyTorchLinearOperator():
     CD_linop = _ChainPyTorchLinearOperator(C_linop, D_linop)
     ABCD_linop = AB_linop @ CD_linop
     assert isinstance(ABCD_linop, _ChainPyTorchLinearOperator)
+    compare_matmat(ABCD_linop, A @ B @ C @ D)
 
     # Try iterating over the chain linear operator
     assert all(
