@@ -11,7 +11,7 @@ from torch.linalg import eigh
 from torch.nn import Conv2d, Module
 from torch.utils.hooks import RemovableHandle
 
-from curvlinops._torch_base import PyTorchLinearOperator
+from curvlinops._torch_base import PyTorchLinearOperator, _ChainPyTorchLinearOperator
 from curvlinops.blockdiagonal import BlockDiagonalLinearOperator
 from curvlinops.eigh import EighDecomposedLinearOperator
 from curvlinops.kfac import FisherType, KFACLinearOperator
@@ -259,7 +259,7 @@ class EKFACLinearOperator(KFACLinearOperator):
 
     @property
     def representation(self) -> Dict[str, PyTorchLinearOperator]:
-        """Return EKFAC's internal representation (eigenvectors + corrected eigenvalues).
+        """Return EKFAC's internal representation.
 
         Returns:
             A dictionary containing the linear operators converting from parameter to
@@ -349,7 +349,7 @@ class EKFACLinearOperator(KFACLinearOperator):
         # EKFAC in the canonical basis
         return BlockDiagonalLinearOperator(blocks)
 
-    def inverse(self, damping: float = 0.0):
+    def inverse(self, damping: float = 0.0) -> _ChainPyTorchLinearOperator:
         """Return the inverse of the EKFAC approximation.
 
         Inverts each eigendecomposed block of the canonical operator
