@@ -517,7 +517,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
             Matrix-multiplication result ``KFAC @ M`` in tensor list format. Has the same
             shapes as the input.
         """
-P = self.representation["from_canonical_op"]
+        P = self.representation["from_canonical_op"]
         PT = self.representation["to_canonical_op"]
         K = self.representation["canonical_op"]
         kfac = P @ K @ PT
