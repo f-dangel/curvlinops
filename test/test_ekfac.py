@@ -596,7 +596,7 @@ def test_expand_setting_scaling(
         loss_term_factor *= output_random_variable_size
     num_data = sum(X.shape[0] for X, _ in data)
     correction = num_data * loss_term_factor
-    _, K, _ = ekfac_sum
+    K = ekfac_sum.representation["canonical_op"]
     for block in K:
         block.eigenvalues = block.eigenvalues / correction
     ekfac_simulated_mean_mat = ekfac_sum @ eye_like(ekfac_sum)

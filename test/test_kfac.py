@@ -607,7 +607,7 @@ def test_expand_setting_scaling(
             loss_term_factor *= output_random_variable_size
 
         num_data = sum(X.shape[0] for X, _ in data)
-        _, K, _ = kfac_sum
+        K = kfac_sum.representation["canonical_op"]
         for block in K:
             # Gradient covariance is always the first Kronecker factor
             block[0] = block[0] / (num_data * loss_term_factor)
@@ -822,7 +822,7 @@ def test_forward_only_fisher_type(
         fisher_type=FisherType.EMPIRICAL,
     )
     # Manually set all gradient covariances to the identity to simulate FOOF
-    _, K, _ = foof_simulated
+    K = foof_simulated.representation["canonical_op"]
     for block in K:
         # Gradient covariance is always the first Kronecker factor
         block[0] = eye_like(block[0])
@@ -1145,7 +1145,7 @@ def test_KFAC_inverse_damped_matmat(
     inv_KFAC = KFAC.inverse(damping=delta)
 
     # Manually add damping to each Kronecker factor, materialize, invert
-    _, K, _ = KFAC
+    K = KFAC.representation["canonical_op"]
     for block in K:
         for idx in range(len(block)):
             # NOTE Needs out-of-place addition because some factors correspond to
@@ -1197,7 +1197,7 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901
     # Manually add heuristic damping to each Kronecker factor
     # NOTE We cannot use in-place operations for this because some Kronecker factors
     # may correspond to identical tensors that would otherwise be damped multiple times.
-    _, K, _ = KFAC
+    K = KFAC.representation["canonical_op"]
     for block in K:
         if len(block) == 2:
             S1, S2 = block[0], block[1]  # ggT, aaT
