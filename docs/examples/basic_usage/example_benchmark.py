@@ -56,6 +56,7 @@ from curvlinops import (
     KFACLinearOperator,
 )
 from curvlinops._torch_base import PyTorchLinearOperator
+from curvlinops.examples import gradient_and_loss
 
 # %%
 #
@@ -385,7 +386,7 @@ def run_time_benchmark(  # noqa: C901
 
     # Select function that will be profiled
     def f_gradient_and_loss():
-        _ = base_linop.gradient_and_loss()
+        _ = gradient_and_loss(model, loss_function, params, data)
 
     def f_precompute():
         nonlocal linop

@@ -25,6 +25,7 @@ from torch import cuda, device, manual_seed, rand
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
 from curvlinops import EKFACLinearOperator, KFACLinearOperator
+from curvlinops.examples import gradient_and_loss
 
 
 def run_peakmem_benchmark(  # noqa: C901, PLR0915
@@ -54,12 +55,8 @@ def run_peakmem_benchmark(  # noqa: C901, PLR0915
         manual_seed(0)  # make deterministic
 
         model, loss_function, params, data = setup_problem(problem_str, linop_str, dev)
-        # NOTE Disable deterministic check as it will otherwise compute matvecs
-        base_linop = setup_linop(
-            linop_str, model, loss_function, params, data, check_deterministic=False
-        )
 
-        _ = base_linop.gradient_and_loss()
+        _ = gradient_and_loss(model, loss_function, params, data)
 
         if is_cuda:
             cuda.synchronize()
