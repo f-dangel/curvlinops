@@ -7,7 +7,11 @@ from typing import Iterable, Iterator, List, MutableMapping, Tuple, Union
 from pytest import raises
 from torch import Size, Tensor, linspace, manual_seed, rand, rand_like, randperm, zeros
 
-from curvlinops._torch_base import CurvatureLinearOperator, PyTorchLinearOperator
+from curvlinops._torch_base import (
+    CurvatureLinearOperator,
+    PyTorchLinearOperator,
+    _ChainPyTorchLinearOperator,
+)
 from curvlinops.examples import TensorLinearOperator
 from test.utils import compare_matmat
 
@@ -236,9 +240,44 @@ def test_ScalePyTorchLinearOperator():
 
 
 def test_ChainPyTorchLinearOperator():
-    """Test chaining two PyTorch linear operators."""
+    """Test chaining PyTorch linear operators."""
     manual_seed(0)
     A, B, C = linspace(1, 10, steps=20).reshape(5, 4), rand(4, 3), rand(3, 2)
     A_linop, B_linop, C_linop = [TensorLinearOperator(T) for T in [A, B, C]]
+    ABC_linop = A_linop @ B_linop @ C_linop
+    assert isinstance(ABC_linop, _ChainPyTorchLinearOperator)
+    compare_matmat(ABC_linop, A @ B @ C)
 
-    compare_matmat(A_linop @ B_linop @ C_linop, A @ B @ C)
+    # Try iterating over the chain linear operator
+    assert all(
+        T_iter is T_linop
+        for T_iter, T_linop in zip(ABC_linop, [A_linop, B_linop, C_linop], strict=True)
+    )
+
+    # Trigger error due to wrong dtype
+    with raises(ValueError, match="Dtype mismatch"):
+        _ = _ChainPyTorchLinearOperator(A_linop, TensorLinearOperator(B.int()), C_linop)
+
+    # Trigger error due to wrong shape
+    with raises(ValueError, match="Shape mismatch"):
+        _ = _ChainPyTorchLinearOperator(
+            A_linop, TensorLinearOperator(rand(4 + 1, 3 - 2)), C_linop
+        )
+
+    # Chaining together two chains results in a single chain
+    D = rand(2, 6)
+    D_linop = TensorLinearOperator(D)
+
+    AB_linop = _ChainPyTorchLinearOperator(A_linop, B_linop)
+    CD_linop = _ChainPyTorchLinearOperator(C_linop, D_linop)
+    ABCD_linop = AB_linop @ CD_linop
+    assert isinstance(ABCD_linop, _ChainPyTorchLinearOperator)
+    compare_matmat(ABCD_linop, A @ B @ C @ D)
+
+    # Try iterating over the chain linear operator
+    assert all(
+        T_iter is T_linop
+        for T_iter, T_linop in zip(
+            ABCD_linop, [A_linop, B_linop, C_linop, D_linop], strict=True
+        )
+    )
