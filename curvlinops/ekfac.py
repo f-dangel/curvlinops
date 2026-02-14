@@ -445,22 +445,22 @@ def _matmat(self, M: list[Tensor]) -> list[Tensor]:
             # restore original shapes
             if "weight" in param_pos:
                 KM[param_pos["weight"]] = KM[param_pos["weight"]].view(weight_shape)
+            @staticmethod
+            def _eigenvectors_(dictionary: dict[Any, Tensor]) -> dict[Any, Tensor]:
+                """Replace all matrix values with their eigenvalues (inplace).
 
-        return KM
-        @staticmethod
-        def _eigenvectors_(dictionary: dict[Any, Tensor]) -> dict[Any, Tensor]:
-            """Replace all matrix values with their eigenvalues (inplace).
+                Args:
+                    dictionary: A dictionary mapping module names to square matrices.
 
-            Args:
-                dictionary: A dictionary mapping module names to square matrices.
-
-            Returns:
-                The modified dictionary mapping module names to the eigenvectors of the
-                input matrices.
-            """
+                Returns:
+                    The modified dictionary mapping module names to the eigenvectors of the
+                    input matrices.
+                """
         for key, value in dictionary.items():
             dictionary[key] = eigh(value).eigenvectors
 
+        return KM
+         
         return dictionary
 
         def compute_eigenvalue_correction(

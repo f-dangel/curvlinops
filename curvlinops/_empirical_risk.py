@@ -219,7 +219,7 @@ class _EmpiricalRiskMixin:
 
         @staticmethod
         def _check_deterministic_batch(
-        Xs: tuple[Tensor | MutableMapping, Tensor | MutableMapping],
+        inputs: tuple[Tensor | MutableMapping, Tensor | MutableMapping],
         ys: tuple[Tensor, Tensor],
         predictions: tuple[Tensor, Tensor],
         losses: tuple[Tensor | None, Tensor | None],
@@ -231,7 +231,7 @@ class _EmpiricalRiskMixin:
             '''Compare two batch outputs of a data-prediction-loss-gradient pass.
 
             Args:
-                Xs: The two data inputs to compare.
+                inputs: The two data inputs to compare.
                 ys: The two data targets to compare.
                 predictions: The two predictions to compare.
                 losses: The two losses to compare.
@@ -243,7 +243,7 @@ class _EmpiricalRiskMixin:
             Raises:
                 RuntimeError: If any of the pairs mismatch.
             '''
-        X1, X2 = Xs
+        X1, X2 = inputs 
         if isinstance(X1, MutableMapping) and isinstance(X2, MutableMapping):
             for k in X1:
                 v1, v2 = X1[k], X2[k]
