@@ -4,11 +4,7 @@ from typing import (
     Callable,
     Iterable,
     Iterator,
-    List,
     MutableMapping,
-    Optional,
-    Tuple,
-    
 )
 
 from torch import Tensor, device, dtype, tensor, zeros_like
@@ -217,8 +213,8 @@ class _EmpiricalRiskMixin:
             ):
                 raise RuntimeError("Check for deterministic total gradient failed.")
 
-        @staticmethod
-        def _check_deterministic_batch(
+    @staticmethod
+    def _check_deterministic_batch(
         inputs: tuple[Tensor | MutableMapping, Tensor | MutableMapping],
         ys: tuple[Tensor, Tensor],
         predictions: tuple[Tensor, Tensor],
@@ -228,22 +224,22 @@ class _EmpiricalRiskMixin:
         rtol: float = 1e-5,
         atol: float = 1e-8,
     ):
-            '''Compare two batch outputs of a data-prediction-loss-gradient pass.
+        """Compare two batch outputs of a data-prediction-loss-gradient pass.
 
-            Args:
-                inputs: The two data inputs to compare.
-                ys: The two data targets to compare.
-                predictions: The two predictions to compare.
-                losses: The two losses to compare.
-                gradients: The two gradients to compare.
-                has_loss_func: Whether a loss function is present.
-                rtol: Relative tolerance for comparison. Default: ``1e-5``.
-                atol: Absolute tolerance for comparison. Default: ``1e-8``.
+        Args:
+            inputs: The two data inputs to compare.
+            ys: The two data targets to compare.
+            predictions: The two predictions to compare.
+            losses: The two losses to compare.
+            gradients: The two gradients to compare.
+            has_loss_func: Whether a loss function is present.
+            rtol: Relative tolerance for comparison. Default: ``1e-5``.
+            atol: Absolute tolerance for comparison. Default: ``1e-8``.
 
-            Raises:
-                RuntimeError: If any of the pairs mismatch.
-            '''
-        X1, X2 = inputs 
+        Raises:
+            RuntimeError: If any of the pairs mismatch.
+        """
+        X1, X2 = inputs
         if isinstance(X1, MutableMapping) and isinstance(X2, MutableMapping):
             for k in X1:
                 v1, v2 = X1[k], X2[k]

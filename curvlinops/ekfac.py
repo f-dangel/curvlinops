@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from functools import partial
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 from einops import einsum, rearrange
 from torch import Tensor, cat
@@ -257,7 +257,7 @@ class EKFACLinearOperator(KFACLinearOperator):
     )
 
     @property
-    def representation(self) -> Dict:
+    def representation(self) -> dict:
         """Return EKFAC's internal representation (eigenvectors + corrected eigenvalues).
 
         Returns:
@@ -303,9 +303,9 @@ class EKFACLinearOperator(KFACLinearOperator):
 
     def _setup_canonical_operator(
         self,
-        input_covariances_eigenvectors: Dict[str, Tensor],
-        gradient_covariances_eigenvectors: Dict[str, Tensor],
-        corrected_eigenvalues: Dict[str, Union[Tensor, Dict[int, Tensor]]],
+        input_covariances_eigenvectors: dict[str, Tensor],
+        gradient_covariances_eigenvectors: dict[str, Tensor],
+        corrected_eigenvalues: dict[str, Tensor, dict[int | Tensor]],
     ) -> BlockDiagonalLinearOperator:
         """Set up the canonical EKFAC operator from Kronecker factors.
 
@@ -380,7 +380,7 @@ class EKFACLinearOperator(KFACLinearOperator):
             )
         return output, y
 
-def _matmat(self, M: list[Tensor]) -> list[Tensor]:
+    def _matmat(self, M: list[Tensor]) -> list[Tensor]:
         """Apply EKFAC to a matrix (multiple vectors) in tensor list format.
 
         This allows for matrix-matrix products with the EKFAC approximation in PyTorch
@@ -445,40 +445,41 @@ def _matmat(self, M: list[Tensor]) -> list[Tensor]:
             # restore original shapes
             if "weight" in param_pos:
                 KM[param_pos["weight"]] = KM[param_pos["weight"]].view(weight_shape)
-            @staticmethod
-            def _eigenvectors_(dictionary: dict[Any, Tensor]) -> dict[Any, Tensor]:
-                """Replace all matrix values with their eigenvalues (inplace).
 
-                Args:
-                    dictionary: A dictionary mapping module names to square matrices.
+        return KM
 
-                Returns:
-                    The modified dictionary mapping module names to the eigenvectors of the
-                    input matrices.
-                """
+    @staticmethod
+    def _eigenvectors_(dictionary: dict[Any, Tensor]) -> dict[Any, Tensor]:
+        """Replace all matrix values with their eigenvalues (inplace).
+
+        Args:
+            dictionary: A dictionary mapping module names to square matrices.
+
+        Returns:
+            The modified dictionary mapping module names to the eigenvectors of the
+            input matrices.
+        """
         for key, value in dictionary.items():
             dictionary[key] = eigh(value).eigenvectors
 
-        return KM
-         
         return dictionary
 
-        def compute_eigenvalue_correction(
+    def compute_eigenvalue_correction(
         self,
         input_covariances_eigenvectors: dict[str, Tensor],
         gradient_covariances_eigenvectors: dict[str, Tensor],
     ) -> dict[str, Tensor | dict[int | Tensor]]:
-            """Compute the corrected eigenvalues for EKFAC.
+        """Compute the corrected eigenvalues for EKFAC.
 
-            Args:
-                input_covariances_eigenvectors: Dictionary mapping module names to input
-                    covariance eigenvectors.
-                gradient_covariances_eigenvectors: Dictionary mapping module names to
-                    gradient covariance eigenvectors.
+        Args:
+            input_covariances_eigenvectors: Dictionary mapping module names to input
+                covariance eigenvectors.
+            gradient_covariances_eigenvectors: Dictionary mapping module names to
+                gradient covariance eigenvectors.
 
-            Returns:
-                Dictionary containing corrected eigenvalues for each module.
-            """
+        Returns:
+            Dictionary containing corrected eigenvalues for each module.
+        """
         # Create empty dictionary to be populated by hooks
         corrected_eigenvalues: dict[str, Tensor | dict[int | Tensor]] = {}
 
@@ -515,7 +516,7 @@ def _matmat(self, M: list[Tensor]) -> list[Tensor]:
 
         return corrected_eigenvalues
 
-        def _register_tensor_hook_on_output_to_accumulate_corrected_eigenvalues(
+    def _register_tensor_hook_on_output_to_accumulate_corrected_eigenvalues(
         self,
         module: Module,
         inputs: tuple[Tensor],
@@ -525,31 +526,31 @@ def _matmat(self, M: list[Tensor]) -> list[Tensor]:
         gradient_covariances_eigenvectors: dict[str, Tensor],
         corrected_eigenvalues: dict[str, Tensor | dict[int | Tensor]],
     ):
-            """Register tensor hook on layer's output to accumulate the corrected eigenvalues.
+        """Register tensor hook on layer's output to accumulate the corrected eigenvalues.
 
-            Note:
-                The easier way to compute the corrected eigenvalues would be via a full
-                backward hook on the module itself which performs the computation.
-                However, this approach breaks down if the output of a layer feeds into an
-                activation with `inplace=True` (see
-                https://github.com/pytorch/pytorch/issues/61519). Hence we use the
-                workaround
-                https://github.com/pytorch/pytorch/issues/61519#issuecomment-883524237, and
-                install a module hook which installs a tensor hook on the module's output
-                tensor, which performs the accumulation of the gradient covariance.
+        Note:
+            The easier way to compute the corrected eigenvalues would be via a full
+            backward hook on the module itself which performs the computation.
+            However, this approach breaks down if the output of a layer feeds into an
+            activation with `inplace=True` (see
+            https://github.com/pytorch/pytorch/issues/61519). Hence we use the
+            workaround
+            https://github.com/pytorch/pytorch/issues/61519#issuecomment-883524237, and
+            install a module hook which installs a tensor hook on the module's output
+            tensor, which performs the accumulation of the gradient covariance.
 
-            Args:
-                module: Layer onto whose output a tensor hook to accumulate the corrected
-                    eigenvalues will be installed.
-                inputs: The layer's input tensors.
-                output: The layer's output tensor.
-                module_name: The name of the layer in the neural network.
-                input_covariances_eigenvectors: Dictionary containing input covariance
-                    eigenvectors.
-                gradient_covariances_eigenvectors: Dictionary containing gradient
-                    covariance eigenvectors.
-                corrected_eigenvalues: Dictionary to store corrected eigenvalues.
-            """
+        Args:
+            module: Layer onto whose output a tensor hook to accumulate the corrected
+                eigenvalues will be installed.
+            inputs: The layer's input tensors.
+            output: The layer's output tensor.
+            module_name: The name of the layer in the neural network.
+            input_covariances_eigenvectors: Dictionary containing input covariance
+                eigenvectors.
+            gradient_covariances_eigenvectors: Dictionary containing gradient
+                covariance eigenvectors.
+            corrected_eigenvalues: Dictionary to store corrected eigenvalues.
+        """
         tensor_hook = partial(
             self._accumulate_corrected_eigenvalues,
             module=module,
@@ -561,7 +562,7 @@ def _matmat(self, M: list[Tensor]) -> list[Tensor]:
         )
         output.register_hook(tensor_hook)
 
-        def _accumulate_corrected_eigenvalues(
+    def _accumulate_corrected_eigenvalues(
         self,
         grad_output: Tensor,
         module: Module,
@@ -571,31 +572,31 @@ def _matmat(self, M: list[Tensor]) -> list[Tensor]:
         corrected_eigenvalues: dict[str, Tensor | dict[int | Tensor]],
         inputs: tuple[Tensor],
     ):
-            r"""Accumulate the corrected eigenvalues.
+        r"""Accumulate the corrected eigenvalues.
 
-            The corrected eigenvalues are computed as
-            :math:`\lambda_{\text{corrected}} = (Q_g^T G Q_a)^2`, where
-            :math:`Q_a` and :math:`Q_g` are the eigenvectors of the input and gradient
-            covariances, respectively, and ``G`` is the gradient matrix. The corrected
-            eigenvalues are used to correct the eigenvalues of the KFAC approximation
-            (EKFAC).
+        The corrected eigenvalues are computed as
+        :math:`\lambda_{\text{corrected}} = (Q_g^T G Q_a)^2`, where
+        :math:`Q_a` and :math:`Q_g` are the eigenvectors of the input and gradient
+        covariances, respectively, and ``G`` is the gradient matrix. The corrected
+        eigenvalues are used to correct the eigenvalues of the KFAC approximation
+        (EKFAC).
 
-            Updates the provided ``corrected_eigenvalues`` dictionary.
+        Updates the provided ``corrected_eigenvalues`` dictionary.
 
-            Args:
-                grad_output: The gradient w.r.t. the output.
-                module: The layer for which corrected eigenvalues will be accumulated.
-                module_name: The name of the layer in the neural network.
-                input_covariances_eigenvectors: Dictionary containing input covariance
-                    eigenvectors.
-                gradient_covariances_eigenvectors: Dictionary containing gradient
-                    covariance eigenvectors.
-                corrected_eigenvalues: Dictionary to store corrected eigenvalues.
-                inputs: A tuple containing the layer's inputs.
+        Args:
+            grad_output: The gradient w.r.t. the output.
+            module: The layer for which corrected eigenvalues will be accumulated.
+            module_name: The name of the layer in the neural network.
+            input_covariances_eigenvectors: Dictionary containing input covariance
+                eigenvectors.
+            gradient_covariances_eigenvectors: Dictionary containing gradient
+                covariance eigenvectors.
+            corrected_eigenvalues: Dictionary to store corrected eigenvalues.
+            inputs: A tuple containing the layer's inputs.
 
-            Raises:
-                ValueError: If the module has multiple inputs.
-            """
+        Raises:
+            ValueError: If the module has multiple inputs.
+        """
         g = grad_output.data.detach()
         batch_size = g.shape[0]
         if isinstance(module, Conv2d):
