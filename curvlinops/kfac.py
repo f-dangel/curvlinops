@@ -22,17 +22,7 @@ from collections.abc import MutableMapping
 from enum import Enum, EnumMeta
 from functools import partial
 from math import sqrt
-from typing import (
-    Any,
-    Callable,
-    Dict,
-    Iterable,
-    List,
-    Optional,
-    Tuple,
-    TypeVar,
-    Union,
-)
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 from warnings import warn
 
 from einops import einsum, rearrange, reduce
@@ -50,7 +40,11 @@ from torch.nn import (
 )
 from torch.utils.hooks import RemovableHandle
 
-from curvlinops._torch_base import CurvatureLinearOperator
+from curvlinops._torch_base import (
+    CurvatureLinearOperator,
+    PyTorchLinearOperator,
+    _ChainPyTorchLinearOperator,
+)
 from curvlinops.blockdiagonal import BlockDiagonalLinearOperator
 from curvlinops.kfac_utils import (
     ToCanonicalLinearOperator,
@@ -329,9 +323,9 @@ class KFACLinearOperator(CurvatureLinearOperator):
         This attribute is lazily evaluated and cached after the first access.
 
         Returns:
-            A dictionary containing the Kronecker factors with keys "input_covariances" and
-            "gradient_covariances". Each of those is a dictionary mapping module names to
-            their respective Kronecker factors.
+            A dictionary containing the linear operators converting from parameter to
+            canonical space and back, as well as the canonical KFAC operator (block-
+            diagonal Kronecker-factored).
         """
         if self._representation is None:
             input_covariances, gradient_covariances = self.compute_kronecker_factors()
@@ -351,10 +345,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
             from_canonical_op = to_canonical_op.adjoint()
 
             self._representation = {
-                # NOTE We should remove the covariance dictionaries in the final refactoring.
-                # They are still in here now to keep KFACInverseLinearOperator functioning.
-                "input_covariances": input_covariances,
-                "gradient_covariances": gradient_covariances,
                 "canonical_op": canonical_op,
                 "to_canonical_op": to_canonical_op,
                 "from_canonical_op": from_canonical_op,
@@ -577,9 +567,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
         # Handle FORWARD_ONLY case by setting gradient covariances to identity
         if self._fisher_type == FisherType.FORWARD_ONLY:
             # We choose to set the gradient covariance to the identity explicitly
-            # for the sake of simplicity, such that the rest of the code here and
-            # for `KFACInverseLinearOperator` does not have to be adapted. This
-            # could be changed to decrease the memory costs.
+            # for the sake of simplicity, but this could be done more efficiently.
             for mod_name, param_pos in self._mapping.items():
                 # We iterate over _mapping to get the module names corresponding
                 # to the parameters. We only need the output dimension of the
@@ -978,7 +966,50 @@ class KFACLinearOperator(CurvatureLinearOperator):
         """
         return self.representation["canonical_op"].frobenius_norm()
 
-    def state_dict(self) -> dict[str, Any]:
+    def inverse(
+        self,
+        damping: float = 0.0,
+        use_heuristic_damping: bool = False,
+        min_damping: float = 1e-8,
+        use_exact_damping: bool = False,
+        retry_double_precision: bool = True,
+    ) -> _ChainPyTorchLinearOperator:
+        r"""Return the inverse of the KFAC approximation.
+
+        Inverts each Kronecker-factored block of the canonical operator
+        and returns the result in parameter space.
+
+        Args:
+            damping: Damping value applied to all Kronecker factors. Default: ``0.0``.
+            use_heuristic_damping: Whether to use a heuristic damping strategy by
+                `Martens and Grosse, 2015 <https://arxiv.org/abs/1503.05671>`_
+                (Section 6.3). Only supported for one or two factors.
+            min_damping: Minimum damping value. Only used if
+                ``use_heuristic_damping`` is ``True``.
+            use_exact_damping: Whether to use exact damping, i.e. to invert
+                :math:`(A \\otimes B) + \\text{damping}\\; \\mathbf{I}`.
+            retry_double_precision: Whether to retry Cholesky decomposition used for
+                inversion in double precision.
+
+        Returns:
+            Inverse of the KFAC approximation as a linear operator ``P @ K^-1 @ PT``.
+        """
+        P = self.representation["from_canonical_op"]
+        PT = self.representation["to_canonical_op"]
+        K = self.representation["canonical_op"]
+        K_inv = BlockDiagonalLinearOperator([
+            block.inverse(
+                damping=damping,
+                use_heuristic_damping=use_heuristic_damping,
+                min_damping=min_damping,
+                use_exact_damping=use_exact_damping,
+                retry_double_precision=retry_double_precision,
+            )
+            for block in K._blocks
+        ])
+        return P @ K_inv @ PT
+
+    def state_dict(self) -> Dict[str, Any]:
         """Return the state of the KFAC linear operator.
 
         Returns:
@@ -1069,11 +1100,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
         self._separate_weight_and_bias = state_dict["separate_weight_and_bias"]
         self._N_data = state_dict["num_data"]
         self._representation = state_dict["_representation"]
-
-        # Check representation dictionaries
-        for key, rep in state_dict["_representation"].items():
-            if "covariances" in key:
-                self._check_if_keys_match_mapping_keys(rep)
 
     @classmethod
     def from_state_dict(

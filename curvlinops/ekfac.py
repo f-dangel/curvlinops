@@ -11,6 +11,7 @@ from torch.linalg import eigh
 from torch.nn import Conv2d, Module
 from torch.utils.hooks import RemovableHandle
 
+from curvlinops._torch_base import PyTorchLinearOperator, _ChainPyTorchLinearOperator
 from curvlinops.blockdiagonal import BlockDiagonalLinearOperator
 from curvlinops.eigh import EighDecomposedLinearOperator
 from curvlinops.kfac import FisherType, KFACLinearOperator
@@ -261,8 +262,9 @@ class EKFACLinearOperator(KFACLinearOperator):
         """Return EKFAC's internal representation (eigenvectors + corrected eigenvalues).
 
         Returns:
-            A dictionary containing the eigenvectors of the input and gradient covariances
-            and the corrected eigenvalues for each module.
+            A dictionary containing the linear operators converting from parameter to
+            canonical space and back, as well as the canonical KFAC operator (block-
+            diagonal Kronecker-factored).
         """
         if self._representation is None:
             input_covariances_eigenvectors, gradient_covariances_eigenvectors = [
@@ -290,11 +292,6 @@ class EKFACLinearOperator(KFACLinearOperator):
             from_canonical_op = to_canonical_op.adjoint()
 
             self._representation = {
-                # NOTE We should remove the covariance dictionaries in the final refactoring.
-                # They are still in here now to keep KFACInverseLinearOperator functioning.
-                "input_covariances_eigenvectors": input_covariances_eigenvectors,
-                "gradient_covariances_eigenvectors": gradient_covariances_eigenvectors,
-                "corrected_eigenvalues": corrected_eigenvalues,
                 "canonical_op": canonical_op,
                 "to_canonical_op": to_canonical_op,
                 "from_canonical_op": from_canonical_op,
@@ -351,6 +348,27 @@ class EKFACLinearOperator(KFACLinearOperator):
         ]
         # EKFAC in the canonical basis
         return BlockDiagonalLinearOperator(blocks)
+
+    def inverse(self, damping: float = 0.0) -> _ChainPyTorchLinearOperator:
+        """Return the inverse of the EKFAC approximation.
+
+        Inverts each eigendecomposed block of the canonical operator
+        and returns the result in parameter space.
+
+        Args:
+            damping: Damping term added to eigenvalues before inversion.
+                Default: ``0.0``.
+
+        Returns:
+            Inverse of the EKFAC approximation as a linear operator.
+        """
+        P = self.representation["from_canonical_op"]
+        PT = self.representation["to_canonical_op"]
+        K = self.representation["canonical_op"]
+        K_inv = BlockDiagonalLinearOperator([
+            block.inverse(damping=damping) for block in K._blocks
+        ])
+        return P @ K_inv @ PT
 
     def _rearrange_for_larger_than_2d_output(
         self, output: Tensor, y: Tensor

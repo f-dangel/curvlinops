@@ -4,16 +4,8 @@ from typing import Dict, Iterable, List, Tuple, Union
 
 from einops.layers.torch import Rearrange
 from pytest import mark, raises
-from torch import (
-    Tensor,
-    allclose,
-    device,
-    float64,
-    manual_seed,
-    rand,
-    rand_like,
-)
-from torch.linalg import qr
+from torch import Tensor, device, float64, manual_seed, rand
+from torch.linalg import inv, qr
 from torch.nn import (
     BCEWithLogitsLoss,
     CrossEntropyLoss,
@@ -32,7 +24,7 @@ from curvlinops.ekfac import (
 from curvlinops.kfac import FisherType, KFACType
 from curvlinops.utils import allclose_report
 from test.cases import DEVICES, DEVICES_IDS
-from test.test_kfac import MC_SAMPLES, MC_TOLS
+from test.test_kfac import MC_SAMPLES, MC_TOLS, _check_does_not_affect_grad
 from test.utils import (
     Conv2dModel,
     UnetModel,
@@ -46,6 +38,8 @@ from test.utils import (
     block_diagonal,
     change_dtype,
     classification_targets,
+    compare_consecutive_matmats,
+    compare_matmat,
     eye_like,
     maybe_exclude_or_shuffle_parameters,
     regression_targets,
@@ -104,10 +98,6 @@ def test_ekfac_type2(
     ekfac_mat = ekfac @ eye_like(ekfac)
 
     assert allclose_report(ggn, ekfac_mat)
-
-    # Check that input covariances were not computed
-    if exclude == "weight":
-        assert len(ekfac.representation["input_covariances_eigenvectors"]) == 0
 
 
 @mark.parametrize("setting", [KFACType.EXPAND, KFACType.REDUCE])
@@ -182,10 +172,6 @@ def test_ekfac_type2_weight_sharing(
     ekfac_mat = ekfac @ eye_like(ekfac)
 
     assert allclose_report(ggn, ekfac_mat)
-
-    # Check that input covariances were not computed
-    if exclude == "weight":
-        assert len(ekfac.representation["input_covariances_eigenvectors"]) == 0
 
 
 @mark.parametrize(
@@ -313,7 +299,6 @@ def test_ekfac_mc_weight_sharing(
         mc_samples=MC_SAMPLES,
         kfac_approx=setting,  # choose EKFAC approximation consistent with setting
         separate_weight_and_bias=separate_weight_and_bias,
-        check_deterministic=False,
     )
     ekfac_mat = ekfac @ eye_like(ekfac)
 
@@ -610,12 +595,8 @@ def test_expand_setting_scaling(
         # MSE loss averages over number of output channels
         loss_term_factor *= output_random_variable_size
     correction = ekfac_sum._N_data * loss_term_factor
-    for eigenvalues in ekfac_sum.representation["corrected_eigenvalues"].values():
-        if isinstance(eigenvalues, dict):
-            for eigenvals in eigenvalues.values():
-                eigenvals /= correction
-        else:
-            eigenvalues /= correction
+    for block in ekfac_sum.representation["canonical_op"]._blocks:
+        block._eigenvalues = block._eigenvalues / correction
     ekfac_simulated_mean_mat = ekfac_sum @ eye_like(ekfac_sum)
 
     # EKFAC with mean reduction
@@ -761,33 +742,7 @@ def test_logdet(
 
 def test_ekfac_does_not_affect_grad():
     """Make sure EKFAC computation does not write to `.grad`."""
-    manual_seed(0)
-    batch_size, D_in, D_out = 4, 3, 2
-    X = rand(batch_size, D_in)
-    y = rand(batch_size, D_out)
-    model = Linear(D_in, D_out)
-
-    params = list(model.parameters())
-    # set gradients to random numbers
-    for p in params:
-        p.grad = rand_like(p)
-    # make independent copies
-    grads_before = [p.grad.clone() for p in params]
-
-    # create and compute EKFAC
-    ekfac = EKFACLinearOperator(
-        model,
-        MSELoss(),
-        params,
-        [(X, y)],
-        # suppress computation of EKFAC matrices
-        check_deterministic=False,
-    )
-    _ = ekfac.representation
-
-    # make sure gradients are unchanged
-    for grad_before, p in zip(grads_before, params):
-        assert allclose(grad_before, p.grad)
+    _check_does_not_affect_grad(EKFACLinearOperator)
 
 
 def test_save_and_load_state_dict():
@@ -906,3 +861,46 @@ def test_compute_eigenvalue_correction_linear_weight_sharing():
         compute_eigenvalue_correction_linear_weight_sharing(
             g, ggT_eigvecs, None, aaT_eigvecs
         )
+
+
+"""EKFACLinearOperator.inverse() tests."""
+
+
+@mark.parametrize(
+    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+)
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
+def test_EKFAC_inverse_exactly_damped_matmat(
+    inv_case: Tuple[
+        Module,
+        Union[MSELoss, CrossEntropyLoss],
+        List[Parameter],
+        Iterable[Tuple[Tensor, Tensor]],
+    ],
+    exclude: str,
+    separate_weight_and_bias: bool,
+    shuffle: bool,
+    delta: float = 1e-2,
+):
+    """Test matrix-matrix multiplication by an inverse (exactly) damped EKFAC approximation."""
+    model_func, loss_func, params, data, batch_size_fn = change_dtype(inv_case, float64)
+    params = maybe_exclude_or_shuffle_parameters(params, model_func, exclude, shuffle)
+
+    EKFAC = EKFACLinearOperator(
+        model_func,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        separate_weight_and_bias=separate_weight_and_bias,
+    )
+
+    # Exact damped inverse: inv(EKFAC + delta * I)
+    inv_EKFAC_naive = inv(EKFAC @ eye_like(EKFAC) + delta * eye_like(EKFAC))
+    inv_EKFAC = EKFAC.inverse(damping=delta)
+
+    compare_consecutive_matmats(inv_EKFAC)
+    compare_matmat(inv_EKFAC, inv_EKFAC_naive)

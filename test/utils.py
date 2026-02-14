@@ -903,22 +903,12 @@ def _test_property(  # noqa: C901
     # Add damping manually to avoid singular matrices for logdet
     if property_name == "logdet":
         DELTA = 1e-3
-        if type(linop) is KFACLinearOperator:
-            assert (
-                linop.representation["input_covariances"]
-                or linop.representation["gradient_covariances"]
-            )
-            for aaT in linop.representation["input_covariances"].values():
-                aaT.add_(eye_like(aaT), alpha=DELTA)
-            for ggT in linop.representation["gradient_covariances"].values():
-                ggT.add_(eye_like(ggT), alpha=DELTA)
-        elif type(linop) is EKFACLinearOperator:
-            for eigenvalues in linop.representation["corrected_eigenvalues"].values():
-                if isinstance(eigenvalues, dict):
-                    for eigenvals in eigenvalues.values():
-                        eigenvals.add_(DELTA)
-                else:
-                    eigenvalues.add_(DELTA)
+        for block in linop.representation["canonical_op"]._blocks:
+            if type(linop) is KFACLinearOperator:
+                for idx, factor in enumerate(block._factors):
+                    block._factors[idx] = factor + DELTA * eye_like(factor)
+            elif type(linop) is EKFACLinearOperator:
+                block._eigenvalues = block._eigenvalues + DELTA
 
     # Mapping from the property name to the corresponding torch function
     torch_fn = {

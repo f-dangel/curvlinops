@@ -2,27 +2,12 @@
 
 from __future__ import annotations
 
-from math import sqrt
-from typing import Any, Dict, List, Optional, Tuple, TypeVar, Union
-from warnings import warn
+from typing import List
 
-from einops import rearrange
 from linear_operator.utils.linear_cg import linear_cg
 from numpy import column_stack
 from scipy.sparse.linalg import lsmr
-from torch import (
-    Tensor,
-    as_tensor,
-    cat,
-    cholesky_inverse,
-    device,
-    dtype,
-    eye,
-    float64,
-    isnan,
-    outer,
-)
-from torch.linalg import cholesky, eigh
+from torch import Tensor, as_tensor, cat, device, dtype, isnan
 
 from curvlinops._torch_base import PyTorchLinearOperator
 from curvlinops.ekfac import EKFACLinearOperator

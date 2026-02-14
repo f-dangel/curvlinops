@@ -1,45 +1,24 @@
 """Contains tests for ``curvlinops/inverse``."""
 
-import os
-from math import sqrt
-from typing import Iterable, List, Tuple, Union
-
-from pytest import mark, raises
-from torch import Tensor, float64, load, manual_seed, rand, save
+from pytest import raises
+from torch import Tensor, float64, manual_seed
 from torch.linalg import inv
-from torch.nn import (
-    CrossEntropyLoss,
-    Linear,
-    Module,
-    MSELoss,
-    Parameter,
-    ReLU,
-    Sequential,
-)
 
 from curvlinops import (
     CGInverseLinearOperator,
-    EKFACLinearOperator,
     GGNLinearOperator,
-    KFACInverseLinearOperator,
-    KFACLinearOperator,
     LSMRInverseLinearOperator,
     NeumannInverseLinearOperator,
 )
 from curvlinops.examples import IdentityLinearOperator
 from curvlinops.examples.functorch import functorch_ggn
-from curvlinops.utils import allclose_report
 from test.test__torch_base import TensorLinearOperator
 from test.utils import (
     change_dtype,
     compare_consecutive_matmats,
     compare_matmat,
-    compare_state_dicts,
     eye_like,
-    maybe_exclude_or_shuffle_parameters,
 )
-
-KFAC_MIN_DAMPING = 1e-8
 
 
 def test_CGInverseLinearOperator_damped_GGN(inv_case, delta_rel: float = 2e-2):

@@ -24,11 +24,7 @@ from memory_profiler import memory_usage
 from torch import cuda, device, manual_seed, rand
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
-from curvlinops import (
-    EKFACLinearOperator,
-    KFACInverseLinearOperator,
-    KFACLinearOperator,
-)
+from curvlinops import EKFACLinearOperator, KFACLinearOperator
 
 
 def run_peakmem_benchmark(  # noqa: C901, PLR0915
@@ -52,20 +48,18 @@ def run_peakmem_benchmark(  # noqa: C901, PLR0915
 
     dev = device(device_str)
     is_cuda = "cuda" in str(dev)
+    is_inverse = linop_str in {"KFAC inverse", "EKFAC inverse"}
 
     def f_gradient_and_loss():
         manual_seed(0)  # make deterministic
 
         model, loss_function, params, data = setup_problem(problem_str, linop_str, dev)
         # NOTE Disable deterministic check as it will otherwise compute matvecs
-        linop = setup_linop(
+        base_linop = setup_linop(
             linop_str, model, loss_function, params, data, check_deterministic=False
         )
 
-        if isinstance(linop, KFACInverseLinearOperator):
-            _ = linop._A.gradient_and_loss()
-        else:
-            _ = linop.gradient_and_loss()
+        _ = base_linop.gradient_and_loss()
 
         if is_cuda:
             cuda.synchronize()
@@ -75,17 +69,14 @@ def run_peakmem_benchmark(  # noqa: C901, PLR0915
 
         model, loss_function, params, data = setup_problem(problem_str, linop_str, dev)
         # NOTE Disable deterministic check as it will otherwise compute matvecs
-        linop = setup_linop(
+        base_linop = setup_linop(
             linop_str, model, loss_function, params, data, check_deterministic=False
         )
 
-        if isinstance(linop, (KFACLinearOperator, EKFACLinearOperator)):
-            linop.refresh_representation()
-        if isinstance(linop, KFACInverseLinearOperator):
-            linop._A.refresh_representation()
-            # damp and invert the Kronecker matrices
-            for mod_name in linop._A._mapping:
-                linop._compute_or_get_cached_inverse(mod_name)
+        if isinstance(base_linop, (KFACLinearOperator, EKFACLinearOperator)):
+            base_linop.refresh_representation()
+        if is_inverse:
+            base_linop.inverse(damping=1e-3)
 
         if is_cuda:
             cuda.synchronize()
@@ -95,18 +86,15 @@ def run_peakmem_benchmark(  # noqa: C901, PLR0915
 
         model, loss_function, params, data = setup_problem(problem_str, linop_str, dev)
         # NOTE Disable deterministic check as it will otherwise compute matvecs
-        linop = setup_linop(
+        base_linop = setup_linop(
             linop_str, model, loss_function, params, data, check_deterministic=False
         )
-        v = rand(linop.shape[1], device=dev)
 
-        if isinstance(linop, (KFACLinearOperator, EKFACLinearOperator)):
-            linop.refresh_representation()
-        if isinstance(linop, KFACInverseLinearOperator):
-            linop._A.refresh_representation()
-            # damp and invert the Kronecker matrices
-            for mod_name in linop._A._mapping:
-                linop._compute_or_get_cached_inverse(mod_name)
+        if isinstance(base_linop, (KFACLinearOperator, EKFACLinearOperator)):
+            base_linop.refresh_representation()
+        linop = base_linop.inverse(damping=1e-3) if is_inverse else base_linop
+
+        v = rand(linop.shape[1], device=dev)
 
         # Double-backward through efficient attention is unsupported, disable fused kernels
         # (https://github.com/pytorch/pytorch/issues/116350#issuecomment-1954667011)
