@@ -1,7 +1,7 @@
 """Contains tests for ``curvlinops.kfac``."""
 
 from math import sqrt
-from typing import Dict, Iterable, List, Tuple, Type, Union
+from typing import Dict, Iterable, List, Tuple, Union
 
 from einops.layers.torch import Rearrange
 from pytest import mark
