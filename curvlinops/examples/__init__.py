@@ -2,12 +2,51 @@
 
 from __future__ import annotations
 
-from typing import List, Tuple
+from collections.abc import MutableMapping
+from typing import Callable, Iterable, List, Optional, Tuple, Union
 
 from torch import Tensor, device, dtype, einsum, ones
+from torch.nn import Module, Parameter
 
+from curvlinops._empirical_risk import _EmpiricalRiskMixin
 from curvlinops._torch_base import PyTorchLinearOperator
 from curvlinops.diag import DiagonalLinearOperator
+
+
+def gradient_and_loss(
+    model_func: Module,
+    loss_func: Module,
+    params: List[Parameter],
+    data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
+    batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
+    num_data: Optional[int] = None,
+) -> Tuple[List[Tensor], Tensor]:
+    """Evaluate the gradient and loss on a data set.
+
+    Args:
+        model_func: The neural network.
+        loss_func: The loss function.
+        params: List of differentiable parameters.
+        data: Source from which mini-batches can be drawn, for instance a list of
+            mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
+        batch_size_fn: Function that returns the batch size given an input ``X``.
+            If ``None``, defaults to ``X.shape[0]``.
+        num_data: Total number of data points. If ``None``, it is inferred from
+            the data at the cost of one traversal through the data loader.
+
+    Returns:
+        Tuple of (gradient, loss) accumulated over the full data set.
+    """
+    mixin = _EmpiricalRiskMixin(
+        model_func,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        num_data=num_data,
+        check_deterministic=False,
+    )
+    return mixin._gradient_and_loss()
 
 
 class TensorLinearOperator(PyTorchLinearOperator):

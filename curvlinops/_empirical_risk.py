@@ -369,7 +369,7 @@ class _EmpiricalRiskMixin:
 
             yield (X, y), prediction, loss, grad_params
 
-    def gradient_and_loss(self) -> Tuple[List[Tensor], Tensor]:
+    def _gradient_and_loss(self) -> Tuple[List[Tensor], Tensor]:
         """Evaluate the gradient and loss on the data.
 
         Returns:
