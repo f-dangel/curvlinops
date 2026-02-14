@@ -1,7 +1,7 @@
 """Contains tests for ``curvlinops/inverse``."""
 
 from pytest import mark, raises
-from torch import Tensor, cuda, float64, manual_seed, rand
+from torch import Tensor, cuda, float64, manual_seed, rand, randn
 from torch.linalg import inv
 
 from curvlinops import (
@@ -19,6 +19,18 @@ from test.utils import (
     compare_matmat,
     eye_like,
 )
+
+
+class _CountingTensorLinearOperator(TensorLinearOperator):
+    """Tensor linear operator that counts `_matmat` calls for efficiency tests."""
+
+    def __init__(self, A: Tensor):
+        super().__init__(A)
+        self.num_matmats = 0
+
+    def _matmat(self, X):
+        self.num_matmats += 1
+        return super()._matmat(X)
 
 
 def test_CGInverseLinearOperator_damped_GGN(inv_case, delta_rel: float = 2e-2):
@@ -188,6 +200,79 @@ def test_inverse_preconditioner_shape_mismatch_raises():
         NeumannInverseLinearOperator(
             TensorLinearOperator(A), preconditioner=TensorLinearOperator(rand(2, 2))
         )
+
+
+def test_CGInverseLinearOperator_preconditioner_efficiency_cpu():
+    """CPU stress test: preconditioning should reduce CG work at equal quality."""
+    manual_seed(0)
+    n, num_rhs = 192, 16
+
+    # Diagonal-dominant SPD system with broad spectrum.
+    D = rand(n, dtype=float64) * 1_000 + 1.0
+    U = randn(n, n, dtype=float64)
+    A = 0.01 * (U + U.T) / 2.0
+    A = A + D.diag()
+
+    X = rand(n, num_rhs, dtype=float64)
+
+    # Jacobi preconditioner P = diag(A)^{-1}
+    P = (1.0 / A.diag()).diag()
+
+    A_no_pre = _CountingTensorLinearOperator(A)
+    inv_no_pre = CGInverseLinearOperator(
+        A_no_pre,
+        eps=0,
+        tolerance=1e-7,
+        max_iter=400,
+        max_tridiag_iter=400,
+    )
+    Y_no_pre = inv_no_pre @ X
+
+    A_with_pre = _CountingTensorLinearOperator(A)
+    inv_with_pre = CGInverseLinearOperator(
+        A_with_pre,
+        preconditioner=TensorLinearOperator(P),
+        eps=0,
+        tolerance=1e-7,
+        max_iter=400,
+        max_tridiag_iter=400,
+    )
+    Y_with_pre = inv_with_pre @ X
+
+    # Comparable solve quality.
+    rel_res_no_pre = (A @ Y_no_pre - X).norm() / X.norm()
+    rel_res_with_pre = (A @ Y_with_pre - X).norm() / X.norm()
+    assert rel_res_no_pre < 1e-5
+    assert rel_res_with_pre < 1e-5
+
+    # Efficiency target: fewer A @ v applications with preconditioning.
+    assert A_with_pre.num_matmats < A_no_pre.num_matmats
+
+
+def test_NeumannInverseLinearOperator_preconditioner_efficiency_cpu():
+    """CPU stress test: exact preconditioner should avoid A matmats in Neumann."""
+    manual_seed(0)
+    n, num_rhs = 128, 8
+    M = randn(n, n, dtype=float64)
+    A = M.T @ M + 0.1 * eye_like(M)
+    inv_A = inv(A)
+    X = rand(n, num_rhs, dtype=float64)
+
+    A_no_pre = _CountingTensorLinearOperator(A)
+    inv_no_pre = NeumannInverseLinearOperator(A_no_pre, num_terms=200, scale=1e-3)
+    _ = inv_no_pre @ X
+
+    A_with_pre = _CountingTensorLinearOperator(A)
+    inv_with_pre = NeumannInverseLinearOperator(
+        A_with_pre,
+        num_terms=0,
+        preconditioner=TensorLinearOperator(inv_A),
+    )
+    Y_with_pre = inv_with_pre @ X
+
+    # Exact (up to numerical precision) solve and less A-work.
+    assert ((A @ Y_with_pre - X).norm() / X.norm()) < 1e-10
+    assert A_with_pre.num_matmats < A_no_pre.num_matmats
 
 
 @mark.cuda

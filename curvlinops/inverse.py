@@ -92,6 +92,14 @@ class CGInverseLinearOperator(_InversePyTorchLinearOperator):
             )
 
         self._cg_hyperparameters = cg_hyperparameters
+        if self._preconditioner is not None and "preconditioner" not in cg_hyperparameters:
+            # Merge once during construction to avoid per-matmul dict copies.
+            self._linear_cg_hyperparameters = {
+                **cg_hyperparameters,
+                "preconditioner": self._preconditioner.__matmul__,
+            }
+        else:
+            self._linear_cg_hyperparameters = cg_hyperparameters
 
     def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         """Multiply X by the inverse of A.
@@ -106,11 +114,9 @@ class CGInverseLinearOperator(_InversePyTorchLinearOperator):
         _, num_vecs = X_flat.shape
 
         # batched CG for all vectors in parallel
-        cg_hyperparameters = dict(self._cg_hyperparameters)
-        if self._preconditioner is not None and "preconditioner" not in cg_hyperparameters:
-            cg_hyperparameters["preconditioner"] = self._preconditioner.__matmul__
-
-        Ainv_X = linear_cg(self._A.__matmul__, X_flat, **cg_hyperparameters)
+        Ainv_X = linear_cg(
+            self._A.__matmul__, X_flat, **self._linear_cg_hyperparameters
+        )
 
         return [
             r.reshape(*s, num_vecs)
@@ -316,7 +322,7 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
                 ]
                 result_list = [result.add_(v) for result, v in zip(result_list, v_list)]
 
-                if self._check_nan and any(isnan(result).any() for result in result_list):
+                if self._check_nan and any(isnan(v).any() for v in v_list):
                     raise ValueError(
                         f"Detected NaNs after application of {idx}-th term."
                         + " This is probably because the Neumann series is non-convergent."
@@ -327,7 +333,7 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
 
         # Preconditioned Neumann/Richardson series:
         # A^{-1} ≈ Σ_{k=0}^{K} (I - P A)^k P
-        v_list = self._preconditioner._matmat([x.clone() for x in X])
+        v_list = self._preconditioner._matmat(X)
         result_list = [v.clone() for v in v_list]
 
         for idx in range(self._num_terms):
@@ -335,7 +341,7 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
             v_list = [v.sub_(PA_v) for v, PA_v in zip(v_list, PA_v_list)]
             result_list = [result.add_(v) for result, v in zip(result_list, v_list)]
 
-            if self._check_nan and any(isnan(result).any() for result in result_list):
+            if self._check_nan and any(isnan(v).any() for v in v_list):
                 raise ValueError(
                     f"Detected NaNs after application of {idx}-th term."
                     + " This is probably because the Neumann series is non-convergent."
