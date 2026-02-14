@@ -729,7 +729,7 @@ class _ScalePyTorchLinearOperator(PyTorchLinearOperator):
 
 
 class _ChainPyTorchLinearOperator(PyTorchLinearOperator):
-    """Linear operator representing the product of linear operators A @ B @ C @ ...."""
+    """Linear operator representing the product of linear operators A @ B @ C @ ..."""
 
     def __init__(self, *operators: PyTorchLinearOperator):
         """Initialize product of linear operators.
@@ -749,7 +749,7 @@ class _ChainPyTorchLinearOperator(PyTorchLinearOperator):
             if left._in_shape != right._out_shape:
                 raise ValueError(
                     f"Shape mismatch between operators {i} and {i + 1}: "
-                    f"{left._in_shape=} does not match {right._out_shape}."
+                    f"input shape {left._in_shape} does not match output shape {right._out_shape}."
                 )
             if left.device != right.device:
                 raise ValueError(
