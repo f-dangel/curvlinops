@@ -1,7 +1,7 @@
 """Contains tests for ``curvlinops/inverse``."""
 
 from pytest import raises
-from torch import Tensor, float64, manual_seed
+from torch import Tensor, float64, manual_seed, rand
 from torch.linalg import inv
 
 from curvlinops import (
@@ -116,3 +116,75 @@ def test_NeumannInverseLinearOperator_toy():
 
     compare_consecutive_matmats(inv_B_neumann)
     compare_matmat(inv_B_neumann, inv_B, **tols)
+
+
+def test_NeumannInverseLinearOperator_preconditioner_toy():
+    """Test preconditioned Neumann inverse on a toy SPD matrix."""
+    manual_seed(0)
+    A = Tensor(
+        [
+            [4.0, 1.0, 0.0],
+            [1.0, 3.0, 1.0],
+            [0.0, 1.0, 2.0],
+        ]
+    ).double()
+    inv_A = inv(A)
+
+    # With an exact preconditioner and zero Neumann updates,
+    # the approximation should already be exact: A^{-1} ≈ P.
+    inv_A_neumann = NeumannInverseLinearOperator(
+        TensorLinearOperator(A),
+        num_terms=0,
+        preconditioner=TensorLinearOperator(inv_A),
+    )
+
+    compare_consecutive_matmats(inv_A_neumann)
+    compare_matmat(inv_A_neumann, inv_A, rtol=1e-10, atol=1e-10)
+
+
+def test_CGInverseLinearOperator_preconditioner_toy():
+    """Test that CGInverseLinearOperator wires preconditioners into linear_cg."""
+    manual_seed(0)
+    A = Tensor(
+        [
+            [4.0, 1.0, 0.0],
+            [1.0, 3.0, 1.0],
+            [0.0, 1.0, 2.0],
+        ]
+    ).double()
+    inv_A = inv(A)
+    A_linop = TensorLinearOperator(A)
+
+    inv_A_cg = CGInverseLinearOperator(
+        A_linop,
+        preconditioner=TensorLinearOperator(inv_A),
+        max_iter=1,
+        max_tridiag_iter=1,
+        tolerance=0,
+        eps=0,
+    )
+
+    compare_consecutive_matmats(inv_A_cg)
+    compare_matmat(inv_A_cg, inv_A, rtol=1e-8, atol=1e-10)
+
+
+def test_inverse_preconditioner_shape_mismatch_raises():
+    """Test both inverse operators reject incompatible preconditioner shapes."""
+    manual_seed(0)
+    A = Tensor(
+        [
+            [2.0, 0.0, 0.0],
+            [0.0, 3.0, 0.0],
+            [0.0, 0.0, 4.0],
+        ]
+    ).double()
+
+    with raises(ValueError, match="Preconditioner must have same in-/out-shapes"):
+        CGInverseLinearOperator(
+            TensorLinearOperator(A), preconditioner=TensorLinearOperator(rand(2, 2))
+        )
+
+    with raises(ValueError, match="Preconditioner must have same in-/out-shapes"):
+        NeumannInverseLinearOperator(
+            TensorLinearOperator(A), preconditioner=TensorLinearOperator(rand(2, 2))
+        )
