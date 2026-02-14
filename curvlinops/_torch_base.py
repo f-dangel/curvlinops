@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import (
     Callable,
     Iterable,
+    Iterator,
     List,
     MutableMapping,
     Optional,
@@ -150,7 +151,14 @@ class PyTorchLinearOperator:
         """
         free_dim = "trailing"  # position of axis in X to parallelize products over
         if isinstance(X, PyTorchLinearOperator):
-            return _ChainPyTorchLinearOperator(self, X)
+            # Flatten nested chains: Chain(A, B) @ Chain(C, D) -> Chain(A, B, C, D)
+            left = (
+                tuple(self)
+                if isinstance(self, _ChainPyTorchLinearOperator)
+                else (self,)
+            )
+            right = tuple(X) if isinstance(X, _ChainPyTorchLinearOperator) else (X,)
+            return _ChainPyTorchLinearOperator(*left, *right)
 
         # convert to tensor list format
         X, list_format, is_vec, num_vecs = self._check_input_and_preprocess(
@@ -721,33 +729,42 @@ class _ScalePyTorchLinearOperator(PyTorchLinearOperator):
 
 
 class _ChainPyTorchLinearOperator(PyTorchLinearOperator):
-    """Linear operator representing the product of two linear operators A @ B."""
+    """Linear operator representing the product of linear operators A @ B @ C @ ...."""
 
-    def __init__(self, A: PyTorchLinearOperator, B: PyTorchLinearOperator):
-        """Initialize product of two linear operators.
+    def __init__(self, *operators: PyTorchLinearOperator):
+        """Initialize product of linear operators.
 
         Args:
-            A: First linear operator.
-            B: Second linear operator.
+            *operators: Two or more linear operators. The product is applied
+                left-to-right: ``operators[0] @ operators[1] @ ... @ operators[-1]``.
 
         Raises:
-            ValueError: If the shapes, devices, or dtypes of the two linear
-                operators are incompatible.
+            ValueError: If fewer than two operators are given, or if shapes,
+                devices, or dtypes of consecutive operators are incompatible.
         """
-        if A._in_shape != B._out_shape:
-            raise ValueError(f"{A._in_shape=} does not match {B._out_shape}.")
-        if A.device != B.device:
-            raise ValueError(
-                f"Devices of linear operators must match. Got {[A.device, B.device]}."
-            )
-        if A.dtype != B.dtype:
-            raise ValueError(
-                f"Dtypes of linear operators must match. Got {[A.dtype, B.dtype]}."
-            )
-        self._A, self._B = A, B
+        if len(operators) < 2:
+            raise ValueError(f"Need at least 2 operators, got {len(operators)}.")
+        for i in range(len(operators) - 1):
+            left, right = operators[i], operators[i + 1]
+            if left._in_shape != right._out_shape:
+                raise ValueError(
+                    f"Shape mismatch between operators {i} and {i + 1}: "
+                    f"{left._in_shape=} does not match {right._out_shape}."
+                )
+            if left.device != right.device:
+                raise ValueError(
+                    f"Device mismatch between operators {i} and {i + 1}: "
+                    f"{[left.device, right.device]}."
+                )
+            if left.dtype != right.dtype:
+                raise ValueError(
+                    f"Dtype mismatch between operators {i} and {i + 1}: "
+                    f"{[left.dtype, right.dtype]}."
+                )
+        self._operators = operators
 
-        # Inherit shapes from the operands
-        super().__init__(B._in_shape, A._out_shape)
+        # Inherit shapes from the outermost operands
+        super().__init__(operators[-1]._in_shape, operators[0]._out_shape)
 
     @property
     def dtype(self) -> dtype:
@@ -756,7 +773,7 @@ class _ChainPyTorchLinearOperator(PyTorchLinearOperator):
         Returns:
             The linear operator's dtype.
         """
-        return self._A.dtype
+        return self._operators[0].dtype
 
     @property
     def device(self) -> device:
@@ -765,7 +782,7 @@ class _ChainPyTorchLinearOperator(PyTorchLinearOperator):
         Returns:
             The linear operator's device.
         """
-        return self._A.device
+        return self._operators[0].device
 
     def _matmat(self, X: List[Tensor]) -> List[Tensor]:
         """Multiply the linear operator onto a matrix in list format.
@@ -776,15 +793,36 @@ class _ChainPyTorchLinearOperator(PyTorchLinearOperator):
         Returns:
             The result of the multiplication in list format.
         """
-        return self._A._matmat(self._B._matmat(X))
+        result = X
+        for op in reversed(self._operators):
+            result = op._matmat(result)
+        return result
+
+    def __iter__(self) -> Iterator[PyTorchLinearOperator]:
+        """Iterate over the operators in the chain.
+
+        Returns:
+            Iterator over the linear operators in left-to-right order.
+        """
+        return iter(self._operators)
+
+    def __len__(self) -> int:
+        """Return the number of operators in the chain.
+
+        Returns:
+            The number of operators.
+        """
+        return len(self._operators)
 
     def _adjoint(self) -> _ChainPyTorchLinearOperator:
-        """Return the linear operator's adjoint: (AB)* = B*A*.
+        """Return the linear operator's adjoint: (ABC...)* = ...C*B*A*.
 
         Returns:
             A linear operator representing the adjoint.
         """
-        return _ChainPyTorchLinearOperator(self._B.adjoint(), self._A.adjoint())
+        return _ChainPyTorchLinearOperator(
+            *(op.adjoint() for op in reversed(self._operators))
+        )
 
 
 class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
