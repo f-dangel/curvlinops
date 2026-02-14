@@ -1,7 +1,7 @@
 """Contains tests for ``curvlinops/inverse``."""
 
-from pytest import raises
-from torch import Tensor, float64, manual_seed, rand
+from pytest import mark, raises
+from torch import Tensor, cuda, float64, manual_seed, rand
 from torch.linalg import inv
 
 from curvlinops import (
@@ -188,3 +188,52 @@ def test_inverse_preconditioner_shape_mismatch_raises():
         NeumannInverseLinearOperator(
             TensorLinearOperator(A), preconditioner=TensorLinearOperator(rand(2, 2))
         )
+
+
+@mark.skipif(not cuda.is_available(), reason="CUDA not available")
+def test_CGInverseLinearOperator_preconditioner_toy_cuda():
+    """CUDA test for CG preconditioner support."""
+    manual_seed(0)
+    A = Tensor(
+        [
+            [4.0, 1.0, 0.0],
+            [1.0, 3.0, 1.0],
+            [0.0, 1.0, 2.0],
+        ]
+    ).double().cuda()
+    inv_A = inv(A)
+
+    inv_A_cg = CGInverseLinearOperator(
+        TensorLinearOperator(A),
+        preconditioner=TensorLinearOperator(inv_A),
+        max_iter=1,
+        max_tridiag_iter=1,
+        tolerance=0,
+        eps=0,
+    )
+
+    compare_consecutive_matmats(inv_A_cg)
+    compare_matmat(inv_A_cg, inv_A, rtol=1e-7, atol=1e-9)
+
+
+@mark.skipif(not cuda.is_available(), reason="CUDA not available")
+def test_NeumannInverseLinearOperator_preconditioner_toy_cuda():
+    """CUDA test for preconditioned Neumann inverse."""
+    manual_seed(0)
+    A = Tensor(
+        [
+            [4.0, 1.0, 0.0],
+            [1.0, 3.0, 1.0],
+            [0.0, 1.0, 2.0],
+        ]
+    ).double().cuda()
+    inv_A = inv(A)
+
+    inv_A_neumann = NeumannInverseLinearOperator(
+        TensorLinearOperator(A),
+        num_terms=0,
+        preconditioner=TensorLinearOperator(inv_A),
+    )
+
+    compare_consecutive_matmats(inv_A_neumann)
+    compare_matmat(inv_A_neumann, inv_A, rtol=1e-9, atol=1e-10)
