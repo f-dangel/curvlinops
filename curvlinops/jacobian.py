@@ -15,8 +15,8 @@ from curvlinops.utils import make_functional_model_and_loss
 
 
 def make_batch_jacobian_matrix_product(
-    model_func: Module, params: Tuple[Parameter, ...]
-) -> Callable[[Union[Tensor, MutableMapping], Tuple[Tensor, ...]], Tensor]:
+    model_func: Module, params: tuple[Parameter, ...]
+) -> Callable[[Tensor | MutableMapping, tuple[Tensor, ...]], Tensor]:
     """Set up function to multiply with the mini-batch Jacobian.
 
     Args:
@@ -32,7 +32,7 @@ def make_batch_jacobian_matrix_product(
     f, _ = make_functional_model_and_loss(model_func, dummy_loss_func, params)
 
     @no_grad()
-    def jacobian_vector_product(X: Tensor, *v: Tuple[Tensor, ...]) -> Tensor:
+    def jacobian_vector_product(X: Tensor, *v: tuple[Tensor, ...]) -> Tensor:
         """Multiply the mini-batch Jacobian on a vector in list format.
 
         Args:
@@ -60,8 +60,8 @@ def make_batch_jacobian_matrix_product(
 
 
 def make_batch_transposed_jacobian_matrix_product(
-    model_func: Module, params: Tuple[Parameter, ...]
-) -> Callable[[Tensor, Tuple[Tensor, ...]], Tuple[Tensor, ...]]:
+    model_func: Module, params: tuple[Parameter, ...]
+) -> Callable[[Tensor, tuple[Tensor, ...]], tuple[Tensor, ...]]:
     r"""Set up function to multiply with the mini-batch transposed Jacobian.
 
     Args:
@@ -77,7 +77,7 @@ def make_batch_transposed_jacobian_matrix_product(
     f, _ = make_functional_model_and_loss(model_func, dummy_loss_func, params)
 
     @no_grad()
-    def transposed_jacobian_vector_product(X: Tensor, v: Tensor) -> Tuple[Tensor, ...]:
+    def transposed_jacobian_vector_product(X: Tensor, v: Tensor) -> tuple[Tensor, ...]:
         """Multiply the mini-batch transposed Jacobian on a vector.
 
         Args:
@@ -116,7 +116,7 @@ class JacobianLinearOperator(CurvatureLinearOperator):
     @cached_property
     def _mp(
         self,
-    ) -> Callable[[Union[Tensor, MutableMapping], Tuple[Tensor, ...]], Tensor]:
+    ) -> Callable[[Tensor | MutableMapping, tuple[Tensor, ...]], Tensor]:
         """Lazy initialization of batch-Jacobian matrix product function.
 
         Returns:
@@ -129,13 +129,13 @@ class JacobianLinearOperator(CurvatureLinearOperator):
 
     def __init__(
         self,
-        model_func: Callable[[Union[MutableMapping, Tensor]], Tensor],
-        params: List[Parameter],
-        data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
+        model_func: Callable[[MutableMapping | Tensor], Tensor],
+        params: list[Parameter],
+        data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
-        num_data: Optional[int] = None,
-        batch_size_fn: Optional[Callable[[Union[Tensor, MutableMapping]], int]] = None,
+        num_data: int | None = None,
+        batch_size_fn: Callable[[Tensor | MutableMapping], int] | None = None,
     ):
         r"""Linear operator for the Jacobian as PyTorch linear operator.
 
@@ -179,7 +179,7 @@ class JacobianLinearOperator(CurvatureLinearOperator):
             batch_size_fn=batch_size_fn,
         )
 
-    def _get_out_shape(self) -> List[Tuple[int, ...]]:
+    def _get_out_shape(self) -> list[tuple[int, ...]]:
         """Return the Jacobian's output space dimensions.
 
         Returns:
@@ -193,7 +193,7 @@ class JacobianLinearOperator(CurvatureLinearOperator):
 
         return [(self._N_data,) + self._model_func(x).shape[1:]]
 
-    def _matmat(self, M: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, M: list[Tensor]) -> list[Tensor]:
         """Apply the Jacobian to a matrix in tensor list format.
 
         Args:
@@ -239,7 +239,7 @@ class TransposedJacobianLinearOperator(CurvatureLinearOperator):
     @cached_property
     def _mp(
         self,
-    ) -> Callable[[Tensor, Tuple[Tensor, ...]], Tuple[Tensor, ...]]:
+    ) -> Callable[[Tensor, tuple[Tensor, ...]], tuple[Tensor, ...]]:
         """Lazy initialization of batch-transposed-Jacobian matrix product function.
 
         Returns:
@@ -254,13 +254,13 @@ class TransposedJacobianLinearOperator(CurvatureLinearOperator):
 
     def __init__(
         self,
-        model_func: Callable[[Union[MutableMapping, Tensor]], Tensor],
-        params: List[Parameter],
-        data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
+        model_func: Callable[[MutableMapping | Tensor], Tensor],
+        params: list[Parameter],
+        data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
-        num_data: Optional[int] = None,
-        batch_size_fn: Optional[Callable[[Union[Tensor, MutableMapping]], int]] = None,
+        num_data: int | None = None,
+        batch_size_fn: Callable[[Tensor | MutableMapping], int] | None = None,
     ):
         r"""Linear operator for the transpose Jacobian as PyTorch linear operator.
 
@@ -304,7 +304,7 @@ class TransposedJacobianLinearOperator(CurvatureLinearOperator):
             batch_size_fn=batch_size_fn,
         )
 
-    def _get_in_shape(self) -> List[Tuple[int, ...]]:
+    def _get_in_shape(self) -> list[tuple[int, ...]]:
         """Return the transposed Jacobian's input space dimensions.
 
         Returns:
@@ -318,7 +318,7 @@ class TransposedJacobianLinearOperator(CurvatureLinearOperator):
 
         return [(self._N_data,) + self._model_func(x).shape[1:]]
 
-    def _matmat(self, M: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, M: list[Tensor]) -> list[Tensor]:
         """Apply the transpose Jacobian to a matrix in tensor list format.
 
         Args:

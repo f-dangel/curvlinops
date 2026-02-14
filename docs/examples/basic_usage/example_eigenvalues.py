@@ -125,7 +125,7 @@ def power_method(
     max_iterations: int = 100,
     tol: float = 1e-3,
     k: int = 1,
-) -> Tuple[numpy.ndarray, numpy.ndarray]:
+) -> tuple[numpy.ndarray, numpy.ndarray]:
     """Compute the top-k eigenpairs of a linear operator using power iteration.
 
     Code modified from PyHessian, see
@@ -148,7 +148,7 @@ def power_method(
     def normalize(v: numpy.ndarray) -> numpy.ndarray:
         return v / numpy.linalg.norm(v)
 
-    def orthonormalize(v: numpy.ndarray, basis: List[numpy.ndarray]) -> numpy.ndarray:
+    def orthonormalize(v: numpy.ndarray, basis: list[numpy.ndarray]) -> numpy.ndarray:
         for basis_vector in basis:
             v -= numpy.dot(v, basis_vector) * basis_vector
         return normalize(v)

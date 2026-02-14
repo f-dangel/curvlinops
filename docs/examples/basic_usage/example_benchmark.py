@@ -122,7 +122,7 @@ else:
 
 def setup_synthetic_mnist_cnn(
     batch_size: int = 512,
-) -> Tuple[Sequential, CrossEntropyLoss, List[Tuple[Tensor, Tensor]]]:
+) -> tuple[Sequential, CrossEntropyLoss, list[tuple[Tensor, Tensor]]]:
     """Set up a synthetic MNIST CNN problem for the benchmark.
 
     Args:
@@ -156,7 +156,7 @@ def setup_synthetic_mnist_cnn(
 
 def setup_problem(
     problem_str: str, linop_str: str, dev: device
-) -> Tuple[Module, Module, List[Parameter], Iterable[Tuple[Tensor, Tensor]]]:
+) -> tuple[Module, Module, list[Parameter], Iterable[tuple[Tensor, Tensor]]]:
     """Set up the neural net, loss function, parameters, and data.
 
     Args:
@@ -231,8 +231,8 @@ def setup_linop(
     linop_str: str,
     model: Module,
     loss_function: Module,
-    params: List[Parameter],
-    data: Iterable[Tuple[Tensor, Tensor]],
+    params: list[Parameter],
+    data: Iterable[tuple[Tensor, Tensor]],
     check_deterministic: bool = True,
 ) -> PyTorchLinearOperator:
     """Set up the linear operator.
@@ -475,8 +475,8 @@ if __name__ == "__main__":
 
 
 def visualize_time_benchmark(
-    linop_strs: List[str], problem_str: str, device_str: str
-) -> Tuple[plt.Figure, plt.Axes]:
+    linop_strs: list[str], problem_str: str, device_str: str
+) -> tuple[plt.Figure, plt.Axes]:
     """Visualize the run time benchmark results.
 
     Args:
@@ -614,7 +614,7 @@ if __name__ == "__main__":
 # the call to ``memory_benchmark.py``, and troubleshoot if the call fails:
 
 
-def run_verbose(cmd: List[str]) -> CompletedProcess:
+def run_verbose(cmd: list[str]) -> CompletedProcess:
     """Run a command and print stdout & stderr if it fails.
 
     Args:
@@ -669,8 +669,8 @@ if __name__ == "__main__":
 
 
 def visualize_peakmem_benchmark(
-    linop_strs: List[str], problem_str: str, device_str: str
-) -> Tuple[plt.Figure, plt.Axes]:
+    linop_strs: list[str], problem_str: str, device_str: str
+) -> tuple[plt.Figure, plt.Axes]:
     """Visualize the peak memory benchmark results.
 
     Args:

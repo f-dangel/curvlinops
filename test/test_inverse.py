@@ -152,11 +152,11 @@ def test_NeumannInverseLinearOperator_toy():
 )
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_KFAC_inverse_damped_matmat(
-    case: Tuple[
+    case: tuple[
         Module,
-        Union[MSELoss, CrossEntropyLoss],
-        List[Parameter],
-        Iterable[Tuple[Tensor, Tensor]],
+        MSELoss | CrossEntropyLoss,
+        list[Parameter],
+        Iterable[tuple[Tensor, Tensor]],
     ],
     fisher_type: str,
     cache: bool,
@@ -229,11 +229,11 @@ def test_KFAC_inverse_damped_matmat(
 )
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901, PLR0912, PLR0915
-    case: Tuple[
+    case: tuple[
         Module,
-        Union[MSELoss, CrossEntropyLoss],
-        List[Parameter],
-        Iterable[Tuple[Tensor, Tensor]],
+        MSELoss | CrossEntropyLoss,
+        list[Parameter],
+        Iterable[tuple[Tensor, Tensor]],
     ],
     cache: bool,
     exclude: str,
@@ -346,11 +346,11 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901, PLR0912, PLR09
 )
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_KFAC_inverse_exactly_damped_matmat(
-    case: Tuple[
+    case: tuple[
         Module,
-        Union[MSELoss, CrossEntropyLoss],
-        List[Parameter],
-        Iterable[Tuple[Tensor, Tensor]],
+        MSELoss | CrossEntropyLoss,
+        list[Parameter],
+        Iterable[tuple[Tensor, Tensor]],
     ],
     cache: bool,
     exclude: str,
@@ -576,11 +576,11 @@ def test_KFAC_inverse_from_state_dict(
 )
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_EKFAC_inverse_exactly_damped_matmat(
-    inv_case: Tuple[
+    inv_case: tuple[
         Module,
-        Union[MSELoss, CrossEntropyLoss],
-        List[Parameter],
-        Iterable[Tuple[Tensor, Tensor]],
+        MSELoss | CrossEntropyLoss,
+        list[Parameter],
+        Iterable[tuple[Tensor, Tensor]],
     ],
     cache: bool,
     exclude: str,

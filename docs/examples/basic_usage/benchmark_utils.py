@@ -60,7 +60,7 @@ class GPTWrapper(Module):
 
 def setup_synthetic_shakespeare_nanogpt(
     batch_size: int = 4,
-) -> Tuple[GPTWrapper, CrossEntropyLoss, List[Tuple[Tensor, Tensor]]]:
+) -> tuple[GPTWrapper, CrossEntropyLoss, list[tuple[Tensor, Tensor]]]:
     """Set up the nanoGPT model and synthetic Shakespeare dataset for the benchmark.
 
     Args:
@@ -99,7 +99,7 @@ def setup_synthetic_shakespeare_nanogpt(
 
 def setup_synthetic_imagenet_resnet50(
     batch_size: int = 64,
-) -> Tuple[Module, CrossEntropyLoss, List[Tuple[Tensor, Tensor]]]:
+) -> tuple[Module, CrossEntropyLoss, list[tuple[Tensor, Tensor]]]:
     """Set up ResNet50 on synthetic ImageNet for the benchmark.
 
     Args:
@@ -120,7 +120,7 @@ def setup_synthetic_imagenet_resnet50(
 
 def setup_synthetic_cifar10_resnet18(
     batch_size: int = 512,
-) -> Tuple[Module, CrossEntropyLoss, List[Tuple[Tensor, Tensor]]]:
+) -> tuple[Module, CrossEntropyLoss, list[tuple[Tensor, Tensor]]]:
     """Set up ResNet18 on synthetic CIFAR10 for the benchmark.
 
     Args:

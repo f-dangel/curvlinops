@@ -10,7 +10,7 @@ from curvlinops.utils import assert_is_square, assert_matvecs_subseed_dim
 
 
 def hutchinson_diag(
-    A: Union[PyTorchLinearOperator, Tensor],
+    A: PyTorchLinearOperator | Tensor,
     num_matvecs: int,
     distribution: str = "rademacher",
 ) -> Tensor:

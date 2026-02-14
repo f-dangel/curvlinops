@@ -22,7 +22,7 @@ from curvlinops.eigh import EighDecomposedLinearOperator
 from curvlinops.utils import _infer_device, _infer_dtype
 
 
-def ensure_all_square(*tensors_or_operators: Union[Tensor, PyTorchLinearOperator]):
+def ensure_all_square(*tensors_or_operators: Tensor | PyTorchLinearOperator):
     """Check that all provided tensors/linear operators are square.
 
     Args:
@@ -80,7 +80,7 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
 
         super().__init__(in_shapes, out_shapes)
 
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         """Apply Kronecker product to matrix in tensor list format.
 
         Args:

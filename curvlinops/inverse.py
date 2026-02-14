@@ -29,7 +29,7 @@ from curvlinops.ekfac import EKFACLinearOperator
 from curvlinops.kfac import FactorType, KFACLinearOperator
 
 KFACInvType = TypeVar(
-    "KFACInvType", Optional[Tensor], Tuple[Optional[Tensor], Optional[Tensor]]
+    "KFACInvType", Tensor | None, tuple[Tensor | None, Tensor | None]
 )
 
 
@@ -92,7 +92,7 @@ class CGInverseLinearOperator(_InversePyTorchLinearOperator):
         super().__init__(A)
         self._cg_hyperparameters = cg_hyperparameters
 
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         """Multiply X by the inverse of A.
 
         Args:
@@ -145,7 +145,7 @@ class LSMRInverseLinearOperator(_InversePyTorchLinearOperator):
         self._A_scipy = A.to_scipy()
         self._lsmr_hyperparameters = lsmr_hyperparameters
 
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         """Multiply the inverse of A onto a matrix X in list format.
 
         Args:
@@ -263,7 +263,7 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
         self._scale = scale
         self._check_nan = check_nan
 
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         """Multiply the inverse of A onto a matrix in list format.
 
         Args:
@@ -319,7 +319,7 @@ class KFACInverseLinearOperator(_InversePyTorchLinearOperator):
     def __init__(
         self,
         A: KFACLinearOperator,
-        damping: Union[float, Tuple[float, float]] = 0.0,
+        damping: float | tuple[float | float] = 0.0,
         use_heuristic_damping: bool = False,
         min_damping: float = 1e-8,
         use_exact_damping: bool = False,
@@ -384,12 +384,12 @@ class KFACInverseLinearOperator(_InversePyTorchLinearOperator):
         self._use_exact_damping = use_exact_damping
         self._cache = cache
         self._retry_double_precision = retry_double_precision
-        self._inverse_input_covariances: Dict[str, FactorType] = {}
-        self._inverse_gradient_covariances: Dict[str, FactorType] = {}
+        self._inverse_input_covariances: dict[str, FactorType] = {}
+        self._inverse_gradient_covariances: dict[str, FactorType] = {}
 
     def _compute_damping(
-        self, aaT: Optional[Tensor], ggT: Optional[Tensor]
-    ) -> Tuple[float, float]:
+        self, aaT: Tensor | None, ggT: Tensor | None
+    ) -> tuple[float, float]:
         """Compute the damping values for the input and gradient covariances.
 
         Args:
@@ -431,7 +431,7 @@ class KFACInverseLinearOperator(_InversePyTorchLinearOperator):
 
     def _compute_inv_damped_eigenvalues(
         self, aaT_eigenvalues: Tensor, ggT_eigenvalues: Tensor, name: str
-    ) -> Union[Tensor, Dict[str, Tensor]]:
+    ) -> Tensor | dict[str | Tensor]:
         """Compute the inverses of the damped eigenvalues for a given layer.
 
         Args:
@@ -452,7 +452,7 @@ class KFACInverseLinearOperator(_InversePyTorchLinearOperator):
                 outer(ggT_eigenvalues, aaT_eigenvalues).add_(self._damping).pow_(-1)
             )
         else:
-            inv_damped_eigenvalues: Dict[str, Tensor] = {}
+            inv_damped_eigenvalues: dict[str, Tensor] = {}
             for p_name, pos in param_pos.items():
                 inv_damped_eigenvalues[pos] = (
                     outer(ggT_eigenvalues, aaT_eigenvalues)
@@ -463,8 +463,8 @@ class KFACInverseLinearOperator(_InversePyTorchLinearOperator):
         return inv_damped_eigenvalues
 
     def _compute_factors_eigendecomposition(
-        self, aaT: Optional[Tensor], ggT: Optional[Tensor]
-    ) -> Tuple[FactorType, FactorType]:
+        self, aaT: Tensor | None, ggT: Tensor | None
+    ) -> tuple[FactorType, FactorType]:
         """Compute the eigendecompositions of the Kronecker factors for a given layer.
 
         Used to perform damped preconditioning in Kronecker-factored eigenbasis (KFE).
@@ -483,8 +483,8 @@ class KFACInverseLinearOperator(_InversePyTorchLinearOperator):
         return (aaT_eigenvalues, aaT_eigenvectors), (ggT_eigenvalues, ggT_eigenvectors)
 
     def _compute_inverse_factors(
-        self, aaT: Optional[Tensor], ggT: Optional[Tensor]
-    ) -> Tuple[FactorType, FactorType]:
+        self, aaT: Tensor | None, ggT: Tensor | None
+    ) -> tuple[FactorType, FactorType]:
         """Compute the inverses of the Kronecker factors for a given layer.
 
         Args:
@@ -528,7 +528,7 @@ class KFACInverseLinearOperator(_InversePyTorchLinearOperator):
 
     def _compute_or_get_cached_inverse(
         self, name: str
-    ) -> Tuple[FactorType, FactorType]:
+    ) -> tuple[FactorType, FactorType]:
         """Invert the Kronecker factors of the KFACLinearOperator or retrieve them.
 
         Args:
@@ -594,7 +594,7 @@ class KFACInverseLinearOperator(_InversePyTorchLinearOperator):
             inv_damped_eigenvalues,
         )
 
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         """Matrix-matrix multiplication with the KFAC inverse.
 
         Args:
@@ -608,7 +608,7 @@ class KFACInverseLinearOperator(_InversePyTorchLinearOperator):
         # Accessing representation triggers computation if not already done
         _ = self._A.representation
 
-        KX: List[Tensor | None] = [None] * len(X)
+        KX: list[Tensor | None] = [None] * len(X)
 
         for mod_name, param_pos in self._A._mapping.items():
             # retrieve the inverses of the Kronecker factors from cache or invert them.
@@ -648,7 +648,7 @@ class KFACInverseLinearOperator(_InversePyTorchLinearOperator):
 
         return KX
 
-    def state_dict(self) -> Dict[str, Any]:
+    def state_dict(self) -> dict[str, Any]:
         """Return the state of the inverse KFAC linear operator.
 
         Returns:
@@ -668,7 +668,7 @@ class KFACInverseLinearOperator(_InversePyTorchLinearOperator):
             "inverse_gradient_covariances": self._inverse_gradient_covariances,
         }
 
-    def load_state_dict(self, state_dict: Dict[str, Any]):
+    def load_state_dict(self, state_dict: dict[str, Any]):
         """Load the state of the inverse KFAC linear operator.
 
         Args:
@@ -690,7 +690,7 @@ class KFACInverseLinearOperator(_InversePyTorchLinearOperator):
 
     @classmethod
     def from_state_dict(
-        cls, state_dict: Dict[str, Any], A: KFACLinearOperator
+        cls, state_dict: dict[str, Any], A: KFACLinearOperator
     ) -> "KFACInverseLinearOperator":
         """Load an inverse KFAC linear operator from a state dictionary.
 

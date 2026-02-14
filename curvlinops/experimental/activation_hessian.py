@@ -60,9 +60,9 @@ class ActivationHessianLinearOperator(CurvatureLinearOperator):
     def __init__(
         self,
         model_func: Module,
-        loss_func: Callable[[Union[MutableMapping, Tensor], Tensor], Tensor],
-        activation: Tuple[str, str, int],
-        data: Iterable[Tuple[Union[MutableMapping, Tensor], Tensor]],
+        loss_func: Callable[[MutableMapping | Tensor, Tensor], Tensor],
+        activation: tuple[str, str, int],
+        data: Iterable[tuple[MutableMapping | Tensor, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
     ):
@@ -136,7 +136,7 @@ class ActivationHessianLinearOperator(CurvatureLinearOperator):
             check_deterministic=check_deterministic,
         )
 
-    def _get_out_shape(self) -> List[Tuple[int, ...]]:
+    def _get_out_shape(self) -> list[tuple[int, ...]]:
         """Return the output shape of the activation Hessian.
 
         Returns:
@@ -158,7 +158,7 @@ class ActivationHessianLinearOperator(CurvatureLinearOperator):
 
         return [self._activation_shape]
 
-    def _get_in_shape(self) -> List[Tuple[int, ...]]:
+    def _get_in_shape(self) -> list[tuple[int, ...]]:
         """Return the input shape of the activation Hessian.
 
         Returns:
@@ -166,7 +166,7 @@ class ActivationHessianLinearOperator(CurvatureLinearOperator):
         """
         return self._get_out_shape()
 
-    def _matmat_batch(self, X: Tensor, y: Tensor, M: List[Tensor]) -> List[Tensor]:
+    def _matmat_batch(self, X: Tensor, y: Tensor, M: list[Tensor]) -> list[Tensor]:
         """Apply the activation Hessian to a matrix in tensor list format.
 
         Args:
@@ -210,7 +210,7 @@ class store_activation:
         SUPPORTED_IO_TYPES: Supported types of in/outputs.
     """
 
-    SUPPORTED_IO_TYPES: Set[str] = {"input", "output"}
+    SUPPORTED_IO_TYPES: set[str] = {"input", "output"}
 
     def __init__(
         self,
@@ -260,7 +260,7 @@ class store_activation:
             raise ValueError(f"`destination` must be empty. Got {destination}.")
         self._destination = destination
 
-        self._hook_handles: List[RemovableHandle] = []
+        self._hook_handles: list[RemovableHandle] = []
 
     def __enter__(self) -> None:
         """Install hook that appends the requested activation to the destination."""
@@ -269,9 +269,9 @@ class store_activation:
 
     def __exit__(
         self,
-        __exc_type: Optional[Type[BaseException]],
-        __exc_value: Optional[BaseException],
-        __traceback: Optional[TracebackType],
+        __exc_type: Type[BaseException] | None,
+        __exc_value: BaseException | None,
+        __traceback: TracebackType | None,
     ) -> None:
         """Remove hook.
 
@@ -286,8 +286,8 @@ class store_activation:
     def hook(
         self,
         module: Module,
-        inputs: Tuple[Tensor],
-        output: Union[Tensor, Tuple[Tensor]],
+        inputs: tuple[Tensor],
+        output: Tensor | tuple[Tensor],
     ):
         """Forward hook that appends the requested activation to the destination.
 

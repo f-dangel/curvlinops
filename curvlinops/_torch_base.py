@@ -3,14 +3,10 @@
 from __future__ import annotations
 
 from typing import (
-    Callable,
-    Iterable,
-    List,
-    MutableMapping,
-    Optional,
-    Tuple,
-    Union,
-)
+     Callable,
+     Iterable,
+     MutableMapping,
+ )
 
 import numpy
 from scipy.sparse.linalg import LinearOperator
@@ -57,7 +53,7 @@ class PyTorchLinearOperator:
     SELF_ADJOINT: bool = False
 
     def __init__(
-        self, in_shape: List[Tuple[int, ...]], out_shape: List[Tuple[int, ...]]
+        self, in_shape: list[tuple[int, ...]], out_shape: list[tuple[int, ...]]
     ):
         """Store the linear operator's input and output space dimensions.
 
@@ -81,8 +77,8 @@ class PyTorchLinearOperator:
         self.shape = (sum(self._out_shape_flat), sum(self._in_shape_flat))
 
     def __rmatmul__(
-        self, X: Union[List[Tensor], Tensor]
-    ) -> Union[List[Tensor], Tensor]:
+        self, X: list[Tensor] | Tensor
+    ) -> list[Tensor] | Tensor:
         """Multiply a tensor from the left onto the linear operator (``X @ A``).
 
         Args:
@@ -122,8 +118,8 @@ class PyTorchLinearOperator:
         )
 
     def __matmul__(
-        self, X: Union[List[Tensor], Tensor, PyTorchLinearOperator]
-    ) -> Union[List[Tensor], Tensor, _ChainPyTorchLinearOperator]:
+             self, X: list[Tensor] | Tensor | PyTorchLinearOperator
+    ) -> list[Tensor] | Tensor | _ChainPyTorchLinearOperator:
         """Multiply onto a vector/matrix given as tensor/tensor list, or an operator.
 
         Args:
@@ -165,7 +161,7 @@ class PyTorchLinearOperator:
             AX, list_format, is_vec, num_vecs, self._out_shape, free_dim
         )
 
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         """Matrix-matrix multiplication.
 
         Args:
@@ -203,10 +199,10 @@ class PyTorchLinearOperator:
 
     def _check_input_and_preprocess(
         self,
-        X: Union[List[Tensor], Tensor],
-        expected_shapes: List[Size],
+        X: list[Tensor] | Tensor,
+        expected_shapes: list[Size],
         free_dim: str,
-    ) -> Tuple[List[Tensor], bool, bool, int]:
+    ) -> tuple[list[Tensor], bool, bool, int]:
         """Check input format and pre-process it to a matrix in tensor list format.
 
         Args:
@@ -244,8 +240,8 @@ class PyTorchLinearOperator:
 
     @staticmethod
     def __check_tensor_and_preprocess(
-        X: Tensor, expected_shapes: List[Size], free_dim: str
-    ) -> Tuple[List[Tensor], bool, int]:
+        X: Tensor, expected_shapes: list[Size], free_dim: str
+    ) -> tuple[list[Tensor], bool, int]:
         """Check single-tensor input format and process into a matrix tensor list.
 
         Args:
@@ -300,8 +296,8 @@ class PyTorchLinearOperator:
 
     @staticmethod
     def __check_tensor_list_and_preprocess(
-        X: List[Tensor], expected_shapes: List[Size], free_dim: str
-    ) -> Tuple[List[Tensor], bool, int]:
+        X: list[Tensor], expected_shapes: list[Size], free_dim: str
+    ) -> tuple[list[Tensor], bool, int]:
         """Check tensor list input format and process into a matrix tensor list.
 
         Args:
@@ -356,13 +352,13 @@ class PyTorchLinearOperator:
 
     @staticmethod
     def _check_output_and_postprocess(
-        AX: List[Tensor],
+        AX: list[Tensor],
         list_format: bool,
         is_vec: bool,
         num_vecs: int,
-        expected_shapes: List[Size],
+        expected_shapes: list[Size],
         free_dim: str,
-    ) -> Union[List[Tensor], Tensor]:
+    ) -> list[Tensor] | Tensor:
         """Check multiplication output and post-process it to the original format.
 
         Args:
@@ -450,7 +446,7 @@ class PyTorchLinearOperator:
         """
         return self + (-1.0 * other)
 
-    def __mul__(self, scalar: Union[int, float]) -> _ScalePyTorchLinearOperator:
+    def __mul__(self, scalar: int | float) -> _ScalePyTorchLinearOperator:
         """Multiply the linear operator by a scalar (A * scalar).
 
         Args:
@@ -461,7 +457,7 @@ class PyTorchLinearOperator:
         """
         return _ScalePyTorchLinearOperator(self, scalar)
 
-    def __rmul__(self, scalar: Union[int, float]) -> _ScalePyTorchLinearOperator:
+    def __rmul__(self, scalar: int | float) -> _ScalePyTorchLinearOperator:
         """Right multiply the linear operator by a scalar (scalar * A).
 
         Args:
@@ -472,7 +468,7 @@ class PyTorchLinearOperator:
         """
         return self * scalar
 
-    def __truediv__(self, scalar: Union[int, float]) -> _ScalePyTorchLinearOperator:
+    def __truediv__(self, scalar: int | float) -> _ScalePyTorchLinearOperator:
         """Divide the linear operator by a scalar (A / scalar).
 
         Args:
@@ -487,7 +483,7 @@ class PyTorchLinearOperator:
     #                                 SCIPY EXPORT                                #
     ###############################################################################
 
-    def to_scipy(self, dtype: Optional[numpy.dtype] = None) -> LinearOperator:
+    def to_scipy(self, dtype: numpy.dtype | None = None) -> LinearOperator:
         """Wrap the PyTorch linear operator with a SciPy linear operator.
 
         Args:
@@ -629,7 +625,7 @@ class _SumPyTorchLinearOperator(PyTorchLinearOperator):
         # Sum is self-adjoint if both operands are self-adjoint
         self.SELF_ADJOINT = A.SELF_ADJOINT and B.SELF_ADJOINT
 
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         """Multiply the linear operator onto a matrix in list format.
 
         Args:
@@ -670,7 +666,7 @@ class _SumPyTorchLinearOperator(PyTorchLinearOperator):
 class _ScalePyTorchLinearOperator(PyTorchLinearOperator):
     """Linear operator representing the scaled version of a linear operator s * A."""
 
-    def __init__(self, A: PyTorchLinearOperator, scalar: Union[float, int]):
+    def __init__(self, A: PyTorchLinearOperator, scalar: float | int):
         """Store the linear operator.
 
         Args:
@@ -682,7 +678,7 @@ class _ScalePyTorchLinearOperator(PyTorchLinearOperator):
         self._scalar = scalar
         self.SELF_ADJOINT = A.SELF_ADJOINT
 
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         """Multiply the linear operator onto a matrix in list format.
 
         Args:
@@ -767,7 +763,7 @@ class _ChainPyTorchLinearOperator(PyTorchLinearOperator):
         """
         return self._A.device
 
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         """Multiply the linear operator onto a matrix in list format.
 
         Args:
@@ -808,16 +804,16 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
 
     def __init__(
         self,
-        model_func: Callable[[Union[Tensor, MutableMapping]], Tensor],
-        loss_func: Union[Callable[[Tensor, Tensor], Tensor], None],
-        params: List[Parameter],
-        data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
+        model_func: Callable[[Tensor | MutableMapping], Tensor],
+        loss_func: Callable[[Tensor | Tensor] | Tensor, None],
+        params: list[Parameter],
+        data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
-        num_data: Optional[int] = None,
-        num_per_example_loss_terms: Optional[int] = None,
-        block_sizes: Optional[List[int]] = None,
-        batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
+        num_data: int | None = None,
+        num_per_example_loss_terms: int | None = None,
+        block_sizes: list[int] | None = None,
+        batch_size_fn: Callable[[MutableMapping | Tensor], int] | None = None,
     ):
         """Linear operator for curvature matrices of empirical risks.
 
@@ -899,7 +895,7 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
         if check_deterministic:
             self._check_deterministic_matvec()
 
-    def _get_in_shape(self) -> List[Tuple[int, ...]]:
+    def _get_in_shape(self) -> list[tuple[int, ...]]:
         """Return linear operator's input space dimensions.
 
         Returns:
@@ -907,7 +903,7 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
         """
         return [tuple(p.shape) for p in self._params]
 
-    def _get_out_shape(self) -> List[Tuple[int, ...]]:
+    def _get_out_shape(self) -> list[tuple[int, ...]]:
         """Return linear operator's output space dimensions.
 
         Returns:
@@ -915,7 +911,7 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
         """
         return [tuple(p.shape) for p in self._params]
 
-    def _matmat(self, M: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, M: list[Tensor]) -> list[Tensor]:
         """Matrix-matrix multiplication.
 
         Args:
@@ -939,8 +935,8 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
         return AM
 
     def _matmat_batch(
-        self, X: Union[MutableMapping, Tensor], y: Tensor, M: List[Tensor]
-    ) -> List[Tensor]:
+        self, X: MutableMapping | Tensor, y: Tensor, M: list[Tensor]
+    ) -> list[Tensor]:
         """Apply the mini-batch matrix to a vector.
 
         Args:

@@ -15,9 +15,9 @@ from curvlinops.utils import make_functional_model_and_loss, split_list
 def make_batch_hessian_matrix_product(
     model_func: Module,
     loss_func: Module,
-    params: Tuple[Parameter, ...],
-    block_sizes: Optional[List[int]] = None,
-) -> Callable[[Tensor, Tensor, Tuple[Tensor, ...]], Tuple[Tensor, ...]]:
+    params: tuple[Parameter, ...],
+    block_sizes: list[int] | None = None,
+) -> Callable[[Tensor, Tensor, tuple[Tensor, ...]], tuple[Tensor, ...]]:
     r"""Set up function that multiplies the mini-batch Hessian onto a matrix in list format.
 
     Args:
@@ -46,8 +46,8 @@ def make_batch_hessian_matrix_product(
 
     @no_grad()
     def hessian_vector_product(
-        X: Tensor, y: Tensor, *v: Tuple[Tensor, ...]
-    ) -> Tuple[Tensor, ...]:
+        X: Tensor, y: Tensor, *v: tuple[Tensor, ...]
+    ) -> tuple[Tensor, ...]:
         """Multiply the mini-batch Hessian on a vector in list format.
 
         Args:
@@ -66,8 +66,8 @@ def make_batch_hessian_matrix_product(
         block_grad_fns = []
 
         def loss_fn(
-            f: Callable[[Tuple[Tensor, ...], Union[Tensor, MutableMapping]], Tensor],
-            *params: Tuple[Tensor, ...],
+            f: Callable[[tuple[Tensor, ...], Tensor | MutableMapping], Tensor],
+            *params: tuple[Tensor, ...],
         ) -> Tensor:
             """Compute the mini-batch loss given the neural net and its parameters.
 
@@ -169,7 +169,7 @@ class HessianLinearOperator(CurvatureLinearOperator):
     def _mp(
         self,
     ) -> Callable[
-        [Union[Tensor, MutableMapping], Tensor, Tuple[Tensor, ...]], Tuple[Tensor, ...]
+        [Tensor | MutableMapping, Tensor, tuple[Tensor, ...]], tuple[Tensor, ...]
     ]:
         """Lazy initialization of batch-Hessian matrix product function.
 
@@ -184,8 +184,8 @@ class HessianLinearOperator(CurvatureLinearOperator):
         )
 
     def _matmat_batch(
-        self, X: Union[Tensor, MutableMapping], y: Tensor, M: List[Tensor]
-    ) -> List[Tensor]:
+        self, X: Tensor | MutableMapping, y: Tensor, M: list[Tensor]
+    ) -> list[Tensor]:
         """Apply the mini-batch Hessian to a matrix.
 
         Args:

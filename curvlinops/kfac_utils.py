@@ -33,7 +33,7 @@ from curvlinops._torch_base import PyTorchLinearOperator
 
 
 def _warn_BCEWithLogitsLoss_targets_unchecked(
-    loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
+    loss_func: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
 ) -> None:
     """Warn that BCEWithLogitsLoss targets are not verified to be binary.
 
@@ -51,7 +51,7 @@ def _warn_BCEWithLogitsLoss_targets_unchecked(
 
 
 def _check_binary_if_BCEWithLogitsLoss(
-    target: Tensor, loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss]
+    target: Tensor, loss_func: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss
 ) -> None:
     """Check if targets are binary (0 or 1) when using BCEWithLogitsLoss.
 
@@ -75,7 +75,7 @@ def _check_binary_if_BCEWithLogitsLoss(
 def loss_hessian_matrix_sqrt(
     output_one_datum: Tensor,
     target_one_datum: Tensor,
-    loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
+    loss_func: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
     warn_BCEWithLogitsLoss_targets_unchecked: bool = True,
 ) -> Tensor:
     r"""Compute the loss function's matrix square root for a sample's output.
@@ -226,7 +226,7 @@ def loss_hessian_matrix_sqrt(
 
 
 def _make_single_datum_sampler(
-    loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
+    loss_func: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
     warn_BCEWithLogitsLoss_targets_unchecked: bool = True,
 ) -> Callable[[Tensor, int, Tensor, Generator], Tensor]:
     """Create a function that samples gradients w.r.t. a single datum's output.
@@ -336,10 +336,10 @@ def _make_single_datum_sampler(
 
 
 def make_grad_output_fn(
-    loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
+    loss_func: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
     mode: str,
     mc_samples: int = 1,
-) -> Callable[[Tensor, Tensor, Optional[Generator]], Tensor]:
+) -> Callable[[Tensor, Tensor, Generator | None], Tensor]:
     """Create a function computing gradient output vectors for a single datum.
 
     For exact mode, returns the columns of the loss Hessian's matrix square root.
@@ -378,7 +378,7 @@ def make_grad_output_fn(
     )
 
     def grad_output_fn(
-        output: Tensor, target: Tensor, generator: Optional[Generator] = None
+        output: Tensor, target: Tensor, generator: Generator | None = None
     ) -> Tensor:
         """Compute gradient output vectors for a single datum.
 
@@ -408,10 +408,10 @@ def make_grad_output_fn(
 
 def extract_patches(
     x: Tensor,
-    kernel_size: Union[Tuple[int, int], int],
-    stride: Union[Tuple[int, int], int],
-    padding: Union[Tuple[int, int], int, str],
-    dilation: Union[Tuple[int, int], int],
+    kernel_size: tuple[int | int] | int,
+    stride: tuple[int | int] | int,
+    padding: tuple[int, int] | int | str,
+    dilation: tuple[int | int] | int,
     groups: int,
 ) -> Tensor:
     """Extract patches from the input of a 2d-convolution.
@@ -454,10 +454,10 @@ def extract_patches(
 
 def extract_averaged_patches(
     x: Tensor,
-    kernel_size: Union[Tuple[int, int], int],
-    stride: Union[Tuple[int, int], int],
-    padding: Union[Tuple[int, int], int, str],
-    dilation: Union[Tuple[int, int], int],
+    kernel_size: tuple[int | int] | int,
+    stride: tuple[int | int] | int,
+    padding: tuple[int, int] | int, str,
+    dilation: tuple[int | int] | int,
     groups: int,
 ) -> Tensor:
     """Extract averaged patches from the input of a 2d-convolution.
@@ -516,8 +516,8 @@ class _CanonicalizationLinearOperator(PyTorchLinearOperator):
 
     def __init__(
         self,
-        param_shapes: List[Size],
-        param_positions: List[Dict[str, int]],
+        param_shapes: list[Size],
+        param_positions: list[dict[str, int]],
         separate_weight_and_bias: bool,
         device: device,
         dtype: dtype,
@@ -541,7 +541,7 @@ class _CanonicalizationLinearOperator(PyTorchLinearOperator):
         in_shape, out_shape = self._compute_shapes()
         super().__init__(in_shape, out_shape)
 
-    def _compute_shapes(self) -> Tuple[List[Tuple[int, ...]], List[Tuple[int, ...]]]:
+    def _compute_shapes(self) -> tuple[list[tuple[int, ...]], list[tuple[int, ...]]]:
         """Compute input and output shapes for the transformation.
 
         Returns:
@@ -549,7 +549,7 @@ class _CanonicalizationLinearOperator(PyTorchLinearOperator):
         """
         raise NotImplementedError("Subclasses must implement _compute_shapes")
 
-    def _compute_canonical_shapes(self) -> List[Tuple[int, ...]]:
+    def _compute_canonical_shapes(self) -> list[tuple[int, ...]]:
         """Compute the shapes in KFAC's canonical basis.
 
         Returns:
@@ -604,7 +604,7 @@ class ToCanonicalLinearOperator(_CanonicalizationLinearOperator):
     This is the adjoint of FromCanonicalLinearOperator.
     """
 
-    def _compute_shapes(self) -> Tuple[List[Tuple[int, ...]], List[Tuple[int, ...]]]:
+    def _compute_shapes(self) -> tuple[list[tuple[int, ...]], list[tuple[int, ...]]]:
         """Compute input and output shapes for the transformation.
 
         Returns:
@@ -614,7 +614,7 @@ class ToCanonicalLinearOperator(_CanonicalizationLinearOperator):
         out_shape = self._compute_canonical_shapes()
         return in_shape, out_shape
 
-    def _matmat(self, M: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, M: list[Tensor]) -> list[Tensor]:
         """Transform parameter tensors to canonical form.
 
         Args:
@@ -666,7 +666,7 @@ class FromCanonicalLinearOperator(_CanonicalizationLinearOperator):
     This is the adjoint of ToCanonicalLinearOperator.
     """
 
-    def _compute_shapes(self) -> Tuple[List[Tuple[int, ...]], List[Tuple[int, ...]]]:
+    def _compute_shapes(self) -> tuple[list[tuple[int, ...]], list[tuple[int, ...]]]:
         """Compute input and output shapes for the transformation.
 
         Returns:
@@ -676,7 +676,7 @@ class FromCanonicalLinearOperator(_CanonicalizationLinearOperator):
         in_shape = self._compute_canonical_shapes()
         return in_shape, out_shape
 
-    def _matmat(self, M: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, M: list[Tensor]) -> list[Tensor]:
         """Transform parameter tensors from canonical form back to original order.
 
         Args:

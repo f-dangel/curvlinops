@@ -144,7 +144,7 @@ rows, columns = 2, 3
 
 def plot(
     transform: Callable[[Tensor], Tensor], transform_title: str = None
-) -> Tuple[Figure, Axes]:
+) -> tuple[Figure, Axes]:
     """Visualize transformed curvature matrices using a shared domain.
 
     Args:
