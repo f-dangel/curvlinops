@@ -74,7 +74,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Introduce a computer class for the GGN diagonal
   ([PR](https://github.com/f-dangel/curvlinops/pull/240))
 
-- **Backward-incompatible:** Make `gradient_and_loss` a utility function
+- **Backward-incompatible:** Remove `CurvatureLinearOperator.gradient_and_loss()` and provide
+  `curvlinops.examples.gradient_and_loss` as the replacement utility function
   ([PR](https://github.com/f-dangel/curvlinops/pull/245))
 
 - Make `_ChainPyTorchLinearOperator` support more than two operators
