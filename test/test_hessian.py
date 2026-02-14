@@ -13,7 +13,7 @@ from test.utils import change_dtype, compare_consecutive_matmats, compare_matmat
 
 def test_HessianLinearOperator(
     case,
-    block_sizes_fn: Callable[[List[Parameter]], Optional[List[int]]],
+    block_sizes_fn: Callable[[list[Parameter]], list[int]] | None,
 ):
     """Test matrix-matrix multiplication with the Hessian.
 

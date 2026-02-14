@@ -24,13 +24,13 @@ from curvlinops.utils import _seed_generator, make_functional_model_and_loss
 def make_batch_ggn_diagonal_func(
     model_func: Module,
     loss_func: Module,
-    params: Tuple[Parameter, ...],
+    params: tuple[Parameter, ...],
     mode: str,
     mc_samples: int,
-    batch_size_fn: Callable[[Union[Tensor, MutableMapping]], int],
+    batch_size_fn: Callable[[Tensor | MutableMapping], int],
 ) -> Callable[
-    [Union[Tensor, MutableMapping], Tensor, Optional[Generator]],
-    List[Tensor],
+    [Tensor | MutableMapping, Tensor, Generator | None],
+    list[Tensor],
 ]:
     """Create a function that computes the GGN diagonal for a batch.
 
@@ -45,7 +45,7 @@ def make_batch_ggn_diagonal_func(
             value's shape for MutableMapping inputs.
 
     Returns:
-        Function with signature ``(X, y, generator) -> List[Tensor]``
+        Function with signature ``(X, y, generator) -> list[Tensor]``
         that computes the GGN diagonal on the batch ``(X, y)``.
     """
     # Create functional version of the model: (*params, x) -> prediction
@@ -57,10 +57,10 @@ def make_batch_ggn_diagonal_func(
     reduction = loss_func.reduction
 
     def ggn_diagonal_datum(
-        x: Union[Tensor, MutableMapping],
+        x: Tensor | MutableMapping,
         y: Tensor,
-        generator: Optional[Generator] = None,
-    ) -> List[Tensor]:
+        generator: Generator | None = None,
+    ) -> list[Tensor]:
         """Compute the GGN diagonal for a single datum.
 
         Args:
@@ -87,10 +87,10 @@ def make_batch_ggn_diagonal_func(
 
     @no_grad()
     def batch_ggn_diagonal(
-        X: Union[Tensor, MutableMapping],
+        X: Tensor | MutableMapping,
         y: Tensor,
-        generator: Optional[Generator] = None,
-    ) -> List[Tensor]:
+        generator: Generator | None = None,
+    ) -> list[Tensor]:
         """Compute the GGN diagonal on a batch.
 
         Args:
@@ -132,18 +132,18 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
             for every iteration.
     """
 
-    SUPPORTED_MODES: Tuple[str, ...] = ("exact", "mc")
+    SUPPORTED_MODES: tuple[str, ...] = ("exact", "mc")
 
     def __init__(
         self,
-        model_func: Callable[[Union[Tensor, MutableMapping]], Tensor],
+        model_func: Callable[[Tensor | MutableMapping], Tensor],
         loss_func: Callable[[Tensor, Tensor], Tensor],
-        params: List[Parameter],
-        data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
+        params: list[Parameter],
+        data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
-        num_data: Optional[int] = None,
-        batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
+        num_data: int | None = None,
+        batch_size_fn: Callable[[MutableMapping | Tensor], int] | None = None,
         mode: str = "exact",
         seed: int = 2_147_483_647,
         mc_samples: int = 1,
@@ -222,7 +222,7 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
         X, _ = next(self._loop_over_data())
         _check_supports_batched_and_unbatched_inputs(X, self._model_func)
 
-    def compute_ggn_diagonal(self) -> List[Tensor]:
+    def compute_ggn_diagonal(self) -> list[Tensor]:
         """Compute the GGN diagonal on the entire data set.
 
         Returns:
@@ -263,14 +263,14 @@ class GGNDiagonalLinearOperator(DiagonalLinearOperator):
 
     def __init__(
         self,
-        model_func: Callable[[Union[Tensor, MutableMapping]], Tensor],
+        model_func: Callable[[Tensor | MutableMapping], Tensor],
         loss_func: Callable[[Tensor, Tensor], Tensor],
-        params: List[Parameter],
-        data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
+        params: list[Parameter],
+        data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
-        num_data: Optional[int] = None,
-        batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
+        num_data: int | None = None,
+        batch_size_fn: Callable[[MutableMapping | Tensor], int] | None = None,
         mode: str = "exact",
         seed: int = 2_147_483_647,
         mc_samples: int = 1,

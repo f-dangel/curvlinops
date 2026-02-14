@@ -15,7 +15,7 @@ from curvlinops.utils import (
 
 
 def xtrace(
-    A: Union[PyTorchLinearOperator, Tensor],
+    A: PyTorchLinearOperator | Tensor,
     num_matvecs: int,
     distribution: str = "rademacher",
 ) -> Tensor:

@@ -4,11 +4,7 @@ from typing import (
     Callable,
     Iterable,
     Iterator,
-    List,
     MutableMapping,
-    Optional,
-    Tuple,
-    Union,
 )
 
 from torch import Tensor, device, dtype, tensor, zeros_like
@@ -38,14 +34,14 @@ class _EmpiricalRiskMixin:
 
     def __init__(
         self,
-        model_func: Callable[[Union[Tensor, MutableMapping]], Tensor],
-        loss_func: Union[Callable[[Tensor, Tensor], Tensor], None],
-        params: List[Parameter],
-        data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
+        model_func: Callable[[Tensor | MutableMapping], Tensor],
+        loss_func: Callable[[Tensor, Tensor], Tensor] | None,
+        params: list[Parameter],
+        data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
-        batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
-        num_data: Optional[int] = None,
-        num_per_example_loss_terms: Optional[int] = None,
+        batch_size_fn: Callable[[MutableMapping | Tensor | None], int] | None = None,
+        num_data: int | None = None,
+        num_per_example_loss_terms: int | None = None,
         check_deterministic: bool = True,
     ):
         """Set up the shared state for empirical risk computation.
@@ -101,9 +97,9 @@ class _EmpiricalRiskMixin:
 
     def _get_data_statistics(
         self,
-        num_data: Optional[int],
-        num_per_example_loss_terms: Optional[int],
-    ) -> Tuple[int, Optional[int]]:
+        num_data: int | None,
+        num_per_example_loss_terms: int | None,
+    ) -> tuple[int, int | None]:
         """Determine the number of data points and per-example loss terms.
 
         Traverses the data at most once, computing whichever statistics were not
@@ -219,11 +215,11 @@ class _EmpiricalRiskMixin:
 
     @staticmethod
     def _check_deterministic_batch(
-        Xs: Tuple[Union[Tensor, MutableMapping], Union[Tensor, MutableMapping]],
-        ys: Tuple[Tensor, Tensor],
-        predictions: Tuple[Tensor, Tensor],
-        losses: Tuple[Optional[Tensor], Optional[Tensor]],
-        gradients: Tuple[Optional[List[Tensor]], Optional[List[Tensor]]],
+        inputs: tuple[Tensor | MutableMapping, Tensor | MutableMapping],
+        ys: tuple[Tensor, Tensor],
+        predictions: tuple[Tensor, Tensor],
+        losses: tuple[Tensor | None, Tensor | None],
+        gradients: tuple[list[Tensor] | None, list[Tensor] | None],
         has_loss_func: bool,
         rtol: float = 1e-5,
         atol: float = 1e-8,
@@ -231,7 +227,7 @@ class _EmpiricalRiskMixin:
         """Compare two batch outputs of a data-prediction-loss-gradient pass.
 
         Args:
-            Xs: The two data inputs to compare.
+            inputs: The two data inputs to compare.
             ys: The two data targets to compare.
             predictions: The two predictions to compare.
             losses: The two losses to compare.
@@ -243,7 +239,7 @@ class _EmpiricalRiskMixin:
         Raises:
             RuntimeError: If any of the pairs mismatch.
         """
-        X1, X2 = Xs
+        X1, X2 = inputs
         if isinstance(X1, MutableMapping) and isinstance(X2, MutableMapping):
             for k in X1:
                 v1, v2 = X1[k], X2[k]
@@ -293,8 +289,8 @@ class _EmpiricalRiskMixin:
 
     def _loop_over_data(
         self,
-        desc: Optional[str] = None,
-    ) -> Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]]:
+        desc: str | None = None,
+    ) -> Iterable[tuple[Tensor | MutableMapping, Tensor]]:
         """Yield batches of the data set, loaded to the correct device.
 
         Args:
@@ -322,7 +318,7 @@ class _EmpiricalRiskMixin:
             yield (X, y)
 
     def _get_normalization_factor(
-        self, X: Union[MutableMapping, Tensor], y: Tensor
+        self, X: MutableMapping | Tensor, y: Tensor
     ) -> float:
         """Return the correction factor for correct normalization over the data set.
 
@@ -340,11 +336,11 @@ class _EmpiricalRiskMixin:
     def _data_prediction_loss_gradient(
         self, desc: str = "batch_prediction_loss_gradient"
     ) -> Iterator[
-        Tuple[
-            Tuple[Union[Tensor, MutableMapping], Tensor],
+        tuple[
+            tuple[Tensor | MutableMapping, Tensor],
             Tensor,
-            Optional[Tensor],
-            Optional[List[Tensor]],
+            Tensor | None,
+            list[Tensor] | None,
         ]
     ]:
         """Yield (input, label), prediction, loss, and gradient for each batch.
@@ -369,7 +365,7 @@ class _EmpiricalRiskMixin:
 
             yield (X, y), prediction, loss, grad_params
 
-    def gradient_and_loss(self) -> Tuple[List[Tensor], Tensor]:
+    def gradient_and_loss(self) -> tuple[list[Tensor], Tensor]:
         """Evaluate the gradient and loss on the data.
 
         Returns:

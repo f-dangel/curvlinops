@@ -15,7 +15,7 @@ from curvlinops.utils import (
 
 
 def hutchpp_trace(
-    A: Union[PyTorchLinearOperator, Tensor],
+    A: PyTorchLinearOperator | Tensor,
     num_matvecs: int,
     distribution: str = "rademacher",
 ) -> Tensor:

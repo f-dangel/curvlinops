@@ -54,7 +54,7 @@ class TensorLinearOperator(PyTorchLinearOperator):
         """
         return TensorLinearOperator(self._A.conj().T)
 
-    def _matmat(self, M: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, M: list[Tensor]) -> list[Tensor]:
         """Multiply the linear operator onto a matrix in list format.
 
         Args:
@@ -121,7 +121,7 @@ class OuterProductLinearOperator(PyTorchLinearOperator):
         self._A = A
         self._c = c
 
-    def _matmat(self, M: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, M: list[Tensor]) -> list[Tensor]:
         """Apply the linear operator to a matrix in list format.
 
         Args:
@@ -168,7 +168,7 @@ class IdentityLinearOperator(DiagonalLinearOperator):
 
     SELF_ADJOINT = True
 
-    def __init__(self, shape: List[Tuple[int, ...]], device: device, dtype: dtype):
+    def __init__(self, shape: list[tuple[int, ...]], device: device, dtype: dtype):
         """Store the linear operator's input and output space dimensions.
 
         Args:
@@ -184,7 +184,7 @@ class IdentityLinearOperator(DiagonalLinearOperator):
         ]
         super().__init__(diagonal)
 
-    def _matmat(self, M: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, M: list[Tensor]) -> list[Tensor]:
         """Apply the linear operator to a matrix in list format.
 
         Args:

@@ -20,7 +20,7 @@ class BlockDiagonalLinearOperator(PyTorchLinearOperator):
     where each Bi is itself a PyTorch linear operator.
     """
 
-    def __init__(self, blocks: List[PyTorchLinearOperator]):
+    def __init__(self, blocks: list[PyTorchLinearOperator]):
         """Initialize the block-diagonal linear operator.
 
         Args:
@@ -46,7 +46,7 @@ class BlockDiagonalLinearOperator(PyTorchLinearOperator):
         # Block diagonal is self-adjoint if all blocks are self-adjoint
         self.SELF_ADJOINT = all(B.SELF_ADJOINT for B in blocks)
 
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         """Matrix-matrix multiplication with block-diagonal structure.
 
         Args:

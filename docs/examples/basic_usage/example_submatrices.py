@@ -85,7 +85,7 @@ assert allclose_report(H_functorch, H @ identity)
 # Let's define a function to extract these blocks from the Hessian:
 
 
-def extract_block(mat: Tensor, params: List[Tensor], i: int, j: int) -> Tensor:
+def extract_block(mat: Tensor, params: list[Tensor], i: int, j: int) -> Tensor:
     """Extract the Hessian block from parameters ``i`` and ``j``.
 
     Args:

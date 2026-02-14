@@ -22,7 +22,7 @@ from collections.abc import MutableMapping
 from enum import Enum, EnumMeta
 from functools import partial
 from math import sqrt
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, TypeVar
 from warnings import warn
 
 from einops import einsum, rearrange, reduce
@@ -55,6 +55,10 @@ from curvlinops.kfac_utils import (
 )
 from curvlinops.kronecker import KroneckerProductLinearOperator
 from curvlinops.utils import _seed_generator
+
+FactorType = TypeVar(
+    "FactorType", Tensor | None, tuple[Tensor | None, Tensor | None]
+)
 
 
 class MetaEnum(EnumMeta):
@@ -175,19 +179,19 @@ class KFACLinearOperator(CurvatureLinearOperator):
     def __init__(
         self,
         model_func: Module,
-        loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
-        params: List[Parameter],
-        data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
+        loss_func: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
+        params: list[Parameter],
+        data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
         seed: int = 2147483647,
         fisher_type: str = FisherType.MC,
         mc_samples: int = 1,
         kfac_approx: str = KFACType.EXPAND,
-        num_per_example_loss_terms: Optional[int] = None,
+        num_per_example_loss_terms: int | None = None,
         separate_weight_and_bias: bool = True,
-        num_data: Optional[int] = None,
-        batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
+        num_data: int | None = None,
+        batch_size_fn: Callable[[MutableMapping | Tensor], int] | None = None,
     ):
         """Kronecker-factored approximate curvature (KFAC) proxy of the Fisher/GGN.
 
@@ -283,7 +287,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
             )
 
         self._seed = seed
-        self._generator: Union[None, Generator] = None
+        self._generator: None | Generator = None
         self._separate_weight_and_bias = separate_weight_and_bias
         self._fisher_type = fisher_type
         self._mc_samples = mc_samples
@@ -313,8 +317,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
         )
 
     @property
-    def representation(self) -> Dict[str, PyTorchLinearOperator]:
-        """Return the internal representation of the linear operator.
+    def representation(self) -> dict[str, dict[str, Tensor]]:
+        """Return the internal representation (Kronecker factors) of the linear operator.
 
         This attribute is lazily evaluated and cached after the first access.
 
@@ -358,10 +362,10 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
     @staticmethod
     def _set_up_grad_outputs_computer(
-        loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
+        loss_func: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
         fisher_type: FisherType,
         mc_samples: int,
-    ) -> Callable[[Tensor, Tensor, Optional[Generator]], Tensor]:
+    ) -> Callable[[Tensor, Tensor, Generator | None], Tensor]:
         """Set up the function that computes network output gradients for KFAC.
 
         Args:
@@ -383,7 +387,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
         )
 
         def compute_grad_outputs(
-            output: Tensor, y: Tensor, generator: Optional[Generator] = None
+            output: Tensor, y: Tensor, generator: Generator | None = None
         ) -> Tensor:
             """Compute the gradients that are backpropagated from the network's output.
 
@@ -404,7 +408,90 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
         return compute_grad_outputs
 
-    def _matmat(self, M: List[Tensor]) -> List[Tensor]:
+    @staticmethod
+    def _left_and_right_multiply(
+        M: Tensor,
+        aaT: FactorType,
+        ggT: FactorType,
+        eigenvalues: Tensor | None = None,
+    ) -> Tensor:
+        """Left and right multiply matrix with Kronecker factors.
+
+        Args:
+            M: (Batched) Matrix for multiplication. Shape will be
+                (ggT.shape[0], aaT.shape[0], K), where K is the number of vectors/the
+                batch dimension of the batched matrix product.
+            aaT: Input covariance Kronecker factor or its eigenvectors. ``None`` for
+                biases.
+            ggT: Gradient covariance Kronecker factor or its eigenvectors.
+            eigenvalues: Eigenvalues of the (E)KFAC approximation when multiplying with
+                the eigendecomposition of the KFAC approximation. ``None`` for the
+                non-decomposed KFAC approximation. Defaults to ``None``.
+
+        Returns:
+            Matrix-multiplication result.
+        """
+        if eigenvalues is None:
+            M = einsum(ggT, M, aaT, "i j, j k v, k l -> i l v")
+        else:
+            # Perform preconditioning in KFE, e.g. see equation (21) in
+            # https://arxiv.org/abs/2308.03296.
+            aaT_eigvecs = aaT
+            ggT_eigvecs = ggT
+            # Transform in eigenbasis.
+            M = einsum(ggT_eigvecs, M, aaT_eigvecs, "i j, i k v, k l -> j l v")
+            # Multiply (broadcasted) by eigenvalues.
+            M.mul_(eigenvalues.unsqueeze(-1))
+            # Transform back to standard basis.
+            M = einsum(ggT_eigvecs, M, aaT_eigvecs, "i j, j k v, l k -> i l v")
+        return M
+
+    @staticmethod
+    def _separate_left_and_right_multiply(
+        KM: list[Tensor],
+        M: list[Tensor],
+        param_pos: dict[str, int],
+        aaT: FactorType,
+        ggT: FactorType,
+        eigenvalues: dict[int | Tensor] | list[Tensor] | None = None,
+    ) -> Tensor:
+        """Multiply matrix with Kronecker factors for separated weight and bias.
+
+        Args:
+            KM: List to write the matrix-multiplication result to.
+            M: List of matrices for multiplication.
+            param_pos: Dictionary with positions of the weight and bias parameters.
+            aaT: Input covariance Kronecker factor or its eigenvectors. ``None`` for
+                biases.
+            ggT: Gradient covariance Kronecker factor or its eigenvectors.
+            eigenvalues: Eigenvalues of the (E)KFAC approximation when multiplying with
+                the eigendecomposition of the KFAC approximation. ``None`` for the
+                non-decomposed KFAC approximation. Can be a list of tensors or a
+                dictionary mapping parameter positions to tensors. Defaults to ``None``.
+        """
+        for p_name, pos in param_pos.items():
+            # for weights we need to multiply from the right with aaT
+            # for weights and biases we need to multiply from the left with ggT
+            if p_name == "weight":
+                M_w = rearrange(M[pos], "c_out ... v -> c_out (...) v")
+                # If `eigenvalues` is not `None`, we transform to eigenbasis here
+                KM[pos] = einsum(M_w, aaT, "c_out j v, j k -> c_out k v")
+            else:
+                KM[pos] = M[pos]
+
+            # If `eigenvalues` is not `None`, we convert to eigenbasis here
+            KM[pos] = einsum(
+                ggT.T if eigenvalues else ggT, KM[pos], "j k, k ... v -> j ... v"
+            )
+
+            if eigenvalues is not None:
+                # Multiply (broadcasted) by eigenvalues, convert back to original basis
+                KM[pos].mul_(eigenvalues[pos].unsqueeze(-1))
+                if p_name == "weight":
+                    KM[pos] = einsum(KM[pos], aaT, "c_out j v, k j -> c_out k v")
+                KM[pos] = einsum(ggT, KM[pos], "j k, k ... v -> j ... v")
+
+    def _matmat(self, M: list[Tensor]) -> list[Tensor]:
         """Apply KFAC to a matrix (multiple vectors) in tensor list format.
 
         This allows for matrix-matrix products with the KFAC approximation in PyTorch
@@ -426,18 +513,18 @@ class KFACLinearOperator(CurvatureLinearOperator):
         kfac = P @ K @ PT
         return kfac @ M
 
-    def compute_kronecker_factors(self) -> Tuple[Dict[str, Tensor], Dict[str, Tensor]]:
+    def compute_kronecker_factors(self) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
         """Compute KFAC's Kronecker factors.
 
         Returns:
             Tuple containing (input_covariances, gradient_covariances) dictionaries.
         """
         # Create empty dictionaries to be populated by hooks
-        input_covariances: Dict[str, Tensor] = {}
-        gradient_covariances: Dict[str, Tensor] = {}
+        input_covariances: dict[str, Tensor] = {}
+        gradient_covariances: dict[str, Tensor] = {}
 
         # install forward and backward hooks
-        hook_handles: List[RemovableHandle] = []
+        hook_handles: list[RemovableHandle] = []
 
         for mod_name, param_pos in self._mapping.items():
             module = self._model_func.get_submodule(mod_name)
@@ -496,7 +583,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
     def _rearrange_for_larger_than_2d_output(
         self, output: Tensor, y: Tensor
-    ) -> Tuple[Tensor, Tensor]:
+    ) -> tuple[Tensor, Tensor]:
         r"""Rearrange the output and target if output is >2d.
 
         This will determine what kind of Fisher/GGN is approximated.
@@ -605,10 +692,10 @@ class KFACLinearOperator(CurvatureLinearOperator):
     def _register_tensor_hook_on_output_to_accumulate_gradient_covariance(
         self,
         module: Module,
-        inputs: Tuple[Tensor],
+        inputs: tuple[Tensor],
         output: Tensor,
         module_name: str,
-        gradient_covariances: Dict[str, Tensor],
+        gradient_covariances: dict[str, Tensor],
     ):
         """Register tensor hook on layer's output to accumulate the grad. covariance.
 
@@ -644,7 +731,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
         grad_output: Tensor,
         module: Module,
         module_name: str,
-        gradient_covariances: Dict[str, Tensor],
+        gradient_covariances: dict[str, Tensor],
     ):
         """Accumulate the gradient covariance for a layer's output.
 
@@ -683,9 +770,9 @@ class KFACLinearOperator(CurvatureLinearOperator):
     def _hook_accumulate_input_covariance(
         self,
         module: Module,
-        inputs: Tuple[Tensor],
+        inputs: tuple[Tensor],
         module_name: str,
-        input_covariances: Dict[str, Tensor],
+        input_covariances: dict[str, Tensor],
     ):
         """Pre-forward hook that accumulates the input covariance of a layer.
 
@@ -738,8 +825,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
     @staticmethod
     def _set_or_add_(
-        dictionary: Dict[Any, Tensor], key: Any, value: Tensor
-    ) -> Dict[str, Tensor]:
+        dictionary: dict[Any, Tensor], key: Any, value: Tensor
+    ) -> dict[str, Tensor]:
         """Set or add a value to a dictionary entry.
 
         Args:
@@ -767,8 +854,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
     @classmethod
     def compute_parameter_mapping(
-        cls, params: List[Union[Tensor, Parameter]], model_func: Module
-    ) -> Dict[str, Dict[str, int]]:
+        cls, params: list[Tensor | Parameter], model_func: Module
+    ) -> dict[str, dict[str, int]]:
         """Construct the mapping between layers, their parameters, and positions.
 
         Args:
@@ -951,7 +1038,24 @@ class KFACLinearOperator(CurvatureLinearOperator):
             "_representation": self._representation,
         }
 
-    def load_state_dict(self, state_dict: Dict[str, Any]):
+    def _check_if_keys_match_mapping_keys(self, dictionary: dict):
+        """Check if the keys of a dictionary match the mapping keys of the linear operator.
+
+        Args:
+            dictionary: Dictionary to check.
+
+        Raises:
+            ValueError: If the keys do not match the mapping keys.
+        """
+        dictionary_keys = set(dictionary.keys())
+        mapping_keys = set(self._mapping.keys())
+        if dictionary_keys and dictionary_keys != mapping_keys:
+            raise ValueError(
+                "Keys in dictionary do not match mapping keys of linear operator. "
+                f"Difference: {dictionary_keys - mapping_keys}."
+            )
+
+    def load_state_dict(self, state_dict: dict[str, Any]):
         """Load the state of the KFAC linear operator.
 
         Warning:
@@ -1000,12 +1104,12 @@ class KFACLinearOperator(CurvatureLinearOperator):
     @classmethod
     def from_state_dict(
         cls,
-        state_dict: Dict[str, Any],
+        state_dict: dict[str, Any],
         model_func: Module,
-        params: List[Parameter],
-        data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
+        params: list[Parameter],
+        data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         check_deterministic: bool = True,
-        batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
+        batch_size_fn: Callable[[MutableMapping | Tensor], int] | None = None,
     ) -> KFACLinearOperator:
         """Load a KFAC linear operator from a state dictionary.
 

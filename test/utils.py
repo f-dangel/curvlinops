@@ -65,7 +65,7 @@ from curvlinops.kfac_utils import FromCanonicalLinearOperator, ToCanonicalLinear
 from curvlinops.utils import allclose_report
 
 
-def get_available_devices() -> List[device]:
+def get_available_devices() -> list[device]:
     """Return CPU and, if present, GPU device.
 
     Returns:
@@ -79,7 +79,7 @@ def get_available_devices() -> List[device]:
     return devices
 
 
-def classification_targets(size: Tuple[int], num_classes: int) -> Tensor:
+def classification_targets(size: tuple[int], num_classes: int) -> Tensor:
     """Create random targets for classes ``0``, ..., ``num_classes - 1``.
 
     Args:
@@ -92,7 +92,7 @@ def classification_targets(size: Tuple[int], num_classes: int) -> Tensor:
     return randint(size=size, low=0, high=num_classes)
 
 
-def binary_classification_targets(size: Tuple[int]) -> Tensor:
+def binary_classification_targets(size: tuple[int]) -> Tensor:
     """Create random binary targets.
 
     Args:
@@ -104,7 +104,7 @@ def binary_classification_targets(size: Tuple[int]) -> Tensor:
     return classification_targets(size, 2).float()
 
 
-def regression_targets(size: Tuple[int]) -> Tensor:
+def regression_targets(size: tuple[int]) -> Tensor:
     """Create random targets for regression.
 
     Args:
@@ -117,7 +117,7 @@ def regression_targets(size: Tuple[int]) -> Tensor:
 
 
 def maybe_exclude_or_shuffle_parameters(
-    params: List[Parameter], model: Module, exclude: str, shuffle: bool
+    params: list[Parameter], model: Module, exclude: str, shuffle: bool
 ):
     """Maybe exclude or shuffle parameters.
 
@@ -144,11 +144,11 @@ def block_diagonal(
     linear_operator: Type[CurvatureLinearOperator],
     model: Module,
     loss_func: Module,
-    params: List[Parameter],
-    data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
-    batch_size_fn: Optional[Callable[[MutableMapping], int]] = None,
+    params: list[Parameter],
+    data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
+    batch_size_fn: Callable[[MutableMapping], int] | None = None,
     separate_weight_and_bias: bool = True,
-    optional_linop_args: Optional[Dict[str, Any]] = None,
+    optional_linop_args: dict[str, Any] | None = None,
 ) -> Tensor:
     """Compute the block-diagonal of the matrix induced by a linear operator.
 
@@ -489,8 +489,8 @@ class UnetModel(Module):
 
 
 def cast_input(
-    X: Union[Tensor, MutableMapping], target_dtype: dtype
-) -> Union[Tensor, MutableMapping]:
+    X: Tensor | MutableMapping, target_dtype: dtype
+) -> Tensor | MutableMapping:
     """Cast an input tensor ``X`` into ``target_dtype``.
 
     The input can be inside a dict-like object under the key ``"x"``.
@@ -557,12 +557,12 @@ def compare_state_dicts(state_dict: dict, state_dict_new: dict):
 
 
 def rand_accepted_formats(
-    shapes: List[Tuple[int, ...]],
+    shapes: list[tuple[int, ...]],
     is_vec: bool,
     dtype: dtype,
     device: device,
     num_vecs: int = 1,
-) -> Tuple[List[Tensor], Tensor, ndarray]:
+) -> tuple[list[Tensor], Tensor, ndarray]:
     """Generate a random vector/matrix in all accepted formats.
 
     Args:
@@ -752,7 +752,7 @@ def compare_matmat_expectation(
     assert allclose_report(op_x / max_repeats / scale, mat_x / scale, **tols)
 
 
-def eye_like(A: Union[Tensor, PyTorchLinearOperator]) -> Tensor:
+def eye_like(A: Tensor | PyTorchLinearOperator) -> Tensor:
     """Create an identity matrix of same size as ``A``.
 
     Args:
@@ -827,7 +827,7 @@ def check_estimator_convergence(
 
 
 def _test_inplace_activations(
-    linop_cls: Type[Union[KFACLinearOperator, EKFACLinearOperator]], dev: device
+    linop_cls: Type[KFACLinearOperator | EKFACLinearOperator], dev: device
 ):
     """Test that (E)KFAC works if the network has in-place activations.
 
@@ -860,13 +860,13 @@ def _test_inplace_activations(
 
 
 def _test_property(  # noqa: C901
-    linop_cls: Type[Union[KFACLinearOperator, EKFACLinearOperator]],
+    linop_cls: Type[KFACLinearOperator | EKFACLinearOperator],
     property_name: str,
     model: Module,
     loss_func: Module,
-    params: List[Parameter],
-    data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
-    batch_size_fn: Optional[Callable[[MutableMapping], int]],
+    params: list[Parameter],
+    data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
+    batch_size_fn: Callable[[MutableMapping], int] | None,
     separate_weight_and_bias: bool,
     check_deterministic: bool,
     rtol: float = 1e-5,
@@ -926,7 +926,7 @@ def _test_property(  # noqa: C901
 
 
 def _test_save_and_load_state_dict(
-    linop_cls: Type[Union[KFACLinearOperator, EKFACLinearOperator]],
+    linop_cls: Type[KFACLinearOperator | EKFACLinearOperator],
 ):
     """Test saving and loading state dict of (E)KFAC.
 
@@ -1007,7 +1007,7 @@ def _test_save_and_load_state_dict(
 
 
 def _test_from_state_dict(
-    linop_cls: Type[Union[KFACLinearOperator, EKFACLinearOperator]],
+    linop_cls: Type[KFACLinearOperator | EKFACLinearOperator],
 ):
     """Test that (E)KFACLinearOperator can be created from state dict."""
     manual_seed(0)
@@ -1040,9 +1040,9 @@ def _test_from_state_dict(
 def _test_ekfac_closer_to_exact_than_kfac(
     model: Module,
     loss_func: Module,
-    params: List[Parameter],
-    data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
-    batch_size_fn: Optional[Callable[[MutableMapping], int]],
+    params: list[Parameter],
+    data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
+    batch_size_fn: Callable[[MutableMapping], int] | None,
     exclude: str,
     separate_weight_and_bias: bool,
     fisher_type: FisherType,

@@ -9,7 +9,7 @@ from curvlinops.sampling import random_vector
 
 
 def hutchinson_squared_fro(
-    A: Union[Tensor, PyTorchLinearOperator],
+    A: Tensor | PyTorchLinearOperator,
     num_matvecs: int,
     distribution: str = "rademacher",
 ) -> Tensor:

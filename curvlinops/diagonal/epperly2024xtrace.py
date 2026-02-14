@@ -14,7 +14,7 @@ from curvlinops.utils import (
 )
 
 
-def xdiag(A: Union[PyTorchLinearOperator, Tensor], num_matvecs: int) -> Tensor:
+def xdiag(A: PyTorchLinearOperator | Tensor, num_matvecs: int) -> Tensor:
     """Estimate a linear operator's diagonal using the XDiag algorithm.
 
     The method is presented in `this paper <https://arxiv.org/pdf/2301.07825>`_:

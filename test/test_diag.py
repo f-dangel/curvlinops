@@ -12,7 +12,7 @@ SHAPES = [[(3, 2), (5,)]]
 
 
 @mark.parametrize("shape", SHAPES)
-def test_matvec(shape: List[Tuple[int, ...]]):
+def test_matvec(shape: list[tuple[int, ...]]):
     """Test matrix-vector multiplication against dense diagonal matrix."""
     manual_seed(0)
     diag = [rand(*s) for s in shape]
@@ -22,7 +22,7 @@ def test_matvec(shape: List[Tuple[int, ...]]):
 
 
 @mark.parametrize("shape", SHAPES)
-def test_add_and_sub_closure(shape: List[Tuple[int, ...]]):
+def test_add_and_sub_closure(shape: list[tuple[int, ...]]):
     """Test that addition/subtraction yields a DiagonalLinearOperator."""
     manual_seed(0)
     diag1, diag2 = [rand(*s) for s in shape], [rand(*s) for s in shape]
@@ -42,7 +42,7 @@ def test_add_and_sub_closure(shape: List[Tuple[int, ...]]):
 
 
 @mark.parametrize("shape", SHAPES)
-def test_mul_and_div_closure(shape: List[Tuple[int, ...]]):
+def test_mul_and_div_closure(shape: list[tuple[int, ...]]):
     """Test that scalar multiplication/division yields a DiagonalLinearOperator."""
     manual_seed(0)
     diag = [rand(*s) for s in shape]
@@ -68,7 +68,7 @@ def test_mul_and_div_closure(shape: List[Tuple[int, ...]]):
 
 
 @mark.parametrize("shape", SHAPES)
-def test_matmul_closure(shape: List[Tuple[int, ...]]):
+def test_matmul_closure(shape: list[tuple[int, ...]]):
     """Test that matmul of two diagonal operators yields a DiagonalLinearOperator."""
     manual_seed(0)
     diag1, diag2 = [rand(*s) for s in shape], [rand(*s) for s in shape]
@@ -81,7 +81,7 @@ def test_matmul_closure(shape: List[Tuple[int, ...]]):
 
 
 @mark.parametrize("shape", SHAPES)
-def test_inverse_closure(shape: List[Tuple[int, ...]]):
+def test_inverse_closure(shape: list[tuple[int, ...]]):
     """Test the damped inverse of a diagonal operator is a diagonal operator."""
     manual_seed(0)
     diag = [rand(*s) for s in shape]

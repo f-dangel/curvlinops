@@ -13,7 +13,7 @@ from curvlinops.utils import _infer_device, _infer_dtype
 class DiagonalLinearOperator(PyTorchLinearOperator):
     """Linear operator representing a diagonal matrix."""
 
-    def __init__(self, diagonal: List[Tensor]):
+    def __init__(self, diagonal: list[Tensor]):
         """Initialize diagonal linear operator.
 
         The diagonal entries are specified in tensor list format, where each tensor
@@ -34,7 +34,7 @@ class DiagonalLinearOperator(PyTorchLinearOperator):
             not d.is_complex() or d.conj().allclose(d) for d in diagonal
         )
 
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         """Matrix-matrix multiplication with the diagonal matrix.
 
         Multiplies each column of ``X`` element-wise by the diagonal entries.
@@ -99,7 +99,7 @@ class DiagonalLinearOperator(PyTorchLinearOperator):
 
     def __add__(
         self, other: PyTorchLinearOperator
-    ) -> Union[_SumPyTorchLinearOperator, DiagonalLinearOperator]:
+    ) -> _SumPyTorchLinearOperator | DiagonalLinearOperator:
         """Add another linear operator to this diagonal operator.
 
         If ``other`` is also a ``DiagonalLinearOperator`` with matching input shapes,
@@ -125,8 +125,8 @@ class DiagonalLinearOperator(PyTorchLinearOperator):
             return super().__add__(other)
 
     def __matmul__(
-        self, other: Union[List[Tensor], Tensor, PyTorchLinearOperator]
-    ) -> Union[List[Tensor], Tensor, PyTorchLinearOperator]:
+        self, other: list[Tensor] | Tensor | PyTorchLinearOperator
+    ) -> list[Tensor] | Tensor | PyTorchLinearOperator:
         """Multiply this operator with a vector, matrix, or another operator.
 
         If ``other`` is a ``DiagonalLinearOperator`` with matching shapes, the

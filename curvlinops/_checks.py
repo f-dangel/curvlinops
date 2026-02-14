@@ -1,7 +1,7 @@
 """Helpers to verify determinism of the empirical risk, gradient, and model."""
 
 from collections import UserDict
-from typing import Any, Callable, List, MutableMapping, Tuple, Union
+from typing import Any, Callable, MutableMapping, Union
 from warnings import warn
 
 from torch import Tensor
@@ -36,7 +36,7 @@ def _register_userdict_as_pytree():
 
     from torch.utils._pytree import register_pytree_node
 
-    def userdict_flatten(ud: UserDict) -> Tuple[List[Any], Tuple[str, ...]]:
+    def userdict_flatten(ud: UserDict) -> tuple[list[Any], tuple[str, ...]]:
         """Flatten a UserDict into a list of values and a tuple of keys.
 
         Args:
@@ -49,7 +49,7 @@ def _register_userdict_as_pytree():
         values = [ud.data[k] for k in keys]
         return values, keys
 
-    def userdict_unflatten(values: List[Any], keys: Tuple[str, ...]) -> UserDict:
+    def userdict_unflatten(values: list[Any], keys: tuple[str, ...]) -> UserDict:
         """Unflatten a list of values and keys back into a UserDict.
 
         Args:
@@ -66,8 +66,8 @@ def _register_userdict_as_pytree():
 
 
 def _check_supports_batched_and_unbatched_inputs(
-    X: Union[Tensor, MutableMapping],
-    f: Callable[[Union[Tensor, MutableMapping]], Tensor],
+    X: Tensor | MutableMapping,
+    f: Callable[[Tensor | MutableMapping], Tensor],
     batch_axis: int = 0,
     rtol: float = 1e-5,
     atol: float = 1e-8,

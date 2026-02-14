@@ -1,12 +1,13 @@
 """Contains pytest fixtures that are visible by other files."""
 
 from collections.abc import MutableMapping
-from typing import Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Generator, Iterable
 
 from numpy import random
 from pytest import fixture
 from torch import Tensor, manual_seed
 from torch.nn import Module, MSELoss, Parameter
+
 
 import test.utils
 from test.cases import (
@@ -26,14 +27,14 @@ from test.kfac_cases import (
 
 
 def initialize_case(
-    case: Dict,
-) -> Tuple[
-    Callable[[Tensor], Tensor],
-    Callable[[Tensor, Tensor], Tensor],
-    List[Tensor],
-    Iterable[Tuple[Tensor, Tensor]],
-    Optional[Callable[[MutableMapping], int]],
-]:
+    case: dict,
+) -> Generator[tuple[
+     Callable[[Tensor], Tensor],
+     Callable[[Tensor, Tensor], Tensor],
+     list[Tensor],
+     Iterable[tuple[Tensor, Tensor]],
+     Callable[[MutableMapping], int] | None,
+ ], Any, Any]:
     """Instantiate a test case and seed random generators.
 
     Args:
@@ -66,13 +67,13 @@ def initialize_case(
 @fixture(params=CASES)
 def case(
     request,
-) -> Tuple[
-    Callable[[Tensor], Tensor],
-    Callable[[Tensor, Tensor], Tensor],
-    List[Tensor],
-    Iterable[Tuple[Tensor, Tensor]],
-    Optional[Callable[[MutableMapping], int]],
-]:
+) -> Generator[tuple[
+     Callable[[Tensor], Tensor],
+     Callable[[Tensor, Tensor], Tensor],
+     list[Tensor],
+     Iterable[tuple[Tensor, Tensor]],
+     Callable[[MutableMapping], int] | None,
+ ], Any, Any]:
     """Provide a parametrized test case.
 
     Yields:
@@ -85,13 +86,13 @@ def case(
 @fixture(params=INV_CASES)
 def inv_case(
     request,
-) -> Tuple[
+) -> Generator[tuple[
     Callable[[Tensor], Tensor],
     Callable[[Tensor, Tensor], Tensor],
-    List[Tensor],
-    Iterable[Tuple[Tensor, Tensor]],
-    Optional[Callable[[MutableMapping], int]],
-]:
+    list[Tensor],
+    Iterable[tuple[Tensor, Tensor]],
+    Callable[[MutableMapping], int] | None,
+], Any, Any]:
     """Provide a parametrized inverse test case.
 
     Yields:
@@ -104,13 +105,13 @@ def inv_case(
 @fixture(params=CNN_CASES)
 def cnn_case(
     request,
-) -> Tuple[
+) -> Generator[tuple[
     Callable[[Tensor], Tensor],
     Callable[[Tensor, Tensor], Tensor],
-    List[Tensor],
-    Iterable[Tuple[Tensor, Tensor]],
-    Optional[Callable[[MutableMapping], int]],
-]:
+    list[Tensor],
+    Iterable[tuple[Tensor, Tensor]],
+    Callable[[MutableMapping], int] | None,
+], Any, Any]:
     """Provide a parametrized CNN test case.
 
     Yields:
@@ -123,13 +124,13 @@ def cnn_case(
 @fixture(params=NON_DETERMINISTIC_CASES)
 def non_deterministic_case(
     request,
-) -> Tuple[
+) -> Generator[tuple[
     Callable[[Tensor], Tensor],
     Callable[[Tensor, Tensor], Tensor],
-    List[Tensor],
-    Iterable[Tuple[Tensor, Tensor]],
-    Optional[Callable[[MutableMapping], int]],
-]:
+    list[Tensor],
+    Iterable[tuple[Tensor, Tensor]],
+    Callable[[MutableMapping], int] | None,
+], Any, Any]:
     """Provide a parametrized non-deterministic test case.
 
     Yields:
@@ -140,7 +141,7 @@ def non_deterministic_case(
 
 
 @fixture(params=BLOCK_SIZES_FNS.values(), ids=BLOCK_SIZES_FNS.keys())
-def block_sizes_fn(request) -> Callable[[List[Parameter]], Optional[List[int]]]:
+def block_sizes_fn(request) -> Callable[[list[Parameter]], list[int]] | None:
     """Generate the ``block_sizes`` argument for a linear operator.
 
     Args:
@@ -156,13 +157,13 @@ def block_sizes_fn(request) -> Callable[[List[Parameter]], Optional[List[int]]]:
 @fixture(params=KFAC_EXACT_CASES)
 def kfac_exact_case(
     request,
-) -> Tuple[
+) -> Generator[tuple[
     Module,
     MSELoss,
-    List[Tensor],
-    Iterable[Tuple[Tensor, Tensor]],
-    Optional[Callable[[MutableMapping], int]],
-]:
+    list[Tensor],
+    Iterable[tuple[Tensor, Tensor]],
+    Callable[[MutableMapping], int] | None,
+], Any, Any]:
     """Prepare a test case for which KFAC equals the GGN.
 
     Yields:
@@ -176,13 +177,13 @@ def kfac_exact_case(
 @fixture(params=KFAC_WEIGHT_SHARING_EXACT_CASES)
 def kfac_weight_sharing_exact_case(
     request,
-) -> Tuple[
-    Module,
-    MSELoss,
-    List[Tensor],
-    Iterable[Tuple[Tensor, Tensor]],
-    Optional[Callable[[MutableMapping], int]],
-]:
+ ) -> Generator[tuple[
+     Module,
+     MSELoss,
+     list[Tensor],
+     Iterable[tuple[Tensor, Tensor]],
+     Callable[[MutableMapping], int] | None,
+ ], Any, Any]:
     """Prepare a test case with weight-sharing for which KFAC equals the GGN.
 
     Yields:
@@ -196,13 +197,13 @@ def kfac_weight_sharing_exact_case(
 @fixture(params=KFAC_EXACT_ONE_DATUM_CASES)
 def kfac_exact_one_datum_case(
     request,
-) -> Tuple[
+) -> Generator[tuple[
     Module,
     Module,
-    List[Tensor],
-    Iterable[Tuple[Tensor, Tensor]],
-    Optional[Callable[[MutableMapping], int]],
-]:
+    list[Tensor],
+    Iterable[tuple[Tensor, Tensor]],
+    Callable[[MutableMapping], int] | None,
+], Any, Any]:
     """Prepare a test case for which KFAC equals the GGN and one datum is used.
 
     Yields:
@@ -216,13 +217,13 @@ def kfac_exact_one_datum_case(
 @fixture(params=SINGLE_LAYER_CASES)
 def single_layer_case(
     request,
-) -> Tuple[
+) -> Generator[tuple[
     Module,
     Module,
-    List[Tensor],
-    Iterable[Tuple[Tensor, Tensor]],
-    Optional[Callable[[MutableMapping], int]],
-]:
+    list[Tensor],
+    Iterable[tuple[Tensor, Tensor]],
+    Callable[[MutableMapping], int] | None,
+], Any, Any]:
     """Prepare a test case with a single-layer model for which FOOF is exact.
 
     Yields:
@@ -236,13 +237,13 @@ def single_layer_case(
 @fixture(params=SINGLE_LAYER_WEIGHT_SHARING_CASES)
 def single_layer_weight_sharing_case(
     request,
-) -> Tuple[
+) -> Generator[tuple[
     Module,
     Module,
-    List[Tensor],
-    Iterable[Tuple[Tensor, Tensor]],
-    Optional[Callable[[MutableMapping], int]],
-]:
+    list[Tensor],
+    Iterable[tuple[Tensor, Tensor]],
+    Callable[[MutableMapping], int] | None,
+], Any, Any]:
     """Test case with a single-layer model with weight-sharing for which FOOF is exact.
 
     Yields:

@@ -18,7 +18,7 @@ class EighDecomposedLinearOperator(PyTorchLinearOperator):
     SELF_ADJOINT: bool = True
 
     def __init__(
-        self, eigenvalues: Tensor, eigenvectors: Union[Tensor, PyTorchLinearOperator]
+        self, eigenvalues: Tensor, eigenvectors: Tensor | PyTorchLinearOperator
     ):
         """Initialize eigendecomposition linear operator.
 
@@ -59,7 +59,7 @@ class EighDecomposedLinearOperator(PyTorchLinearOperator):
 
         super().__init__(in_shapes, out_shapes)
 
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         """Apply eigendecomposition operator to matrix.
 
         Computes Q diag(λ) Q^T @ X efficiently as Q @ (λ * (Q^T @ X)).

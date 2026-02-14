@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from functools import partial
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 from einops import einsum, rearrange
 from torch import Tensor, cat
@@ -23,9 +23,9 @@ from curvlinops.utils import _seed_generator
 def compute_eigenvalue_correction_linear_weight_sharing(
     g: Tensor,
     ggT_eigvecs: Tensor,
-    a: Union[Tensor, None],
-    aaT_eigvecs: Union[Tensor, None],
-    _force_strategy: Optional[str] = None,
+    a: Tensor | None,
+    aaT_eigvecs: Tensor | None,
+    _force_strategy: str | None = None,
 ) -> Tensor:
     r"""Compute eigenvalue corrections for a linear layer with weight sharing.
 
@@ -251,15 +251,15 @@ class EKFACLinearOperator(KFACLinearOperator):
         _SUPPORTED_FISHER_TYPE: Tuple with supported Fisher types.
     """
 
-    _SUPPORTED_FISHER_TYPE: Tuple[FisherType, ...] = (
+    _SUPPORTED_FISHER_TYPE: tuple[FisherType, ...] = (
         FisherType.TYPE2,
         FisherType.MC,
         FisherType.EMPIRICAL,
     )
 
     @property
-    def representation(self) -> Dict[str, PyTorchLinearOperator]:
-        """Return EKFAC's internal representation.
+    def representation(self) -> dict:
+        """Return EKFAC's internal representation (eigenvectors + corrected eigenvalues).
 
         Returns:
             A dictionary containing the linear operators converting from parameter to
@@ -300,9 +300,9 @@ class EKFACLinearOperator(KFACLinearOperator):
 
     def _setup_canonical_operator(
         self,
-        input_covariances_eigenvectors: Dict[str, Tensor],
-        gradient_covariances_eigenvectors: Dict[str, Tensor],
-        corrected_eigenvalues: Dict[str, Union[Tensor, Dict[int, Tensor]]],
+        input_covariances_eigenvectors: dict[str, Tensor],
+        gradient_covariances_eigenvectors: dict[str, Tensor],
+        corrected_eigenvalues: dict[str, Tensor, dict[int | Tensor]],
     ) -> BlockDiagonalLinearOperator:
         """Set up the canonical EKFAC operator from Kronecker factors.
 
@@ -372,7 +372,7 @@ class EKFACLinearOperator(KFACLinearOperator):
 
     def _rearrange_for_larger_than_2d_output(
         self, output: Tensor, y: Tensor
-    ) -> Tuple[Tensor, Tensor]:
+    ) -> tuple[Tensor, Tensor]:
         r"""Rearrange the output and target if output is >2d.
 
         This will determine what kind of Fisher/GGN is approximated.
@@ -398,8 +398,76 @@ class EKFACLinearOperator(KFACLinearOperator):
             )
         return output, y
 
+    def _matmat(self, M: list[Tensor]) -> list[Tensor]:
+        """Apply EKFAC to a matrix (multiple vectors) in tensor list format.
+
+        This allows for matrix-matrix products with the EKFAC approximation in PyTorch
+        without converting tensors to numpy arrays, which avoids unnecessary
+        device transfers when working with GPUs and flattening/concatenating.
+
+        Args:
+            M: Matrix for multiplication in tensor list format. Each entry has the
+                same shape as a parameter with an additional trailing dimension of size
+                ``K`` for the columns, i.e. ``[(*p1.shape, K), (*p2.shape, K), ...]``.
+
+        Returns:
+            Matrix-multiplication result ``EKFAC @ M`` in tensor list format. Has the same
+            shapes as the input.
+        """
+        input_covariances_eigenvectors = self.representation[
+            "input_covariances_eigenvectors"
+        ]
+        gradient_covariances_eigenvectors = self.representation[
+            "gradient_covariances_eigenvectors"
+        ]
+        corrected_eigenvalues = self.representation["corrected_eigenvalues"]
+
+        KM: list[Tensor | None] = [None] * len(M)
+
+        for mod_name, param_pos in self._mapping.items():
+            # cache the weight shape to ensure correct shapes are returned
+            if "weight" in param_pos:
+                weight_shape = M[param_pos["weight"]].shape
+
+            # Get the EKFAC approximation components for the current module
+            # aaT_eigenvectors does not exist if the weight matrix is excluded
+            aaT_eigenvectors = input_covariances_eigenvectors.get(mod_name)
+            # ggT_eigenvectors and corrected_eigenvals always exists
+            ggT_eigenvectors = gradient_covariances_eigenvectors[mod_name]
+            corrected_eigenvals = corrected_eigenvalues[mod_name]
+
+            # bias and weights are treated jointly
+            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+                param_pos.keys()
+            ):
+                w_pos, b_pos = param_pos["weight"], param_pos["bias"]
+                # v denotes the free dimension for treating multiple vectors in parallel
+                M_w = rearrange(M[w_pos], "c_out ... v -> c_out (...) v")
+                M_joint = cat([M_w, M[b_pos].unsqueeze(-2)], dim=-2)
+                M_joint = self._left_and_right_multiply(
+                    M_joint, aaT_eigenvectors, ggT_eigenvectors, corrected_eigenvals
+                )
+                w_cols = M_w.shape[1]
+                KM[w_pos], KM[b_pos] = M_joint.split([w_cols, 1], dim=-2)
+                KM[b_pos].squeeze_(1)
+            else:
+                self._separate_left_and_right_multiply(
+                    KM,
+                    M,
+                    param_pos,
+                    aaT_eigenvectors,
+                    ggT_eigenvectors,
+                    corrected_eigenvals,
+                )
+
+            # restore original shapes
+            if "weight" in param_pos:
+                KM[param_pos["weight"]] = KM[param_pos["weight"]].view(weight_shape)
+
+        return KM
+
     @staticmethod
-    def _eigenvectors_(dictionary: Dict[Any, Tensor]) -> Dict[Any, Tensor]:
+    def _eigenvectors_(dictionary: dict[Any, Tensor]) -> dict[Any, Tensor]:
         """Replace all matrix values with their eigenvalues (inplace).
 
         Args:
@@ -416,9 +484,9 @@ class EKFACLinearOperator(KFACLinearOperator):
 
     def compute_eigenvalue_correction(
         self,
-        input_covariances_eigenvectors: Dict[str, Tensor],
-        gradient_covariances_eigenvectors: Dict[str, Tensor],
-    ) -> Dict[str, Union[Tensor, Dict[int, Tensor]]]:
+        input_covariances_eigenvectors: dict[str, Tensor],
+        gradient_covariances_eigenvectors: dict[str, Tensor],
+    ) -> dict[str, Tensor | dict[int | Tensor]]:
         """Compute the corrected eigenvalues for EKFAC.
 
         Args:
@@ -431,10 +499,10 @@ class EKFACLinearOperator(KFACLinearOperator):
             Dictionary containing corrected eigenvalues for each module.
         """
         # Create empty dictionary to be populated by hooks
-        corrected_eigenvalues: Dict[str, Union[Tensor, Dict[int, Tensor]]] = {}
+        corrected_eigenvalues: dict[str, Tensor | dict[int | Tensor]] = {}
 
         # install forward hooks
-        hook_handles: List[RemovableHandle] = []
+        hook_handles: list[RemovableHandle] = []
 
         for mod_name in self._mapping:
             module = self._model_func.get_submodule(mod_name)
@@ -469,12 +537,12 @@ class EKFACLinearOperator(KFACLinearOperator):
     def _register_tensor_hook_on_output_to_accumulate_corrected_eigenvalues(
         self,
         module: Module,
-        inputs: Tuple[Tensor],
+        inputs: tuple[Tensor],
         output: Tensor,
         module_name: str,
-        input_covariances_eigenvectors: Dict[str, Tensor],
-        gradient_covariances_eigenvectors: Dict[str, Tensor],
-        corrected_eigenvalues: Dict[str, Union[Tensor, Dict[int, Tensor]]],
+        input_covariances_eigenvectors: dict[str, Tensor],
+        gradient_covariances_eigenvectors: dict[str, Tensor],
+        corrected_eigenvalues: dict[str, Tensor | dict[int | Tensor]],
     ):
         """Register tensor hook on layer's output to accumulate the corrected eigenvalues.
 
@@ -517,10 +585,10 @@ class EKFACLinearOperator(KFACLinearOperator):
         grad_output: Tensor,
         module: Module,
         module_name: str,
-        input_covariances_eigenvectors: Dict[str, Tensor],
-        gradient_covariances_eigenvectors: Dict[str, Tensor],
-        corrected_eigenvalues: Dict[str, Union[Tensor, Dict[int, Tensor]]],
-        inputs: Tuple[Tensor],
+        input_covariances_eigenvectors: dict[str, Tensor],
+        gradient_covariances_eigenvectors: dict[str, Tensor],
+        corrected_eigenvalues: dict[str, Tensor | dict[int | Tensor]],
+        inputs: tuple[Tensor],
     ):
         r"""Accumulate the corrected eigenvalues.
 

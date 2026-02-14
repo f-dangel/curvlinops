@@ -14,7 +14,7 @@ from curvlinops.utils import make_functional_model_and_loss
 
 def make_ggn_vector_product(
     f: Callable[..., Tensor], c: Callable[..., Tensor], num_c_extra_args: int = 0
-) -> Callable[..., Tuple[Tensor, ...]]:
+) -> Callable[..., tuple[Tensor, ...]]:
     """Create a function that computes GGN-vector products for given f and c functions.
 
     Args:
@@ -34,11 +34,11 @@ def make_ggn_vector_product(
 
     @no_grad()
     def ggn_vector_product(
-        params: Tuple[Tensor, ...],
+        params: tuple[Tensor, ...],
         X: Tensor,
         y: Tensor,
-        *args_and_v: Tuple[Tensor, ...],
-    ) -> Tuple[Tensor, ...]:
+        *args_and_v: tuple[Tensor, ...],
+    ) -> tuple[Tensor, ...]:
         """Multiply the GGN on a vector in list format.
 
         Args:
@@ -72,9 +72,9 @@ def make_ggn_vector_product(
 
 
 def make_batch_ggn_matrix_product(
-    model_func: Module, loss_func: Module, params: Tuple[Parameter, ...]
+    model_func: Module, loss_func: Module, params: tuple[Parameter, ...]
 ) -> Callable[
-    [Union[Tensor, MutableMapping], Tensor, Tuple[Tensor, ...]], Tuple[Tensor, ...]
+    [Tensor | MutableMapping, Tensor, tuple[Tensor, ...]], tuple[Tensor, ...]
 ]:
     r"""Set up function that multiplies the mini-batch GGN onto a matrix in list format.
 
@@ -150,7 +150,7 @@ class GGNLinearOperator(CurvatureLinearOperator):
     def _mp(
         self,
     ) -> Callable[
-        [Union[Tensor, MutableMapping], Tensor, Tuple[Tensor, ...]], Tuple[Tensor, ...]
+        [Tensor | MutableMapping, Tensor, tuple[Tensor, ...]], tuple[Tensor, ...]
     ]:
         """Lazy initialization of batch-GGN matrix product function.
 
@@ -165,8 +165,8 @@ class GGNLinearOperator(CurvatureLinearOperator):
         )
 
     def _matmat_batch(
-        self, X: Union[Tensor, MutableMapping], y: Tensor, M: List[Tensor]
-    ) -> List[Tensor]:
+        self, X: Tensor | MutableMapping, y: Tensor, M: list[Tensor]
+    ) -> list[Tensor]:
         """Apply the mini-batch GGN to a matrix.
 
         Args:
