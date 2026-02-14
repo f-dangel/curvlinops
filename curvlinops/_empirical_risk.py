@@ -43,7 +43,7 @@ class _EmpiricalRiskMixin:
         params: list[Parameter],
         data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
-        batch_size_fn: Callable[[MutableMapping | Tensor | None, int]] = None,
+        batch_size_fn: Callable[[MutableMapping | Tensor | None], int] | None = None,
         num_data: int | None = None,
         num_per_example_loss_terms: int | None = None,
         check_deterministic: bool = True,
