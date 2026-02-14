@@ -275,6 +275,42 @@ def test_NeumannInverseLinearOperator_preconditioner_efficiency_cpu():
     assert A_with_pre.num_matmats < A_no_pre.num_matmats
 
 
+def test_NeumannInverseLinearOperator_preconditioned_beats_naive_cpu():
+    """For same iteration budget, preconditioned Neumann should reduce residual more."""
+    manual_seed(0)
+    n, num_rhs, num_terms = 256, 8, 40
+
+    # Ill-conditioned-ish SPD, but diagonally dominant enough for Neumann with scaling.
+    D = rand(n, dtype=float64) * 200 + 1.0
+    U = randn(n, n, dtype=float64)
+    A = 0.02 * (U + U.T) / 2.0
+    A = A + D.diag()
+
+    # Same initialization idea for both methods.
+    scale = 0.9 / A.diag().max().item()
+    X = rand(n, num_rhs, dtype=float64)
+
+    # Naive Neumann
+    inv_naive = NeumannInverseLinearOperator(
+        TensorLinearOperator(A), num_terms=num_terms, scale=scale
+    )
+    Y_naive = inv_naive @ X
+    rel_res_naive = (A @ Y_naive - X).norm() / X.norm()
+
+    # Preconditioned Neumann (Jacobi preconditioner)
+    P = (1.0 / A.diag()).diag()
+    inv_pre = NeumannInverseLinearOperator(
+        TensorLinearOperator(A),
+        num_terms=num_terms,
+        preconditioner=TensorLinearOperator(P),
+    )
+    Y_pre = inv_pre @ X
+    rel_res_pre = (A @ Y_pre - X).norm() / X.norm()
+
+    # Expect better residual with preconditioning at same iteration budget.
+    assert rel_res_pre < rel_res_naive
+
+
 @mark.cuda
 @mark.skipif(not cuda.is_available(), reason="CUDA not available")
 def test_CGInverseLinearOperator_preconditioner_toy_cuda():
