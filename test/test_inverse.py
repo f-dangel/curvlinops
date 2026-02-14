@@ -190,6 +190,7 @@ def test_inverse_preconditioner_shape_mismatch_raises():
         )
 
 
+@mark.cuda
 @mark.skipif(not cuda.is_available(), reason="CUDA not available")
 def test_CGInverseLinearOperator_preconditioner_toy_cuda():
     """CUDA test for CG preconditioner support."""
@@ -216,6 +217,7 @@ def test_CGInverseLinearOperator_preconditioner_toy_cuda():
     compare_matmat(inv_A_cg, inv_A, rtol=1e-7, atol=1e-9)
 
 
+@mark.cuda
 @mark.skipif(not cuda.is_available(), reason="CUDA not available")
 def test_NeumannInverseLinearOperator_preconditioner_toy_cuda():
     """CUDA test for preconditioned Neumann inverse."""
@@ -237,3 +239,56 @@ def test_NeumannInverseLinearOperator_preconditioner_toy_cuda():
 
     compare_consecutive_matmats(inv_A_neumann)
     compare_matmat(inv_A_neumann, inv_A, rtol=1e-9, atol=1e-10)
+
+
+@mark.cuda
+@mark.skipif(not cuda.is_available(), reason="CUDA not available")
+def test_NeumannInverseLinearOperator_scale_toy_cuda():
+    """CUDA test for scaled Neumann convergence rescue."""
+    manual_seed(0)
+    A = Tensor(
+        [
+            [0.0, 1.0 / 2.0, 1.0 / 4.0],
+            [5.0 / 7.0, 0.0, 1.0 / 7.0],
+            [3.0 / 10.0, 3.0 / 5.0, 0.0],
+        ]
+    ).double().cuda()
+    A = A + eye_like(A)
+    B = 2 * A
+    inv_B = inv(B)
+
+    inv_B_neumann = NeumannInverseLinearOperator(
+        TensorLinearOperator(B), num_terms=1_000, scale=0.5
+    )
+    compare_consecutive_matmats(inv_B_neumann)
+    compare_matmat(inv_B_neumann, inv_B, rtol=1e-3, atol=1e-5)
+
+
+@mark.cuda
+@mark.skipif(not cuda.is_available(), reason="CUDA not available")
+def test_CGInverseLinearOperator_damped_GGN_cuda(inv_case, delta_rel: float = 2e-2):
+    """CUDA test for damped GGN inverse with CG and optional preconditioner API."""
+    model_func, loss_func, params, data, batch_size_fn = change_dtype(inv_case, float64)
+    # move test case to CUDA
+    model_func = model_func.cuda()
+    loss_func = loss_func.cuda()
+    params = list(model_func.parameters())
+    data = [
+        (({"x": X["x"].cuda()} if isinstance(X, dict) else X.cuda()), y.cuda())
+        for X, y in data
+    ]
+
+    GGN_naive = functorch_ggn(
+        model_func, loss_func, params, data, input_key="x"
+    ).detach()
+    delta = delta_rel * GGN_naive.diag().mean().item()
+    damping = delta * IdentityLinearOperator([p.shape for p in params], "cuda", float64)
+
+    GGN = GGNLinearOperator(
+        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
+    )
+    inv_GGN_naive = inv(GGN_naive + delta * eye_like(GGN_naive))
+
+    inv_GGN = CGInverseLinearOperator(GGN + damping, eps=0, tolerance=1e-5)
+    compare_consecutive_matmats(inv_GGN)
+    compare_matmat(inv_GGN, inv_GGN_naive, atol=1e-7, rtol=1e-4)
