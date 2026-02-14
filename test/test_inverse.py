@@ -3,6 +3,7 @@
 from pytest import mark, raises
 from torch import Tensor, cuda, float64, manual_seed, rand, randn
 from torch.linalg import inv
+from torch.nn import Linear, MSELoss
 
 from curvlinops import (
     CGInverseLinearOperator,
@@ -309,6 +310,49 @@ def test_NeumannInverseLinearOperator_preconditioned_beats_naive_cpu():
 
     # Expect better residual with preconditioning at same iteration budget.
     assert rel_res_pre < rel_res_naive
+
+
+def test_inverse_operators_single_linear_overparameterized_cpu():
+    """Over-parameterized single Linear(500,1) with 100 data points should work."""
+    manual_seed(0)
+    n, d_in, d_out = 100, 500, 1
+    model = Linear(d_in, d_out, bias=True).to(float64)
+    loss_func = MSELoss(reduction="mean").to(float64)
+
+    X = rand(n, d_in, dtype=float64)
+    y = rand(n, d_out, dtype=float64)
+    data = [(X, y)]
+    params = list(model.parameters())
+
+    # 500*1 + 1 = 501 parameters > 100 data points
+    assert sum(p.numel() for p in params) == 501
+
+    GGN = GGNLinearOperator(model, loss_func, params, data)
+    GGN_naive = functorch_ggn(model, loss_func, params, data).detach()
+
+    # Damping makes the system strictly SPD/invertible.
+    delta = 1e-3 * GGN_naive.diag().mean().item()
+    damping = delta * IdentityLinearOperator([p.shape for p in params], "cpu", float64)
+    A = GGN + damping
+    A_naive = GGN_naive + delta * eye_like(GGN_naive)
+
+    rhs = rand(A.shape[0], 4, dtype=float64)
+
+    # CG inverse should solve stably.
+    inv_cg = CGInverseLinearOperator(A, eps=0, tolerance=1e-6, max_iter=400)
+    sol_cg = inv_cg @ rhs
+    rel_res_cg = (A_naive @ sol_cg - rhs).norm() / rhs.norm()
+    assert rel_res_cg < 1e-4
+
+    # Preconditioned CG should also remain stable on this over-parameterized setup.
+    alpha = 1.0 / A_naive.diag().mean().item()
+    pre = alpha * IdentityLinearOperator([p.shape for p in params], "cpu", float64)
+    inv_cg_pre = CGInverseLinearOperator(
+        A, preconditioner=pre, eps=0, tolerance=1e-6, max_iter=400
+    )
+    sol_cg_pre = inv_cg_pre @ rhs
+    rel_res_cg_pre = (A_naive @ sol_cg_pre - rhs).norm() / rhs.norm()
+    assert rel_res_cg_pre < 1e-4
 
 
 @mark.cuda
