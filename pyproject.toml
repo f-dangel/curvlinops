@@ -183,3 +183,8 @@ line-ending = "auto"
     # First line should end with a period, question mark, or exclamation point
     "D415"
 ]
+
+[tool.pytest.ini_options]
+markers = [
+    "cuda: marks tests that should run on CUDA devices",
+]
