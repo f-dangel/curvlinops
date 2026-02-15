@@ -24,7 +24,6 @@ class EKFACLinearOperator(KFACLinearOperator):
     - Liu, X., Masana, M., Herranz, L., Van de Weijer, J., Lopez, A., Bagdanov, A. (2018).
       Rotate your networks: Better weight consolidation and less catastrophic forgetting
       (ICPR).
-
     """
 
     _COMPUTER_CLS = EKFACComputer
@@ -48,21 +47,28 @@ class EKFACLinearOperator(KFACLinearOperator):
             Q_a = input_eigvecs.get(mod_name, None)
             Q_g = gradient_eigvecs[mod_name]
             lambdas = corrected_eigenvalues[mod_name]
+
+            # Handle joint weight+bias case
             if not computer._separate_weight_and_bias and {"weight", "bias"} == set(
                 param_pos.keys()
             ):
+                # Single Kronecker product block for weight+bias
                 bases.append([Q_g, Q_a])
                 corrections.append(lambdas)
             else:
+                # Separate blocks for weight and bias
                 for p_name, p_pos in param_pos.items():
                     bases.append([Q_g, Q_a] if p_name == "weight" else [Q_g])
                     corrections.append(lambdas[p_pos])
+
+        # Create Kronecker product linear operators for each block
         blocks = [
             EighDecomposedLinearOperator(
                 correction.flatten(), KroneckerProductLinearOperator(*basis)
             )
             for basis, correction in zip(bases, corrections)
         ]
+        # EKFAC in the canonical basis
         return BlockDiagonalLinearOperator(blocks)
 
     def inverse(self, damping: float = 0.0) -> _ChainPyTorchLinearOperator:
