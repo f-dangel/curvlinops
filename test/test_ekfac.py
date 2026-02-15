@@ -18,6 +18,7 @@ from torch.nn import (
 )
 
 from curvlinops import EFLinearOperator, GGNLinearOperator
+from curvlinops.computers.ekfac import EKFACComputer
 from curvlinops.ekfac import EKFACLinearOperator
 from curvlinops.kfac import FisherType, KFACType
 from curvlinops.utils import allclose_report
@@ -470,7 +471,7 @@ def test_ekfac_inplace_activations(dev: device):
     _test_inplace_activations(EKFACLinearOperator, dev)
 
 
-@mark.parametrize("fisher_type", EKFACLinearOperator._SUPPORTED_FISHER_TYPE)
+@mark.parametrize("fisher_type", EKFACComputer._SUPPORTED_FISHER_TYPE)
 @mark.parametrize(
     "loss", [MSELoss, CrossEntropyLoss, BCEWithLogitsLoss], ids=["mse", "ce", "bce"]
 )
@@ -534,7 +535,7 @@ def test_multi_dim_output(
         )
 
 
-@mark.parametrize("fisher_type", EKFACLinearOperator._SUPPORTED_FISHER_TYPE)
+@mark.parametrize("fisher_type", EKFACComputer._SUPPORTED_FISHER_TYPE)
 @mark.parametrize(
     "loss", [MSELoss, CrossEntropyLoss, BCEWithLogitsLoss], ids=["mse", "ce", "bce"]
 )
@@ -755,7 +756,7 @@ def test_ekfac_torch_save_load(tmp_path: Path) -> None:
 
 # TODO: Add test for FisherType.MC once tests are in float64.
 @mark.parametrize("fisher_type", [FisherType.TYPE2, FisherType.EMPIRICAL])
-@mark.parametrize("kfac_approx", EKFACLinearOperator._SUPPORTED_KFAC_APPROX)
+@mark.parametrize("kfac_approx", EKFACComputer._SUPPORTED_KFAC_APPROX)
 @mark.parametrize(
     "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
 )
@@ -787,8 +788,8 @@ def test_ekfac_closer_to_exact_than_kfac(
     )
 
 
-@mark.parametrize("fisher_type", EKFACLinearOperator._SUPPORTED_FISHER_TYPE)
-@mark.parametrize("kfac_approx", EKFACLinearOperator._SUPPORTED_KFAC_APPROX)
+@mark.parametrize("fisher_type", EKFACComputer._SUPPORTED_FISHER_TYPE)
+@mark.parametrize("kfac_approx", EKFACComputer._SUPPORTED_KFAC_APPROX)
 @mark.parametrize(
     "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
 )

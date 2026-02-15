@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Tuple
-
 from curvlinops._torch_base import _ChainPyTorchLinearOperator
 from curvlinops.blockdiagonal import BlockDiagonalLinearOperator
 from curvlinops.computers.ekfac import EKFACComputer
 from curvlinops.eigh import EighDecomposedLinearOperator
-from curvlinops.kfac import FisherType, KFACLinearOperator
+from curvlinops.kfac import KFACLinearOperator
 from curvlinops.kronecker import KroneckerProductLinearOperator
 
 
@@ -27,16 +25,9 @@ class EKFACLinearOperator(KFACLinearOperator):
       Rotate your networks: Better weight consolidation and less catastrophic forgetting
       (ICPR).
 
-    Attributes:
-        _SUPPORTED_FISHER_TYPE: Tuple of supported Fisher types.
     """
 
     _COMPUTER_CLS = EKFACComputer
-    _SUPPORTED_FISHER_TYPE: Tuple[FisherType, ...] = (
-        FisherType.TYPE2,
-        FisherType.MC,
-        FisherType.EMPIRICAL,
-    )
 
     @staticmethod
     def _compute_canonical_op(computer: EKFACComputer) -> BlockDiagonalLinearOperator:

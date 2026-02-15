@@ -30,6 +30,7 @@ from torch.nn import (
 )
 
 from curvlinops import EFLinearOperator, GGNLinearOperator
+from curvlinops.computers.kfac import KFACComputer
 from curvlinops.kfac import FisherType, KFACLinearOperator, KFACType
 from curvlinops.utils import allclose_report
 from test.cases import DEVICES, DEVICES_IDS
@@ -462,7 +463,7 @@ def test_kfac_inplace_activations(dev: device):
     _test_inplace_activations(KFACLinearOperator, dev)
 
 
-@mark.parametrize("fisher_type", KFACLinearOperator._SUPPORTED_FISHER_TYPE)
+@mark.parametrize("fisher_type", KFACComputer._SUPPORTED_FISHER_TYPE)
 @mark.parametrize(
     "loss", [MSELoss, CrossEntropyLoss, BCEWithLogitsLoss], ids=["mse", "ce", "bce"]
 )
@@ -547,7 +548,7 @@ def test_multi_dim_output(
     assert allclose_report(kfac_mat, kfac_flat_mat)
 
 
-@mark.parametrize("fisher_type", KFACLinearOperator._SUPPORTED_FISHER_TYPE)
+@mark.parametrize("fisher_type", KFACComputer._SUPPORTED_FISHER_TYPE)
 @mark.parametrize(
     "loss", [MSELoss, CrossEntropyLoss, BCEWithLogitsLoss], ids=["mse", "ce", "bce"]
 )
@@ -1127,7 +1128,7 @@ def test_bug_132_dtype_deterministic_checks(dev: device):
 KFAC_MIN_DAMPING = 1e-8
 
 
-@mark.parametrize("fisher_type", KFACLinearOperator._SUPPORTED_FISHER_TYPE)
+@mark.parametrize("fisher_type", KFACComputer._SUPPORTED_FISHER_TYPE)
 @mark.parametrize(
     "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
 )

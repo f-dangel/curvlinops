@@ -83,17 +83,11 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
       Kronecker-Factored Approximate Curvature for Modern Neural Network Architectures (NeurIPS).
 
     Attributes:
-        _SUPPORTED_LOSSES: Tuple of supported loss functions.
-        _SUPPORTED_FISHER_TYPE: Enum class of supported Fisher types.
-        _SUPPORTED_KFAC_APPROX: Enum class of supported KFAC approximation types.
         SELF_ADJOINT: Whether the operator is self-adjoint. ``True`` for KFAC.
     """
 
     _COMPUTER_CLS = KFACComputer
     SELF_ADJOINT: bool = True
-    _SUPPORTED_LOSSES = KFACComputer._SUPPORTED_LOSSES
-    _SUPPORTED_FISHER_TYPE = KFACComputer._SUPPORTED_FISHER_TYPE
-    _SUPPORTED_KFAC_APPROX = KFACComputer._SUPPORTED_KFAC_APPROX
 
     def __init__(
         self,
@@ -113,12 +107,6 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
         batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
     ):
         """Kronecker-factored approximate curvature (KFAC) proxy of the Fisher/GGN.
-
-        Warning:
-            If the model's parameters change, e.g. during training, you need to
-            create a fresh instance of this object. This is because the Kronecker
-            factors are computed once in the constructor and will thus become outdated
-            if the model changes.
 
         Warning:
             This is an early proto-type with limitations:
