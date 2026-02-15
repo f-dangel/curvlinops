@@ -14,4 +14,4 @@ KFAC-related
 EKFAC-related
 -------------
 
-.. autofunction:: curvlinops.ekfac.compute_eigenvalue_correction_linear_weight_sharing
+.. autofunction:: curvlinops.computers.ekfac.compute_eigenvalue_correction_linear_weight_sharing
