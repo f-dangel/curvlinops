@@ -1,8 +1,6 @@
 """Tests the linear operator interface in PyTorch."""
 
-from __future__ import annotations
-
-from typing import Iterable, Iterator, List, MutableMapping, Tuple, Union
+from collections.abc import Iterable, Iterator, MutableMapping
 
 from pytest import raises
 from torch import Size, Tensor, linspace, manual_seed, rand, rand_like, randperm, zeros
@@ -50,7 +48,7 @@ def test_empty_shapes_exception():
 class MockLinearOperator(PyTorchLinearOperator):
     """Dummy linear operator in PyTorch. Implements the zero matrix."""
 
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         ((dev, dt, num_vecs),) = {(x.device, x.dtype, x.shape[-1]) for x in X}
         return [zeros(*x.shape[:-1], num_vecs, device=dev, dtype=dt) for x in X]
 
@@ -163,7 +161,7 @@ class FixedBatchesMockLinearOperator(CurvatureLinearOperator):
 
     FIXED_DATA_ORDER: bool = True
 
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         ((dev, dt, num_vecs),) = {(x.device, x.dtype, x.shape[-1]) for x in X}
         return [zeros(*x.shape[:-1], num_vecs, device=dev, dtype=dt) for x in X]
 
@@ -171,7 +169,7 @@ class FixedBatchesMockLinearOperator(CurvatureLinearOperator):
 class PermutedBatchLoader:
     """Randomly shuffle data points in a batch before returning it."""
 
-    def __init__(self, data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]]):
+    def __init__(self, data: Iterable[tuple[Tensor | MutableMapping, Tensor]]):
         """Store data used for permutation.
 
         Args:
@@ -179,7 +177,7 @@ class PermutedBatchLoader:
         """
         self.data = data
 
-    def __iter__(self) -> Iterator[Tuple[Union[Tensor, MutableMapping], Tensor]]:
+    def __iter__(self) -> Iterator[tuple[Tensor | MutableMapping, Tensor]]:
         """Iterate over permuted batches.
 
         Yields:

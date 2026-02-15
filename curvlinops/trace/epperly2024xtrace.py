@@ -1,7 +1,5 @@
 """Implements the XTrace algorithm from Epperly 2024."""
 
-from typing import Union
-
 from torch import Tensor, column_stack, dot, einsum, mean
 from torch.linalg import inv, qr
 
@@ -15,7 +13,7 @@ from curvlinops.utils import (
 
 
 def xtrace(
-    A: Union[PyTorchLinearOperator, Tensor],
+    A: PyTorchLinearOperator | Tensor,
     num_matvecs: int,
     distribution: str = "rademacher",
 ) -> Tensor:

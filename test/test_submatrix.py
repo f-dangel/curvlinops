@@ -1,7 +1,5 @@
 """Contains tests for ``curvlinops/submatrix`` on curvature linear operators."""
 
-from typing import List
-
 from pytest import mark, raises
 from torch import float64
 
@@ -22,7 +20,7 @@ CURVATURE_IN_FUNCTORCH = {
 CURVATURE_CASES = CURVATURE_IN_FUNCTORCH.keys()
 
 
-def even_idxs(dim: int) -> List[int]:
+def even_idxs(dim: int) -> list[int]:
     """Return even indices below ``dim``.
 
     Returns:
@@ -31,7 +29,7 @@ def even_idxs(dim: int) -> List[int]:
     return list(range(0, dim, 2))
 
 
-def odd_idxs(dim: int) -> List[int]:
+def odd_idxs(dim: int) -> list[int]:
     """Return odd indices below ``dim``.
 
     Returns:

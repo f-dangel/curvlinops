@@ -1,6 +1,6 @@
 """Contains tests for ``curvlinops/hessian``."""
 
-from typing import Callable, List, Optional
+from collections.abc import Callable
 
 from torch import block_diag, float64
 from torch.nn import Parameter
@@ -12,8 +12,7 @@ from test.utils import change_dtype, compare_consecutive_matmats, compare_matmat
 
 
 def test_HessianLinearOperator(
-    case,
-    block_sizes_fn: Callable[[List[Parameter]], Optional[List[int]]],
+    case, block_sizes_fn: Callable[[list[Parameter]], list[int] | None]
 ):
     """Test matrix-matrix multiplication with the Hessian.
 

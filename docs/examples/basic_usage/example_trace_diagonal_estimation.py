@@ -10,7 +10,6 @@ Here are the imports:
 
 from os import getenv
 from shutil import which
-from typing import Dict
 
 import matplotlib.pyplot as plt
 from torch import (
@@ -178,7 +177,7 @@ NUM_MATVECS_HUTCHPP = (NUM_MATVECS_HUTCH + (3 - NUM_MATVECS_HUTCH % 3)).unique()
 NUM_MATVECS_XTRACE = (NUM_MATVECS_HUTCH + (2 - NUM_MATVECS_HUTCH % 2)).unique()
 
 
-def compute_relative_trace_errors(Y_mat: Tensor) -> Dict[str, Dict[str, Tensor]]:
+def compute_relative_trace_errors(Y_mat: Tensor) -> dict[str, dict[str, Tensor]]:
     """Compute the relative trace errors for Hutchinson's method, Hutch++, and XTrace.
 
     Args:
@@ -253,7 +252,7 @@ for method, data in results.items():
 
 
 def plot_estimation_results(
-    results: Dict[str, Dict[str, Tensor]], ax: plt.Axes, target: str = "trace"
+    results: dict[str, dict[str, Tensor]], ax: plt.Axes, target: str = "trace"
 ) -> None:
     """Plot the trace estimation results on the given Axes.
 
@@ -391,7 +390,7 @@ NUM_MATVECS_HUTCH = linspace(1, 100, 50, dtype=int32).unique()
 NUM_MATVECS_XDIAG = (NUM_MATVECS_HUTCH + (2 - NUM_MATVECS_HUTCH % 2)).unique()
 
 
-def compute_relative_diagonal_errors(Y_mat: Tensor) -> Dict[str, Dict[str, Tensor]]:
+def compute_relative_diagonal_errors(Y_mat: Tensor) -> dict[str, dict[str, Tensor]]:
     """Compute the relative diagonal errors for Hutchinson's method and XDiag.
 
     Args:

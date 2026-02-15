@@ -1,6 +1,6 @@
 """Linear operator for eigen-decompositions."""
 
-from typing import List, Union
+from __future__ import annotations
 
 from torch import Tensor, device, dtype
 
@@ -19,7 +19,7 @@ class EighDecomposedLinearOperator(PyTorchLinearOperator):
     SELF_ADJOINT: bool = True
 
     def __init__(
-        self, eigenvalues: Tensor, eigenvectors: Union[Tensor, PyTorchLinearOperator]
+        self, eigenvalues: Tensor, eigenvectors: Tensor | PyTorchLinearOperator
     ):
         """Initialize eigendecomposition linear operator.
 
@@ -81,7 +81,7 @@ class EighDecomposedLinearOperator(PyTorchLinearOperator):
         _check_same_dtype(self._eigenvalues, value)
         self._eigenvalues = value
 
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         """Apply eigendecomposition operator to matrix.
 
         Computes Q diag(λ) Q^T @ X efficiently as Q @ (λ * (Q^T @ X)).
@@ -156,7 +156,7 @@ class EighDecomposedLinearOperator(PyTorchLinearOperator):
         """
         return self._eigenvalues.norm(p="fro")
 
-    def inverse(self, damping: float = 0.0) -> "EighDecomposedLinearOperator":
+    def inverse(self, damping: float = 0.0) -> EighDecomposedLinearOperator:
         """Return the inverse of the eigendecomposition operator.
 
         The inverse is given by Q diag(1 / (λ + damping)) Q^T.

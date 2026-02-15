@@ -1,7 +1,6 @@
 """Tests for ``curvlinops.examples``."""
 
 from collections.abc import Callable, Iterable, MutableMapping
-from typing import List, Optional, Tuple, Union
 
 from torch import Tensor
 
@@ -11,12 +10,12 @@ from curvlinops.utils import allclose_report
 
 
 def test_gradient_and_loss(
-    case: Tuple[
+    case: tuple[
         Callable[[Tensor], Tensor],
         Callable[[Tensor, Tensor], Tensor],
-        List[Tensor],
-        Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
-        Optional[Callable[[MutableMapping], int]],
+        list[Tensor],
+        Iterable[tuple[Tensor | MutableMapping, Tensor]],
+        Callable[[MutableMapping], int] | None,
     ],
 ):
     """Test the standalone ``gradient_and_loss`` against ``functorch``.

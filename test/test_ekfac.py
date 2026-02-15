@@ -1,7 +1,7 @@
 """Contains tests for ``EKFACLinearOperator`` in ``curvlinops.kfac``."""
 
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple, Union
 
 from einops.layers.torch import Rearrange
 from pytest import mark, raises
@@ -56,8 +56,8 @@ from test.utils import (
 )
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_ekfac_type2(
-    kfac_exact_case: Tuple[
-        Module, MSELoss, List[Parameter], Iterable[Tuple[Tensor, Tensor]]
+    kfac_exact_case: tuple[
+        Module, MSELoss, list[Parameter], Iterable[tuple[Tensor, Tensor]]
     ],
     shuffle: bool,
     exclude: str,
@@ -111,11 +111,11 @@ def test_ekfac_type2(
 )
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_ekfac_type2_weight_sharing(
-    kfac_weight_sharing_exact_case: Tuple[
-        Union[WeightShareModel, Conv2dModel],
+    kfac_weight_sharing_exact_case: tuple[
+        WeightShareModel | Conv2dModel,
         MSELoss,
-        List[Parameter],
-        Dict[str, Iterable[Tuple[Tensor, Tensor]]],
+        list[Parameter],
+        dict[str, Iterable[tuple[Tensor, Tensor]]],
     ],
     setting: str,
     shuffle: bool,
@@ -184,8 +184,8 @@ def test_ekfac_type2_weight_sharing(
 )
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_ekfac_mc(
-    kfac_exact_case: Tuple[
-        Module, MSELoss, List[Parameter], Iterable[Tuple[Tensor, Tensor]]
+    kfac_exact_case: tuple[
+        Module, MSELoss, list[Parameter], Iterable[tuple[Tensor, Tensor]]
     ],
     separate_weight_and_bias: bool,
     exclude: str,
@@ -242,11 +242,11 @@ def test_ekfac_mc(
 )
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_ekfac_mc_weight_sharing(
-    kfac_weight_sharing_exact_case: Tuple[
-        Union[WeightShareModel, Conv2dModel],
+    kfac_weight_sharing_exact_case: tuple[
+        WeightShareModel | Conv2dModel,
         MSELoss,
-        List[Parameter],
-        Dict[str, Iterable[Tuple[Tensor, Tensor]]],
+        list[Parameter],
+        dict[str, Iterable[tuple[Tensor, Tensor]]],
     ],
     separate_weight_and_bias: bool,
     exclude: str,
@@ -317,11 +317,11 @@ def test_ekfac_mc_weight_sharing(
 )
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_ekfac_one_datum(
-    kfac_exact_one_datum_case: Tuple[
+    kfac_exact_one_datum_case: tuple[
         Module,
-        Union[BCEWithLogitsLoss, CrossEntropyLoss],
-        List[Parameter],
-        Iterable[Tuple[Tensor, Tensor]],
+        BCEWithLogitsLoss | CrossEntropyLoss,
+        list[Parameter],
+        Iterable[tuple[Tensor, Tensor]],
     ],
     separate_weight_and_bias: bool,
     exclude: str,
@@ -362,11 +362,11 @@ def test_ekfac_one_datum(
 )
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_ekfac_mc_one_datum(
-    kfac_exact_one_datum_case: Tuple[
+    kfac_exact_one_datum_case: tuple[
         Module,
-        Union[BCEWithLogitsLoss, CrossEntropyLoss],
-        List[Parameter],
-        Iterable[Tuple[Tensor, Tensor]],
+        BCEWithLogitsLoss | CrossEntropyLoss,
+        list[Parameter],
+        Iterable[tuple[Tensor, Tensor]],
     ],
     separate_weight_and_bias: bool,
     exclude: str,
@@ -418,11 +418,11 @@ def test_ekfac_mc_one_datum(
 )
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_ekfac_ef_one_datum(
-    kfac_exact_one_datum_case: Tuple[
+    kfac_exact_one_datum_case: tuple[
         Module,
-        Union[BCEWithLogitsLoss, CrossEntropyLoss],
-        List[Parameter],
-        Iterable[Tuple[Tensor, Tensor]],
+        BCEWithLogitsLoss | CrossEntropyLoss,
+        list[Parameter],
+        Iterable[tuple[Tensor, Tensor]],
     ],
     separate_weight_and_bias: bool,
     exclude: str,
@@ -479,7 +479,7 @@ def test_ekfac_inplace_activations(dev: device):
 @mark.parametrize("dev", DEVICES, ids=DEVICES_IDS)
 def test_multi_dim_output(
     fisher_type: str,
-    loss: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
+    loss: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
     reduction: str,
     dev: device,
 ):
@@ -542,7 +542,7 @@ def test_multi_dim_output(
 @mark.parametrize("dev", DEVICES, ids=DEVICES_IDS)
 def test_expand_setting_scaling(
     fisher_type: str,
-    loss: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
+    loss: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
     dev: device,
 ):
     """Test EKFAC for correct scaling for expand setting with mean reduction loss.
@@ -835,11 +835,11 @@ def test_ekfac_closer_to_exact_than_kfac_weight_sharing(
 )
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_EKFAC_inverse_exactly_damped_matmat(
-    inv_case: Tuple[
+    inv_case: tuple[
         Module,
-        Union[MSELoss, CrossEntropyLoss],
-        List[Parameter],
-        Iterable[Tuple[Tensor, Tensor]],
+        MSELoss | CrossEntropyLoss,
+        list[Parameter],
+        Iterable[tuple[Tensor, Tensor]],
     ],
     exclude: str,
     separate_weight_and_bias: bool,

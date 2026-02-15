@@ -1,8 +1,7 @@
 """Contains LinearOperator implementation of the approximate Fisher."""
 
-from collections.abc import MutableMapping
+from collections.abc import Callable, Iterable, MutableMapping
 from functools import cached_property, partial
-from typing import Callable, Iterable, List, Optional, Tuple, Union
 
 from einops import einsum, rearrange
 from torch import Generator, Tensor
@@ -19,10 +18,10 @@ from curvlinops.utils import _seed_generator, make_functional_flattened_model_an
 
 
 def make_batch_fmc_matrix_product(
-    model_func: Module, loss_func: Module, params: Tuple[Parameter, ...]
+    model_func: Module, loss_func: Module, params: tuple[Parameter, ...]
 ) -> Callable[
-    [Union[Tensor, MutableMapping], Tensor, Tuple[Tensor, ...], int, Generator],
-    Tuple[Tensor, ...],
+    [Tensor | MutableMapping, Tensor, tuple[Tensor, ...], int, Generator],
+    tuple[Tensor, ...],
 ]:
     r"""Set up function that multiplies the mini-batch MC Fisher onto a matrix.
 
@@ -133,12 +132,12 @@ def make_batch_fmc_matrix_product(
     # NOTE The Binary check is incompatible with vmap.
     # Therefore we have to pull it outside vmap
     def _fmcmp_with_check(
-        X: Union[Tensor, MutableMapping],
+        X: Tensor | MutableMapping,
         y: Tensor,
         mc_samples: int,
         generator: Generator,
         *M: Tensor,
-    ) -> Tuple[Tensor, ...]:
+    ) -> tuple[Tensor, ...]:
         """Multiply MC-Fisher onto a matrix for a batch, with BCEWithLogitsLoss checks.
 
         This function wraps the vmapped MC-Fisher matrix product with additional
@@ -265,16 +264,16 @@ class FisherMCLinearOperator(CurvatureLinearOperator):
 
     def __init__(
         self,
-        model_func: Callable[[Union[Tensor, MutableMapping]], Tensor],
-        loss_func: Union[MSELoss, CrossEntropyLoss],
-        params: List[Parameter],
-        data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
+        model_func: Callable[[Tensor | MutableMapping], Tensor],
+        loss_func: MSELoss | CrossEntropyLoss,
+        params: list[Parameter],
+        data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
         seed: int = 2147483647,
         mc_samples: int = 1,
-        num_data: Optional[int] = None,
-        batch_size_fn: Optional[Callable[[MutableMapping], int]] = None,
+        num_data: int | None = None,
+        batch_size_fn: Callable[[MutableMapping], int] | None = None,
     ):
         """Linear operator for the Monte-Carlo approximation of the type-I Fisher.
 
@@ -323,7 +322,7 @@ class FisherMCLinearOperator(CurvatureLinearOperator):
                 f"Loss must be one of {self.supported_losses}. Got: {loss_func}."
             )
         self._seed = seed
-        self._generator: Union[None, Generator] = None
+        self._generator: None | Generator = None
         self._mc_samples = mc_samples
         super().__init__(
             model_func,
@@ -336,7 +335,7 @@ class FisherMCLinearOperator(CurvatureLinearOperator):
             batch_size_fn=batch_size_fn,
         )
 
-    def _matmat(self, M: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, M: list[Tensor]) -> list[Tensor]:
         """Multiply the MC-Fisher onto a matrix.
 
         Create and seed the random number generator.
@@ -355,8 +354,8 @@ class FisherMCLinearOperator(CurvatureLinearOperator):
     def _mp(
         self,
     ) -> Callable[
-        [Union[Tensor, MutableMapping], Tensor, int, Generator, Tuple[Tensor, ...]],
-        Tuple[Tensor, ...],
+        [Tensor | MutableMapping, Tensor, int, Generator, tuple[Tensor, ...]],
+        tuple[Tensor, ...],
     ]:
         """Lazy initialization of batch MC-Fisher matrix product function.
 
@@ -372,8 +371,8 @@ class FisherMCLinearOperator(CurvatureLinearOperator):
         )
 
     def _matmat_batch(
-        self, X: Union[Tensor, MutableMapping], y: Tensor, M: List[Tensor]
-    ) -> List[Tensor]:
+        self, X: Tensor | MutableMapping, y: Tensor, M: list[Tensor]
+    ) -> list[Tensor]:
         """Apply the mini-batch MC-Fisher to a matrix.
 
         Args:

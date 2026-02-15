@@ -1,7 +1,6 @@
 """Contains a linear operator class for the diagonal of the GGN matrix."""
 
-from collections.abc import MutableMapping
-from typing import Callable, Iterable, List, Optional, Tuple, Union
+from collections.abc import Callable, Iterable, MutableMapping
 
 from torch import Tensor
 from torch.nn import Parameter
@@ -19,14 +18,14 @@ class GGNDiagonalLinearOperator(DiagonalLinearOperator):
 
     def __init__(
         self,
-        model_func: Callable[[Union[Tensor, MutableMapping]], Tensor],
+        model_func: Callable[[Tensor | MutableMapping], Tensor],
         loss_func: Callable[[Tensor, Tensor], Tensor],
-        params: List[Parameter],
-        data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
+        params: list[Parameter],
+        data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
-        num_data: Optional[int] = None,
-        batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
+        num_data: int | None = None,
+        batch_size_fn: Callable[[MutableMapping | Tensor], int] | None = None,
         mode: str = "exact",
         seed: int = 2_147_483_647,
         mc_samples: int = 1,

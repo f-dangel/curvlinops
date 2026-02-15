@@ -1,7 +1,6 @@
 """Test ``curvlinops.trace.epperli2024xtrace."""
 
 from functools import partial
-from typing import Union
 
 from pytest import mark
 from torch import Tensor, column_stack, dot, isclose, manual_seed, rand, trace
@@ -18,7 +17,7 @@ NUM_MATVEC_IDS = [f"num_matvecs={num_matvecs}" for num_matvecs in NUM_MATVECS]
 
 
 def xtrace_naive(
-    A: Union[PyTorchLinearOperator, Tensor],
+    A: PyTorchLinearOperator | Tensor,
     num_matvecs: int,
     distribution: str = "rademacher",
 ) -> Tensor:

@@ -16,13 +16,11 @@ and generalized to all linear layers with weight sharing in
   Kronecker-Factored Approximate Curvature for Modern Neural Network Architectures (NeurIPS).
 """
 
-from __future__ import annotations
-
-from collections.abc import MutableMapping
+from collections.abc import Callable, Iterable, MutableMapping
 from enum import Enum, EnumMeta
 from functools import partial
 from math import sqrt
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any
 
 from einops import einsum, rearrange, reduce
 from torch import Generator, Tensor, cat, eye
@@ -153,19 +151,19 @@ class KFACComputer(_EmpiricalRiskMixin):
     def __init__(
         self,
         model_func: Module,
-        loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
-        params: List[Parameter],
-        data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
+        loss_func: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
+        params: list[Parameter],
+        data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
         seed: int = 2_147_483_647,
         fisher_type: str = FisherType.MC,
         mc_samples: int = 1,
         kfac_approx: str = KFACType.EXPAND,
-        num_per_example_loss_terms: Optional[int] = None,
+        num_per_example_loss_terms: int | None = None,
         separate_weight_and_bias: bool = True,
-        num_data: Optional[int] = None,
-        batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
+        num_data: int | None = None,
+        batch_size_fn: Callable[[MutableMapping | Tensor], int] | None = None,
     ):
         """Set up the KFAC computer.
 
@@ -254,7 +252,7 @@ class KFACComputer(_EmpiricalRiskMixin):
             )
 
         self._seed = seed
-        self._generator: Union[None, Generator] = None
+        self._generator: None | Generator = None
         self._separate_weight_and_bias = separate_weight_and_bias
         self._fisher_type = fisher_type
         self._mc_samples = mc_samples
@@ -284,7 +282,7 @@ class KFACComputer(_EmpiricalRiskMixin):
 
     def compute(
         self,
-    ) -> Tuple[Dict[str, Tensor], Dict[str, Tensor], Dict[str, Dict[str, int]]]:
+    ) -> tuple[dict[str, Tensor], dict[str, Tensor], dict[str, dict[str, int]]]:
         """Compute the Kronecker factors.
 
         Returns:
@@ -297,10 +295,10 @@ class KFACComputer(_EmpiricalRiskMixin):
 
     @staticmethod
     def _set_up_grad_outputs_computer(
-        loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
+        loss_func: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
         fisher_type: FisherType,
         mc_samples: int,
-    ) -> Callable[[Tensor, Tensor, Optional[Generator]], Tensor]:
+    ) -> Callable[[Tensor, Tensor, Generator | None], Tensor]:
         """Set up the function that computes network output gradients for KFAC.
 
         Args:
@@ -322,7 +320,7 @@ class KFACComputer(_EmpiricalRiskMixin):
         )
 
         def compute_grad_outputs(
-            output: Tensor, y: Tensor, generator: Optional[Generator] = None
+            output: Tensor, y: Tensor, generator: Generator | None = None
         ) -> Tensor:
             """Compute the gradients that are backpropagated from the network's output.
 
@@ -343,18 +341,18 @@ class KFACComputer(_EmpiricalRiskMixin):
 
         return compute_grad_outputs
 
-    def _compute_kronecker_factors(self) -> Tuple[Dict[str, Tensor], Dict[str, Tensor]]:
+    def _compute_kronecker_factors(self) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
         """Compute KFAC's Kronecker factors.
 
         Returns:
             Tuple containing (input_covariances, gradient_covariances) dictionaries.
         """
         # Create empty dictionaries to be populated by hooks
-        input_covariances: Dict[str, Tensor] = {}
-        gradient_covariances: Dict[str, Tensor] = {}
+        input_covariances: dict[str, Tensor] = {}
+        gradient_covariances: dict[str, Tensor] = {}
 
         # install forward and backward hooks
-        hook_handles: List[RemovableHandle] = []
+        hook_handles: list[RemovableHandle] = []
 
         for mod_name, param_pos in self._mapping.items():
             module = self._model_func.get_submodule(mod_name)
@@ -413,7 +411,7 @@ class KFACComputer(_EmpiricalRiskMixin):
 
     def _rearrange_for_larger_than_2d_output(
         self, output: Tensor, y: Tensor
-    ) -> Tuple[Tensor, Tensor]:
+    ) -> tuple[Tensor, Tensor]:
         r"""Rearrange the output and target if output is >2d.
 
         This will determine what kind of Fisher/GGN is approximated.
@@ -522,10 +520,10 @@ class KFACComputer(_EmpiricalRiskMixin):
     def _register_tensor_hook_on_output_to_accumulate_gradient_covariance(
         self,
         module: Module,
-        inputs: Tuple[Tensor],
+        inputs: tuple[Tensor],
         output: Tensor,
         module_name: str,
-        gradient_covariances: Dict[str, Tensor],
+        gradient_covariances: dict[str, Tensor],
     ):
         """Register tensor hook on layer's output to accumulate the grad. covariance.
 
@@ -561,7 +559,7 @@ class KFACComputer(_EmpiricalRiskMixin):
         grad_output: Tensor,
         module: Module,
         module_name: str,
-        gradient_covariances: Dict[str, Tensor],
+        gradient_covariances: dict[str, Tensor],
     ):
         """Accumulate the gradient covariance for a layer's output.
 
@@ -600,9 +598,9 @@ class KFACComputer(_EmpiricalRiskMixin):
     def _hook_accumulate_input_covariance(
         self,
         module: Module,
-        inputs: Tuple[Tensor],
+        inputs: tuple[Tensor],
         module_name: str,
-        input_covariances: Dict[str, Tensor],
+        input_covariances: dict[str, Tensor],
     ):
         """Pre-forward hook that accumulates the input covariance of a layer.
 
@@ -655,8 +653,8 @@ class KFACComputer(_EmpiricalRiskMixin):
 
     @staticmethod
     def _set_or_add_(
-        dictionary: Dict[Any, Tensor], key: Any, value: Tensor
-    ) -> Dict[str, Tensor]:
+        dictionary: dict[Any, Tensor], key: Any, value: Tensor
+    ) -> dict[str, Tensor]:
         """Set or add a value to a dictionary entry.
 
         Args:
@@ -684,8 +682,8 @@ class KFACComputer(_EmpiricalRiskMixin):
 
     @classmethod
     def compute_parameter_mapping(
-        cls, params: List[Union[Tensor, Parameter]], model_func: Module
-    ) -> Dict[str, Dict[str, int]]:
+        cls, params: list[Tensor | Parameter], model_func: Module
+    ) -> dict[str, dict[str, int]]:
         """Construct the mapping between layers, their parameters, and positions.
 
         Args:
