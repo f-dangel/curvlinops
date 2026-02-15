@@ -1,6 +1,7 @@
 """Contains tests for ``curvlinops.kfac``."""
 
 from math import sqrt
+from pathlib import Path
 from typing import Dict, Iterable, List, Tuple, Union
 
 from einops.layers.torch import Rearrange
@@ -10,9 +11,11 @@ from torch import (
     allclose,
     device,
     float64,
+    load,
     manual_seed,
     rand,
     rand_like,
+    save,
 )
 from torch.linalg import inv
 from torch.nn import (
@@ -1038,6 +1041,36 @@ def _check_does_not_affect_grad(linop_cls):
 def test_kfac_does_not_affect_grad():
     """Make sure KFAC computation does not write to `.grad`."""
     _check_does_not_affect_grad(KFACLinearOperator)
+
+
+def _check_torch_save_load(linop_cls: type, tmp_path: Path) -> None:
+    """Test that an (E)KFAC operator can be saved and loaded with torch.save/load.
+
+    Args:
+        linop_cls: The linear operator class to test.
+        tmp_path: Temporary directory provided by pytest.
+    """
+    manual_seed(0)
+    model = Linear(3, 2)
+    params = list(model.parameters())
+    data = [(rand(4, 3), rand(4, 2))]
+
+    linop = linop_cls(model, MSELoss(), params, data)
+    mat_before = linop @ eye_like(linop)
+
+    path = tmp_path / "linop.pt"
+    save(linop, path)
+    linop_loaded = load(path, weights_only=False)
+
+    mat_after = linop_loaded @ eye_like(linop_loaded)
+    assert allclose(mat_before, mat_after)
+
+    path.unlink()
+
+
+def test_kfac_torch_save_load(tmp_path: Path) -> None:
+    """Test that KFACLinearOperator can be saved and loaded with torch.save/load."""
+    _check_torch_save_load(KFACLinearOperator, tmp_path)
 
 
 @mark.parametrize("fisher_type", ["type-2", "mc", "empirical", "forward-only"])

@@ -1,5 +1,6 @@
 """Contains tests for ``EKFACLinearOperator`` in ``curvlinops.kfac``."""
 
+from pathlib import Path
 from typing import Dict, Iterable, List, Tuple, Union
 
 from einops.layers.torch import Rearrange
@@ -21,7 +22,12 @@ from curvlinops.ekfac import EKFACLinearOperator
 from curvlinops.kfac import FisherType, KFACType
 from curvlinops.utils import allclose_report
 from test.cases import DEVICES, DEVICES_IDS
-from test.test_kfac import MC_SAMPLES, MC_TOLS, _check_does_not_affect_grad
+from test.test_kfac import (
+    MC_SAMPLES,
+    MC_TOLS,
+    _check_does_not_affect_grad,
+    _check_torch_save_load,
+)
 from test.utils import (
     Conv2dModel,
     UnetModel,
@@ -740,6 +746,11 @@ def test_logdet(
 def test_ekfac_does_not_affect_grad():
     """Make sure EKFAC computation does not write to `.grad`."""
     _check_does_not_affect_grad(EKFACLinearOperator)
+
+
+def test_ekfac_torch_save_load(tmp_path: Path) -> None:
+    """Test that EKFACLinearOperator can be saved and loaded with torch.save/load."""
+    _check_torch_save_load(EKFACLinearOperator, tmp_path)
 
 
 # TODO: Add test for FisherType.MC once tests are in float64.

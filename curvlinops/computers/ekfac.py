@@ -229,10 +229,23 @@ def compute_eigenvalue_correction_linear_weight_sharing(
 
 
 class EKFACComputer(KFACComputer):
-    """Computes EKFAC's eigenvalue-corrected Kronecker factors.
+    """Computes EKFAC's eigenvalue-corrected Kronecker factors for the Fisher/GGN.
 
-    Extends KFACComputer with eigenvalue decomposition of the Kronecker factors
-    and eigenvalue correction computation.
+    Extends :class:`KFACComputer` with eigenvalue decomposition of the Kronecker
+    factors and eigenvalue correction computation.
+
+    Eigenvalue-corrected Kronecker-Factored Approximate Curvature (EKFAC) was originally
+    introduced in
+
+    - George, T., Laurent, C., Bouthillier, X., Ballas, N., Vincent, P. (2018).
+      Fast Approximate Natural Gradient Descent in a Kronecker-factored Eigenbasis
+      (NeurIPS)
+
+    and concurrently in the context of continual learning in
+
+    - Liu, X., Masana, M., Herranz, L., Van de Weijer, J., Lopez, A., Bagdanov, A.
+      (2018). Rotate your networks: Better weight consolidation and less catastrophic
+      forgetting (ICPR).
 
     Attributes:
         _SUPPORTED_FISHER_TYPE: Tuple of supported Fisher types.

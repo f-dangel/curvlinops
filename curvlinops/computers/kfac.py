@@ -108,10 +108,34 @@ class KFACType(str, Enum, metaclass=MetaEnum):
 
 
 class KFACComputer(_EmpiricalRiskMixin):
-    """Computes KFAC's Kronecker factors.
+    r"""Computes KFAC's Kronecker factors for the Fisher/GGN.
 
     This class handles the data iteration and computation logic for KFAC. It computes
     the input and gradient covariances (Kronecker factors) and the parameter mapping.
+
+    KFAC approximates the per-layer Fisher/GGN with a Kronecker product:
+    Consider a weight matrix :math:`\\mathbf{W}` and a bias vector :math:`\\mathbf{b}`
+    in a single layer. The layer's Fisher :math:`\\mathbf{F}(\\mathbf{\\theta})` for
+
+    .. math::
+        \\mathbf{\\theta}
+        =
+        \\begin{pmatrix}
+        \\mathrm{vec}(\\mathbf{W}) \\\\ \\mathbf{b}
+        \\end{pmatrix}
+
+    where :math:`\\mathrm{vec}` denotes column-stacking is approximated as
+
+    .. math::
+        \\mathbf{F}(\\mathbf{\\theta})
+        \\approx
+        \\mathbf{A}_{(\\text{KFAC})} \\otimes \\mathbf{B}_{(\\text{KFAC})}
+
+    (see :class:`curvlinops.FisherMCLinearOperator` for the Fisher's definition).
+    Loosely speaking, the first Kronecker factor is the un-centered covariance of the
+    inputs to a layer. The second Kronecker factor is the un-centered covariance of
+    'would-be' gradients w.r.t. the layer's output. Those 'would-be' gradients result
+    from sampling labels from the model's distribution and computing their gradients.
 
     Attributes:
         _SUPPORTED_LOSSES: Tuple of supported loss functions.
@@ -145,6 +169,10 @@ class KFACComputer(_EmpiricalRiskMixin):
     ):
         """Set up the KFAC computer.
 
+        Warning:
+            This is an early proto-type with limitations:
+                - Only Linear and Conv2d modules are supported.
+
         Args:
             model_func: The neural network. Must consist of modules.
             loss_func: The loss function.
@@ -157,21 +185,48 @@ class KFACComputer(_EmpiricalRiskMixin):
                 deterministic. Defaults to ``True``.
             seed: The seed for the random number generator used to draw labels
                 from the model's predictive distribution. Defaults to ``2147483647``.
-            fisher_type: The type of Fisher/GGN to approximate. Defaults to
-                ``FisherType.MC``.
+            fisher_type: The type of Fisher/GGN to approximate.
+                If ``FisherType.TYPE2``, the exact Hessian of the loss w.r.t. the model
+                outputs is used. This requires as many backward passes as the output
+                dimension, i.e. the number of classes for classification. This is
+                sometimes also called type-2 Fisher. If ``FisherType.MC``, the
+                expectation is approximated by sampling ``mc_samples`` labels from the
+                model's predictive distribution. If ``FisherType.EMPIRICAL``, the
+                empirical gradients are used which corresponds to the uncentered
+                gradient covariance, or the empirical Fisher.
+                If ``FisherType.FORWARD_ONLY``, the gradient covariances will be
+                identity matrices, see the FOOF method in
+                `Benzing, 2022 <https://arxiv.org/abs/2201.12250>`_ or ISAAC in
+                `Petersen et al., 2023 <https://arxiv.org/abs/2305.00604>`_.
+                Defaults to ``FisherType.MC``.
             mc_samples: The number of Monte-Carlo samples to use per data point.
                 Has to be set to ``1`` when ``fisher_type != FisherType.MC``.
                 Defaults to ``1``.
             kfac_approx: A string specifying the KFAC approximation that should
-                be used for linear weight-sharing layers. Defaults to
-                ``KFACType.EXPAND``.
-            num_per_example_loss_terms: Number of per-example loss terms. If ``None``,
-                it is inferred from the data. Defaults to ``None``.
+                be used for linear weight-sharing layers, e.g. ``Conv2d`` modules
+                or ``Linear`` modules that process matrix- or higher-dimensional
+                features.
+                Possible values are ``KFACType.EXPAND`` and ``KFACType.REDUCE``.
+                See `Eschenhagen et al., 2023 <https://arxiv.org/abs/2311.00636>`_
+                for an explanation of the two approximations.
+                Defaults to ``KFACType.EXPAND``.
+            num_per_example_loss_terms: Number of per-example loss terms, e.g., the
+                number of tokens in a sequence. The model outputs will have
+                ``num_data * num_per_example_loss_terms * C`` entries, where ``C`` is
+                the dimension of the random variable we define the likelihood over --
+                for the ``CrossEntropyLoss`` it will be the number of classes, for the
+                ``MSELoss`` and ``BCEWithLogitsLoss`` it will be the size of the last
+                dimension of the the model outputs/targets (our convention here).
+                If ``None``, ``num_per_example_loss_terms`` is inferred from the data at
+                the cost of one traversal through the data loader. It is expected to be
+                the same for all examples. Defaults to ``None``.
             separate_weight_and_bias: Whether to treat weights and biases separately.
                 Defaults to ``True``.
-            num_data: Number of data points. If ``None``, it is inferred from the data.
+            num_data: Number of data points. If ``None``, it is inferred from the data
+                at the cost of one traversal through the data loader.
             batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
-                needs to be specified.
+                needs to be specified. The intended behavior is to consume the first
+                entry of the iterates from ``data`` and return their batch size.
 
         Raises:
             ValueError: If the loss function is not supported.
