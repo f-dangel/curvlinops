@@ -48,7 +48,6 @@ def run_peakmem_benchmark(  # noqa: C901, PLR0915
 
     dev = device(device_str)
     is_cuda = "cuda" in str(dev)
-    is_inverse = linop_str in {"KFAC inverse", "EKFAC inverse"}
 
     def f_gradient_and_loss():
         manual_seed(0)  # make deterministic
