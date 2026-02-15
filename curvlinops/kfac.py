@@ -206,11 +206,17 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
             if not computer._separate_weight_and_bias and {"weight", "bias"} == set(
                 param_pos.keys()
             ):
+                # Single Kronecker product block for weight+bias
                 factors.append([ggT, aaT])
             else:
+                # Separate blocks for weight and bias
                 for p_name in param_pos:
                     factors.append([ggT, aaT] if p_name == "weight" else [ggT])
+
+        # Create Kronecker product linear operators for each block
         blocks = [KroneckerProductLinearOperator(*fs) for fs in factors]
+
+        # KFAC in the canonical basis
         return BlockDiagonalLinearOperator(blocks)
 
     @staticmethod
