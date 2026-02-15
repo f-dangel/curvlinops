@@ -22,7 +22,7 @@ from collections.abc import MutableMapping
 from enum import Enum, EnumMeta
 from functools import partial
 from math import sqrt
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, TypeVar
 from warnings import warn
 
 from einops import einsum, rearrange, reduce

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List
+from typing import Any, Callable, TypeVar 
 
 from linear_operator.utils.linear_cg import linear_cg
 from numpy import column_stack
