@@ -97,7 +97,7 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
         data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
-        seed: int = 2147483647,
+        seed: int = 2_147_483_647,
         fisher_type: str = FisherType.MC,
         mc_samples: int = 1,
         kfac_approx: str = KFACType.EXPAND,
