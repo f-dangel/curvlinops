@@ -49,7 +49,7 @@ def test_GGNDiagonalComputer(case, kwargs: Dict):
 
     diag = GGNDiagonalComputer(
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn, **kwargs
-    ).compute_ggn_diagonal()
+    ).compute()
     assert len(diag) == len(params)
     for d, p in zip(diag, params):
         assert d.shape == p.shape
@@ -67,7 +67,7 @@ def test_GGNDiagonalComputer(case, kwargs: Dict):
 
 @mark.parametrize("kwargs", DIAGONAL_CASES, ids=DIAGONAL_IDS)
 def test_GGNDiagonalComputer_sequential_consistency(case, kwargs: Dict):
-    """Calling compute_ggn_diagonal() twice produces the same diagonal.
+    """Calling compute() twice produces the same diagonal.
 
     Args:
         case: Tuple of model, loss function, parameters, data, and batch size getter.
@@ -78,8 +78,8 @@ def test_GGNDiagonalComputer_sequential_consistency(case, kwargs: Dict):
     computer = GGNDiagonalComputer(
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn, **kwargs
     )
-    diag1 = computer.compute_ggn_diagonal()
-    diag2 = computer.compute_ggn_diagonal()
+    diag1 = computer.compute()
+    diag2 = computer.compute()
     for d1, d2 in zip(diag1, diag2):
         assert allclose(d1, d2)
 
@@ -94,8 +94,8 @@ def test_GGNDiagonalComputer_mc_different_seed(case):
     args = (model_func, loss_func, params, data)
     kwargs = {"batch_size_fn": batch_size_fn, "mode": "mc", "mc_samples": 1}
 
-    diag1 = GGNDiagonalComputer(*args, **kwargs, seed=0).compute_ggn_diagonal()
-    diag2 = GGNDiagonalComputer(*args, **kwargs, seed=1).compute_ggn_diagonal()
+    diag1 = GGNDiagonalComputer(*args, **kwargs, seed=0).compute()
+    diag2 = GGNDiagonalComputer(*args, **kwargs, seed=1).compute()
 
     assert all(
         not allclose(d1, d2) or allclose(d1, zeros_like(d1))

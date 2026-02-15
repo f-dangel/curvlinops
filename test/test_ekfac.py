@@ -30,10 +30,8 @@ from test.utils import (
     UnetModel,
     WeightShareModel,
     _test_ekfac_closer_to_exact_than_kfac,
-    _test_from_state_dict,
     _test_inplace_activations,
     _test_property,
-    _test_save_and_load_state_dict,
     binary_classification_targets,
     block_diagonal,
     change_dtype,
@@ -596,7 +594,7 @@ def test_expand_setting_scaling(
         loss_term_factor *= output_random_variable_size
     num_data = sum(X.shape[0] for X, _ in data)
     correction = num_data * loss_term_factor
-    K = ekfac_sum.representation["canonical_op"]
+    _, K, _ = ekfac_sum
     for block in K:
         block.eigenvalues = block.eigenvalues / correction
     ekfac_simulated_mean_mat = ekfac_sum @ eye_like(ekfac_sum)
@@ -745,16 +743,6 @@ def test_logdet(
 def test_ekfac_does_not_affect_grad():
     """Make sure EKFAC computation does not write to `.grad`."""
     _check_does_not_affect_grad(EKFACLinearOperator)
-
-
-def test_save_and_load_state_dict():
-    """Test that EKFACLinearOperator can be saved and loaded from state dict."""
-    _test_save_and_load_state_dict(EKFACLinearOperator)
-
-
-def test_from_state_dict():
-    """Test that EKFACLinearOperator can be created from state dict."""
-    _test_from_state_dict(EKFACLinearOperator)
 
 
 # TODO: Add test for FisherType.MC once tests are in float64.

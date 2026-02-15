@@ -1,6 +1,5 @@
 """Utility functions to test ``curvlinops``."""
 
-import os
 from collections.abc import MutableMapping
 from contextlib import redirect_stdout, suppress
 from itertools import product
@@ -9,10 +8,8 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Type, U
 from einops import rearrange, reduce
 from einops.layers.torch import Rearrange
 from numpy import ndarray
-from pytest import raises, warns
 from torch import (
     Tensor,
-    allclose,
     as_tensor,
     cat,
     cuda,
@@ -20,13 +17,11 @@ from torch import (
     dtype,
     eye,
     linalg,
-    load,
     logdet,
     manual_seed,
     rand,
     randint,
     randperm,
-    save,
     trace,
     zeros_like,
 )
@@ -55,13 +50,7 @@ from curvlinops import (
     GGNLinearOperator,
     KFACLinearOperator,
 )
-from curvlinops._torch_base import (
-    CurvatureLinearOperator,
-    PyTorchLinearOperator,
-    _ChainPyTorchLinearOperator,
-)
-from curvlinops.blockdiagonal import BlockDiagonalLinearOperator
-from curvlinops.kfac_utils import FromCanonicalLinearOperator, ToCanonicalLinearOperator
+from curvlinops._torch_base import CurvatureLinearOperator, PyTorchLinearOperator
 from curvlinops.utils import allclose_report
 
 
@@ -524,38 +513,6 @@ def batch_size_fn(X: MutableMapping) -> int:
     return X["x"].shape[0]
 
 
-def compare_state_dicts(state_dict: dict, state_dict_new: dict):
-    """Compare two state dicts recursively.
-
-    Args:
-        state_dict (dict): The first state dict to compare.
-        state_dict_new (dict): The second state dict to compare.
-    """
-    assert len(state_dict) == len(state_dict_new)
-    for value, value_new in zip(state_dict.values(), state_dict_new.values()):
-        if isinstance(value, Tensor):
-            assert allclose(value, value_new)
-        elif isinstance(value, dict):
-            compare_state_dicts(value, value_new)
-        elif isinstance(value, tuple):
-            assert len(value) == len(value_new)
-            assert all(isinstance(v, type(v2)) for v, v2 in zip(value, value_new))
-            for v, v2 in zip(value, value_new):
-                if v is None:
-                    assert v2 is None
-                else:
-                    assert allclose(as_tensor(v), as_tensor(v2))
-        elif type(value) is type(value_new) and type(value) in {
-            BlockDiagonalLinearOperator,
-            _ChainPyTorchLinearOperator,
-            ToCanonicalLinearOperator,
-            FromCanonicalLinearOperator,
-        }:
-            pass
-        else:
-            assert value == value_new
-
-
 def rand_accepted_formats(
     shapes: List[Tuple[int, ...]],
     is_vec: bool,
@@ -903,12 +860,13 @@ def _test_property(  # noqa: C901
     # Add damping manually to avoid singular matrices for logdet
     if property_name == "logdet":
         DELTA = 1e-3
-        for block in linop.representation["canonical_op"]._blocks:
+        _, K, _ = linop
+        for block in K:
             if type(linop) is KFACLinearOperator:
-                for idx, factor in enumerate(block._factors):
-                    block._factors[idx] = factor + DELTA * eye_like(factor)
+                for idx in range(len(block)):
+                    block[idx] = block[idx] + DELTA * eye_like(block[idx])
             elif type(linop) is EKFACLinearOperator:
-                block._eigenvalues = block._eigenvalues + DELTA
+                block.eigenvalues = block.eigenvalues + DELTA
 
     # Mapping from the property name to the corresponding torch function
     torch_fn = {
@@ -923,118 +881,6 @@ def _test_property(  # noqa: C901
     linop_mat = linop @ eye_like(linop)
     quantity_naive = torch_fn(linop_mat)
     assert allclose_report(quantity, quantity_naive, rtol=rtol, atol=atol)
-
-
-def _test_save_and_load_state_dict(
-    linop_cls: Type[Union[KFACLinearOperator, EKFACLinearOperator]],
-):
-    """Test saving and loading state dict of (E)KFAC.
-
-    Args:
-        linop_cls: The linear operator class to test.
-    """
-    manual_seed(0)
-    batch_size, D_in, D_out = 4, 3, 2
-    X = rand(batch_size, D_in)
-    y = rand(batch_size, D_out)
-    model = Linear(D_in, D_out)
-
-    params = list(model.parameters())
-    # create and compute linop
-    linop = linop_cls(
-        model,
-        MSELoss(reduction="sum"),
-        params,
-        [(X, y)],
-    )
-
-    # save state dict
-    state_dict = linop.state_dict()
-    PATH = "linop_state_dict.pt"
-    save(state_dict, PATH)
-
-    # create new linop with different loss function and try to load state dict
-    linop_new = linop_cls(
-        model,
-        CrossEntropyLoss(),
-        params,
-        [(X, y)],
-        # Avoid computing linop because y has the wrong shape for CE
-        check_deterministic=False,
-    )
-    with raises(ValueError, match="loss"):
-        linop_new.load_state_dict(load(PATH, weights_only=False))
-
-    # create new linop with different loss reduction and try to load state dict
-    linop_new = linop_cls(
-        model,
-        MSELoss(),
-        params,
-        [(X, y)],
-    )
-    with raises(ValueError, match="reduction"):
-        linop_new.load_state_dict(load(PATH, weights_only=False))
-
-    # create new linop with different model and try to load state dict
-    wrong_model = Sequential(Linear(D_in, 10), ReLU(), Linear(10, D_out))
-    wrong_params = list(wrong_model.parameters())
-    linop_new = linop_cls(
-        wrong_model,
-        MSELoss(reduction="sum"),
-        wrong_params,
-        [(X, y)],
-    )
-    with raises(RuntimeError, match="loading state_dict"):
-        linop_new.load_state_dict(load(PATH, weights_only=False))
-
-    # create new linop and load state dict
-    linop_new = linop_cls(
-        model,
-        MSELoss(reduction="sum"),
-        params,
-        [(X, y)],
-        check_deterministic=False,  # turn off to avoid computing linop again
-    )
-    with warns(UserWarning, match="will overwrite the parameters"):
-        linop_new.load_state_dict(load(PATH, weights_only=False))
-    # clean up
-    os.remove(PATH)
-
-    # check that the two linops are equal
-    compare_state_dicts(linop.state_dict(), linop_new.state_dict())
-    test_vec = rand(linop.shape[1])
-    assert allclose_report(linop @ test_vec, linop_new @ test_vec)
-
-
-def _test_from_state_dict(
-    linop_cls: Type[Union[KFACLinearOperator, EKFACLinearOperator]],
-):
-    """Test that (E)KFACLinearOperator can be created from state dict."""
-    manual_seed(0)
-    batch_size, D_in, D_out = 4, 3, 2
-    X = rand(batch_size, D_in)
-    y = rand(batch_size, D_out)
-    model = Linear(D_in, D_out)
-
-    params = list(model.parameters())
-    # create and compute (E)KFAC
-    linop = linop_cls(
-        model,
-        MSELoss(reduction="sum"),
-        params,
-        [(X, y)],
-    )
-
-    # save state dict
-    state_dict = linop.state_dict()
-
-    # create new linop from state dict
-    linop_new = linop_cls.from_state_dict(state_dict, model, params, [(X, y)])
-
-    # check that the two linops are equal
-    compare_state_dicts(linop.state_dict(), linop_new.state_dict())
-    test_vec = rand(linop.shape[1])
-    assert allclose_report(linop @ test_vec, linop_new @ test_vec)
 
 
 def _test_ekfac_closer_to_exact_than_kfac(

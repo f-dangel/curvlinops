@@ -23,7 +23,6 @@ from enum import Enum, EnumMeta
 from functools import partial
 from math import sqrt
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
-from warnings import warn
 
 from einops import einsum, rearrange, reduce
 from torch import Generator, Tensor, cat, eye
@@ -40,13 +39,11 @@ from torch.nn import (
 )
 from torch.utils.hooks import RemovableHandle
 
-from curvlinops._torch_base import (
-    CurvatureLinearOperator,
-    PyTorchLinearOperator,
-    _ChainPyTorchLinearOperator,
-)
+from curvlinops._empirical_risk import _EmpiricalRiskMixin
+from curvlinops._torch_base import _ChainPyTorchLinearOperator
 from curvlinops.blockdiagonal import BlockDiagonalLinearOperator
 from curvlinops.kfac_utils import (
+    FromCanonicalLinearOperator,
     ToCanonicalLinearOperator,
     _check_binary_if_BCEWithLogitsLoss,
     extract_averaged_patches,
@@ -115,61 +112,23 @@ class KFACType(str, Enum, metaclass=MetaEnum):
     REDUCE = "reduce"
 
 
-class KFACLinearOperator(CurvatureLinearOperator):
-    r"""Linear operator to multiply with the Fisher/GGN's KFAC approximation.
+class KFACComputer(_EmpiricalRiskMixin):
+    """Computes KFAC's Kronecker factors.
 
-    KFAC approximates the per-layer Fisher/GGN with a Kronecker product:
-    Consider a weight matrix :math:`\mathbf{W}` and a bias vector :math:`\mathbf{b}`
-    in a single layer. The layer's Fisher :math:`\mathbf{F}(\mathbf{\theta})` for
-
-    .. math::
-        \mathbf{\theta}
-        =
-        \begin{pmatrix}
-        \mathrm{vec}(\mathbf{W}) \\ \mathbf{b}
-        \end{pmatrix}
-
-    where :math:`\mathrm{vec}` denotes column-stacking is approximated as
-
-    .. math::
-        \mathbf{F}(\mathbf{\theta})
-        \approx
-        \mathbf{A}_{(\text{KFAC})} \otimes \mathbf{B}_{(\text{KFAC})}
-
-    (see :class:`curvlinops.FisherMCLinearOperator` for the Fisher's definition).
-    Loosely speaking, the first Kronecker factor is the un-centered covariance of the
-    inputs to a layer. The second Kronecker factor is the un-centered covariance of
-    'would-be' gradients w.r.t. the layer's output. Those 'would-be' gradients result
-    from sampling labels from the model's distribution and computing their gradients.
-
-    Kronecker-Factored Approximate Curvature (KFAC) was originally introduced for MLPs in
-
-    - Martens, J., & Grosse, R. (2015). Optimizing neural networks with Kronecker-factored
-      approximate curvature. International Conference on Machine Learning (ICML),
-
-    extended to CNNs in
-
-    - Grosse, R., & Martens, J. (2016). A kronecker-factored approximate Fisher matrix for
-      convolution layers. International Conference on Machine Learning (ICML),
-
-    and generalized to all linear layers with weight sharing in
-
-    - Eschenhagen, R., Immer, A., Turner, R. E., Schneider, F., Hennig, P. (2023).
-      Kronecker-Factored Approximate Curvature for Modern Neural Network Architectures (NeurIPS).
+    This class handles the data iteration and computation logic for KFAC. It computes
+    the input and gradient covariances (Kronecker factors) and the parameter mapping.
 
     Attributes:
         _SUPPORTED_LOSSES: Tuple of supported loss functions.
         _SUPPORTED_MODULES: Tuple of supported layers.
-        _SUPPORTED_FISHER_TYPE: Enum of supported Fisher types.
-        _SUPPORTED_KFAC_APPROX: Enum of supported KFAC approximation types.
-        SELF_ADJOINT: Whether the operator is self-adjoint. ``True`` for KFAC.
+        _SUPPORTED_FISHER_TYPE: Enum class of supported Fisher types.
+        _SUPPORTED_KFAC_APPROX: Enum class of supported KFAC approximation types.
     """
 
     _SUPPORTED_LOSSES = (MSELoss, CrossEntropyLoss, BCEWithLogitsLoss)
     _SUPPORTED_MODULES = (Linear, Conv2d)
     _SUPPORTED_FISHER_TYPE: FisherType = FisherType
     _SUPPORTED_KFAC_APPROX: KFACType = KFACType
-    SELF_ADJOINT: bool = True
     NEEDS_NUM_PER_EXAMPLE_LOSS_TERMS: bool = True
 
     def __init__(
@@ -189,18 +148,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
         num_data: Optional[int] = None,
         batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
     ):
-        """Kronecker-factored approximate curvature (KFAC) proxy of the Fisher/GGN.
-
-        Warning:
-            If the model's parameters change, e.g. during training, you need to
-            create a fresh instance of this object. This is because, for performance
-            reasons, the Kronecker factors are computed once and cached during the
-            first matrix-vector product. They will thus become outdated if the model
-            changes.
-
-        Warning:
-            This is an early proto-type with limitations:
-                - Only Linear and Conv2d modules are supported.
+        """Set up the KFAC computer.
 
         Args:
             model_func: The neural network. Must consist of modules.
@@ -210,57 +158,30 @@ class KFACLinearOperator(CurvatureLinearOperator):
             data: A data loader containing the data of the Fisher/GGN.
             progressbar: Whether to show a progress bar when computing the Kronecker
                 factors. Defaults to ``False``.
-            check_deterministic: Whether to check that the linear operator is
+            check_deterministic: Whether to check that the data and model are
                 deterministic. Defaults to ``True``.
             seed: The seed for the random number generator used to draw labels
                 from the model's predictive distribution. Defaults to ``2147483647``.
-            fisher_type: The type of Fisher/GGN to approximate.
-                If ``FisherType.TYPE2``, the exact Hessian of the loss w.r.t. the model
-                outputs is used. This requires as many backward passes as the output
-                dimension, i.e. the number of classes for classification. This is
-                sometimes also called type-2 Fisher. If ``FisherType.MC``, the
-                expectation is approximated by sampling ``mc_samples`` labels from the
-                model's predictive distribution. If ``FisherType.EMPIRICAL``, the
-                empirical gradients are used which corresponds to the uncentered
-                gradient covariance, or the empirical Fisher.
-                If ``FisherType.FORWARD_ONLY``, the gradient covariances will be
-                identity matrices, see the FOOF method in
-                `Benzing, 2022 <https://arxiv.org/abs/2201.12250>`_ or ISAAC in
-                `Petersen et al., 2023 <https://arxiv.org/abs/2305.00604>`_.
-                Defaults to ``FisherType.MC``.
+            fisher_type: The type of Fisher/GGN to approximate. Defaults to
+                ``FisherType.MC``.
             mc_samples: The number of Monte-Carlo samples to use per data point.
                 Has to be set to ``1`` when ``fisher_type != FisherType.MC``.
                 Defaults to ``1``.
             kfac_approx: A string specifying the KFAC approximation that should
-                be used for linear weight-sharing layers, e.g. ``Conv2d`` modules
-                or ``Linear`` modules that process matrix- or higher-dimensional
-                features.
-                Possible values are ``KFACType.EXPAND`` and ``KFACType.REDUCE``.
-                See `Eschenhagen et al., 2023 <https://arxiv.org/abs/2311.00636>`_
-                for an explanation of the two approximations.
-                Defaults to ``KFACType.EXPAND``.
-            num_per_example_loss_terms: Number of per-example loss terms, e.g., the
-                number of tokens in a sequence. The model outputs will have
-                ``num_data * num_per_example_loss_terms * C`` entries, where ``C`` is
-                the dimension of the random variable we define the likelihood over --
-                for the ``CrossEntropyLoss`` it will be the number of classes, for the
-                ``MSELoss`` and ``BCEWithLogitsLoss`` it will be the size of the last
-                dimension of the the model outputs/targets (our convention here).
-                If ``None``, ``num_per_example_loss_terms`` is inferred from the data at
-                the cost of one traversal through the data loader. It is expected to be
-                the same for all examples. Defaults to ``None``.
+                be used for linear weight-sharing layers. Defaults to
+                ``KFACType.EXPAND``.
+            num_per_example_loss_terms: Number of per-example loss terms. If ``None``,
+                it is inferred from the data. Defaults to ``None``.
             separate_weight_and_bias: Whether to treat weights and biases separately.
                 Defaults to ``True``.
-            num_data: Number of data points. If ``None``, it is inferred from the data
-                at the cost of one traversal through the data loader.
+            num_data: Number of data points. If ``None``, it is inferred from the data.
             batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
-                needs to be specified. The intended behavior is to consume the first
-                entry of the iterates from ``data`` and return their batch size.
+                needs to be specified.
 
         Raises:
             ValueError: If the loss function is not supported.
             ValueError: If ``fisher_type != FisherType.MC`` and ``mc_samples != 1``.
-            ValueError: If ``X`` is not a tensor and ``batch_size_fn`` is not specified.
+            ValueError: If ``kfac_approx`` is not supported.
         """
         if not isinstance(loss_func, self._SUPPORTED_LOSSES):
             raise ValueError(
@@ -289,7 +210,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
         self._mc_samples = mc_samples
         self._kfac_approx = kfac_approx
         self._mapping = self.compute_parameter_mapping(params, model_func)
-        self._representation = None
 
         # Function (prediction_batch, label_batch) -> grad_outputs for backpropagation
         self._grad_outputs_computer = (
@@ -312,49 +232,18 @@ class KFACLinearOperator(CurvatureLinearOperator):
             batch_size_fn=batch_size_fn,
         )
 
-    @property
-    def representation(self) -> Dict[str, PyTorchLinearOperator]:
-        """Return the internal representation of the linear operator.
-
-        This attribute is lazily evaluated and cached after the first access.
+    def compute(
+        self,
+    ) -> Tuple[Dict[str, Tensor], Dict[str, Tensor], Dict[str, Dict[str, int]]]:
+        """Compute the Kronecker factors.
 
         Returns:
-            A dictionary containing the linear operators converting from parameter to
-            canonical space and back, as well as the canonical KFAC operator (block-
-            diagonal Kronecker-factored).
+            Tuple of ``(input_covariances, gradient_covariances, mapping)`` where the
+            first two are dictionaries mapping module names to covariance matrices and
+            ``mapping`` maps module names to dictionaries of parameter names and their
+            positions.
         """
-        if self._representation is None:
-            input_covariances, gradient_covariances = self.compute_kronecker_factors()
-            # KFAC in the canonical basis
-            canonical_op = self._setup_canonical_operator(
-                input_covariances, gradient_covariances
-            )
-
-            # Set up converters from parameter to canonical space and back
-            to_canonical_op = ToCanonicalLinearOperator(
-                [p.shape for p in self._params],
-                list(self._mapping.values()),
-                self._separate_weight_and_bias,
-                self.device,
-                self.dtype,
-            )
-            from_canonical_op = to_canonical_op.adjoint()
-
-            self._representation = {
-                "canonical_op": canonical_op,
-                "to_canonical_op": to_canonical_op,
-                "from_canonical_op": from_canonical_op,
-            }
-        return self._representation
-
-    def refresh_representation(self):
-        """Refresh the internal representation of the linear operator.
-
-        Re-computes the Kronecker factors.
-        """
-        self._representation = None
-        # Accessing the property triggers the re-computation
-        _ = self.representation
+        return (*self._compute_kronecker_factors(), self._mapping)
 
     @staticmethod
     def _set_up_grad_outputs_computer(
@@ -404,29 +293,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
         return compute_grad_outputs
 
-    def _matmat(self, M: List[Tensor]) -> List[Tensor]:
-        """Apply KFAC to a matrix (multiple vectors) in tensor list format.
-
-        This allows for matrix-matrix products with the KFAC approximation in PyTorch
-        without converting tensors to numpy arrays, which avoids unnecessary
-        device transfers when working with GPUs and flattening/concatenating.
-
-        Args:
-            M: Matrix for multiplication in tensor list format. Each entry has the
-                same shape as a parameter with an additional trailing dimension of size
-                ``K`` for the columns, i.e. ``[(*p1.shape, K), (*p2.shape, K), ...]``.
-
-        Returns:
-            Matrix-multiplication result ``KFAC @ M`` in tensor list format. Has the same
-            shapes as the input.
-        """
-        P = self.representation["from_canonical_op"]
-        PT = self.representation["to_canonical_op"]
-        K = self.representation["canonical_op"]
-        kfac = P @ K @ PT
-        return kfac @ M
-
-    def compute_kronecker_factors(self) -> Tuple[Dict[str, Tensor], Dict[str, Tensor]]:
+    def _compute_kronecker_factors(self) -> Tuple[Dict[str, Tensor], Dict[str, Tensor]]:
         """Compute KFAC's Kronecker factors.
 
         Returns:
@@ -806,44 +673,213 @@ class KFACLinearOperator(CurvatureLinearOperator):
 
         return positions
 
-    def _setup_canonical_operator(
+
+class KFACLinearOperator(_ChainPyTorchLinearOperator):
+    r"""Linear operator to multiply with the Fisher/GGN's KFAC approximation.
+
+    KFAC approximates the per-layer Fisher/GGN with a Kronecker product:
+    Consider a weight matrix :math:`\mathbf{W}` and a bias vector :math:`\mathbf{b}`
+    in a single layer. The layer's Fisher :math:`\mathbf{F}(\mathbf{\theta})` for
+
+    .. math::
+        \mathbf{\theta}
+        =
+        \begin{pmatrix}
+        \mathrm{vec}(\mathbf{W}) \\ \mathbf{b}
+        \end{pmatrix}
+
+    where :math:`\mathrm{vec}` denotes column-stacking is approximated as
+
+    .. math::
+        \mathbf{F}(\mathbf{\theta})
+        \approx
+        \mathbf{A}_{(\text{KFAC})} \otimes \mathbf{B}_{(\text{KFAC})}
+
+    (see :class:`curvlinops.FisherMCLinearOperator` for the Fisher's definition).
+    Loosely speaking, the first Kronecker factor is the un-centered covariance of the
+    inputs to a layer. The second Kronecker factor is the un-centered covariance of
+    'would-be' gradients w.r.t. the layer's output. Those 'would-be' gradients result
+    from sampling labels from the model's distribution and computing their gradients.
+
+    Kronecker-Factored Approximate Curvature (KFAC) was originally introduced for MLPs in
+
+    - Martens, J., & Grosse, R. (2015). Optimizing neural networks with Kronecker-factored
+      approximate curvature. International Conference on Machine Learning (ICML),
+
+    extended to CNNs in
+
+    - Grosse, R., & Martens, J. (2016). A kronecker-factored approximate Fisher matrix for
+      convolution layers. International Conference on Machine Learning (ICML),
+
+    and generalized to all linear layers with weight sharing in
+
+    - Eschenhagen, R., Immer, A., Turner, R. E., Schneider, F., Hennig, P. (2023).
+      Kronecker-Factored Approximate Curvature for Modern Neural Network Architectures (NeurIPS).
+
+    Attributes:
+        _SUPPORTED_LOSSES: Tuple of supported loss functions.
+        _SUPPORTED_FISHER_TYPE: Enum class of supported Fisher types.
+        _SUPPORTED_KFAC_APPROX: Enum class of supported KFAC approximation types.
+        SELF_ADJOINT: Whether the operator is self-adjoint. ``True`` for KFAC.
+    """
+
+    _COMPUTER_CLS = KFACComputer
+    SELF_ADJOINT: bool = True
+    _SUPPORTED_LOSSES = KFACComputer._SUPPORTED_LOSSES
+    _SUPPORTED_FISHER_TYPE = KFACComputer._SUPPORTED_FISHER_TYPE
+    _SUPPORTED_KFAC_APPROX = KFACComputer._SUPPORTED_KFAC_APPROX
+
+    def __init__(
         self,
-        input_covariances: Dict[str, Tensor],
-        gradient_covariances: Dict[str, Tensor],
-    ) -> BlockDiagonalLinearOperator:
-        """Set up the canonical KFAC operator from Kronecker factors.
+        model_func: Module,
+        loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
+        params: List[Parameter],
+        data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
+        progressbar: bool = False,
+        check_deterministic: bool = True,
+        seed: int = 2147483647,
+        fisher_type: str = FisherType.MC,
+        mc_samples: int = 1,
+        kfac_approx: str = KFACType.EXPAND,
+        num_per_example_loss_terms: Optional[int] = None,
+        separate_weight_and_bias: bool = True,
+        num_data: Optional[int] = None,
+        batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
+    ):
+        """Kronecker-factored approximate curvature (KFAC) proxy of the Fisher/GGN.
+
+        Warning:
+            If the model's parameters change, e.g. during training, you need to
+            create a fresh instance of this object. This is because the Kronecker
+            factors are computed once in the constructor and will thus become outdated
+            if the model changes.
+
+        Warning:
+            This is an early proto-type with limitations:
+                - Only Linear and Conv2d modules are supported.
 
         Args:
-            input_covariances: Dictionary mapping module names to input covariances.
-            gradient_covariances: Dictionary mapping module names to gradient
-                covariances.
+            model_func: The neural network. Must consist of modules.
+            loss_func: The loss function.
+            params: The parameters defining the Fisher/GGN that will be approximated
+                through KFAC.
+            data: A data loader containing the data of the Fisher/GGN.
+            progressbar: Whether to show a progress bar when computing the Kronecker
+                factors. Defaults to ``False``.
+            check_deterministic: Whether to check that the linear operator is
+                deterministic. Defaults to ``True``.
+            seed: The seed for the random number generator used to draw labels
+                from the model's predictive distribution. Defaults to ``2147483647``.
+            fisher_type: The type of Fisher/GGN to approximate.
+                If ``FisherType.TYPE2``, the exact Hessian of the loss w.r.t. the model
+                outputs is used. This requires as many backward passes as the output
+                dimension, i.e. the number of classes for classification. This is
+                sometimes also called type-2 Fisher. If ``FisherType.MC``, the
+                expectation is approximated by sampling ``mc_samples`` labels from the
+                model's predictive distribution. If ``FisherType.EMPIRICAL``, the
+                empirical gradients are used which corresponds to the uncentered
+                gradient covariance, or the empirical Fisher.
+                If ``FisherType.FORWARD_ONLY``, the gradient covariances will be
+                identity matrices, see the FOOF method in
+                `Benzing, 2022 <https://arxiv.org/abs/2201.12250>`_ or ISAAC in
+                `Petersen et al., 2023 <https://arxiv.org/abs/2305.00604>`_.
+                Defaults to ``FisherType.MC``.
+            mc_samples: The number of Monte-Carlo samples to use per data point.
+                Has to be set to ``1`` when ``fisher_type != FisherType.MC``.
+                Defaults to ``1``.
+            kfac_approx: A string specifying the KFAC approximation that should
+                be used for linear weight-sharing layers, e.g. ``Conv2d`` modules
+                or ``Linear`` modules that process matrix- or higher-dimensional
+                features.
+                Possible values are ``KFACType.EXPAND`` and ``KFACType.REDUCE``.
+                See `Eschenhagen et al., 2023 <https://arxiv.org/abs/2311.00636>`_
+                for an explanation of the two approximations.
+                Defaults to ``KFACType.EXPAND``.
+            num_per_example_loss_terms: Number of per-example loss terms, e.g., the
+                number of tokens in a sequence. The model outputs will have
+                ``num_data * num_per_example_loss_terms * C`` entries, where ``C`` is
+                the dimension of the random variable we define the likelihood over --
+                for the ``CrossEntropyLoss`` it will be the number of classes, for the
+                ``MSELoss`` and ``BCEWithLogitsLoss`` it will be the size of the last
+                dimension of the the model outputs/targets (our convention here).
+                If ``None``, ``num_per_example_loss_terms`` is inferred from the data at
+                the cost of one traversal through the data loader. It is expected to be
+                the same for all examples. Defaults to ``None``.
+            separate_weight_and_bias: Whether to treat weights and biases separately.
+                Defaults to ``True``.
+            num_data: Number of data points. If ``None``, it is inferred from the data
+                at the cost of one traversal through the data loader.
+            batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
+                needs to be specified. The intended behavior is to consume the first
+                entry of the iterates from ``data`` and return their batch size.
+        """
+        computer = self._COMPUTER_CLS(
+            model_func,
+            loss_func,
+            params,
+            data,
+            progressbar=progressbar,
+            check_deterministic=check_deterministic,
+            seed=seed,
+            fisher_type=fisher_type,
+            mc_samples=mc_samples,
+            kfac_approx=kfac_approx,
+            num_per_example_loss_terms=num_per_example_loss_terms,
+            separate_weight_and_bias=separate_weight_and_bias,
+            num_data=num_data,
+            batch_size_fn=batch_size_fn,
+        )
+        # KFAC = P @ K @ PT
+        K = self._compute_canonical_op(computer)
+        P, PT = self._build_converters(computer)
+        super().__init__(P, K, PT)
+
+    @staticmethod
+    def _compute_canonical_op(computer: KFACComputer) -> BlockDiagonalLinearOperator:
+        """Compute Kronecker factors and assemble the canonical block-diagonal operator.
+
+        Args:
+            computer: A ``KFACComputer`` instance.
 
         Returns:
             Block diagonal linear operator representing KFAC in canonical basis.
         """
-        # Set up Kronecker operators for each block
+        input_covariances, gradient_covariances, mapping = computer.compute()
         factors = []
-
-        for mod_name, param_pos in self._mapping.items():
+        for mod_name, param_pos in mapping.items():
             aaT = input_covariances.get(mod_name, None)
             ggT = gradient_covariances[mod_name]
-
-            # Handle joint weight+bias case
-            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
+            if not computer._separate_weight_and_bias and {"weight", "bias"} == set(
                 param_pos.keys()
             ):
-                # Single Kronecker product block for weight+bias
                 factors.append([ggT, aaT])
             else:
-                # Separate blocks for weight and bias
                 for p_name in param_pos:
                     factors.append([ggT, aaT] if p_name == "weight" else [ggT])
-
-        # Create Kronecker product linear operators for each block
         blocks = [KroneckerProductLinearOperator(*fs) for fs in factors]
-
-        # KFAC in the canonical basis
         return BlockDiagonalLinearOperator(blocks)
+
+    @staticmethod
+    def _build_converters(
+        computer: KFACComputer,
+    ) -> Tuple[FromCanonicalLinearOperator, ToCanonicalLinearOperator]:
+        """Build the canonical space converters.
+
+        Args:
+            computer: A ``KFACComputer`` instance.
+
+        Returns:
+            Tuple of ``(from_canonical_op, to_canonical_op)``.
+        """
+        PT = ToCanonicalLinearOperator(
+            [p.shape for p in computer._params],
+            list(computer._mapping.values()),
+            computer._separate_weight_and_bias,
+            computer.device,
+            computer.dtype,
+        )
+        P = PT.adjoint()
+        return P, PT
 
     def trace(self) -> Tensor:
         """Trace of the KFAC approximation.
@@ -851,7 +887,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
         Returns:
             Trace of the KFAC approximation.
         """
-        return self.representation["canonical_op"].trace()
+        _, K, _ = self
+        return K.trace()
 
     def det(self) -> Tensor:
         """Compute the determinant of the KFAC approximation.
@@ -859,7 +896,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
         Returns:
             Determinant of the KFAC approximation.
         """
-        return self.representation["canonical_op"].det()
+        _, K, _ = self
+        return K.det()
 
     def logdet(self) -> Tensor:
         """Log determinant of the KFAC approximation.
@@ -869,7 +907,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
         Returns:
             Log determinant of the KFAC approximation.
         """
-        return self.representation["canonical_op"].logdet()
+        _, K, _ = self
+        return K.logdet()
 
     def frobenius_norm(self) -> Tensor:
         """Frobenius norm of the KFAC approximation.
@@ -877,7 +916,8 @@ class KFACLinearOperator(CurvatureLinearOperator):
         Returns:
             Frobenius norm of the KFAC approximation.
         """
-        return self.representation["canonical_op"].frobenius_norm()
+        _, K, _ = self
+        return K.frobenius_norm()
 
     def inverse(
         self,
@@ -907,9 +947,7 @@ class KFACLinearOperator(CurvatureLinearOperator):
         Returns:
             Inverse of the KFAC approximation as a linear operator ``P @ K^-1 @ PT``.
         """
-        P = self.representation["from_canonical_op"]
-        PT = self.representation["to_canonical_op"]
-        K = self.representation["canonical_op"]
+        P, K, PT = self
         K_inv = BlockDiagonalLinearOperator([
             block.inverse(
                 damping=damping,
@@ -918,136 +956,6 @@ class KFACLinearOperator(CurvatureLinearOperator):
                 use_exact_damping=use_exact_damping,
                 retry_double_precision=retry_double_precision,
             )
-            for block in K._blocks
+            for block in K
         ])
-        return P @ K_inv @ PT
-
-    def state_dict(self) -> Dict[str, Any]:
-        """Return the state of the KFAC linear operator.
-
-        Returns:
-            State dictionary.
-        """
-        loss_type = {
-            MSELoss: "MSELoss",
-            CrossEntropyLoss: "CrossEntropyLoss",
-            BCEWithLogitsLoss: "BCEWithLogitsLoss",
-        }[type(self._loss_func)]
-        return {
-            # Model and loss function
-            "model_func_state_dict": self._model_func.state_dict(),
-            "loss_type": loss_type,
-            "loss_reduction": self._loss_func.reduction,
-            # Attributes
-            "progressbar": self._progressbar,
-            "seed": self._seed,
-            "fisher_type": self._fisher_type,
-            "mc_samples": self._mc_samples,
-            "kfac_approx": self._kfac_approx,
-            "num_per_example_loss_terms": self._num_per_example_loss_terms,
-            "separate_weight_and_bias": self._separate_weight_and_bias,
-            "num_data": self._N_data,
-            # Representation (Kronecker factors), if computed
-            "_representation": self._representation,
-        }
-
-    def load_state_dict(self, state_dict: Dict[str, Any]):
-        """Load the state of the KFAC linear operator.
-
-        Warning:
-            Loading a state dict will overwrite the parameters of the model underlying
-            the linear operator!
-
-        Args:
-            state_dict: State dictionary.
-
-        Raises:
-            ValueError: If the loss function does not match the state dict.
-            ValueError: If the loss function reduction does not match the state dict.
-        """
-        warn(
-            "Loading a state dict will overwrite the parameters of the model underlying the linear operator!",
-            stacklevel=2,
-        )
-        self._model_func.load_state_dict(state_dict["model_func_state_dict"])
-        # Verify that the loss function and its reduction match the state dict
-        loss_func_type = {
-            "MSELoss": MSELoss,
-            "CrossEntropyLoss": CrossEntropyLoss,
-            "BCEWithLogitsLoss": BCEWithLogitsLoss,
-        }[state_dict["loss_type"]]
-        if not isinstance(self._loss_func, loss_func_type):
-            raise ValueError(
-                f"Loss function mismatch: {loss_func_type} != {type(self._loss_func)}."
-            )
-        if state_dict["loss_reduction"] != self._loss_func.reduction:
-            raise ValueError(
-                "Loss function reduction mismatch: "
-                f"{state_dict['loss_reduction']} != {self._loss_func.reduction}."
-            )
-
-        # Set attributes
-        self._progressbar = state_dict["progressbar"]
-        self._seed = state_dict["seed"]
-        self._fisher_type = state_dict["fisher_type"]
-        self._mc_samples = state_dict["mc_samples"]
-        self._kfac_approx = state_dict["kfac_approx"]
-        self._num_per_example_loss_terms = state_dict["num_per_example_loss_terms"]
-        self._separate_weight_and_bias = state_dict["separate_weight_and_bias"]
-        self._N_data = state_dict["num_data"]
-        self._representation = state_dict["_representation"]
-
-    @classmethod
-    def from_state_dict(
-        cls,
-        state_dict: Dict[str, Any],
-        model_func: Module,
-        params: List[Parameter],
-        data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
-        check_deterministic: bool = True,
-        batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
-    ) -> KFACLinearOperator:
-        """Load a KFAC linear operator from a state dictionary.
-
-        Args:
-            state_dict: State dictionary.
-            model_func: The model function.
-            params: The model's parameters that KFAC is computed for.
-            data: A data loader containing the data of the Fisher/GGN.
-            check_deterministic: Whether to check that the linear operator is
-                deterministic. Defaults to ``True``.
-            batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
-                needs to be specified. The intended behavior is to consume the first
-                entry of the iterates from ``data`` and return their batch size.
-
-        Returns:
-            Linear operator of KFAC approximation.
-        """
-        loss_func = {
-            "MSELoss": MSELoss,
-            "CrossEntropyLoss": CrossEntropyLoss,
-            "BCEWithLogitsLoss": BCEWithLogitsLoss,
-        }[state_dict["loss_type"]](reduction=state_dict["loss_reduction"])
-        kfac = cls(
-            model_func,
-            loss_func,
-            params,
-            data,
-            batch_size_fn=batch_size_fn,
-            check_deterministic=False,
-            progressbar=state_dict["progressbar"],
-            seed=state_dict["seed"],
-            fisher_type=state_dict["fisher_type"],
-            mc_samples=state_dict["mc_samples"],
-            kfac_approx=state_dict["kfac_approx"],
-            num_per_example_loss_terms=state_dict["num_per_example_loss_terms"],
-            separate_weight_and_bias=state_dict["separate_weight_and_bias"],
-            num_data=state_dict["num_data"],
-        )
-        kfac.load_state_dict(state_dict)
-
-        # Potentially call `check_deterministic` after the state dict is loaded
-        if check_deterministic:
-            kfac._check_deterministic()
-
-        return kfac
+        return _ChainPyTorchLinearOperator(P, K_inv, PT)

@@ -11,11 +11,11 @@ from torch.linalg import eigh
 from torch.nn import Conv2d, Module
 from torch.utils.hooks import RemovableHandle
 
-from curvlinops._torch_base import PyTorchLinearOperator, _ChainPyTorchLinearOperator
+from curvlinops._torch_base import _ChainPyTorchLinearOperator
 from curvlinops.blockdiagonal import BlockDiagonalLinearOperator
 from curvlinops.eigh import EighDecomposedLinearOperator
-from curvlinops.kfac import FisherType, KFACLinearOperator
-from curvlinops.kfac_utils import ToCanonicalLinearOperator, extract_patches
+from curvlinops.kfac import FisherType, KFACComputer, KFACLinearOperator
+from curvlinops.kfac_utils import extract_patches
 from curvlinops.kronecker import KroneckerProductLinearOperator
 from curvlinops.utils import _seed_generator
 
@@ -232,23 +232,14 @@ def compute_eigenvalue_correction_linear_weight_sharing(
     return eigencorrection
 
 
-class EKFACLinearOperator(KFACLinearOperator):
-    """Linear operator to multiply with the Fisher/GGN's EKFAC approximation.
+class EKFACComputer(KFACComputer):
+    """Computes EKFAC's eigenvalue-corrected Kronecker factors.
 
-    Eigenvalue-corrected Kronecker-Factored Approximate Curvature (EKFAC) was originally
-    introduced in
-
-    - George, T., Laurent, C., Bouthillier, X., Ballas, N., Vincent, P. (2018).
-      Fast Approximate Natural Gradient Descent in a Kronecker-factored Eigenbasis (NeurIPS)
-
-    and concurrently in the context of continual learning in
-
-    - Liu, X., Masana, M., Herranz, L., Van de Weijer, J., Lopez, A., Bagdanov, A. (2018).
-      Rotate your networks: Better weight consolidation and less catastrophic forgetting
-      (ICPR).
+    Extends KFACComputer with eigenvalue decomposition of the Kronecker factors
+    and eigenvalue correction computation.
 
     Attributes:
-        _SUPPORTED_FISHER_TYPE: Tuple with supported Fisher types.
+        _SUPPORTED_FISHER_TYPE: Tuple of supported Fisher types.
     """
 
     _SUPPORTED_FISHER_TYPE: Tuple[FisherType, ...] = (
@@ -257,118 +248,30 @@ class EKFACLinearOperator(KFACLinearOperator):
         FisherType.EMPIRICAL,
     )
 
-    @property
-    def representation(self) -> Dict[str, PyTorchLinearOperator]:
-        """Return EKFAC's internal representation.
-
-        Returns:
-            A dictionary containing the linear operators converting from parameter to
-            canonical space and back, as well as the canonical KFAC operator (block-
-            diagonal Kronecker-factored).
-        """
-        if self._representation is None:
-            input_covariances_eigenvectors, gradient_covariances_eigenvectors = [
-                self._eigenvectors_(covariances)
-                for covariances in self.compute_kronecker_factors()
-            ]
-            corrected_eigenvalues = self.compute_eigenvalue_correction(
-                input_covariances_eigenvectors, gradient_covariances_eigenvectors
-            )
-            # EKFAC in the canonical basis
-            canonical_op = self._setup_canonical_operator(
-                input_covariances_eigenvectors,
-                gradient_covariances_eigenvectors,
-                corrected_eigenvalues,
-            )
-
-            # Set up converters from parameter to canonical space and back
-            to_canonical_op = ToCanonicalLinearOperator(
-                [p.shape for p in self._params],
-                list(self._mapping.values()),
-                self._separate_weight_and_bias,
-                self.device,
-                self.dtype,
-            )
-            from_canonical_op = to_canonical_op.adjoint()
-
-            self._representation = {
-                "canonical_op": canonical_op,
-                "to_canonical_op": to_canonical_op,
-                "from_canonical_op": from_canonical_op,
-            }
-        return self._representation
-
-    def _setup_canonical_operator(
+    def compute(
         self,
-        input_covariances_eigenvectors: Dict[str, Tensor],
-        gradient_covariances_eigenvectors: Dict[str, Tensor],
-        corrected_eigenvalues: Dict[str, Union[Tensor, Dict[int, Tensor]]],
-    ) -> BlockDiagonalLinearOperator:
-        """Set up the canonical EKFAC operator from Kronecker factors.
-
-        Args:
-            input_covariances_eigenvectors: Dictionary mapping module names to input
-                covariance eigenvectors.
-            gradient_covariances_eigenvectors: Dictionary mapping module names to
-                gradient covariance eigenvectors.
-            corrected_eigenvalues: Dictionary mapping module names to eigenvalue
-                corrections.
+    ) -> Tuple[
+        Dict[str, Tensor],
+        Dict[str, Tensor],
+        Dict[str, Union[Tensor, Dict[int, Tensor]]],
+        Dict[str, Dict[str, int]],
+    ]:
+        """Compute eigenvalue-corrected Kronecker factors.
 
         Returns:
-            Block diagonal linear operator representing KFAC in canonical basis.
+            Tuple of ``(input_covariance_eigenvectors, gradient_covariance_eigenvectors,
+            corrected_eigenvalues, mapping)`` where the first two are dictionaries
+            mapping module names to eigenvector matrices, the third maps module names to
+            eigenvalue corrections, and ``mapping`` maps module names to dictionaries of
+            parameter names and their positions.
         """
-        # Set up operators for each block
-        bases = []
-        corrections = []
-
-        for mod_name, param_pos in self._mapping.items():
-            Q_a = input_covariances_eigenvectors.get(mod_name, None)
-            Q_g = gradient_covariances_eigenvectors[mod_name]
-            lambdas = corrected_eigenvalues[mod_name]
-
-            # Handle joint weight+bias case
-            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
-                param_pos.keys()
-            ):
-                # Single Kronecker product block for weight+bias
-                bases.append([Q_g, Q_a])
-                corrections.append(lambdas)
-            else:
-                # Separate blocks for weight and bias
-                for p_name, p_pos in param_pos.items():
-                    bases.append([Q_g, Q_a] if p_name == "weight" else [Q_g])
-                    corrections.append(lambdas[p_pos])
-
-        # Create Kronecker product linear operators for each block
-        blocks = [
-            EighDecomposedLinearOperator(
-                correction.flatten(), KroneckerProductLinearOperator(*basis)
-            )
-            for basis, correction in zip(bases, corrections)
-        ]
-        # EKFAC in the canonical basis
-        return BlockDiagonalLinearOperator(blocks)
-
-    def inverse(self, damping: float = 0.0) -> _ChainPyTorchLinearOperator:
-        """Return the inverse of the EKFAC approximation.
-
-        Inverts each eigendecomposed block of the canonical operator
-        and returns the result in parameter space.
-
-        Args:
-            damping: Damping term added to eigenvalues before inversion.
-                Default: ``0.0``.
-
-        Returns:
-            Inverse of the EKFAC approximation as a linear operator.
-        """
-        P = self.representation["from_canonical_op"]
-        PT = self.representation["to_canonical_op"]
-        K = self.representation["canonical_op"]
-        K_inv = BlockDiagonalLinearOperator([
-            block.inverse(damping=damping) for block in K._blocks
-        ])
-        return P @ K_inv @ PT
+        input_covariances, gradient_covariances, mapping = super().compute()
+        input_covariances = self._eigenvectors_(input_covariances)
+        gradient_covariances = self._eigenvectors_(gradient_covariances)
+        corrected_eigenvalues = self.compute_eigenvalue_correction(
+            input_covariances, gradient_covariances
+        )
+        return input_covariances, gradient_covariances, corrected_eigenvalues, mapping
 
     def _rearrange_for_larger_than_2d_output(
         self, output: Tensor, y: Tensor
@@ -400,7 +303,7 @@ class EKFACLinearOperator(KFACLinearOperator):
 
     @staticmethod
     def _eigenvectors_(dictionary: Dict[Any, Tensor]) -> Dict[Any, Tensor]:
-        """Replace all matrix values with their eigenvalues (inplace).
+        """Replace all matrix values with their eigenvectors (inplace).
 
         Args:
             dictionary: A dictionary mapping module names to square matrices.
@@ -617,3 +520,85 @@ class EKFACLinearOperator(KFACLinearOperator):
                     pos,
                     eigencorrection.mul_(correction),
                 )
+
+
+class EKFACLinearOperator(KFACLinearOperator):
+    """Linear operator to multiply with the Fisher/GGN's EKFAC approximation.
+
+    Eigenvalue-corrected Kronecker-Factored Approximate Curvature (EKFAC) was originally
+    introduced in
+
+    - George, T., Laurent, C., Bouthillier, X., Ballas, N., Vincent, P. (2018).
+      Fast Approximate Natural Gradient Descent in a Kronecker-factored Eigenbasis (NeurIPS)
+
+    and concurrently in the context of continual learning in
+
+    - Liu, X., Masana, M., Herranz, L., Van de Weijer, J., Lopez, A., Bagdanov, A. (2018).
+      Rotate your networks: Better weight consolidation and less catastrophic forgetting
+      (ICPR).
+
+    Attributes:
+        _SUPPORTED_FISHER_TYPE: Tuple of supported Fisher types.
+    """
+
+    _COMPUTER_CLS = EKFACComputer
+    _SUPPORTED_FISHER_TYPE: Tuple[FisherType, ...] = (
+        FisherType.TYPE2,
+        FisherType.MC,
+        FisherType.EMPIRICAL,
+    )
+
+    @staticmethod
+    def _compute_canonical_op(computer: EKFACComputer) -> BlockDiagonalLinearOperator:
+        """Compute EKFAC factors and assemble the canonical block-diagonal operator.
+
+        Args:
+            computer: An ``EKFACComputer`` instance.
+
+        Returns:
+            Block diagonal linear operator representing EKFAC in canonical basis.
+        """
+        input_eigvecs, gradient_eigvecs, corrected_eigenvalues, mapping = (
+            computer.compute()
+        )
+        bases = []
+        corrections = []
+        for mod_name, param_pos in mapping.items():
+            Q_a = input_eigvecs.get(mod_name, None)
+            Q_g = gradient_eigvecs[mod_name]
+            lambdas = corrected_eigenvalues[mod_name]
+            if not computer._separate_weight_and_bias and {"weight", "bias"} == set(
+                param_pos.keys()
+            ):
+                bases.append([Q_g, Q_a])
+                corrections.append(lambdas)
+            else:
+                for p_name, p_pos in param_pos.items():
+                    bases.append([Q_g, Q_a] if p_name == "weight" else [Q_g])
+                    corrections.append(lambdas[p_pos])
+        blocks = [
+            EighDecomposedLinearOperator(
+                correction.flatten(), KroneckerProductLinearOperator(*basis)
+            )
+            for basis, correction in zip(bases, corrections)
+        ]
+        return BlockDiagonalLinearOperator(blocks)
+
+    def inverse(self, damping: float = 0.0) -> _ChainPyTorchLinearOperator:
+        """Return the inverse of the EKFAC approximation.
+
+        Inverts each eigendecomposed block of the canonical operator
+        and returns the result in parameter space.
+
+        Args:
+            damping: Damping term added to eigenvalues before inversion.
+                Default: ``0.0``.
+
+        Returns:
+            Inverse of the EKFAC approximation as a linear operator.
+        """
+        P, K, PT = self
+        K_inv = BlockDiagonalLinearOperator([
+            block.inverse(damping=damping) for block in K
+        ])
+        return _ChainPyTorchLinearOperator(P, K_inv, PT)

@@ -123,7 +123,7 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
     """Computes the diagonal of the Generalized Gauss-Newton matrix.
 
     This class handles data iteration, deterministic checks, and the actual
-    computation of the GGN diagonal. Call ``.compute_ggn_diagonal()`` to obtain the
+    computation of the GGN diagonal. Call ``.compute()`` to obtain the
     diagonal as a list of tensors.
 
     Attributes:
@@ -222,7 +222,7 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
         X, _ = next(self._loop_over_data())
         _check_supports_batched_and_unbatched_inputs(X, self._model_func)
 
-    def compute_ggn_diagonal(self) -> List[Tensor]:
+    def compute(self) -> List[Tensor]:
         """Compute the GGN diagonal on the entire data set.
 
         Returns:
@@ -326,5 +326,5 @@ class GGNDiagonalLinearOperator(DiagonalLinearOperator):
             seed=seed,
             mc_samples=mc_samples,
         )
-        diagonal = computer.compute_ggn_diagonal()
+        diagonal = computer.compute()
         super().__init__(diagonal)

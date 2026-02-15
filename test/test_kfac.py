@@ -34,10 +34,8 @@ from test.utils import (
     Conv2dModel,
     UnetModel,
     WeightShareModel,
-    _test_from_state_dict,
     _test_inplace_activations,
     _test_property,
-    _test_save_and_load_state_dict,
     binary_classification_targets,
     block_diagonal,
     change_dtype,
@@ -607,7 +605,7 @@ def test_expand_setting_scaling(
             loss_term_factor *= output_random_variable_size
 
         num_data = sum(X.shape[0] for X, _ in data)
-        K = kfac_sum.representation["canonical_op"]
+        _, K, _ = kfac_sum
         for block in K:
             # Gradient covariance is always the first Kronecker factor
             block[0] = block[0] / (num_data * loss_term_factor)
@@ -822,7 +820,7 @@ def test_forward_only_fisher_type(
         fisher_type=FisherType.EMPIRICAL,
     )
     # Manually set all gradient covariances to the identity to simulate FOOF
-    K = foof_simulated.representation["canonical_op"]
+    _, K, _ = foof_simulated
     for block in K:
         # Gradient covariance is always the first Kronecker factor
         block[0] = eye_like(block[0])
@@ -1042,16 +1040,6 @@ def test_kfac_does_not_affect_grad():
     _check_does_not_affect_grad(KFACLinearOperator)
 
 
-def test_save_and_load_state_dict():
-    """Test that KFACLinearOperator can be saved and loaded from state dict."""
-    _test_save_and_load_state_dict(KFACLinearOperator)
-
-
-def test_from_state_dict():
-    """Test that KFACLinearOperator can be created from state dict."""
-    _test_from_state_dict(KFACLinearOperator)
-
-
 @mark.parametrize("fisher_type", ["type-2", "mc", "empirical", "forward-only"])
 @mark.parametrize("kfac_approx", ["expand", "reduce"])
 def test_string_in_enum(fisher_type: str, kfac_approx: str):
@@ -1145,7 +1133,7 @@ def test_KFAC_inverse_damped_matmat(
     inv_KFAC = KFAC.inverse(damping=delta)
 
     # Manually add damping to each Kronecker factor, materialize, invert
-    K = KFAC.representation["canonical_op"]
+    _, K, _ = KFAC
     for block in K:
         for idx in range(len(block)):
             # NOTE Needs out-of-place addition because some factors correspond to
@@ -1197,7 +1185,7 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901
     # Manually add heuristic damping to each Kronecker factor
     # NOTE We cannot use in-place operations for this because some Kronecker factors
     # may correspond to identical tensors that would otherwise be damped multiple times.
-    K = KFAC.representation["canonical_op"]
+    _, K, _ = KFAC
     for block in K:
         if len(block) == 2:
             S1, S2 = block[0], block[1]  # ggT, aaT

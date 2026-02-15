@@ -24,7 +24,6 @@ from memory_profiler import memory_usage
 from torch import cuda, device, manual_seed, rand
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
-from curvlinops import EKFACLinearOperator, KFACLinearOperator
 from curvlinops.examples import gradient_and_loss
 
 
@@ -66,14 +65,9 @@ def run_peakmem_benchmark(  # noqa: C901, PLR0915
 
         model, loss_function, params, data = setup_problem(problem_str, linop_str, dev)
         # NOTE Disable deterministic check as it will otherwise compute matvecs
-        base_linop = setup_linop(
+        _ = setup_linop(
             linop_str, model, loss_function, params, data, check_deterministic=False
         )
-
-        if isinstance(base_linop, (KFACLinearOperator, EKFACLinearOperator)):
-            base_linop.refresh_representation()
-        if is_inverse:
-            base_linop.inverse(damping=1e-3)
 
         if is_cuda:
             cuda.synchronize()
@@ -83,14 +77,9 @@ def run_peakmem_benchmark(  # noqa: C901, PLR0915
 
         model, loss_function, params, data = setup_problem(problem_str, linop_str, dev)
         # NOTE Disable deterministic check as it will otherwise compute matvecs
-        base_linop = setup_linop(
+        linop = setup_linop(
             linop_str, model, loss_function, params, data, check_deterministic=False
         )
-
-        if isinstance(base_linop, (KFACLinearOperator, EKFACLinearOperator)):
-            base_linop.refresh_representation()
-        linop = base_linop.inverse(damping=1e-3) if is_inverse else base_linop
-
         v = rand(linop.shape[1], device=dev)
 
         # Double-backward through efficient attention is unsupported, disable fused kernels
