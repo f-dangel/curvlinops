@@ -1,6 +1,7 @@
 """Contains tests for ``curvlinops.kfac``."""
 
 from math import sqrt
+from pathlib import Path
 from typing import Dict, Iterable, List, Tuple, Union
 
 from einops.layers.torch import Rearrange
@@ -10,9 +11,11 @@ from torch import (
     allclose,
     device,
     float64,
+    load,
     manual_seed,
     rand,
     rand_like,
+    save,
 )
 from torch.linalg import inv
 from torch.nn import (
@@ -27,6 +30,7 @@ from torch.nn import (
 )
 
 from curvlinops import EFLinearOperator, GGNLinearOperator
+from curvlinops.computers.kfac import KFACComputer
 from curvlinops.kfac import FisherType, KFACLinearOperator, KFACType
 from curvlinops.utils import allclose_report
 from test.cases import DEVICES, DEVICES_IDS
@@ -34,10 +38,8 @@ from test.utils import (
     Conv2dModel,
     UnetModel,
     WeightShareModel,
-    _test_from_state_dict,
     _test_inplace_activations,
     _test_property,
-    _test_save_and_load_state_dict,
     binary_classification_targets,
     block_diagonal,
     change_dtype,
@@ -461,7 +463,7 @@ def test_kfac_inplace_activations(dev: device):
     _test_inplace_activations(KFACLinearOperator, dev)
 
 
-@mark.parametrize("fisher_type", KFACLinearOperator._SUPPORTED_FISHER_TYPE)
+@mark.parametrize("fisher_type", KFACComputer._SUPPORTED_FISHER_TYPE)
 @mark.parametrize(
     "loss", [MSELoss, CrossEntropyLoss, BCEWithLogitsLoss], ids=["mse", "ce", "bce"]
 )
@@ -546,7 +548,7 @@ def test_multi_dim_output(
     assert allclose_report(kfac_mat, kfac_flat_mat)
 
 
-@mark.parametrize("fisher_type", KFACLinearOperator._SUPPORTED_FISHER_TYPE)
+@mark.parametrize("fisher_type", KFACComputer._SUPPORTED_FISHER_TYPE)
 @mark.parametrize(
     "loss", [MSELoss, CrossEntropyLoss, BCEWithLogitsLoss], ids=["mse", "ce", "bce"]
 )
@@ -607,7 +609,7 @@ def test_expand_setting_scaling(
             loss_term_factor *= output_random_variable_size
 
         num_data = sum(X.shape[0] for X, _ in data)
-        K = kfac_sum.representation["canonical_op"]
+        _, K, _ = kfac_sum
         for block in K:
             # Gradient covariance is always the first Kronecker factor
             block[0] = block[0] / (num_data * loss_term_factor)
@@ -822,7 +824,7 @@ def test_forward_only_fisher_type(
         fisher_type=FisherType.EMPIRICAL,
     )
     # Manually set all gradient covariances to the identity to simulate FOOF
-    K = foof_simulated.representation["canonical_op"]
+    _, K, _ = foof_simulated
     for block in K:
         # Gradient covariance is always the first Kronecker factor
         block[0] = eye_like(block[0])
@@ -1042,14 +1044,34 @@ def test_kfac_does_not_affect_grad():
     _check_does_not_affect_grad(KFACLinearOperator)
 
 
-def test_save_and_load_state_dict():
-    """Test that KFACLinearOperator can be saved and loaded from state dict."""
-    _test_save_and_load_state_dict(KFACLinearOperator)
+def _check_torch_save_load(linop_cls: type, tmp_path: Path) -> None:
+    """Test that an (E)KFAC operator can be saved and loaded with torch.save/load.
+
+    Args:
+        linop_cls: The linear operator class to test.
+        tmp_path: Temporary directory provided by pytest.
+    """
+    manual_seed(0)
+    model = Linear(3, 2)
+    params = list(model.parameters())
+    data = [(rand(4, 3), rand(4, 2))]
+
+    linop = linop_cls(model, MSELoss(), params, data)
+    mat_before = linop @ eye_like(linop)
+
+    path = tmp_path / "linop.pt"
+    save(linop, path)
+    linop_loaded = load(path, weights_only=False)
+
+    mat_after = linop_loaded @ eye_like(linop_loaded)
+    assert allclose(mat_before, mat_after)
+
+    path.unlink()
 
 
-def test_from_state_dict():
-    """Test that KFACLinearOperator can be created from state dict."""
-    _test_from_state_dict(KFACLinearOperator)
+def test_kfac_torch_save_load(tmp_path: Path) -> None:
+    """Test that KFACLinearOperator can be saved and loaded with torch.save/load."""
+    _check_torch_save_load(KFACLinearOperator, tmp_path)
 
 
 @mark.parametrize("fisher_type", ["type-2", "mc", "empirical", "forward-only"])
@@ -1106,7 +1128,7 @@ def test_bug_132_dtype_deterministic_checks(dev: device):
 KFAC_MIN_DAMPING = 1e-8
 
 
-@mark.parametrize("fisher_type", KFACLinearOperator._SUPPORTED_FISHER_TYPE)
+@mark.parametrize("fisher_type", KFACComputer._SUPPORTED_FISHER_TYPE)
 @mark.parametrize(
     "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
 )
@@ -1145,7 +1167,7 @@ def test_KFAC_inverse_damped_matmat(
     inv_KFAC = KFAC.inverse(damping=delta)
 
     # Manually add damping to each Kronecker factor, materialize, invert
-    K = KFAC.representation["canonical_op"]
+    _, K, _ = KFAC
     for block in K:
         for idx in range(len(block)):
             # NOTE Needs out-of-place addition because some factors correspond to
@@ -1197,7 +1219,7 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901
     # Manually add heuristic damping to each Kronecker factor
     # NOTE We cannot use in-place operations for this because some Kronecker factors
     # may correspond to identical tensors that would otherwise be damped multiple times.
-    K = KFAC.representation["canonical_op"]
+    _, K, _ = KFAC
     for block in K:
         if len(block) == 2:
             S1, S2 = block[0], block[1]  # ggT, aaT

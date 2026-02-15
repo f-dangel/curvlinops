@@ -294,6 +294,10 @@ def setup_linop(
     with sdpa_kernel(SDPBackend.MATH) if attention_double_backward else nullcontext():
         linop = linop_cls(*args, **kwargs)
 
+    is_inverse = linop_str in {"KFAC inverse", "EKFAC inverse"}
+    if is_inverse:
+        linop = linop.inverse(damping=1e-3)
+
     return linop
 
 
@@ -376,24 +380,21 @@ def run_time_benchmark(  # noqa: C901
     dev = device(device_str)
     is_cuda = "cuda" in str(dev)
     model, loss_function, params, data = setup_problem(problem_str, linop_str, dev)
-    base_linop = setup_linop(
-        linop_str, model, loss_function, params, data, check_deterministic=False
-    )
-    is_inverse = linop_str in {"KFAC inverse", "EKFAC inverse"}
-    linop = base_linop.inverse(damping=1e-3) if is_inverse else base_linop
-
-    v = rand(linop.shape[1], device=dev)
 
     # Select function that will be profiled
     def f_gradient_and_loss():
         _ = gradient_and_loss(model, loss_function, params, data)
 
     def f_precompute():
-        nonlocal linop
-        if isinstance(base_linop, (KFACLinearOperator, EKFACLinearOperator)):
-            base_linop.refresh_representation()
-        if is_inverse:
-            linop = base_linop.inverse(damping=1e-3)
+        _ = setup_linop(
+            linop_str, model, loss_function, params, data, check_deterministic=False
+        )
+
+    # Generate one linear operator and vector for multiplication
+    linop = setup_linop(
+        linop_str, model, loss_function, params, data, check_deterministic=False
+    )
+    v = rand(linop.shape[1], device=dev)
 
     def f_matvec():
         # Double-backward through efficient attention is unsupported, disable fused kernels

@@ -1,11 +1,12 @@
 """Contains tests for ``EKFACLinearOperator`` in ``curvlinops.kfac``."""
 
+from pathlib import Path
 from typing import Dict, Iterable, List, Tuple, Union
 
 from einops.layers.torch import Rearrange
 from pytest import mark, raises
 from torch import Tensor, device, float64, manual_seed, rand
-from torch.linalg import inv, qr
+from torch.linalg import inv
 from torch.nn import (
     BCEWithLogitsLoss,
     CrossEntropyLoss,
@@ -17,23 +18,24 @@ from torch.nn import (
 )
 
 from curvlinops import EFLinearOperator, GGNLinearOperator
-from curvlinops.ekfac import (
-    EKFACLinearOperator,
-    compute_eigenvalue_correction_linear_weight_sharing,
-)
+from curvlinops.computers.ekfac import EKFACComputer
+from curvlinops.ekfac import EKFACLinearOperator
 from curvlinops.kfac import FisherType, KFACType
 from curvlinops.utils import allclose_report
 from test.cases import DEVICES, DEVICES_IDS
-from test.test_kfac import MC_SAMPLES, MC_TOLS, _check_does_not_affect_grad
+from test.test_kfac import (
+    MC_SAMPLES,
+    MC_TOLS,
+    _check_does_not_affect_grad,
+    _check_torch_save_load,
+)
 from test.utils import (
     Conv2dModel,
     UnetModel,
     WeightShareModel,
     _test_ekfac_closer_to_exact_than_kfac,
-    _test_from_state_dict,
     _test_inplace_activations,
     _test_property,
-    _test_save_and_load_state_dict,
     binary_classification_targets,
     block_diagonal,
     change_dtype,
@@ -469,7 +471,7 @@ def test_ekfac_inplace_activations(dev: device):
     _test_inplace_activations(EKFACLinearOperator, dev)
 
 
-@mark.parametrize("fisher_type", EKFACLinearOperator._SUPPORTED_FISHER_TYPE)
+@mark.parametrize("fisher_type", EKFACComputer._SUPPORTED_FISHER_TYPE)
 @mark.parametrize(
     "loss", [MSELoss, CrossEntropyLoss, BCEWithLogitsLoss], ids=["mse", "ce", "bce"]
 )
@@ -533,7 +535,7 @@ def test_multi_dim_output(
         )
 
 
-@mark.parametrize("fisher_type", EKFACLinearOperator._SUPPORTED_FISHER_TYPE)
+@mark.parametrize("fisher_type", EKFACComputer._SUPPORTED_FISHER_TYPE)
 @mark.parametrize(
     "loss", [MSELoss, CrossEntropyLoss, BCEWithLogitsLoss], ids=["mse", "ce", "bce"]
 )
@@ -596,7 +598,7 @@ def test_expand_setting_scaling(
         loss_term_factor *= output_random_variable_size
     num_data = sum(X.shape[0] for X, _ in data)
     correction = num_data * loss_term_factor
-    K = ekfac_sum.representation["canonical_op"]
+    _, K, _ = ekfac_sum
     for block in K:
         block.eigenvalues = block.eigenvalues / correction
     ekfac_simulated_mean_mat = ekfac_sum @ eye_like(ekfac_sum)
@@ -747,19 +749,14 @@ def test_ekfac_does_not_affect_grad():
     _check_does_not_affect_grad(EKFACLinearOperator)
 
 
-def test_save_and_load_state_dict():
-    """Test that EKFACLinearOperator can be saved and loaded from state dict."""
-    _test_save_and_load_state_dict(EKFACLinearOperator)
-
-
-def test_from_state_dict():
-    """Test that EKFACLinearOperator can be created from state dict."""
-    _test_from_state_dict(EKFACLinearOperator)
+def test_ekfac_torch_save_load(tmp_path: Path) -> None:
+    """Test that EKFACLinearOperator can be saved and loaded with torch.save/load."""
+    _check_torch_save_load(EKFACLinearOperator, tmp_path)
 
 
 # TODO: Add test for FisherType.MC once tests are in float64.
 @mark.parametrize("fisher_type", [FisherType.TYPE2, FisherType.EMPIRICAL])
-@mark.parametrize("kfac_approx", EKFACLinearOperator._SUPPORTED_KFAC_APPROX)
+@mark.parametrize("kfac_approx", EKFACComputer._SUPPORTED_KFAC_APPROX)
 @mark.parametrize(
     "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
 )
@@ -791,8 +788,8 @@ def test_ekfac_closer_to_exact_than_kfac(
     )
 
 
-@mark.parametrize("fisher_type", EKFACLinearOperator._SUPPORTED_FISHER_TYPE)
-@mark.parametrize("kfac_approx", EKFACLinearOperator._SUPPORTED_KFAC_APPROX)
+@mark.parametrize("fisher_type", EKFACComputer._SUPPORTED_FISHER_TYPE)
+@mark.parametrize("kfac_approx", EKFACComputer._SUPPORTED_KFAC_APPROX)
 @mark.parametrize(
     "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
 )
@@ -825,44 +822,6 @@ def test_ekfac_closer_to_exact_than_kfac_weight_sharing(
         fisher_type,
         kfac_approx,
     )
-
-
-def test_compute_eigenvalue_correction_linear_weight_sharing():
-    """Verifies equivalence of per-example gradient and Gramian approaches."""
-    manual_seed(0)
-    N, S, D1, D2 = 2, 3, 4, 5
-    DT = float64
-
-    # Generate random layer inputs and output gradients
-    g = rand(N, S, D1, dtype=DT)
-    a = rand(N, S, D2, dtype=DT)
-
-    # Generate random bases
-    ggT_eigvecs, _ = qr(rand(D1, D1, dtype=DT))
-    aaT_eigvecs, _ = qr(rand(D2, D2, dtype=DT))
-
-    # Verify both strategies yield the same result
-    correction_via_gramian = compute_eigenvalue_correction_linear_weight_sharing(
-        g, ggT_eigvecs, a, aaT_eigvecs, _force_strategy="gramian"
-    )
-    correction_via_gradients = compute_eigenvalue_correction_linear_weight_sharing(
-        g, ggT_eigvecs, a, aaT_eigvecs, _force_strategy="per_example_gradients"
-    )
-    assert allclose_report(correction_via_gramian, correction_via_gradients)
-
-    # Test invalid _force_strategy argument raises an error
-    with raises(ValueError, match="Invalid _force_strategy"):
-        compute_eigenvalue_correction_linear_weight_sharing(
-            g, ggT_eigvecs, a, aaT_eigvecs, _force_strategy="invalid_strategy"
-        )
-
-    # Test exception is raised if a and aaT_eigvecs do not have the same type
-    with raises(ValueError, match=r"Both \(a, aaT_eigvecs\) must be None or Tensor"):
-        compute_eigenvalue_correction_linear_weight_sharing(g, ggT_eigvecs, a, None)
-    with raises(ValueError, match=r"Both \(a, aaT_eigvecs\) must be None or Tensor"):
-        compute_eigenvalue_correction_linear_weight_sharing(
-            g, ggT_eigvecs, None, aaT_eigvecs
-        )
 
 
 """EKFACLinearOperator.inverse() tests."""
