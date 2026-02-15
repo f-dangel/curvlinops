@@ -1,7 +1,5 @@
 """Implements the XDiag algorithm from Epperly 2024."""
 
-from typing import Union
-
 from torch import Tensor, column_stack, dot, einsum
 from torch.linalg import inv, qr
 
@@ -14,7 +12,7 @@ from curvlinops.utils import (
 )
 
 
-def xdiag(A: Union[PyTorchLinearOperator, Tensor], num_matvecs: int) -> Tensor:
+def xdiag(A: PyTorchLinearOperator | Tensor, num_matvecs: int) -> Tensor:
     """Estimate a linear operator's diagonal using the XDiag algorithm.
 
     The method is presented in `this paper <https://arxiv.org/pdf/2301.07825>`_:

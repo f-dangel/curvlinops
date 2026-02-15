@@ -7,7 +7,7 @@ sufficiently small parameter space.
 First, the imports.
 """
 
-from typing import Callable, Tuple
+from collections.abc import Callable
 
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
@@ -144,7 +144,7 @@ rows, columns = 2, 3
 
 def plot(
     transform: Callable[[Tensor], Tensor], transform_title: str = None
-) -> Tuple[Figure, Axes]:
+) -> tuple[Figure, Axes]:
     """Visualize transformed curvature matrices using a shared domain.
 
     Args:

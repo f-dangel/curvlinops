@@ -16,10 +16,7 @@ and generalized to all linear layers with weight sharing in
   Kronecker-Factored Approximate Curvature for Modern Neural Network Architectures (NeurIPS).
 """
 
-from __future__ import annotations
-
-from collections.abc import MutableMapping
-from typing import Callable, Iterable, List, Optional, Tuple, Union
+from collections.abc import Callable, Iterable, MutableMapping
 
 from torch import Tensor
 from torch.nn import (
@@ -92,19 +89,19 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
     def __init__(
         self,
         model_func: Module,
-        loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
-        params: List[Parameter],
-        data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
+        loss_func: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
+        params: list[Parameter],
+        data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
         seed: int = 2_147_483_647,
         fisher_type: str = FisherType.MC,
         mc_samples: int = 1,
         kfac_approx: str = KFACType.EXPAND,
-        num_per_example_loss_terms: Optional[int] = None,
+        num_per_example_loss_terms: int | None = None,
         separate_weight_and_bias: bool = True,
-        num_data: Optional[int] = None,
-        batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
+        num_data: int | None = None,
+        batch_size_fn: Callable[[MutableMapping | Tensor], int] | None = None,
     ):
         """Kronecker-factored approximate curvature (KFAC) proxy of the Fisher/GGN.
 
@@ -224,7 +221,7 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
     @staticmethod
     def _build_converters(
         computer: KFACComputer,
-    ) -> Tuple[FromCanonicalLinearOperator, ToCanonicalLinearOperator]:
+    ) -> tuple[FromCanonicalLinearOperator, ToCanonicalLinearOperator]:
         """Build the canonical space converters.
 
         Args:

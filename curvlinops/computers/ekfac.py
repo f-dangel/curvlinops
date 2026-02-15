@@ -1,9 +1,7 @@
 """Computer for the Fisher/GGN's eigenvalue-corrected KFAC (EKFAC) approximation."""
 
-from __future__ import annotations
-
 from functools import partial
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 from einops import einsum, rearrange
 from torch import Tensor, cat
@@ -19,9 +17,9 @@ from curvlinops.utils import _seed_generator
 def compute_eigenvalue_correction_linear_weight_sharing(
     g: Tensor,
     ggT_eigvecs: Tensor,
-    a: Union[Tensor, None],
-    aaT_eigvecs: Union[Tensor, None],
-    _force_strategy: Optional[str] = None,
+    a: Tensor | None,
+    aaT_eigvecs: Tensor | None,
+    _force_strategy: str | None = None,
 ) -> Tensor:
     r"""Compute eigenvalue corrections for a linear layer with weight sharing.
 
@@ -251,7 +249,7 @@ class EKFACComputer(KFACComputer):
         _SUPPORTED_FISHER_TYPE: Tuple of supported Fisher types.
     """
 
-    _SUPPORTED_FISHER_TYPE: Tuple[FisherType, ...] = (
+    _SUPPORTED_FISHER_TYPE: tuple[FisherType, ...] = (
         FisherType.TYPE2,
         FisherType.MC,
         FisherType.EMPIRICAL,
@@ -259,11 +257,11 @@ class EKFACComputer(KFACComputer):
 
     def compute(
         self,
-    ) -> Tuple[
-        Dict[str, Tensor],
-        Dict[str, Tensor],
-        Dict[str, Union[Tensor, Dict[int, Tensor]]],
-        Dict[str, Dict[str, int]],
+    ) -> tuple[
+        dict[str, Tensor],
+        dict[str, Tensor],
+        dict[str, Tensor | dict[int, Tensor]],
+        dict[str, dict[str, int]],
     ]:
         """Compute eigenvalue-corrected Kronecker factors.
 
@@ -284,7 +282,7 @@ class EKFACComputer(KFACComputer):
 
     def _rearrange_for_larger_than_2d_output(
         self, output: Tensor, y: Tensor
-    ) -> Tuple[Tensor, Tensor]:
+    ) -> tuple[Tensor, Tensor]:
         r"""Rearrange the output and target if output is >2d.
 
         This will determine what kind of Fisher/GGN is approximated.
@@ -311,7 +309,7 @@ class EKFACComputer(KFACComputer):
         return output, y
 
     @staticmethod
-    def _eigenvectors_(dictionary: Dict[Any, Tensor]) -> Dict[Any, Tensor]:
+    def _eigenvectors_(dictionary: dict[Any, Tensor]) -> dict[Any, Tensor]:
         """Replace all matrix values with their eigenvectors (inplace).
 
         Args:
@@ -328,9 +326,9 @@ class EKFACComputer(KFACComputer):
 
     def compute_eigenvalue_correction(
         self,
-        input_covariances_eigenvectors: Dict[str, Tensor],
-        gradient_covariances_eigenvectors: Dict[str, Tensor],
-    ) -> Dict[str, Union[Tensor, Dict[int, Tensor]]]:
+        input_covariances_eigenvectors: dict[str, Tensor],
+        gradient_covariances_eigenvectors: dict[str, Tensor],
+    ) -> dict[str, Tensor | dict[int, Tensor]]:
         """Compute the corrected eigenvalues for EKFAC.
 
         Args:
@@ -343,10 +341,10 @@ class EKFACComputer(KFACComputer):
             Dictionary containing corrected eigenvalues for each module.
         """
         # Create empty dictionary to be populated by hooks
-        corrected_eigenvalues: Dict[str, Union[Tensor, Dict[int, Tensor]]] = {}
+        corrected_eigenvalues: dict[str, Tensor | dict[int, Tensor]] = {}
 
         # install forward hooks
-        hook_handles: List[RemovableHandle] = []
+        hook_handles: list[RemovableHandle] = []
 
         for mod_name in self._mapping:
             module = self._model_func.get_submodule(mod_name)
@@ -381,12 +379,12 @@ class EKFACComputer(KFACComputer):
     def _register_tensor_hook_on_output_to_accumulate_corrected_eigenvalues(
         self,
         module: Module,
-        inputs: Tuple[Tensor],
+        inputs: tuple[Tensor],
         output: Tensor,
         module_name: str,
-        input_covariances_eigenvectors: Dict[str, Tensor],
-        gradient_covariances_eigenvectors: Dict[str, Tensor],
-        corrected_eigenvalues: Dict[str, Union[Tensor, Dict[int, Tensor]]],
+        input_covariances_eigenvectors: dict[str, Tensor],
+        gradient_covariances_eigenvectors: dict[str, Tensor],
+        corrected_eigenvalues: dict[str, Tensor | dict[int, Tensor]],
     ):
         """Register tensor hook on layer's output to accumulate the corrected eigenvalues.
 
@@ -429,10 +427,10 @@ class EKFACComputer(KFACComputer):
         grad_output: Tensor,
         module: Module,
         module_name: str,
-        input_covariances_eigenvectors: Dict[str, Tensor],
-        gradient_covariances_eigenvectors: Dict[str, Tensor],
-        corrected_eigenvalues: Dict[str, Union[Tensor, Dict[int, Tensor]]],
-        inputs: Tuple[Tensor],
+        input_covariances_eigenvectors: dict[str, Tensor],
+        gradient_covariances_eigenvectors: dict[str, Tensor],
+        corrected_eigenvalues: dict[str, Tensor | dict[int, Tensor]],
+        inputs: tuple[Tensor],
     ):
         r"""Accumulate the corrected eigenvalues.
 

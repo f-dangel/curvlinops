@@ -2,7 +2,6 @@
 
 from contextlib import nullcontext
 from math import sqrt
-from typing import Tuple, Union
 
 from pytest import mark, raises, warns
 from torch import (
@@ -68,8 +67,8 @@ LOSS_FUNC_CLASS_IDS = [cls.__name__ for cls in LOSS_FUNC_CLASSES]
 @mark.parametrize("loss_func_cls", LOSS_FUNC_CLASSES, ids=LOSS_FUNC_CLASS_IDS)
 @mark.parametrize("reduction", ["mean", "sum"])
 def test_loss_hessian_matrix_sqrt(
-    output_shape: Tuple[int, ...],
-    loss_func_cls: Union[CrossEntropyLoss, MSELoss, BCEWithLogitsLoss],
+    output_shape: tuple[int, ...],
+    loss_func_cls: CrossEntropyLoss | MSELoss | BCEWithLogitsLoss,
     reduction: str,
 ):
     """Test loss_hessian_matrix_sqrt for various loss functions.
@@ -155,8 +154,8 @@ def test_loss_hessian_matrix_sqrt(
 @mark.parametrize("loss_func_cls", LOSS_FUNC_CLASSES, ids=LOSS_FUNC_CLASS_IDS)
 @mark.parametrize("reduction", ["mean", "sum"])
 def test_grad_output_sampler_convergence(
-    output_shape: Tuple[int, ...],
-    loss_func_cls: Union[CrossEntropyLoss, MSELoss, BCEWithLogitsLoss],
+    output_shape: tuple[int, ...],
+    loss_func_cls: CrossEntropyLoss | MSELoss | BCEWithLogitsLoss,
     reduction: str,
 ) -> None:
     """Test that sampled gradient outer products converge to the true Hessian.

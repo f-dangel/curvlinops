@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from math import prod, sqrt
-from typing import Iterator, List, Union
 from warnings import warn
 
 from einops import einsum
@@ -25,7 +25,7 @@ from curvlinops.eigh import EighDecomposedLinearOperator
 from curvlinops.utils import _infer_device, _infer_dtype
 
 
-def ensure_all_square(*tensors_or_operators: Union[Tensor, PyTorchLinearOperator]):
+def ensure_all_square(*tensors_or_operators: Tensor | PyTorchLinearOperator):
     """Check that all provided tensors/linear operators are square.
 
     Args:
@@ -126,7 +126,7 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
         _check_same_dtype(old, value)
         self._factors[index] = value
 
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         """Apply Kronecker product to matrix in tensor list format.
 
         Args:
@@ -140,7 +140,7 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
         x = x.reshape(*[S.shape[1] for S in self._factors], x.shape[-1])
         return [einsum(x, *self._factors, self._einsum_equation).flatten(end_dim=-2)]
 
-    def _adjoint(self) -> "KroneckerProductLinearOperator":
+    def _adjoint(self) -> KroneckerProductLinearOperator:
         """Return the adjoint of the Kronecker product.
 
         The adjoint of S_1 ⊗ S_2 ⊗ ... ⊗ S_k is S_1^H ⊗ S_2^H ⊗ ... ⊗ S_k^H.

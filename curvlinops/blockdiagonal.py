@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Iterator, List
+from collections.abc import Iterator
 
 from torch import Tensor, device, dtype, stack
 
@@ -27,7 +27,7 @@ class BlockDiagonalLinearOperator(PyTorchLinearOperator):
     where each Bi is itself a PyTorch linear operator.
     """
 
-    def __init__(self, blocks: List[PyTorchLinearOperator]):
+    def __init__(self, blocks: list[PyTorchLinearOperator]):
         """Initialize the block-diagonal linear operator.
 
         Args:
@@ -96,7 +96,7 @@ class BlockDiagonalLinearOperator(PyTorchLinearOperator):
         _check_same_dtype(old, value)
         self._blocks[index] = value
 
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         """Matrix-matrix multiplication with block-diagonal structure.
 
         Args:
@@ -110,7 +110,7 @@ class BlockDiagonalLinearOperator(PyTorchLinearOperator):
         # Multiply per-block and concatenate the resulting lists into the result
         return sum([B @ X_B for B, X_B in zip(self._blocks, X_blocks)], start=[])
 
-    def _adjoint(self) -> "BlockDiagonalLinearOperator":
+    def _adjoint(self) -> BlockDiagonalLinearOperator:
         """Return the adjoint of the block-diagonal linear operator.
 
         The adjoint of a block-diagonal matrix is block-diagonal with adjoint blocks.

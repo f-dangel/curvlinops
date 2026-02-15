@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections import UserDict
-from typing import TYPE_CHECKING, Any, Callable, List, MutableMapping, Tuple, Union
+from collections.abc import Callable, MutableMapping
+from typing import TYPE_CHECKING, Any
 from warnings import warn
 
 from torch import Tensor
@@ -76,8 +77,7 @@ def _check_same_tensor_list_shape(
 
 
 def _check_same_device(
-    old: Union[Tensor, PyTorchLinearOperator],
-    new: Union[Tensor, PyTorchLinearOperator],
+    old: Tensor | PyTorchLinearOperator, new: Tensor | PyTorchLinearOperator
 ):
     """Check that two objects live on the same device.
 
@@ -93,8 +93,7 @@ def _check_same_device(
 
 
 def _check_same_dtype(
-    old: Union[Tensor, PyTorchLinearOperator],
-    new: Union[Tensor, PyTorchLinearOperator],
+    old: Tensor | PyTorchLinearOperator, new: Tensor | PyTorchLinearOperator
 ):
     """Check that two objects have the same dtype.
 
@@ -132,7 +131,7 @@ def _register_userdict_as_pytree():
 
     from torch.utils._pytree import register_pytree_node
 
-    def userdict_flatten(ud: UserDict) -> Tuple[List[Any], Tuple[str, ...]]:
+    def userdict_flatten(ud: UserDict) -> tuple[list[Any], tuple[str, ...]]:
         """Flatten a UserDict into a list of values and a tuple of keys.
 
         Args:
@@ -145,7 +144,7 @@ def _register_userdict_as_pytree():
         values = [ud.data[k] for k in keys]
         return values, keys
 
-    def userdict_unflatten(values: List[Any], keys: Tuple[str, ...]) -> UserDict:
+    def userdict_unflatten(values: list[Any], keys: tuple[str, ...]) -> UserDict:
         """Unflatten a list of values and keys back into a UserDict.
 
         Args:
@@ -162,8 +161,8 @@ def _register_userdict_as_pytree():
 
 
 def _check_supports_batched_and_unbatched_inputs(
-    X: Union[Tensor, MutableMapping],
-    f: Callable[[Union[Tensor, MutableMapping]], Tensor],
+    X: Tensor | MutableMapping,
+    f: Callable[[Tensor | MutableMapping], Tensor],
     batch_axis: int = 0,
     rtol: float = 1e-5,
     atol: float = 1e-8,

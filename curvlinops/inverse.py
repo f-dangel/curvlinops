@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import List
-
 from linear_operator.utils.linear_cg import linear_cg
 from numpy import column_stack
 from scipy.sparse.linalg import lsmr
@@ -71,7 +69,7 @@ class CGInverseLinearOperator(_InversePyTorchLinearOperator):
         super().__init__(A)
         self._cg_hyperparameters = cg_hyperparameters
 
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         """Multiply X by the inverse of A.
 
         Args:
@@ -124,7 +122,7 @@ class LSMRInverseLinearOperator(_InversePyTorchLinearOperator):
         self._A_scipy = A.to_scipy()
         self._lsmr_hyperparameters = lsmr_hyperparameters
 
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         """Multiply the inverse of A onto a matrix X in list format.
 
         Args:
@@ -242,7 +240,7 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
         self._scale = scale
         self._check_nan = check_nan
 
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         """Multiply the inverse of A onto a matrix in list format.
 
         Args:

@@ -1,7 +1,5 @@
 """Contains tests for ``curvlinops/computers/ggn_diagonal``."""
 
-from typing import Dict
-
 from pytest import mark
 from torch import allclose, cat, float64, zeros_like
 
@@ -17,7 +15,7 @@ DIAGONAL_IDS = [
 
 
 @mark.parametrize("kwargs", DIAGONAL_CASES, ids=DIAGONAL_IDS)
-def test_GGNDiagonalComputer(case, kwargs: Dict):
+def test_GGNDiagonalComputer(case, kwargs: dict):
     """Test GGN diagonal computation against functorch reference.
 
     Args:
@@ -46,7 +44,7 @@ def test_GGNDiagonalComputer(case, kwargs: Dict):
 
 
 @mark.parametrize("kwargs", DIAGONAL_CASES, ids=DIAGONAL_IDS)
-def test_GGNDiagonalComputer_sequential_consistency(case, kwargs: Dict):
+def test_GGNDiagonalComputer_sequential_consistency(case, kwargs: dict):
     """Calling compute() twice produces the same diagonal.
 
     Args:

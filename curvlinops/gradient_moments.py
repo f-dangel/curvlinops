@@ -1,8 +1,7 @@
 """Contains linear operator implementation of gradient moment matrices."""
 
-from collections.abc import MutableMapping
+from collections.abc import Callable, MutableMapping
 from functools import cached_property, partial
-from typing import Callable, List, Tuple, Union
 
 from einops import einsum
 from torch import Tensor
@@ -15,9 +14,9 @@ from curvlinops.utils import make_functional_flattened_model_and_loss
 
 
 def make_batch_ef_matrix_product(
-    model_func: Module, loss_func: Module, params: Tuple[Parameter, ...]
+    model_func: Module, loss_func: Module, params: tuple[Parameter, ...]
 ) -> Callable[
-    [Union[Tensor, MutableMapping], Tensor, Tuple[Tensor, ...]], Tuple[Tensor, ...]
+    [Tensor | MutableMapping, Tensor, tuple[Tensor, ...]], tuple[Tensor, ...]
 ]:
     r"""Set up function that multiplies the mini-batch empirical Fisher onto a matrix.
 
@@ -141,7 +140,7 @@ class EFLinearOperator(CurvatureLinearOperator):
     def _mp(
         self,
     ) -> Callable[
-        [Union[Tensor, MutableMapping], Tensor, Tuple[Tensor, ...]], Tuple[Tensor, ...]
+        [Tensor | MutableMapping, Tensor, tuple[Tensor, ...]], tuple[Tensor, ...]
     ]:
         """Lazy initialization of the batch empirical Fisher matrix product function.
 
@@ -163,8 +162,8 @@ class EFLinearOperator(CurvatureLinearOperator):
         )
 
     def _matmat_batch(
-        self, X: Union[Tensor, MutableMapping], y: Tensor, M: List[Tensor]
-    ) -> List[Tensor]:
+        self, X: Tensor | MutableMapping, y: Tensor, M: list[Tensor]
+    ) -> list[Tensor]:
         """Apply the mini-batch empirical Fisher to a matrix in tensor list format.
 
         Args:

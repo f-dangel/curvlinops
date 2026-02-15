@@ -1,7 +1,5 @@
 """Contains LinearOperator implementation of EKFAC approximation of the Fisher/GGN."""
 
-from __future__ import annotations
-
 from curvlinops._torch_base import _ChainPyTorchLinearOperator
 from curvlinops.blockdiagonal import BlockDiagonalLinearOperator
 from curvlinops.computers.ekfac import EKFACComputer
