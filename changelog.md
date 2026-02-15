@@ -33,6 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+- Modernize type annotations
+  ([PR](https://github.com/f-dangel/curvlinops/pull/250))
+
 - Introduce computer classes for KFAC and EKFAC in a `computer` submodule (move GGN diagonal computer, too).
   Computers compute Kronecker factors and eigencorrections.
   The linear operators handle assembling them into linear operators.
