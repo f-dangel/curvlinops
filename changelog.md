@@ -28,7 +28,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed/Removed
 
+- **Backward-incompatible:** Remove `(E)KFACLinearOperator`'s `state_dict` and `from_state_dict` methods, use `torch.save(K, path)` and `torch.load(path)` instead
+  ([PR](https://github.com/f-dangel/curvlinops/pull/249))
+
 ### Internal
+
+- Introduce computer classes for KFAC and EKFAC in a `computer` submodule (move GGN diagonal computer, too).
+  Computers compute Kronecker factors and eigencorrections.
+  The linear operators handle assembling them into linear operators.
+  ([PR](https://github.com/f-dangel/curvlinops/pull/249))
 
 - Cache `.pytest_cache` in CI and run tests with `--ff` (failed-first) for faster feedback cycles
   ([PR](https://github.com/f-dangel/curvlinops/pull/248))
