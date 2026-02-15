@@ -203,6 +203,8 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
         for mod_name, param_pos in mapping.items():
             aaT = input_covariances.get(mod_name, None)
             ggT = gradient_covariances[mod_name]
+
+            # Handle joint weight+bias case
             if not computer._separate_weight_and_bias and {"weight", "bias"} == set(
                 param_pos.keys()
             ):
