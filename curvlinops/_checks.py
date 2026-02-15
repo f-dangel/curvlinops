@@ -1,5 +1,7 @@
 """Helpers to verify determinism of the empirical risk, gradient, and model."""
 
+from __future__ import annotations
+
 from collections import UserDict
 from collections.abc import Callable, MutableMapping
 from typing import TYPE_CHECKING, Any
