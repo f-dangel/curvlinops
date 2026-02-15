@@ -1,7 +1,9 @@
 """Helpers to verify determinism of the empirical risk, gradient, and model."""
 
+from __future__ import annotations
+
 from collections import UserDict
-from typing import Any, Callable, List, MutableMapping, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, List, MutableMapping, Tuple, Union
 from warnings import warn
 
 from torch import Tensor
@@ -9,8 +11,102 @@ from torch.func import vmap
 
 from curvlinops.utils import allclose_report
 
+if TYPE_CHECKING:
+    from curvlinops._torch_base import PyTorchLinearOperator
+
 # Track whether UserDict has been registered as a PyTree node
 _userdict_pytree_registered = False
+
+
+def _check_matmul_compatible_shape(
+    left: PyTorchLinearOperator, right: PyTorchLinearOperator
+):
+    """Check that two linear operators can be chained (left @ right).
+
+    Args:
+        left: The left operator.
+        right: The right operator.
+
+    Raises:
+        ValueError: If the left operator's input shape doesn't match the right
+            operator's output shape.
+    """
+    if left._in_shape != right._out_shape:
+        raise ValueError(
+            f"Shape mismatch: input shape {left._in_shape} does not match"
+            f" output shape {right._out_shape}."
+        )
+
+
+def _check_same_shape(old: Tensor, new: Tensor):
+    """Check that two tensors have the same shape.
+
+    Args:
+        old: The original tensor.
+        new: The new tensor.
+
+    Raises:
+        ValueError: If shapes don't match.
+    """
+    if old.shape != new.shape:
+        raise ValueError(f"Shape mismatch: expected {old.shape}, got {new.shape}.")
+
+
+def _check_same_tensor_list_shape(
+    old: PyTorchLinearOperator, new: PyTorchLinearOperator
+):
+    """Check that two linear operators have the same tensor list shapes.
+
+    Compares ``_in_shape`` and ``_out_shape`` (the structured list-of-tuples
+    shapes used by ``PyTorchLinearOperator``).
+
+    Args:
+        old: The original linear operator.
+        new: The new linear operator.
+
+    Raises:
+        ValueError: If ``_in_shape`` or ``_out_shape`` don't match.
+    """
+    if old._in_shape != new._in_shape or old._out_shape != new._out_shape:
+        raise ValueError(
+            f"Shape mismatch: expected in_shape={old._in_shape}, "
+            f"out_shape={old._out_shape}, got in_shape={new._in_shape}, "
+            f"out_shape={new._out_shape}."
+        )
+
+
+def _check_same_device(
+    old: Union[Tensor, PyTorchLinearOperator],
+    new: Union[Tensor, PyTorchLinearOperator],
+):
+    """Check that two objects live on the same device.
+
+    Args:
+        old: The original tensor or linear operator.
+        new: The new tensor or linear operator.
+
+    Raises:
+        ValueError: If devices don't match.
+    """
+    if old.device != new.device:
+        raise ValueError(f"Device mismatch: expected {old.device}, got {new.device}.")
+
+
+def _check_same_dtype(
+    old: Union[Tensor, PyTorchLinearOperator],
+    new: Union[Tensor, PyTorchLinearOperator],
+):
+    """Check that two objects have the same dtype.
+
+    Args:
+        old: The original tensor or linear operator.
+        new: The new tensor or linear operator.
+
+    Raises:
+        ValueError: If dtypes don't match.
+    """
+    if old.dtype != new.dtype:
+        raise ValueError(f"Dtype mismatch: expected {old.dtype}, got {new.dtype}.")
 
 
 def _register_userdict_as_pytree():

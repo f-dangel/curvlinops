@@ -1,7 +1,9 @@
 """PyTorch linear operator implementation of Kronecker product S_1 ⊗ S_2 ⊗ ... ."""
 
+from __future__ import annotations
+
 from math import prod, sqrt
-from typing import List, Union
+from typing import Iterator, List, Union
 from warnings import warn
 
 from einops import einsum
@@ -17,6 +19,7 @@ from torch import (
 )
 from torch.linalg import cholesky, eigh, matrix_norm
 
+from curvlinops._checks import _check_same_device, _check_same_dtype, _check_same_shape
 from curvlinops._torch_base import PyTorchLinearOperator
 from curvlinops.eigh import EighDecomposedLinearOperator
 from curvlinops.utils import _infer_device, _infer_dtype
@@ -79,6 +82,49 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
         self._einsum_equation = equation
 
         super().__init__(in_shapes, out_shapes)
+
+    def __iter__(self) -> Iterator[Tensor]:
+        """Iterate over the Kronecker factors.
+
+        Returns:
+            Iterator over the factor tensors.
+        """
+        return iter(self._factors)
+
+    def __len__(self) -> int:
+        """Return the number of Kronecker factors.
+
+        Returns:
+            The number of factors.
+        """
+        return len(self._factors)
+
+    def __getitem__(self, index: int) -> Tensor:
+        """Get a Kronecker factor by index.
+
+        Args:
+            index: Index of the factor.
+
+        Returns:
+            The factor tensor at the given index.
+        """
+        return self._factors[index]
+
+    def __setitem__(self, index: int, value: Tensor):
+        """Replace a Kronecker factor by index.
+
+        The replacement must have the same shape, device, and dtype as
+        the factor it replaces.
+
+        Args:
+            index: Index of the factor to replace.
+            value: The new factor tensor.
+        """
+        old = self._factors[index]
+        _check_same_shape(old, value)
+        _check_same_device(old, value)
+        _check_same_dtype(old, value)
+        self._factors[index] = value
 
     def _matmat(self, X: List[Tensor]) -> List[Tensor]:
         """Apply Kronecker product to matrix in tensor list format.

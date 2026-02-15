@@ -4,6 +4,7 @@ from typing import List, Union
 
 from torch import Tensor, device, dtype
 
+from curvlinops._checks import _check_same_device, _check_same_dtype, _check_same_shape
 from curvlinops._torch_base import PyTorchLinearOperator
 from curvlinops.utils import _infer_device, _infer_dtype
 
@@ -58,6 +59,27 @@ class EighDecomposedLinearOperator(PyTorchLinearOperator):
         in_shapes, out_shapes = [(n,)], [(n,)]
 
         super().__init__(in_shapes, out_shapes)
+
+    @property
+    def eigenvalues(self) -> Tensor:
+        """Return the eigenvalues.
+
+        Returns:
+            1D tensor of eigenvalues.
+        """
+        return self._eigenvalues
+
+    @eigenvalues.setter
+    def eigenvalues(self, value: Tensor):
+        """Set the eigenvalues.
+
+        Args:
+            value: 1D tensor of eigenvalues with same shape, device, and dtype.
+        """
+        _check_same_shape(self._eigenvalues, value)
+        _check_same_device(self._eigenvalues, value)
+        _check_same_dtype(self._eigenvalues, value)
+        self._eigenvalues = value
 
     def _matmat(self, X: List[Tensor]) -> List[Tensor]:
         """Apply eigendecomposition operator to matrix.

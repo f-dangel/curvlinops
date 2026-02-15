@@ -1,9 +1,16 @@
 """Implements a linear operator for block-diagonal matrices."""
 
-from typing import List
+from __future__ import annotations
+
+from typing import Iterator, List
 
 from torch import Tensor, device, dtype, stack
 
+from curvlinops._checks import (
+    _check_same_device,
+    _check_same_dtype,
+    _check_same_tensor_list_shape,
+)
 from curvlinops._torch_base import PyTorchLinearOperator
 from curvlinops.kronecker import ensure_all_square
 from curvlinops.utils import _infer_device, _infer_dtype, split_list
@@ -45,6 +52,49 @@ class BlockDiagonalLinearOperator(PyTorchLinearOperator):
 
         # Block diagonal is self-adjoint if all blocks are self-adjoint
         self.SELF_ADJOINT = all(B.SELF_ADJOINT for B in blocks)
+
+    def __iter__(self) -> Iterator[PyTorchLinearOperator]:
+        """Iterate over the diagonal blocks.
+
+        Returns:
+            Iterator over the block linear operators.
+        """
+        return iter(self._blocks)
+
+    def __len__(self) -> int:
+        """Return the number of diagonal blocks.
+
+        Returns:
+            The number of blocks.
+        """
+        return len(self._blocks)
+
+    def __getitem__(self, index: int) -> PyTorchLinearOperator:
+        """Get a block by index.
+
+        Args:
+            index: Index of the block.
+
+        Returns:
+            The block at the given index.
+        """
+        return self._blocks[index]
+
+    def __setitem__(self, index: int, value: PyTorchLinearOperator):
+        """Replace a block by index.
+
+        The replacement must have the same shape, device, and dtype as
+        the block it replaces.
+
+        Args:
+            index: Index of the block to replace.
+            value: The new block.
+        """
+        old = self._blocks[index]
+        _check_same_tensor_list_shape(old, value)
+        _check_same_device(old, value)
+        _check_same_dtype(old, value)
+        self._blocks[index] = value
 
     def _matmat(self, X: List[Tensor]) -> List[Tensor]:
         """Matrix-matrix multiplication with block-diagonal structure.
