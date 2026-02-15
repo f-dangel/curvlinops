@@ -63,7 +63,7 @@ install-test:
 .PHONY: test
 
 test:
-	@pytest -vx --cov=curvlinops --doctest-modules curvlinops test
+	@pytest -vx --ff --cov=curvlinops --doctest-modules curvlinops test
 
 .PHONY: install-lint
 
