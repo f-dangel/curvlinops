@@ -33,6 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cache `.pytest_cache` in CI and run tests with `--ff` (failed-first) for faster feedback cycles
   ([PR](https://github.com/f-dangel/curvlinops/pull/248))
 
+- Add sequence protocol (`__iter__`, `__len__`, `__getitem__`, `__setitem__`) to
+  `BlockDiagonalLinearOperator`, `KroneckerProductLinearOperator`, and
+  `_ChainPyTorchLinearOperator`; add `eigenvalues` property to
+  `EighDecomposedLinearOperator`; extract reusable shape/device/dtype validation helpers
+  ([PR](https://github.com/f-dangel/curvlinops/pull/247))
+
 - Merge tests for testing matrix-matrix & matrix-vector products
   with the original and transposed operator, reducing number of tests
   ([PR](https://github.com/f-dangel/curvlinops/pull/222))

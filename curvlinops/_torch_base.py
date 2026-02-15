@@ -28,6 +28,12 @@ from torch import (
 )
 from torch.nn import Parameter
 
+from curvlinops._checks import (
+    _check_matmul_compatible_shape,
+    _check_same_device,
+    _check_same_dtype,
+    _check_same_tensor_list_shape,
+)
 from curvlinops._empirical_risk import _EmpiricalRiskMixin
 from curvlinops.utils import allclose_report
 
@@ -608,29 +614,10 @@ class _SumPyTorchLinearOperator(PyTorchLinearOperator):
         Args:
             A: First linear operator.
             B: Second linear operator.
-
-        Raises:
-            ValueError: If the shapes, devices, or dtypes of the two linear
-                operators do not match.
         """
-        if A._in_shape != B._in_shape:
-            raise ValueError(
-                "Input shapes of linear operators must match:"
-                + f"Got {A._in_shape} vs. {B._in_shape}."
-            )
-        if A._out_shape != B._out_shape:
-            raise ValueError(
-                "Output shapes of linear operators must match:"
-                + f"Got {A._out_shape} vs. {B._out_shape}."
-            )
-        if A.device != B.device:
-            raise ValueError(
-                f"Devices of linear operators must match. Got {[A.device, B.device]}."
-            )
-        if A.dtype != B.dtype:
-            raise ValueError(
-                f"Dtypes of linear operators must match. Got {[A.dtype, B.dtype]}."
-            )
+        _check_same_tensor_list_shape(A, B)
+        _check_same_device(A, B)
+        _check_same_dtype(A, B)
         super().__init__(A._in_shape, A._out_shape)
         self._A, self._B = A, B
 
@@ -746,22 +733,10 @@ class _ChainPyTorchLinearOperator(PyTorchLinearOperator):
             raise ValueError(f"Need at least 2 operators, got {len(operators)}.")
         for i in range(len(operators) - 1):
             left, right = operators[i], operators[i + 1]
-            if left._in_shape != right._out_shape:
-                raise ValueError(
-                    f"Shape mismatch between operators {i} and {i + 1}: "
-                    f"input shape {left._in_shape} does not match output shape {right._out_shape}."
-                )
-            if left.device != right.device:
-                raise ValueError(
-                    f"Device mismatch between operators {i} and {i + 1}: "
-                    f"{[left.device, right.device]}."
-                )
-            if left.dtype != right.dtype:
-                raise ValueError(
-                    f"Dtype mismatch between operators {i} and {i + 1}: "
-                    f"{[left.dtype, right.dtype]}."
-                )
-        self._operators = operators
+            _check_matmul_compatible_shape(left, right)
+            _check_same_device(left, right)
+            _check_same_dtype(left, right)
+        self._operators = list(operators)
 
         # Inherit shapes from the outermost operands
         super().__init__(operators[-1]._in_shape, operators[0]._out_shape)
@@ -813,6 +788,33 @@ class _ChainPyTorchLinearOperator(PyTorchLinearOperator):
             The number of operators.
         """
         return len(self._operators)
+
+    def __getitem__(self, index: int) -> PyTorchLinearOperator:
+        """Get an operator by index.
+
+        Args:
+            index: Index of the operator.
+
+        Returns:
+            The operator at the given index.
+        """
+        return self._operators[index]
+
+    def __setitem__(self, index: int, value: PyTorchLinearOperator):
+        """Replace an operator by index.
+
+        The replacement must have the same shape, device, and dtype as
+        the operator it replaces.
+
+        Args:
+            index: Index of the operator to replace.
+            value: The new operator.
+        """
+        old = self._operators[index]
+        _check_same_tensor_list_shape(old, value)
+        _check_same_device(old, value)
+        _check_same_dtype(old, value)
+        self._operators[index] = value
 
     def _adjoint(self) -> _ChainPyTorchLinearOperator:
         """Return the linear operator's adjoint: (ABC...)* = ...C*B*A*.
