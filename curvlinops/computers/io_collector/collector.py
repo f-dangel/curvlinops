@@ -10,7 +10,7 @@ The entry point is a function f that takes a tensor x representing the input, an
 dictionary containing a mapping from names to parameter tensors. The goal is to de-
 tect how these parameters are used, and to return a list of these relations.
 This is done by tracing f into a `torch.fx.GraphModule`, and inspecting its graph,
-mattern for usage patterns such as fully-connected layers.
+matching for usage patterns such as fully-connected layers.
 
 With the above mechanism, we can now augment f to not only return f(x), but also
 the intermediates that are consumed and produced by the specified parameters.
@@ -93,7 +93,7 @@ def with_param_io(
             (original_output, layer_info_1, layer_info_2, ...)
         where each layer_info is a tuple:
             (operation_name, layer_output, layer_input, weight_name, bias_name, hyperparams)
-        The operation_name is either "Linear(y=W@x+b)" or "Conv2d(y=W*x+b)".
+        The operation_name is either "Linear(y=W@x+b)" or "Conv(y=W*x+b)".
         bias_name is None if the layer has no bias, and weight_name or bias_name
         is `NOT_A_PARAM` if the tensor used as weight or bias is not a tracked parameter.
         hyperparams is a dictionary of layer-specific parameters (empty for linear layers).

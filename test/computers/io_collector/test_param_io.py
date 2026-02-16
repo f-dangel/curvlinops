@@ -108,7 +108,7 @@ def test_fully_connected():
     _verify_io(f, x, params, io_true)
 
     # 5) Use torch.nn
-    fc = Linear(D_out, D_in, bias=True)
+    fc = Linear(D_in, D_out, bias=True)
 
     def f(x: Tensor, params: dict) -> Tensor:
         return functional_call(fc, params, x)

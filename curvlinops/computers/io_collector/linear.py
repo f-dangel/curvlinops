@@ -52,12 +52,13 @@ class LinearWeightMatcher(_PatternMatcher):
                     and len(pT_user.args) == 3
                     and not pT_user.kwargs
                 ):
-                    bias, inputs, _ = pT_user.args
-                    layer_info = AffineLayerInfo(
-                        LINEAR_STR, pT_user, p_node, inputs, bias, {}
-                    )
-                    matches.append(layer_info)
-                    paths.append((p_node, pT, pT_user))
+                    bias, inputs, mat2 = pT_user.args
+                    if mat2 == pT:
+                        layer_info = AffineLayerInfo(
+                            LINEAR_STR, pT_user, p_node, inputs, bias, {}
+                        )
+                        matches.append(layer_info)
+                        paths.append((p_node, pT, pT_user))
 
                 # Case: x @ W.T (mm, no bias)
                 elif (
@@ -65,12 +66,13 @@ class LinearWeightMatcher(_PatternMatcher):
                     and len(pT_user.args) == 2
                     and not pT_user.kwargs
                 ):
-                    inputs, _ = pT_user.args
-                    layer_info = AffineLayerInfo(
-                        LINEAR_STR, pT_user, p_node, inputs, None, {}
-                    )
-                    matches.append(layer_info)
-                    paths.append((p_node, pT, pT_user))
+                    inputs, mat2 = pT_user.args
+                    if mat2 == pT:
+                        layer_info = AffineLayerInfo(
+                            LINEAR_STR, pT_user, p_node, inputs, None, {}
+                        )
+                        matches.append(layer_info)
+                        paths.append((p_node, pT, pT_user))
 
         return matches, paths
 
@@ -102,9 +104,16 @@ class LinearBiasMatcher(_PatternMatcher):
             if p_user.op != "call_function":
                 continue
 
-            if p_user.target == aten.addmm.default:
-                # Detect the weight
+            if (
+                p_user.target == aten.addmm.default
+                and len(p_user.args) == 3
+                and not p_user.kwargs
+            ):
                 bias, inputs, WT = p_user.args
+
+                # Verify this parameter is the bias (first argument)
+                if bias != p_node:
+                    continue
 
                 # Check if WT is a valid weight transpose operation and extract W_node
                 (W_node,) = (

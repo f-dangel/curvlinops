@@ -93,8 +93,10 @@ def verify_match_complete(
     for p in param_nodes:
         detected_paths_from_p = [path for path in detected_paths if path[0] == p]
 
-        # We only need to explore paths until the maximum detected path length
-        max_length = max([len(path) for path in detected_paths_from_p] + [0])
+        # We only need to explore paths until the maximum detected path length.
+        # Use at least depth 2 so that when no paths are detected we still
+        # traverse one hop beyond the parameter node to report actual usage.
+        max_length = max([len(path) for path in detected_paths_from_p] + [2])
 
         for path in _find_all_paths_from(p, max_length):
             # Check if this usage path starts with any detected path
