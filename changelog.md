@@ -36,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add a collector for in/outputs of linear weight sharing layers based on `make_fx`
   ([PR](https://github.com/f-dangel/curvlinops/pull/252))
 
+- Add KFAC-specific IO collector (`with_kfac_io`) that wraps the generic collector
+  with validation and structured output for KFAC computation
+  ([PR](https://github.com/f-dangel/curvlinops/pull/253))
+
 - Unify KFAC's gradient output computation for all Fisher types (`TYPE2`, `MC`,
   `EMPIRICAL`, `FORWARD_ONLY`) via `make_grad_output_fn` in `kfac_utils.py`,
   removing `_maybe_adjust_loss_scale`
