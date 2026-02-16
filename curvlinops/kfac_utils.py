@@ -30,6 +30,7 @@ from torch.nn.functional import one_hot, unfold
 from torch.nn.modules.utils import _pair
 
 from curvlinops._torch_base import PyTorchLinearOperator
+from curvlinops.utils import make_functional_call
 
 
 def _warn_BCEWithLogitsLoss_targets_unchecked(
@@ -387,8 +388,6 @@ def make_grad_output_fn(
     )
 
     if mode == "empirical":
-        from curvlinops.utils import make_functional_call
-
         functional_loss_func = make_functional_call(loss_func, [])
 
         def _scaled_datum_loss(prediction: Tensor, target: Tensor) -> Tensor:
