@@ -24,12 +24,13 @@ from torch import (
     zeros,
     zeros_like,
 )
-from torch.func import vmap
+from torch.func import grad, vmap
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from torch.nn.functional import one_hot, unfold
 from torch.nn.modules.utils import _pair
 
 from curvlinops._torch_base import PyTorchLinearOperator
+from curvlinops.utils import make_functional_call
 
 
 def _warn_BCEWithLogitsLoss_targets_unchecked(
@@ -344,6 +345,8 @@ def make_grad_output_fn(
 
     For exact mode, returns the columns of the loss Hessian's matrix square root.
     For MC mode, returns Monte-Carlo sampled gradient vectors.
+    For empirical mode, returns the gradient of the loss w.r.t. the output.
+    For forward-only mode, returns an empty tensor (no backward passes needed).
 
     Note:
         The binary target check for ``BCEWithLogitsLoss`` is disabled inside this
@@ -357,7 +360,9 @@ def make_grad_output_fn(
 
     Args:
         loss_func: The loss function.
-        mode: ``'exact'`` for Hessian square root, ``'mc'`` for Monte-Carlo sampling.
+        mode: ``'exact'`` for Hessian square root, ``'mc'`` for Monte-Carlo sampling,
+            ``'empirical'`` for empirical gradients, ``'forward-only'`` for no
+            backward passes.
         mc_samples: Number of Monte-Carlo samples (only used when ``mode='mc'``).
             Default: ``1``.
 
@@ -365,17 +370,57 @@ def make_grad_output_fn(
         A function with signature
         ``(output, target, generator=None) -> [num_vectors, *output.shape]``
         operating on a single datum (no batch axis). ``num_vectors`` is
-        ``output.numel()`` for exact mode or ``mc_samples`` for MC mode.
+        ``output.numel()`` for exact mode, ``mc_samples`` for MC mode, ``1``
+        for empirical mode, or ``0`` for forward-only mode.
 
     Raises:
-        ValueError: If ``mode`` is not ``'exact'`` or ``'mc'``.
+        ValueError: If ``mode`` is not ``'exact'``, ``'mc'``, ``'empirical'``,
+            or ``'forward-only'``.
     """
-    if mode not in ("exact", "mc"):
-        raise ValueError(f"Invalid mode {mode!r}. Must be 'exact' or 'mc'.")
+    if mode not in ("exact", "mc", "empirical", "forward-only"):
+        raise ValueError(
+            f"Invalid mode {mode!r}. "
+            "Must be 'exact', 'mc', 'empirical', or 'forward-only'."
+        )
 
     sample_grad_output = _make_single_datum_sampler(
         loss_func, warn_BCEWithLogitsLoss_targets_unchecked=False
     )
+
+    if mode == "empirical":
+        functional_loss_func = make_functional_call(loss_func, [])
+
+        def _scaled_datum_loss(prediction: Tensor, target: Tensor) -> Tensor:
+            """Compute a scaled loss for one sample, adjusting for mean reduction.
+
+            For ``MSELoss`` and ``BCEWithLogitsLoss`` with ``reduction='mean'``,
+            the loss averages over both batch and output dimensions. Since we
+            operate on a single datum (no batch), the output-dimension averaging
+            produces an extra ``1/C`` factor. We want only ``1/sqrt(C)`` so that
+            the gradient outer product gives the correct contribution to the
+            empirical Fisher.
+
+            Args:
+                prediction: Model prediction for one sample, without batch dim.
+                target: Target for one sample, without batch dim.
+
+            Returns:
+                Scaled loss for one sample.
+            """
+            (C,) = prediction.shape
+            scale = (
+                sqrt(C)
+                if (
+                    isinstance(loss_func, (BCEWithLogitsLoss, MSELoss))
+                    and loss_func.reduction == "mean"
+                )
+                else 1.0
+            )
+            return scale * functional_loss_func(
+                prediction.unsqueeze(0), target.unsqueeze(0)
+            )
+
+        _empirical_grad = grad(_scaled_datum_loss, argnums=0)
 
     def grad_output_fn(
         output: Tensor, target: Tensor, generator: Generator | None = None
@@ -385,12 +430,14 @@ def make_grad_output_fn(
         Args:
             output: Model prediction for one datum (no batch axis).
             target: Label for the datum (no batch axis).
-            generator: Random generator (used for MC mode, ignored in exact mode).
+            generator: Random generator (used for MC mode, ignored otherwise).
 
         Returns:
             Gradient vectors of shape ``[num_vectors, *output.shape]``.
         """
-        if mode == "exact":
+        if mode == "forward-only":
+            return output.new_empty(0, *output.shape)
+        elif mode == "exact":
             hessian_sqrt = loss_hessian_matrix_sqrt(
                 output,
                 target,
@@ -398,10 +445,12 @@ def make_grad_output_fn(
                 warn_BCEWithLogitsLoss_targets_unchecked=False,
             )
             return hessian_sqrt.reshape(*output.shape, output.numel()).movedim(-1, 0)
-        else:  # mode == "mc"
+        elif mode == "mc":
             return sample_grad_output(output, mc_samples, target, generator).div_(
                 sqrt(mc_samples)
             )
+        else:  # mode == "empirical"
+            return _empirical_grad(output, target).unsqueeze(0)
 
     return grad_output_fn
 

@@ -19,12 +19,10 @@ and generalized to all linear layers with weight sharing in
 from collections.abc import Callable, Iterable, MutableMapping
 from enum import Enum, EnumMeta
 from functools import partial
-from math import sqrt
 from typing import Any
 
 from einops import einsum, rearrange, reduce
-from torch import Generator, Tensor, cat, eye
-from torch.autograd import grad
+from torch import Generator, Tensor, autograd, cat, eye
 from torch.func import vmap
 from torch.nn import (
     BCEWithLogitsLoss,
@@ -260,12 +258,8 @@ class KFACComputer(_EmpiricalRiskMixin):
         self._mapping = self.compute_parameter_mapping(params, model_func)
 
         # Function (prediction_batch, label_batch) -> grad_outputs for backpropagation
-        self._grad_outputs_computer = (
-            self._set_up_grad_outputs_computer(loss_func, fisher_type, mc_samples)
-            # TODO Implement grad_output sampler for empirical case and remove
-            # _maybe_adjust_loss_scale
-            if fisher_type in {FisherType.MC, FisherType.TYPE2}
-            else None
+        self._grad_outputs_computer = self._set_up_grad_outputs_computer(
+            loss_func, fisher_type, mc_samples
         )
 
         super().__init__(
@@ -303,7 +297,7 @@ class KFACComputer(_EmpiricalRiskMixin):
 
         Args:
             loss_func: The loss function.
-            fisher_type: The Fisher type (``TYPE2`` or ``MC``).
+            fisher_type: The Fisher type.
             mc_samples: Number of MC samples (used when ``fisher_type`` is ``MC``).
 
         Returns:
@@ -311,10 +305,20 @@ class KFACComputer(_EmpiricalRiskMixin):
             that computes the gradients to be backpropagated from the network's
             output, with shape ``[num_vectors, batch, *output_shape]``.
         """
-        mode = {FisherType.MC: "mc", FisherType.TYPE2: "exact"}[fisher_type]
+        mode = {
+            FisherType.MC: "mc",
+            FisherType.TYPE2: "exact",
+            FisherType.EMPIRICAL: "empirical",
+            FisherType.FORWARD_ONLY: "forward-only",
+        }[fisher_type]
 
         grad_output_fn = make_grad_output_fn(loss_func, mode, mc_samples)
-        randomness = {"mc": "different", "exact": "same"}[mode]
+        randomness = {
+            "mc": "different",
+            "exact": "same",
+            "empirical": "same",
+            "forward-only": "same",
+        }[mode]
         batched_grad_output_fn = vmap(
             grad_output_fn, in_dims=(0, 0, None), out_dims=1, randomness=randomness
         )
@@ -432,30 +436,6 @@ class KFACComputer(_EmpiricalRiskMixin):
             y = rearrange(y, "batch ... c -> (batch ...) c")
         return output, y
 
-    def _maybe_adjust_loss_scale(self, loss: Tensor, output: Tensor) -> Tensor:
-        """Adjust the scale of the loss tensor if necessary.
-
-        The ``BCEWithLogitsLoss`` and ``MSELoss`` also average over the output dimension
-        in addition to the batch dimension. We adjust the scale of the loss to correct
-        for this.
-
-        Args:
-            loss: The loss tensor to adjust.
-            output: The model's output.
-
-        Returns:
-            The scaled loss tensor.
-        """
-        if (
-            isinstance(self._loss_func, (BCEWithLogitsLoss, MSELoss))
-            and self._loss_func.reduction == "mean"
-        ):
-            # ``BCEWithLogitsLoss`` and ``MSELoss`` also average over non-batch
-            # dimensions. We have to scale the loss to incorporate this scaling.
-            _, C = output.shape
-            loss *= sqrt(C)
-        return loss
-
     def _compute_loss_and_backward(self, output: Tensor, y: Tensor):
         r"""Compute the loss and the backward pass(es) required for KFAC.
 
@@ -466,9 +446,6 @@ class KFACComputer(_EmpiricalRiskMixin):
 
         Raises:
             ValueError: If the output is not 2d and y is not 1d/2d.
-            ValueError: If ``fisher_type`` is not ``FisherType.TYPE2``,
-                ``FisherType.MC``, ``FisherType.EMPIRICAL``, or
-                ``FisherType.FORWARD_ONLY``.
         """
         if output.ndim != 2 or y.ndim not in {1, 2}:
             raise ValueError(
@@ -476,45 +453,26 @@ class KFACComputer(_EmpiricalRiskMixin):
                 f"Got {output.ndim=} and {y.ndim=}."
             )
 
-        if self._fisher_type in {FisherType.TYPE2, FisherType.MC}:
-            # Compute the gradients w.r.t. the network's output that will be
-            # backpropagated to compute the KFAC approximation
-            # - TYPE2: Hessian square root columns
-            # - MC: Monte-Carlo approximation of the the Hessian square root
-            # Detach output: we only need values for the backpropagated vectors.
-            grad_outputs = self._grad_outputs_computer(
-                output.detach(), y, self._generator
-            )
+        # Compute the gradients w.r.t. the network's output that will be
+        # backpropagated to compute the KFAC approximation.
+        # Detach output: we only need values for the backpropagated vectors.
+        grad_outputs = self._grad_outputs_computer(output.detach(), y, self._generator)
 
-            # Fix scaling caused by the batch dimension
-            num_loss_terms = output.shape[0]
-            reduction = self._loss_func.reduction
-            scale = {"sum": 1.0, "mean": 1.0 / num_loss_terms}[reduction]
-            grad_outputs.mul_(scale)
+        # Fix scaling caused by the batch dimension
+        num_loss_terms = output.shape[0]
+        reduction = self._loss_func.reduction
+        scale = {"sum": 1.0, "mean": 1.0 / num_loss_terms}[reduction]
+        grad_outputs.mul_(scale)
 
-            # Backpropagate all vectors
-            num_vectors = grad_outputs.shape[0]
-            for v in range(num_vectors):
-                grad(
-                    output,
-                    self._params,
-                    grad_outputs=grad_outputs[v],
-                    retain_graph=v < num_vectors - 1,
-                )
-
-        elif self._fisher_type == FisherType.EMPIRICAL:
-            loss = self._loss_func(output, y)
-            loss = self._maybe_adjust_loss_scale(loss, output)
-            grad(loss, self._params)
-
-        elif self._fisher_type == FisherType.FORWARD_ONLY:
-            # No backward passes required for forward-only KFAC
-            pass
-
-        else:
-            raise ValueError(
-                f"Invalid fisher_type: {self._fisher_type}. "
-                + f"Supported: {self._SUPPORTED_FISHER_TYPE}."
+        # Backpropagate all vectors (0 for forward-only, 1 for empirical,
+        # mc_samples for MC, and C (number of output features per datum) for TYPE2).
+        num_vectors = grad_outputs.shape[0]
+        for v in range(num_vectors):
+            autograd.grad(
+                output,
+                self._params,
+                grad_outputs=grad_outputs[v],
+                retain_graph=v < num_vectors - 1,
             )
 
     def _register_tensor_hook_on_output_to_accumulate_gradient_covariance(
