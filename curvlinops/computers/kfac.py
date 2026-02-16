@@ -465,7 +465,7 @@ class KFACComputer(_EmpiricalRiskMixin):
         grad_outputs.mul_(scale)
 
         # Backpropagate all vectors (0 for forward-only, 1 for empirical,
-        # mc_samples for MC, output.numel() for TYPE2).
+        # mc_samples for MC, and C (number of output features per datum) for TYPE2).
         num_vectors = grad_outputs.shape[0]
         for v in range(num_vectors):
             autograd.grad(
