@@ -33,6 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+- Unify KFAC's gradient output computation for all Fisher types (`TYPE2`, `MC`,
+  `EMPIRICAL`, `FORWARD_ONLY`) via `make_grad_output_fn` in `kfac_utils.py`,
+  removing `_maybe_adjust_loss_scale`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/251))
+
 - Modernize type annotations
   ([PR](https://github.com/f-dangel/curvlinops/pull/250))
 
