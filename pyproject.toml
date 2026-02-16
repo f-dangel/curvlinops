@@ -90,15 +90,17 @@ docs = [
 ###############################################################################
 [tool.setuptools_scm]
 
-[tool.pydocstyle]
-convention = "google"
-match = '.*\.py$'
-# subdirectories cannot be included or excluded
-# https://github.com/PyCQA/pydocstyle/issues/363
-match_dir = '^(?!.*(?:test|\.git|docs)).*'
-
 [tool.ruff]
 line-length = 88
+preview = true
+exclude = [
+    ".eggs",
+    ".git",
+    ".pytest_cache",
+    "docs/rtd",
+    "build",
+    "dist",
+]
 
 [tool.ruff.lint]
 # Enable all rules from flake8 (E, F), plus additional ones including isort (I)
