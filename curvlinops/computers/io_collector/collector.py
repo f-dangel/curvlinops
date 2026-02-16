@@ -16,7 +16,8 @@ With the above mechanism, we can now augment f to not only return f(x), but also
 the intermediates that are consumed and produced by the specified parameters.
 """
 
-from typing import Any, Callable, Dict, List, Tuple, TypeAlias, Union
+from collections.abc import Callable
+from typing import Any, TypeAlias
 
 from torch import Tensor
 from torch.func import functionalize
@@ -28,16 +29,14 @@ from curvlinops.computers.io_collector.patterns import match_parameter_usage
 from curvlinops.computers.io_collector.verification import verify_match_complete
 
 # Type aliases for complex return types
-LayerInfoTuple: TypeAlias = Tuple[
-    str, Node, Node, str, Union[str, None], Dict[str, Any]
-]
+LayerInfoTuple: TypeAlias = tuple[str, Node, Node, str, str | None, dict[str, Any]]
 ParamIOFunction: TypeAlias = Callable[
-    [Tensor, Dict[str, Tensor]], Tuple[Union[Tensor, Tuple[Any, ...]], ...]
+    [Tensor, dict[str, Tensor]], tuple[Tensor | tuple[Any, ...], ...]
 ]
 
 
 def _modify_graph_to_include_layer_info(
-    gm: GraphModule, layer_info_tuples: Tuple[Tuple[Any, ...], ...]
+    gm: GraphModule, layer_info_tuples: tuple[tuple[Any, ...], ...]
 ) -> None:
     """Modify the graph to return layer info alongside the original output.
 
@@ -56,9 +55,9 @@ def _modify_graph_to_include_layer_info(
 
 
 def with_param_io(
-    f: Callable[[Tensor, Dict[str, Tensor]], Tensor],
+    f: Callable[[Tensor, dict[str, Tensor]], Tensor],
     x: Tensor,
-    named_params: Dict[str, Tensor],
+    named_params: dict[str, Tensor],
 ) -> ParamIOFunction:
     """Get a traced module that returns layer inputs and outputs alongside the result.
 
@@ -95,17 +94,17 @@ def with_param_io(
 
     # Find placeholder nodes (inputs to the graph)
     # The first placeholder is the input x, the rest are parameters
-    placeholders: List[Node] = [
+    placeholders: list[Node] = [
         node for node in gm.graph.nodes if node.op == "placeholder"
     ]
-    param_nodes: List[Node] = placeholders[1:]
+    param_nodes: list[Node] = placeholders[1:]
 
     # Establish mapping between param names and node names
     if len(named_params) != len(param_nodes):
         raise ValueError(
             f"Expected {len(named_params)} parameter nodes, got {len(param_nodes)}."
         )
-    node_name_to_param_name: Dict[str, str] = {
+    node_name_to_param_name: dict[str, str] = {
         node.name: param_name for param_name, node in zip(named_params, param_nodes)
     }
 
@@ -121,7 +120,7 @@ def with_param_io(
 
     # Build the layer info tuples to return alongside the original output
     # Format: (operation_name, output_node, input_node, weight_name, bias_name, hyperparams)
-    layer_info_tuples: Tuple[LayerInfoTuple, ...] = tuple(
+    layer_info_tuples: tuple[LayerInfoTuple, ...] = tuple(
         as_tuple(info, node_name_to_param_name) for info in usage_info
     )
 

@@ -1,6 +1,6 @@
 """Pattern matching for detecting convolution layer operations and parameter usage."""
 
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 from torch.fx import Node
 from torch.ops import aten
@@ -18,7 +18,7 @@ class ConvolutionWeightMatcher(_PatternMatcher):
 
     def matches(
         self, p_node: Node
-    ) -> Tuple[List[AffineLayerInfo], List[Tuple[Node, ...]]]:
+    ) -> tuple[list[AffineLayerInfo], list[tuple[Node, ...]]]:
         """Match a parameter node used as weight in conv layers.
 
         Args:
@@ -62,7 +62,7 @@ class ConvolutionBiasMatcher(_PatternMatcher):
 
     def matches(
         self, p_node: Node
-    ) -> Tuple[List[AffineLayerInfo], List[Tuple[Node, ...]]]:
+    ) -> tuple[list[AffineLayerInfo], list[tuple[Node, ...]]]:
         """Match a parameter node used as bias in convolution layers.
 
         Args:
@@ -103,7 +103,7 @@ class ConvolutionBiasMatcher(_PatternMatcher):
         return matches, paths
 
 
-def _extract_conv_hyperparams(args: Tuple[Any, ...]) -> Dict[str, Any]:
+def _extract_conv_hyperparams(args: tuple[Any, ...]) -> dict[str, Any]:
     """Extract hyperparameters from convolution arguments.
 
     Args:

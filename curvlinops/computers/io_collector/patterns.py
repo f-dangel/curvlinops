@@ -1,7 +1,5 @@
 """Pattern matching system for detecting parameter usage in PyTorch FX graphs."""
 
-from typing import List, Tuple
-
 from torch.fx import Node
 
 from curvlinops.computers.io_collector._base import AffineLayerInfo
@@ -16,8 +14,8 @@ from curvlinops.computers.io_collector.linear import (
 
 
 def match_parameter_usage(
-    param_nodes: List[Node],
-) -> Tuple[List[AffineLayerInfo], List[Tuple[Node, ...]]]:
+    param_nodes: list[Node],
+) -> tuple[list[AffineLayerInfo], list[tuple[Node, ...]]]:
     """Match parameter nodes against known usage patterns.
 
     Args:
@@ -34,8 +32,8 @@ def match_parameter_usage(
         ConvolutionWeightMatcher(),
         ConvolutionBiasMatcher(),
     ]
-    usage_info: List[AffineLayerInfo] = []
-    path_info: List[Tuple[Node, ...]] = []
+    usage_info: list[AffineLayerInfo] = []
+    path_info: list[tuple[Node, ...]] = []
 
     for p_node in param_nodes:
         p_usage_info = []
