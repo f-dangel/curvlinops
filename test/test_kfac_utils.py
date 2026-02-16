@@ -1,18 +1,37 @@
-"""Test KFAC's utility functions."""
+"""Test utility functions related to KFAC."""
 
 from contextlib import nullcontext
 from math import sqrt
-from typing import Tuple, Union
 
 from pytest import mark, raises, warns
-from torch import Generator, Tensor, as_tensor, manual_seed, ones, randint, randn, zeros
-from torch.func import hessian
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
+from torch import (
+    Generator,
+    Tensor,
+    as_tensor,
+    cat,
+    manual_seed,
+    ones,
+    rand_like,
+    randint,
+    randn,
+    zeros,
+)
+from torch.func import hessian, vmap
+from torch.nn import (
+    BCEWithLogitsLoss,
+    Conv2d,
+    CrossEntropyLoss,
+    Linear,
+    MSELoss,
+    Sequential,
+)
 
 from curvlinops.kfac_utils import (
+    FromCanonicalLinearOperator,
+    ToCanonicalLinearOperator,
     _check_binary_if_BCEWithLogitsLoss,
+    _make_single_datum_sampler,
     loss_hessian_matrix_sqrt,
-    make_grad_output_sampler,
 )
 from curvlinops.utils import allclose_report
 
@@ -48,8 +67,8 @@ LOSS_FUNC_CLASS_IDS = [cls.__name__ for cls in LOSS_FUNC_CLASSES]
 @mark.parametrize("loss_func_cls", LOSS_FUNC_CLASSES, ids=LOSS_FUNC_CLASS_IDS)
 @mark.parametrize("reduction", ["mean", "sum"])
 def test_loss_hessian_matrix_sqrt(
-    output_shape: Tuple[int, ...],
-    loss_func_cls: Union[CrossEntropyLoss, MSELoss, BCEWithLogitsLoss],
+    output_shape: tuple[int, ...],
+    loss_func_cls: CrossEntropyLoss | MSELoss | BCEWithLogitsLoss,
     reduction: str,
 ):
     """Test loss_hessian_matrix_sqrt for various loss functions.
@@ -135,8 +154,8 @@ def test_loss_hessian_matrix_sqrt(
 @mark.parametrize("loss_func_cls", LOSS_FUNC_CLASSES, ids=LOSS_FUNC_CLASS_IDS)
 @mark.parametrize("reduction", ["mean", "sum"])
 def test_grad_output_sampler_convergence(
-    output_shape: Tuple[int, ...],
-    loss_func_cls: Union[CrossEntropyLoss, MSELoss, BCEWithLogitsLoss],
+    output_shape: tuple[int, ...],
+    loss_func_cls: CrossEntropyLoss | MSELoss | BCEWithLogitsLoss,
     reduction: str,
 ) -> None:
     """Test that sampled gradient outer products converge to the true Hessian.
@@ -168,8 +187,13 @@ def test_grad_output_sampler_convergence(
     else:
         raise NotImplementedError(f"Unsupported loss function: {loss_func_cls}")
 
-    # Create gradient sampler
-    sampler = make_grad_output_sampler(loss_func)
+    # Create gradient sampler (vmapped over batch)
+    sampler = vmap(
+        _make_single_datum_sampler(loss_func),
+        in_dims=(0, None, 0, None),
+        out_dims=1,
+        randomness="different",
+    )
 
     # Sample many gradients with fixed generator for reproducibility
     generator = Generator().manual_seed(42)
@@ -218,3 +242,68 @@ def test_grad_output_sampler_convergence(
     assert allclose_report(
         empirical_cov / scale, true_hess / scale, rtol=1e-3, atol=5e-3
     )
+
+
+@mark.parametrize("separate_weight_and_bias", [True, False], ids=["separate", "joint"])
+def test_CanonicalLinearOperator(separate_weight_and_bias: bool):
+    """Test that canonicalization properly reorders, groups, and ungroups parameters."""
+    manual_seed(0)
+
+    # Define an unconventional order of the parameter space, mixing weights and biases.
+    # NOTE This network is non-functional, we only care about its parameters
+    net = Sequential(Conv2d(6, 5, 4), Linear(5, 3), Linear(3, 2, bias=False))
+
+    # Natural order would be: w1, b1, w2, b2, w3
+    # Create unconventional order: w1, b2, b1, w3, w2
+    natural_params = list(net.parameters())
+    new_order = [0, 3, 1, 4, 2]
+    params = [natural_params[idx] for idx in new_order]
+
+    # Define param_positions to map back to layers
+    param_positions = [
+        {"weight": 0, "bias": 2},  # layer1: weight at pos 0, bias at pos 2
+        {"weight": 4, "bias": 1},  # layer2: weight at pos 4, bias at pos 1
+        {"weight": 3},  # layer3: weight at pos 3
+    ]
+
+    # Extract param shapes, device, and dtype
+    param_shapes = [p.shape for p in params]  # p.shape is already a Size object
+    device = params[0].device
+    dtype = params[0].dtype
+
+    # Verify correct behavior of canonicalization for this case
+    x = [rand_like(p) for p in params]
+    x_w1, x_b2, x_b1, x_w3, x_w2 = x
+
+    x_canonical = (
+        [x_i.flatten() for x_i in [x_w1, x_b1, x_w2, x_b2, x_w3]]
+        if separate_weight_and_bias
+        else [
+            # Conv kernel is 4d, we flatten it to 2d first before appending the bias
+            cat([x_w1.flatten(start_dim=1), x_b1.unsqueeze(-1)], dim=-1).flatten(),
+            cat([x_w2, x_b2.unsqueeze(-1)], dim=-1).flatten(),
+            x_w3.flatten(),
+        ]
+    )
+
+    # Multiplication with canonicalization operator should produce x_canonical
+    to_canonical = ToCanonicalLinearOperator(
+        param_shapes, param_positions, separate_weight_and_bias, device, dtype
+    )
+    to_canonical_x = to_canonical @ x
+    assert len(to_canonical_x) == len(x_canonical)
+    assert all(allclose_report(x1, x2) for x1, x2 in zip(to_canonical_x, x_canonical))
+
+    # Multiplication of x_canonical with from_canonical operator should produce x
+    from_canonical = FromCanonicalLinearOperator(
+        param_shapes, param_positions, separate_weight_and_bias, device, dtype
+    )
+    from_canonical_x = from_canonical @ x_canonical
+    assert len(from_canonical_x) == len(x)
+    assert all(allclose_report(x1, x2) for x1, x2 in zip(from_canonical_x, x))
+
+    # Check that the transpose operator is the inverse
+    for P, v in zip([to_canonical, from_canonical], [x, x_canonical]):
+        PTP_v = P.adjoint() @ (P @ v)
+        assert len(PTP_v) == len(v)
+        assert all(allclose_report(v1, v2) for v1, v2 in zip(PTP_v, v))

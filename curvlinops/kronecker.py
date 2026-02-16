@@ -1,7 +1,9 @@
 """PyTorch linear operator implementation of Kronecker product S_1 ⊗ S_2 ⊗ ... ."""
 
+from __future__ import annotations
+
+from collections.abc import Iterator
 from math import prod, sqrt
-from typing import List, Union
 from warnings import warn
 
 from einops import einsum
@@ -17,11 +19,13 @@ from torch import (
 )
 from torch.linalg import cholesky, eigh, matrix_norm
 
+from curvlinops._checks import _check_same_device, _check_same_dtype, _check_same_shape
 from curvlinops._torch_base import PyTorchLinearOperator
 from curvlinops.eigh import EighDecomposedLinearOperator
+from curvlinops.utils import _infer_device, _infer_dtype
 
 
-def ensure_all_square(*tensors_or_operators: Union[Tensor, PyTorchLinearOperator]):
+def ensure_all_square(*tensors_or_operators: Tensor | PyTorchLinearOperator):
     """Check that all provided tensors/linear operators are square.
 
     Args:
@@ -79,7 +83,50 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
 
         super().__init__(in_shapes, out_shapes)
 
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+    def __iter__(self) -> Iterator[Tensor]:
+        """Iterate over the Kronecker factors.
+
+        Returns:
+            Iterator over the factor tensors.
+        """
+        return iter(self._factors)
+
+    def __len__(self) -> int:
+        """Return the number of Kronecker factors.
+
+        Returns:
+            The number of factors.
+        """
+        return len(self._factors)
+
+    def __getitem__(self, index: int) -> Tensor:
+        """Get a Kronecker factor by index.
+
+        Args:
+            index: Index of the factor.
+
+        Returns:
+            The factor tensor at the given index.
+        """
+        return self._factors[index]
+
+    def __setitem__(self, index: int, value: Tensor):
+        """Replace a Kronecker factor by index.
+
+        The replacement must have the same shape, device, and dtype as
+        the factor it replaces.
+
+        Args:
+            index: Index of the factor to replace.
+            value: The new factor tensor.
+        """
+        old = self._factors[index]
+        _check_same_shape(old, value)
+        _check_same_device(old, value)
+        _check_same_dtype(old, value)
+        self._factors[index] = value
+
+    def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         """Apply Kronecker product to matrix in tensor list format.
 
         Args:
@@ -93,7 +140,7 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
         x = x.reshape(*[S.shape[1] for S in self._factors], x.shape[-1])
         return [einsum(x, *self._factors, self._einsum_equation).flatten(end_dim=-2)]
 
-    def _adjoint(self) -> "KroneckerProductLinearOperator":
+    def _adjoint(self) -> KroneckerProductLinearOperator:
         """Return the adjoint of the Kronecker product.
 
         The adjoint of S_1 ⊗ S_2 ⊗ ... ⊗ S_k is S_1^H ⊗ S_2^H ⊗ ... ⊗ S_k^H.
@@ -110,14 +157,8 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
 
         Returns:
             Device of the factors.
-
-        Raises:
-            RuntimeError: If factors are on different devices.
         """
-        devices = {factor.device for factor in self._factors}
-        if len(devices) != 1:
-            raise RuntimeError(f"Factors are on different devices: {devices}")
-        return devices.pop()
+        return _infer_device(self._factors)
 
     @property
     def dtype(self) -> dtype:
@@ -125,14 +166,8 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
 
         Returns:
             Data type of the factors.
-
-        Raises:
-            RuntimeError: If factors have different data types.
         """
-        dtypes = {factor.dtype for factor in self._factors}
-        if len(dtypes) != 1:
-            raise RuntimeError(f"Factors have different dtypes: {dtypes}")
-        return dtypes.pop()
+        return _infer_dtype(self._factors)
 
     def trace(self) -> Tensor:
         """Trace of the Kronecker product.
@@ -196,7 +231,7 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
             damping: Damping value applied to all Kronecker factors. Default: ``0.0``.
             use_heuristic_damping: Whether to use a heuristic damping strategy by
                 `Martens and Grosse, 2015 <https://arxiv.org/abs/1503.05671>`_
-                (Section 6.3). Only supported for exactly two factors.
+                (Section 6.3). Only supported for one or two factors.
             min_damping: Minimum damping value. Only used if
                 ``use_heuristic_damping`` is ``True``.
             use_exact_damping: Whether to use exact damping, i.e. to invert
@@ -209,7 +244,7 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
 
         Raises:
             ValueError: If both heuristic and exact damping are selected.
-            ValueError: If heuristic damping is used with number of factors != 2.
+            ValueError: If heuristic damping is used with number of factors > 2.
             RuntimeError: If negative mean eigenvalues are detected during
                 heuristic damping.
         """
@@ -218,9 +253,9 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
         if use_heuristic_damping and use_exact_damping:
             raise ValueError("Either use heuristic damping or exact damping, not both.")
 
-        if use_heuristic_damping and len(self._factors) != 2:
+        if use_heuristic_damping and len(self._factors) > 2:
             raise ValueError(
-                f"Heuristic damping only implemented for two factors. "
+                f"Heuristic damping only implemented for at most two factors. "
                 f"Got {len(self._factors)}"
             )
 
@@ -236,7 +271,10 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
 
         else:
             # Martens and Grosse, 2015 (https://arxiv.org/abs/1503.05671) (Section 6.3)
-            if use_heuristic_damping and len(self._factors) == 2:
+            if use_heuristic_damping and len(self._factors) == 1:
+                individual_damping = (max(damping, min_damping),)
+
+            elif use_heuristic_damping and len(self._factors) == 2:
                 S1, S2 = self._factors
                 mean_eig1, mean_eig2 = S1.diag().mean(), S2.diag().mean()
                 if any(mean_eig < 0 for mean_eig in [mean_eig1, mean_eig2]):
@@ -247,6 +285,7 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
                 damping1 = max(sqrt_damping / sqrt_eig_mean_ratio, min_damping)
                 damping2 = max(sqrt_damping * sqrt_eig_mean_ratio, min_damping)
                 individual_damping = (damping1, damping2)
+
             else:
                 individual_damping = tuple(len(self._factors) * [damping])
 

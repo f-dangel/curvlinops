@@ -1,18 +1,15 @@
 """Utility functions to test ``curvlinops``."""
 
-import os
-from collections.abc import MutableMapping
+from collections.abc import Callable, Iterable, MutableMapping
 from contextlib import redirect_stdout, suppress
 from itertools import product
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Type, Union
+from typing import Any
 
 from einops import rearrange, reduce
 from einops.layers.torch import Rearrange
 from numpy import ndarray
-from pytest import raises, warns
 from torch import (
     Tensor,
-    allclose,
     as_tensor,
     cat,
     cuda,
@@ -20,16 +17,15 @@ from torch import (
     dtype,
     eye,
     linalg,
-    load,
     logdet,
     manual_seed,
     rand,
     randint,
     randperm,
-    save,
     trace,
     zeros_like,
 )
+from torch.func import vmap
 from torch.nn import (
     AdaptiveAvgPool2d,
     BCEWithLogitsLoss,
@@ -58,7 +54,7 @@ from curvlinops._torch_base import CurvatureLinearOperator, PyTorchLinearOperato
 from curvlinops.utils import allclose_report
 
 
-def get_available_devices() -> List[device]:
+def get_available_devices() -> list[device]:
     """Return CPU and, if present, GPU device.
 
     Returns:
@@ -72,7 +68,7 @@ def get_available_devices() -> List[device]:
     return devices
 
 
-def classification_targets(size: Tuple[int], num_classes: int) -> Tensor:
+def classification_targets(size: tuple[int], num_classes: int) -> Tensor:
     """Create random targets for classes ``0``, ..., ``num_classes - 1``.
 
     Args:
@@ -85,7 +81,7 @@ def classification_targets(size: Tuple[int], num_classes: int) -> Tensor:
     return randint(size=size, low=0, high=num_classes)
 
 
-def binary_classification_targets(size: Tuple[int]) -> Tensor:
+def binary_classification_targets(size: tuple[int]) -> Tensor:
     """Create random binary targets.
 
     Args:
@@ -97,7 +93,7 @@ def binary_classification_targets(size: Tuple[int]) -> Tensor:
     return classification_targets(size, 2).float()
 
 
-def regression_targets(size: Tuple[int]) -> Tensor:
+def regression_targets(size: tuple[int]) -> Tensor:
     """Create random targets for regression.
 
     Args:
@@ -110,7 +106,7 @@ def regression_targets(size: Tuple[int]) -> Tensor:
 
 
 def maybe_exclude_or_shuffle_parameters(
-    params: List[Parameter], model: Module, exclude: str, shuffle: bool
+    params: list[Parameter], model: Module, exclude: str, shuffle: bool
 ):
     """Maybe exclude or shuffle parameters.
 
@@ -134,14 +130,14 @@ def maybe_exclude_or_shuffle_parameters(
 
 
 def block_diagonal(
-    linear_operator: Type[CurvatureLinearOperator],
+    linear_operator: type[CurvatureLinearOperator],
     model: Module,
     loss_func: Module,
-    params: List[Parameter],
-    data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
-    batch_size_fn: Optional[Callable[[MutableMapping], int]] = None,
+    params: list[Parameter],
+    data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
+    batch_size_fn: Callable[[MutableMapping], int] | None = None,
     separate_weight_and_bias: bool = True,
-    optional_linop_args: Optional[Dict[str, Any]] = None,
+    optional_linop_args: dict[str, Any] | None = None,
 ) -> Tensor:
     """Compute the block-diagonal of the matrix induced by a linear operator.
 
@@ -216,17 +212,31 @@ class WeightShareModel(Sequential):
     ``(batch, ..., out_dim)``.
     """
 
-    def __init__(self, *args: Module, setting: str = "expand", loss: str = "MSE"):
+    def __init__(
+        self,
+        *args: Module,
+        setting: str = "expand",
+        loss: str = "MSE",
+        num_output_feature_dims: int = 1,
+    ):
         """Initialize the model.
 
         Args:
             *args: Modules of the sequential model.
-            setting: Weight-sharing setting to use.
-            loss: Loss type that determines output handling.
+            setting: The weight-sharing setting of the model. One of ``'expand'``,
+                ``'expand-flatten'``, or ``'reduce'``.
+            loss: The type of loss function the model is used with. One of ``'MSE'``,
+                ``'CE'``, or ``'BCE'``.
+            num_output_feature_dims: Number of feature dimensions in the output
+                (excluding batch dimension). For example, if the sequential model
+                outputs ``(batch, seq, classes)``, the value should be 2. Used to
+                detect whether a batch dimension is present. This is necessary to
+                make the model behave consistently for batched and un-batched inputs.
         """
         super().__init__(*args)
         self.setting = setting
         self.loss = loss
+        self._num_output_feature_dims = num_output_feature_dims
 
     @property
     def setting(self) -> str:
@@ -293,29 +303,64 @@ class WeightShareModel(Sequential):
 
         Assumes MSELoss. The output would have to be transposed to be used with
         the CrossEntropyLoss.
+        Handles both batched inputs (with batch dimension) and unbatched inputs
+        (without batch dimension, e.g., when called via vmap).
 
         Args:
             x: Input to the forward pass.
 
         Returns:
             Output of the sequential model with processed weight-sharing dimension.
+
+        Raises:
+            ValueError: If the output of the sequential model has an unexpected shape.
         """
-        x = super().forward(x)
-        if self.setting == "reduce":
-            # Example: Vision transformer for image classification.
-            # (batch, image_patches, c) -> (batch, c)
-            return reduce(x, "batch ... c -> batch c", "mean")
-        # if self.setting == "expand":
-        # Example: Transformer for translation: (batch, sequence_length, c)
-        # (although second and third dimension would have to be transposed for
-        # classification)
-        if self.setting == "expand-flatten":
-            # Example: Pixel-wise MSE loss for diffusion model:
-            # (batch, hight, width, c) -> (batch, hight * width * c)
-            x = rearrange(x, "batch ... c -> batch (... c)")
-        elif x.ndim > 2 and self.loss == "CE":
-            x = rearrange(x, "batch ... c -> batch c ...")
-        return x
+        # Run the sequential model first
+        sequential_output = super().forward(x)
+
+        def postprocess_one_datum(x_n: Tensor) -> Tensor:
+            """Post-process a single datum's output.
+
+            Args:
+                x_n: Output tensor for a single datum (no batch dimension).
+
+            Returns:
+                Post-processed output tensor.
+            """
+            if self.setting == "reduce":
+                # Example: Vision transformer for image classification.
+                # (image_patches, c) -> (c,)
+                return reduce(x_n, "... c -> c", "mean")
+            # Example: Transformer for translation: (sequence_length, c)
+            # (although second and third dimension would have to be transposed for
+            # classification)
+            if self.setting == "expand-flatten":
+                # Example: Pixel-wise MSE loss for diffusion model:
+                # (height, width, c) -> (height * width * c)
+                x_n = rearrange(x_n, "... c -> (... c)")
+            elif x_n.ndim > 1 and self.loss == "CE":
+                x_n = rearrange(x_n, "... c -> c ...")
+
+            return x_n
+
+        # Detect if batch dimension is present by comparing output ndim
+        has_batch = sequential_output.ndim > self._num_output_feature_dims
+
+        # Validate that the output has the expected shape
+        ndim_no_batch = self._num_output_feature_dims
+        ndim_with_batch = self._num_output_feature_dims + 1
+
+        if sequential_output.ndim not in [ndim_no_batch, ndim_with_batch]:
+            raise ValueError(
+                f"Sequential output has unexpected shape {sequential_output.shape}. "
+                f"Expected {ndim_no_batch} dimensions (no batch) or {ndim_with_batch} "
+                f"dimensions (with batch), but got {sequential_output.ndim} dimensions."
+            )
+
+        postprocess_fn = (
+            vmap(postprocess_one_datum) if has_batch else postprocess_one_datum
+        )
+        return postprocess_fn(sequential_output)
 
 
 class Conv2dModel(Module):
@@ -433,8 +478,8 @@ class UnetModel(Module):
 
 
 def cast_input(
-    X: Union[Tensor, MutableMapping], target_dtype: dtype
-) -> Union[Tensor, MutableMapping]:
+    X: Tensor | MutableMapping, target_dtype: dtype
+) -> Tensor | MutableMapping:
     """Cast an input tensor ``X`` into ``target_dtype``.
 
     The input can be inside a dict-like object under the key ``"x"``.
@@ -468,38 +513,13 @@ def batch_size_fn(X: MutableMapping) -> int:
     return X["x"].shape[0]
 
 
-def compare_state_dicts(state_dict: dict, state_dict_new: dict):
-    """Compare two state dicts recursively.
-
-    Args:
-        state_dict (dict): The first state dict to compare.
-        state_dict_new (dict): The second state dict to compare.
-    """
-    assert len(state_dict) == len(state_dict_new)
-    for value, value_new in zip(state_dict.values(), state_dict_new.values()):
-        if isinstance(value, Tensor):
-            assert allclose(value, value_new)
-        elif isinstance(value, dict):
-            compare_state_dicts(value, value_new)
-        elif isinstance(value, tuple):
-            assert len(value) == len(value_new)
-            assert all(isinstance(v, type(v2)) for v, v2 in zip(value, value_new))
-            for v, v2 in zip(value, value_new):
-                if v is None:
-                    assert v2 is None
-                else:
-                    assert allclose(as_tensor(v), as_tensor(v2))
-        else:
-            assert value == value_new
-
-
 def rand_accepted_formats(
-    shapes: List[Tuple[int, ...]],
+    shapes: list[tuple[int, ...]],
     is_vec: bool,
     dtype: dtype,
     device: device,
     num_vecs: int = 1,
-) -> Tuple[List[Tensor], Tensor, ndarray]:
+) -> tuple[list[Tensor], Tensor, ndarray]:
     """Generate a random vector/matrix in all accepted formats.
 
     Args:
@@ -689,7 +709,7 @@ def compare_matmat_expectation(
     assert allclose_report(op_x / max_repeats / scale, mat_x / scale, **tols)
 
 
-def eye_like(A: Union[Tensor, PyTorchLinearOperator]) -> Tensor:
+def eye_like(A: Tensor | PyTorchLinearOperator) -> Tensor:
     """Create an identity matrix of same size as ``A``.
 
     Args:
@@ -764,7 +784,7 @@ def check_estimator_convergence(
 
 
 def _test_inplace_activations(
-    linop_cls: Type[Union[KFACLinearOperator, EKFACLinearOperator]], dev: device
+    linop_cls: type[KFACLinearOperator | EKFACLinearOperator], dev: device
 ):
     """Test that (E)KFAC works if the network has in-place activations.
 
@@ -797,13 +817,13 @@ def _test_inplace_activations(
 
 
 def _test_property(  # noqa: C901
-    linop_cls: Type[Union[KFACLinearOperator, EKFACLinearOperator]],
+    linop_cls: type[KFACLinearOperator | EKFACLinearOperator],
     property_name: str,
     model: Module,
     loss_func: Module,
-    params: List[Parameter],
-    data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
-    batch_size_fn: Optional[Callable[[MutableMapping], int]],
+    params: list[Parameter],
+    data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
+    batch_size_fn: Callable[[MutableMapping], int] | None,
     separate_weight_and_bias: bool,
     check_deterministic: bool,
     rtol: float = 1e-5,
@@ -840,25 +860,13 @@ def _test_property(  # noqa: C901
     # Add damping manually to avoid singular matrices for logdet
     if property_name == "logdet":
         DELTA = 1e-3
-        if type(linop) is KFACLinearOperator:
-            if not check_deterministic:
-                linop.compute_kronecker_factors()
-            assert linop._input_covariances or linop._gradient_covariances
-            for aaT in linop._input_covariances.values():
-                aaT.add_(eye_like(aaT), alpha=DELTA)
-            for ggT in linop._gradient_covariances.values():
-                ggT.add_(eye_like(ggT), alpha=DELTA)
-        elif type(linop) is EKFACLinearOperator:
-            if not check_deterministic:
-                linop.compute_kronecker_factors()
-                linop.compute_eigenvalue_correction()
-            assert linop._corrected_eigenvalues
-            for eigenvalues in linop._corrected_eigenvalues.values():
-                if isinstance(eigenvalues, dict):
-                    for eigenvals in eigenvalues.values():
-                        eigenvals.add_(DELTA)
-                else:
-                    eigenvalues.add_(DELTA)
+        _, K, _ = linop
+        for block in K:
+            if type(linop) is KFACLinearOperator:
+                for idx in range(len(block)):
+                    block[idx] = block[idx] + DELTA * eye_like(block[idx])
+            elif type(linop) is EKFACLinearOperator:
+                block.eigenvalues = block.eigenvalues + DELTA
 
     # Mapping from the property name to the corresponding torch function
     torch_fn = {
@@ -875,124 +883,12 @@ def _test_property(  # noqa: C901
     assert allclose_report(quantity, quantity_naive, rtol=rtol, atol=atol)
 
 
-def _test_save_and_load_state_dict(
-    linop_cls: Type[Union[KFACLinearOperator, EKFACLinearOperator]],
-):
-    """Test saving and loading state dict of (E)KFAC.
-
-    Args:
-        linop_cls: The linear operator class to test.
-    """
-    manual_seed(0)
-    batch_size, D_in, D_out = 4, 3, 2
-    X = rand(batch_size, D_in)
-    y = rand(batch_size, D_out)
-    model = Linear(D_in, D_out)
-
-    params = list(model.parameters())
-    # create and compute linop
-    linop = linop_cls(
-        model,
-        MSELoss(reduction="sum"),
-        params,
-        [(X, y)],
-    )
-
-    # save state dict
-    state_dict = linop.state_dict()
-    PATH = "linop_state_dict.pt"
-    save(state_dict, PATH)
-
-    # create new linop with different loss function and try to load state dict
-    linop_new = linop_cls(
-        model,
-        CrossEntropyLoss(),
-        params,
-        [(X, y)],
-        # Avoid computing linop because y has the wrong shape for CE
-        check_deterministic=False,
-    )
-    with raises(ValueError, match="loss"):
-        linop_new.load_state_dict(load(PATH, weights_only=False))
-
-    # create new linop with different loss reduction and try to load state dict
-    linop_new = linop_cls(
-        model,
-        MSELoss(),
-        params,
-        [(X, y)],
-    )
-    with raises(ValueError, match="reduction"):
-        linop_new.load_state_dict(load(PATH, weights_only=False))
-
-    # create new linop with different model and try to load state dict
-    wrong_model = Sequential(Linear(D_in, 10), ReLU(), Linear(10, D_out))
-    wrong_params = list(wrong_model.parameters())
-    linop_new = linop_cls(
-        wrong_model,
-        MSELoss(reduction="sum"),
-        wrong_params,
-        [(X, y)],
-    )
-    with raises(RuntimeError, match="loading state_dict"):
-        linop_new.load_state_dict(load(PATH, weights_only=False))
-
-    # create new linop and load state dict
-    linop_new = linop_cls(
-        model,
-        MSELoss(reduction="sum"),
-        params,
-        [(X, y)],
-        check_deterministic=False,  # turn off to avoid computing linop again
-    )
-    with warns(UserWarning, match="will overwrite the parameters"):
-        linop_new.load_state_dict(load(PATH, weights_only=False))
-    # clean up
-    os.remove(PATH)
-
-    # check that the two linops are equal
-    compare_state_dicts(linop.state_dict(), linop_new.state_dict())
-    test_vec = rand(linop.shape[1])
-    assert allclose_report(linop @ test_vec, linop_new @ test_vec)
-
-
-def _test_from_state_dict(
-    linop_cls: Type[Union[KFACLinearOperator, EKFACLinearOperator]],
-):
-    """Test that (E)KFACLinearOperator can be created from state dict."""
-    manual_seed(0)
-    batch_size, D_in, D_out = 4, 3, 2
-    X = rand(batch_size, D_in)
-    y = rand(batch_size, D_out)
-    model = Linear(D_in, D_out)
-
-    params = list(model.parameters())
-    # create and compute (E)KFAC
-    linop = linop_cls(
-        model,
-        MSELoss(reduction="sum"),
-        params,
-        [(X, y)],
-    )
-
-    # save state dict
-    state_dict = linop.state_dict()
-
-    # create new linop from state dict
-    linop_new = linop_cls.from_state_dict(state_dict, model, params, [(X, y)])
-
-    # check that the two linops are equal
-    compare_state_dicts(linop.state_dict(), linop_new.state_dict())
-    test_vec = rand(linop.shape[1])
-    assert allclose_report(linop @ test_vec, linop_new @ test_vec)
-
-
 def _test_ekfac_closer_to_exact_than_kfac(
     model: Module,
     loss_func: Module,
-    params: List[Parameter],
-    data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
-    batch_size_fn: Optional[Callable[[MutableMapping], int]],
+    params: list[Parameter],
+    data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
+    batch_size_fn: Callable[[MutableMapping], int] | None,
     exclude: str,
     separate_weight_and_bias: bool,
     fisher_type: FisherType,
@@ -1067,7 +963,7 @@ def _test_ekfac_closer_to_exact_than_kfac(
     )  # For no_weights the numerical error might dominate.
 
 
-def change_dtype(case: Tuple, dt: dtype) -> Tuple:
+def change_dtype(case: tuple, dt: dtype) -> tuple:
     """Change the data type of a test case.
 
     Args:

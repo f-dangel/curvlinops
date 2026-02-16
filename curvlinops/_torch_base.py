@@ -2,16 +2,7 @@
 
 from __future__ import annotations
 
-from typing import (
-    Callable,
-    Iterable,
-    Iterator,
-    List,
-    MutableMapping,
-    Optional,
-    Tuple,
-    Union,
-)
+from collections.abc import Callable, Iterable, Iterator, MutableMapping
 
 import numpy
 from scipy.sparse.linalg import LinearOperator
@@ -24,13 +15,17 @@ from torch import (
     device,
     dtype,
     rand,
-    tensor,
     zeros_like,
 )
-from torch.autograd import grad
 from torch.nn import Parameter
-from tqdm import tqdm
 
+from curvlinops._checks import (
+    _check_matmul_compatible_shape,
+    _check_same_device,
+    _check_same_dtype,
+    _check_same_tensor_list_shape,
+)
+from curvlinops._empirical_risk import _EmpiricalRiskMixin
 from curvlinops.utils import allclose_report
 
 
@@ -60,14 +55,22 @@ class PyTorchLinearOperator:
     SELF_ADJOINT: bool = False
 
     def __init__(
-        self, in_shape: List[Tuple[int, ...]], out_shape: List[Tuple[int, ...]]
+        self, in_shape: list[tuple[int, ...]], out_shape: list[tuple[int, ...]]
     ):
         """Store the linear operator's input and output space dimensions.
 
         Args:
             in_shape: A list of shapes specifying the linear operator's input space.
             out_shape: A list of shapes specifying the linear operator's output space.
+
+        Raises:
+            ValueError: If either ``in_shape`` or ``out_shape`` is empty.
         """
+        if not in_shape or not out_shape:
+            raise ValueError(
+                f"In- {in_shape} and output shapes {out_shape} must be non-empty."
+            )
+
         self._in_shape = [Size(s) for s in in_shape]
         self._out_shape = [Size(s) for s in out_shape]
 
@@ -75,9 +78,7 @@ class PyTorchLinearOperator:
         self._out_shape_flat = [s.numel() for s in self._out_shape]
         self.shape = (sum(self._out_shape_flat), sum(self._in_shape_flat))
 
-    def __rmatmul__(
-        self, X: Union[List[Tensor], Tensor]
-    ) -> Union[List[Tensor], Tensor]:
+    def __rmatmul__(self, X: list[Tensor] | Tensor) -> list[Tensor] | Tensor:
         """Multiply a tensor from the left onto the linear operator (``X @ A``).
 
         Args:
@@ -117,8 +118,8 @@ class PyTorchLinearOperator:
         )
 
     def __matmul__(
-        self, X: Union[List[Tensor], Tensor, PyTorchLinearOperator]
-    ) -> Union[List[Tensor], Tensor, _ChainPyTorchLinearOperator]:
+        self, X: list[Tensor] | Tensor | PyTorchLinearOperator
+    ) -> list[Tensor] | Tensor | _ChainPyTorchLinearOperator:
         """Multiply onto a vector/matrix given as tensor/tensor list, or an operator.
 
         Args:
@@ -145,7 +146,14 @@ class PyTorchLinearOperator:
         """
         free_dim = "trailing"  # position of axis in X to parallelize products over
         if isinstance(X, PyTorchLinearOperator):
-            return _ChainPyTorchLinearOperator(self, X)
+            # Flatten nested chains: Chain(A, B) @ Chain(C, D) -> Chain(A, B, C, D)
+            left = (
+                tuple(self)
+                if isinstance(self, _ChainPyTorchLinearOperator)
+                else (self,)
+            )
+            right = tuple(X) if isinstance(X, _ChainPyTorchLinearOperator) else (X,)
+            return _ChainPyTorchLinearOperator(*left, *right)
 
         # convert to tensor list format
         X, list_format, is_vec, num_vecs = self._check_input_and_preprocess(
@@ -160,7 +168,7 @@ class PyTorchLinearOperator:
             AX, list_format, is_vec, num_vecs, self._out_shape, free_dim
         )
 
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         """Matrix-matrix multiplication.
 
         Args:
@@ -197,11 +205,8 @@ class PyTorchLinearOperator:
         raise NotImplementedError
 
     def _check_input_and_preprocess(
-        self,
-        X: Union[List[Tensor], Tensor],
-        expected_shapes: List[Size],
-        free_dim: str,
-    ) -> Tuple[List[Tensor], bool, bool, int]:
+        self, X: list[Tensor] | Tensor, expected_shapes: list[Size], free_dim: str
+    ) -> tuple[list[Tensor], bool, bool, int]:
         """Check input format and pre-process it to a matrix in tensor list format.
 
         Args:
@@ -239,8 +244,8 @@ class PyTorchLinearOperator:
 
     @staticmethod
     def __check_tensor_and_preprocess(
-        X: Tensor, expected_shapes: List[Size], free_dim: str
-    ) -> Tuple[List[Tensor], bool, int]:
+        X: Tensor, expected_shapes: list[Size], free_dim: str
+    ) -> tuple[list[Tensor], bool, int]:
         """Check single-tensor input format and process into a matrix tensor list.
 
         Args:
@@ -295,8 +300,8 @@ class PyTorchLinearOperator:
 
     @staticmethod
     def __check_tensor_list_and_preprocess(
-        X: List[Tensor], expected_shapes: List[Size], free_dim: str
-    ) -> Tuple[List[Tensor], bool, int]:
+        X: list[Tensor], expected_shapes: list[Size], free_dim: str
+    ) -> tuple[list[Tensor], bool, int]:
         """Check tensor list input format and process into a matrix tensor list.
 
         Args:
@@ -351,13 +356,13 @@ class PyTorchLinearOperator:
 
     @staticmethod
     def _check_output_and_postprocess(
-        AX: List[Tensor],
+        AX: list[Tensor],
         list_format: bool,
         is_vec: bool,
         num_vecs: int,
-        expected_shapes: List[Size],
+        expected_shapes: list[Size],
         free_dim: str,
-    ) -> Union[List[Tensor], Tensor]:
+    ) -> list[Tensor] | Tensor:
         """Check multiplication output and post-process it to the original format.
 
         Args:
@@ -443,9 +448,9 @@ class PyTorchLinearOperator:
         Returns:
             A new linear operator representing the difference A - B.
         """
-        return _SumPyTorchLinearOperator(self, -1.0 * other)
+        return self + (-1.0 * other)
 
-    def __mul__(self, scalar: Union[int, float]) -> _ScalePyTorchLinearOperator:
+    def __mul__(self, scalar: int | float) -> _ScalePyTorchLinearOperator:
         """Multiply the linear operator by a scalar (A * scalar).
 
         Args:
@@ -456,7 +461,7 @@ class PyTorchLinearOperator:
         """
         return _ScalePyTorchLinearOperator(self, scalar)
 
-    def __rmul__(self, scalar: Union[int, float]) -> _ScalePyTorchLinearOperator:
+    def __rmul__(self, scalar: int | float) -> _ScalePyTorchLinearOperator:
         """Right multiply the linear operator by a scalar (scalar * A).
 
         Args:
@@ -465,13 +470,24 @@ class PyTorchLinearOperator:
         Returns:
             A new linear operator representing the scaled linear operator.
         """
-        return self.__mul__(scalar)
+        return self * scalar
+
+    def __truediv__(self, scalar: int | float) -> _ScalePyTorchLinearOperator:
+        """Divide the linear operator by a scalar (A / scalar).
+
+        Args:
+            scalar: A scalar to divide the linear operator by.
+
+        Returns:
+            A new linear operator representing the scaled linear operator.
+        """
+        return self * (1.0 / scalar)
 
     ###############################################################################
     #                                 SCIPY EXPORT                                #
     ###############################################################################
 
-    def to_scipy(self, dtype: Optional[numpy.dtype] = None) -> LinearOperator:
+    def to_scipy(self, dtype: numpy.dtype | None = None) -> LinearOperator:
         """Wrap the PyTorch linear operator with a SciPy linear operator.
 
         Args:
@@ -522,6 +538,24 @@ class PyTorchLinearOperator:
         """
         raise NotImplementedError
 
+    def _check_deterministic_matvec(self, rtol: float = 1e-5, atol: float = 1e-8):
+        """Probe whether the linear operator's matrix-vector product is deterministic.
+
+        Performs two sequential matrix-vector products and compares them.
+
+        Args:
+            rtol: Relative tolerance for comparison. Defaults to ``1e-5``.
+            atol: Absolute tolerance for comparison. Defaults to ``1e-8``.
+
+        Raises:
+            RuntimeError: If the two matrix-vector products yield different results.
+        """
+        v = rand(self.shape[1], device=self.device, dtype=self.dtype)
+        Av1 = self @ v
+        Av2 = self @ v
+        if not allclose_report(Av1, Av2, rtol=rtol, atol=atol):
+            raise RuntimeError("Check for deterministic matvec failed.")
+
     @staticmethod
     def _scipy_compatible(
         f: Callable[[Tensor], Tensor], device: device, dtype: dtype
@@ -566,36 +600,17 @@ class _SumPyTorchLinearOperator(PyTorchLinearOperator):
         Args:
             A: First linear operator.
             B: Second linear operator.
-
-        Raises:
-            ValueError: If the shapes, devices, or dtypes of the two linear
-                operators do not match.
         """
-        if A._in_shape != B._in_shape:
-            raise ValueError(
-                "Input shapes of linear operators must match:"
-                + f"Got {A._in_shape} vs. {B._in_shape}."
-            )
-        if A._out_shape != B._out_shape:
-            raise ValueError(
-                "Output shapes of linear operators must match:"
-                + f"Got {A._out_shape} vs. {B._out_shape}."
-            )
-        if A.device != B.device:
-            raise ValueError(
-                f"Devices of linear operators must match. Got {[A.device, B.device]}."
-            )
-        if A.dtype != B.dtype:
-            raise ValueError(
-                f"Dtypes of linear operators must match. Got {[A.dtype, B.dtype]}."
-            )
+        _check_same_tensor_list_shape(A, B)
+        _check_same_device(A, B)
+        _check_same_dtype(A, B)
         super().__init__(A._in_shape, A._out_shape)
         self._A, self._B = A, B
 
         # Sum is self-adjoint if both operands are self-adjoint
         self.SELF_ADJOINT = A.SELF_ADJOINT and B.SELF_ADJOINT
 
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         """Multiply the linear operator onto a matrix in list format.
 
         Args:
@@ -636,7 +651,7 @@ class _SumPyTorchLinearOperator(PyTorchLinearOperator):
 class _ScalePyTorchLinearOperator(PyTorchLinearOperator):
     """Linear operator representing the scaled version of a linear operator s * A."""
 
-    def __init__(self, A: PyTorchLinearOperator, scalar: Union[float, int]):
+    def __init__(self, A: PyTorchLinearOperator, scalar: float | int):
         """Store the linear operator.
 
         Args:
@@ -648,7 +663,7 @@ class _ScalePyTorchLinearOperator(PyTorchLinearOperator):
         self._scalar = scalar
         self.SELF_ADJOINT = A.SELF_ADJOINT
 
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         """Multiply the linear operator onto a matrix in list format.
 
         Args:
@@ -687,33 +702,30 @@ class _ScalePyTorchLinearOperator(PyTorchLinearOperator):
 
 
 class _ChainPyTorchLinearOperator(PyTorchLinearOperator):
-    """Linear operator representing the product of two linear operators A @ B."""
+    """Linear operator representing the product of linear operators A @ B @ C @ ..."""
 
-    def __init__(self, A: PyTorchLinearOperator, B: PyTorchLinearOperator):
-        """Initialize product of two linear operators.
+    def __init__(self, *operators: PyTorchLinearOperator):
+        """Initialize product of linear operators.
 
         Args:
-            A: First linear operator.
-            B: Second linear operator.
+            *operators: Two or more linear operators. The product is applied
+                left-to-right: ``operators[0] @ operators[1] @ ... @ operators[-1]``.
 
         Raises:
-            ValueError: If the shapes, devices, or dtypes of the two linear
-                operators are incompatible.
+            ValueError: If fewer than two operators are given, or if shapes,
+                devices, or dtypes of consecutive operators are incompatible.
         """
-        if A._in_shape != B._out_shape:
-            raise ValueError(f"{A._in_shape=} does not match {B._out_shape}.")
-        if A.device != B.device:
-            raise ValueError(
-                f"Devices of linear operators must match. Got {[A.device, B.device]}."
-            )
-        if A.dtype != B.dtype:
-            raise ValueError(
-                f"Dtypes of linear operators must match. Got {[A.dtype, B.dtype]}."
-            )
-        self._A, self._B = A, B
+        if len(operators) < 2:
+            raise ValueError(f"Need at least 2 operators, got {len(operators)}.")
+        for i in range(len(operators) - 1):
+            left, right = operators[i], operators[i + 1]
+            _check_matmul_compatible_shape(left, right)
+            _check_same_device(left, right)
+            _check_same_dtype(left, right)
+        self._operators = list(operators)
 
-        # Inherit shapes from the operands
-        super().__init__(B._in_shape, A._out_shape)
+        # Inherit shapes from the outermost operands
+        super().__init__(operators[-1]._in_shape, operators[0]._out_shape)
 
     @property
     def dtype(self) -> dtype:
@@ -722,7 +734,7 @@ class _ChainPyTorchLinearOperator(PyTorchLinearOperator):
         Returns:
             The linear operator's dtype.
         """
-        return self._A.dtype
+        return self._operators[0].dtype
 
     @property
     def device(self) -> device:
@@ -731,9 +743,9 @@ class _ChainPyTorchLinearOperator(PyTorchLinearOperator):
         Returns:
             The linear operator's device.
         """
-        return self._A.device
+        return self._operators[0].device
 
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         """Multiply the linear operator onto a matrix in list format.
 
         Args:
@@ -742,18 +754,66 @@ class _ChainPyTorchLinearOperator(PyTorchLinearOperator):
         Returns:
             The result of the multiplication in list format.
         """
-        return self._A._matmat(self._B._matmat(X))
+        result = X
+        for op in reversed(self._operators):
+            result = op._matmat(result)
+        return result
+
+    def __iter__(self) -> Iterator[PyTorchLinearOperator]:
+        """Iterate over the operators in the chain.
+
+        Returns:
+            Iterator over the linear operators in left-to-right order.
+        """
+        return iter(self._operators)
+
+    def __len__(self) -> int:
+        """Return the number of operators in the chain.
+
+        Returns:
+            The number of operators.
+        """
+        return len(self._operators)
+
+    def __getitem__(self, index: int) -> PyTorchLinearOperator:
+        """Get an operator by index.
+
+        Args:
+            index: Index of the operator.
+
+        Returns:
+            The operator at the given index.
+        """
+        return self._operators[index]
+
+    def __setitem__(self, index: int, value: PyTorchLinearOperator):
+        """Replace an operator by index.
+
+        The replacement must have the same shape, device, and dtype as
+        the operator it replaces.
+
+        Args:
+            index: Index of the operator to replace.
+            value: The new operator.
+        """
+        old = self._operators[index]
+        _check_same_tensor_list_shape(old, value)
+        _check_same_device(old, value)
+        _check_same_dtype(old, value)
+        self._operators[index] = value
 
     def _adjoint(self) -> _ChainPyTorchLinearOperator:
-        """Return the linear operator's adjoint: (AB)* = B*A*.
+        """Return the linear operator's adjoint: (ABC...)* = ...C*B*A*.
 
         Returns:
             A linear operator representing the adjoint.
         """
-        return _ChainPyTorchLinearOperator(self._B.adjoint(), self._A.adjoint())
+        return _ChainPyTorchLinearOperator(
+            *(op.adjoint() for op in reversed(self._operators))
+        )
 
 
-class CurvatureLinearOperator(PyTorchLinearOperator):
+class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
     """Base class for PyTorch linear operators of deep learning curvature matrices.
 
     To implement a new curvature linear operator, subclass this class and implement
@@ -774,15 +834,16 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
 
     def __init__(
         self,
-        model_func: Callable[[Union[Tensor, MutableMapping]], Tensor],
-        loss_func: Union[Callable[[Tensor, Tensor], Tensor], None],
-        params: List[Parameter],
-        data: Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]],
+        model_func: Callable[[Tensor | MutableMapping], Tensor],
+        loss_func: Callable[[Tensor, Tensor], Tensor] | None,
+        params: list[Parameter],
+        data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
-        num_data: Optional[int] = None,
-        block_sizes: Optional[List[int]] = None,
-        batch_size_fn: Optional[Callable[[Union[MutableMapping, Tensor]], int]] = None,
+        num_data: int | None = None,
+        num_per_example_loss_terms: int | None = None,
+        block_sizes: list[int] | None = None,
+        batch_size_fn: Callable[[MutableMapping | Tensor], int] | None = None,
     ):
         """Linear operator for curvature matrices of empirical risks.
 
@@ -813,6 +874,10 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
                 safeguard, only turn it off if you know what you are doing.
             num_data: Number of data points. If ``None``, it is inferred from the data
                 at the cost of one traversal through the data loader.
+            num_per_example_loss_terms: Number of per-example loss terms, e.g. the
+                number of tokens in a sequence. Only used by subclasses with
+                ``NEEDS_NUM_PER_EXAMPLE_LOSS_TERMS = True``. If ``None``, it is
+                inferred from the data when needed. Default: ``None``.
             block_sizes: This argument will be ignored if the linear operator does not
                 support blocks. List of integers indicating the number of
                 ``nn.Parameter``s forming a block. Entries must sum to ``len(params)``.
@@ -830,12 +895,6 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
             ValueError: If any block size is not positive.
             ValueError: If ``X`` is not a tensor and ``batch_size_fn`` is not specified.
         """
-        if isinstance(next(iter(data))[0], MutableMapping) and batch_size_fn is None:
-            raise ValueError(
-                "When using dict-like custom data, `batch_size_fn` is required."
-            )
-
-        self._params = params
         if block_sizes is not None:
             if not self.SUPPORTS_BLOCKS:
                 raise ValueError(
@@ -847,29 +906,26 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
                 raise ValueError("Block sizes must be positive.")
         self._block_sizes = [len(params)] if block_sizes is None else block_sizes
 
-        self._model_func = model_func
-        self._loss_func = loss_func
-        self._data = data
-        self._progressbar = progressbar
-        self._batch_size_fn = (
-            (lambda X: X.shape[0]) if batch_size_fn is None else batch_size_fn
+        _EmpiricalRiskMixin.__init__(
+            self,
+            model_func,
+            loss_func,
+            params,
+            data,
+            progressbar=progressbar,
+            batch_size_fn=batch_size_fn,
+            num_data=num_data,
+            num_per_example_loss_terms=num_per_example_loss_terms,
+            check_deterministic=check_deterministic,
         )
-
-        self._N_data = (
-            sum(
-                self._batch_size_fn(X)
-                for (X, _) in self._loop_over_data(desc="_N_data")
-            )
-            if num_data is None
-            else num_data
+        PyTorchLinearOperator.__init__(
+            self, self._get_in_shape(), self._get_out_shape()
         )
-
-        super().__init__(self._get_in_shape(), self._get_out_shape())
 
         if check_deterministic:
-            self._check_deterministic()
+            self._check_deterministic_matvec()
 
-    def _get_in_shape(self) -> List[Tuple[int, ...]]:
+    def _get_in_shape(self) -> list[tuple[int, ...]]:
         """Return linear operator's input space dimensions.
 
         Returns:
@@ -877,7 +933,7 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
         """
         return [tuple(p.shape) for p in self._params]
 
-    def _get_out_shape(self) -> List[Tuple[int, ...]]:
+    def _get_out_shape(self) -> list[tuple[int, ...]]:
         """Return linear operator's output space dimensions.
 
         Returns:
@@ -885,7 +941,7 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
         """
         return [tuple(p.shape) for p in self._params]
 
-    def _matmat(self, M: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, M: list[Tensor]) -> list[Tensor]:
         """Matrix-matrix multiplication.
 
         Args:
@@ -909,8 +965,8 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
         return AM
 
     def _matmat_batch(
-        self, X: Union[MutableMapping, Tensor], y: Tensor, M: List[Tensor]
-    ) -> List[Tensor]:
+        self, X: MutableMapping | Tensor, y: Tensor, M: list[Tensor]
+    ) -> list[Tensor]:
         """Apply the mini-batch matrix to a vector.
 
         Args:
@@ -926,280 +982,3 @@ class CurvatureLinearOperator(PyTorchLinearOperator):
             NotImplementedError: Must be implemented by descendants.
         """
         raise NotImplementedError
-
-    def _loop_over_data(
-        self, desc: Optional[str] = None, add_device_to_desc: bool = True
-    ) -> Iterable[Tuple[Union[Tensor, MutableMapping], Tensor]]:
-        """Yield batches of the data set, loaded to the correct device.
-
-        Args:
-            desc: Description for the progress bar. Will be ignored if progressbar is
-                disabled.
-            add_device_to_desc: Whether to add the device to the description.
-                Default: ``True``.
-
-        Yields:
-            Mini-batches ``(X, y)``.
-        """
-        data_iter = self._data
-        dev = self.device
-
-        if self._progressbar:
-            desc = f"{self.__class__.__name__}{'' if desc is None else f'.{desc}'}"
-            if add_device_to_desc:
-                desc = f"{desc} (on {str(dev)})"
-            data_iter = tqdm(data_iter, desc=desc)
-
-        for X, y in data_iter:
-            # Assume everything is handled by the model
-            # if `X` is a custom data format
-            if isinstance(X, Tensor):
-                X = X.to(dev)
-            y = y.to(dev)
-            yield (X, y)
-
-    def _get_normalization_factor(
-        self, X: Union[MutableMapping, Tensor], y: Tensor
-    ) -> float:
-        """Return the correction factor for correct normalization over the data set.
-
-        Args:
-            X: Input to the DNN.
-            y: Ground truth.
-
-        Returns:
-            Normalization factor
-        """
-        return {"sum": 1.0, "mean": self._batch_size_fn(X) / self._N_data}[
-            self._loss_func.reduction
-        ]
-
-    ###############################################################################
-    #                             DETERMINISTIC CHECKS                            #
-    ###############################################################################
-
-    def data_prediction_loss_gradient(
-        self, desc: str = "batch_prediction_loss_gradient"
-    ) -> Iterator[
-        Tuple[
-            Tuple[Union[Tensor, MutableMapping], Tensor],
-            Tensor,
-            Optional[Tensor],
-            Optional[List[Tensor]],
-        ]
-    ]:
-        """Yield (input, label), prediction, loss, and gradient for each batch.
-
-        Args:
-            desc: Description for the progress bar (if the linear operator's
-                progress bar is enabled). Default: ``'batch_prediction_loss_gradient'``.
-
-        Yields:
-            Tuple of ((input, label), prediction, loss, gradient) for each batch of
-            the data.
-        """
-        for X, y in self._loop_over_data(desc=desc):
-            prediction = self._model_func(X)
-            if self._loss_func is None:
-                loss, grad_params = None, None
-            else:
-                normalization_factor = self._get_normalization_factor(X, y)
-                loss = self._loss_func(prediction, y).mul_(normalization_factor)
-                grad_params = [g.detach() for g in grad(loss, self._params)]
-                loss.detach_()
-
-            yield (X, y), prediction, loss, grad_params
-
-    def gradient_and_loss(self) -> Tuple[List[Tensor], Tensor]:
-        """Evaluate the gradient and loss on the data.
-
-        (Not really part of the LinearOperator interface.)
-
-        Returns:
-            Gradient and loss on the data set.
-
-        Raises:
-            ValueError: If there is no loss function.
-        """
-        if self._loss_func is None:
-            raise ValueError("No loss function specified.")
-
-        total_loss = tensor([0.0], device=self.device, dtype=self.dtype).squeeze()
-        total_grad = [zeros_like(p) for p in self._params]
-
-        for _, _, loss, grad_params in self.data_prediction_loss_gradient(
-            desc="gradient_and_loss"
-        ):
-            total_loss.add_(loss)
-            for total_g, g in zip(total_grad, grad_params):
-                total_g.add_(g)
-
-        return total_grad, total_loss
-
-    def _check_deterministic(self):
-        """Check that the linear operator is deterministic.
-
-        Non-deterministic behavior is detected if:
-
-        - Two independent applications of matvec onto the same vector yield different
-          results
-        - Two independent total loss/gradient computations yield different results
-        - If ``FIXED_DATA_ORDER`` is ``True`` and any mini-batch quantity differs.
-
-        Raises:
-            RuntimeError: If non-deterministic behavior is detected.
-        """
-        rtol, atol = 5e-5, 1e-6
-
-        if self._loss_func is None:
-            total_grad1, total_grad2 = None, None
-            total_loss1, total_loss2 = None, None
-        else:
-            total_grad1 = [zeros_like(p) for p in self._params]
-            total_grad2 = [zeros_like(p) for p in self._params]
-            total_loss1 = tensor(0.0, device=self.device, dtype=self.dtype)
-            total_loss2 = tensor(0.0, device=self.device, dtype=self.dtype)
-
-        # loop twice over the data loader, accumulate total quantities and compare
-        # batch quantities if the linear operator demands fixed data order
-        for ((X1, y1), pred1, loss1, grad1), ((X2, y2), pred2, loss2, grad2) in zip(
-            self.data_prediction_loss_gradient(), self.data_prediction_loss_gradient()
-        ):
-            if self.FIXED_DATA_ORDER:
-                self.__check_deterministic_batch(
-                    (X1, X2),
-                    (y1, y2),
-                    (pred1, pred2),
-                    (loss1, loss2),
-                    (grad1, grad2),
-                    rtol=rtol,
-                    atol=atol,
-                )
-
-            # accumulate total quantities
-            if self._loss_func is not None:
-                total_loss1.add_(loss1)
-                total_loss2.add_(loss2)
-                for total_g1, g1 in zip(total_grad1, grad1):
-                    total_g1.add_(g1)
-                for total_g2, g2 in zip(total_grad2, grad2):
-                    total_g2.add_(g2)
-
-        if self._loss_func is not None:
-            if not allclose_report(loss1, loss2, rtol=rtol, atol=atol):
-                raise RuntimeError("Check for deterministic total loss failed.")
-
-            if any(
-                not allclose_report(g1, g2, atol=atol, rtol=rtol)
-                for g1, g2 in zip(total_grad1, total_grad2)
-            ):
-                raise RuntimeError("Check for deterministic total gradient failed.")
-
-        self.__check_deterministic_matvec(rtol=rtol, atol=atol)
-
-    def __check_deterministic_batch(
-        self,
-        Xs: Tuple[Union[Tensor, MutableMapping], Union[Tensor, MutableMapping]],
-        ys: Tuple[Tensor, Tensor],
-        predictions: Tuple[Tensor, Tensor],
-        losses: Tuple[Optional[Tensor], Optional[Tensor]],
-        gradients: Tuple[Optional[List[Tensor]], Optional[List[Tensor]]],
-        rtol: float = 1e-5,
-        atol: float = 1e-8,
-    ):
-        """Compare two outputs of ``self.data_prediction_loss_gradient``.
-
-        Args:
-            Xs: The two data inputs to compare.
-            ys: The two data targets to compare.
-            predictions: The two predictions to compare.
-            losses: The two losses to compare.
-            gradients: The two gradients to compare.
-            rtol: Relative tolerance for comparison. Default is 1e-5.
-            atol: Absolute tolerance for comparison. Default is 1e-8.
-
-        Raises:
-            RuntimeError: If any of the pairs mismatch.
-        """
-        X1, X2 = Xs
-        if isinstance(X1, MutableMapping) and isinstance(X2, MutableMapping):
-            for k in X1.keys():
-                v1, v2 = X1[k], X2[k]
-                if isinstance(v1, Tensor) and not allclose_report(
-                    v1, v2, rtol=rtol, atol=atol
-                ):
-                    raise RuntimeError("Check for deterministic X failed.")
-        elif not allclose_report(X1, X2, rtol=rtol, atol=atol):
-            raise RuntimeError("Check for deterministic X failed.")
-
-        y1, y2 = ys
-        if not allclose_report(y1, y2, rtol=rtol, atol=atol):
-            raise RuntimeError("Check for deterministic y failed.")
-
-        pred1, pred2 = predictions
-        if not allclose_report(pred1, pred2, rtol=rtol, atol=atol):
-            raise RuntimeError("Check for deterministic batch prediction failed.")
-
-        loss1, loss2 = losses
-        grad1, grad2 = gradients
-        if self._loss_func is not None:
-            if not allclose_report(loss1, loss2, rtol=rtol, atol=atol):
-                raise RuntimeError("Check for deterministic batch loss failed.")
-
-            if any(
-                not allclose_report(g1, g2, rtol=rtol, atol=atol)
-                for g1, g2 in zip(grad1, grad2)
-            ):
-                raise RuntimeError("Check for deterministic batch gradient failed.")
-
-    def __check_deterministic_matvec(self, rtol: float = 1e-5, atol: float = 1e-8):
-        """Probe whether the linear operator's matrix-vector product is deterministic.
-
-        Performs two sequential matrix-vector products and compares them.
-
-        Args:
-            rtol: Relative tolerance for comparison. Defaults to ``1e-5``.
-            atol: Absolute tolerance for comparison. Defaults to ``1e-8``.
-
-        Raises:
-            RuntimeError: If the two matrix-vector products yield different results.
-        """
-        v = rand(self.shape[1], device=self.device, dtype=self.dtype)
-        Av1 = self @ v
-        Av2 = self @ v
-        if not allclose_report(Av1, Av2, rtol=rtol, atol=atol):
-            raise RuntimeError("Check for deterministic matvec failed.")
-
-    ###############################################################################
-    #                                 SCIPY EXPORT                                #
-    ###############################################################################
-
-    @property
-    def device(self) -> device:
-        """Infer the device onto which to load NumPy vectors for the matrix multiply.
-
-        Returns:
-            Inferred device.
-
-        Raises:
-            RuntimeError: If the device cannot be inferred.
-        """
-        devices = {p.device for p in self._params}
-        if len(devices) != 1:
-            raise RuntimeError(f"Could not infer device. Parameters live on {devices}.")
-        return devices.pop()
-
-    @property
-    def dtype(self) -> dtype:
-        """Infer the data type to which to load NumPy vectors for the matrix multiply.
-
-        Returns:
-            Inferred data type.
-
-        Raises:
-            RuntimeError: If the data type cannot be inferred.
-        """
-        dtypes = {p.dtype for p in self._params}
-        if len(dtypes) != 1:
-            raise RuntimeError(f"Could not infer data type. Parameters have {dtypes}.")
-        return dtypes.pop()

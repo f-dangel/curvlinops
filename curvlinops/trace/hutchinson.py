@@ -1,7 +1,5 @@
 """Vanilla Hutchinson trace estimation."""
 
-from typing import Union
-
 from torch import Tensor, column_stack, einsum
 
 from curvlinops._torch_base import PyTorchLinearOperator
@@ -10,7 +8,7 @@ from curvlinops.utils import assert_is_square, assert_matvecs_subseed_dim
 
 
 def hutchinson_trace(
-    A: Union[Tensor, PyTorchLinearOperator],
+    A: Tensor | PyTorchLinearOperator,
     num_matvecs: int,
     distribution: str = "rademacher",
 ) -> Tensor:

@@ -1,12 +1,19 @@
 """Implements a linear operator for block-diagonal matrices."""
 
-from typing import List
+from __future__ import annotations
+
+from collections.abc import Iterator
 
 from torch import Tensor, device, dtype, stack
 
+from curvlinops._checks import (
+    _check_same_device,
+    _check_same_dtype,
+    _check_same_tensor_list_shape,
+)
 from curvlinops._torch_base import PyTorchLinearOperator
 from curvlinops.kronecker import ensure_all_square
-from curvlinops.utils import split_list
+from curvlinops.utils import _infer_device, _infer_dtype, split_list
 
 
 class BlockDiagonalLinearOperator(PyTorchLinearOperator):
@@ -20,7 +27,7 @@ class BlockDiagonalLinearOperator(PyTorchLinearOperator):
     where each Bi is itself a PyTorch linear operator.
     """
 
-    def __init__(self, blocks: List[PyTorchLinearOperator]):
+    def __init__(self, blocks: list[PyTorchLinearOperator]):
         """Initialize the block-diagonal linear operator.
 
         Args:
@@ -46,7 +53,50 @@ class BlockDiagonalLinearOperator(PyTorchLinearOperator):
         # Block diagonal is self-adjoint if all blocks are self-adjoint
         self.SELF_ADJOINT = all(B.SELF_ADJOINT for B in blocks)
 
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+    def __iter__(self) -> Iterator[PyTorchLinearOperator]:
+        """Iterate over the diagonal blocks.
+
+        Returns:
+            Iterator over the block linear operators.
+        """
+        return iter(self._blocks)
+
+    def __len__(self) -> int:
+        """Return the number of diagonal blocks.
+
+        Returns:
+            The number of blocks.
+        """
+        return len(self._blocks)
+
+    def __getitem__(self, index: int) -> PyTorchLinearOperator:
+        """Get a block by index.
+
+        Args:
+            index: Index of the block.
+
+        Returns:
+            The block at the given index.
+        """
+        return self._blocks[index]
+
+    def __setitem__(self, index: int, value: PyTorchLinearOperator):
+        """Replace a block by index.
+
+        The replacement must have the same shape, device, and dtype as
+        the block it replaces.
+
+        Args:
+            index: Index of the block to replace.
+            value: The new block.
+        """
+        old = self._blocks[index]
+        _check_same_tensor_list_shape(old, value)
+        _check_same_device(old, value)
+        _check_same_dtype(old, value)
+        self._blocks[index] = value
+
+    def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         """Matrix-matrix multiplication with block-diagonal structure.
 
         Args:
@@ -60,7 +110,7 @@ class BlockDiagonalLinearOperator(PyTorchLinearOperator):
         # Multiply per-block and concatenate the resulting lists into the result
         return sum([B @ X_B for B, X_B in zip(self._blocks, X_blocks)], start=[])
 
-    def _adjoint(self) -> "BlockDiagonalLinearOperator":
+    def _adjoint(self) -> BlockDiagonalLinearOperator:
         """Return the adjoint of the block-diagonal linear operator.
 
         The adjoint of a block-diagonal matrix is block-diagonal with adjoint blocks.
@@ -77,14 +127,8 @@ class BlockDiagonalLinearOperator(PyTorchLinearOperator):
 
         Returns:
             Device of the blocks.
-
-        Raises:
-            RuntimeError: If blocks have inconsistent devices.
         """
-        devices = {block.device for block in self._blocks}
-        if len(devices) > 1:
-            raise RuntimeError(f"Blocks have inconsistent devices: {devices}")
-        return devices.pop()
+        return _infer_device(self._blocks)
 
     @property
     def dtype(self) -> dtype:
@@ -92,14 +136,8 @@ class BlockDiagonalLinearOperator(PyTorchLinearOperator):
 
         Returns:
             Data type of the blocks.
-
-        Raises:
-            RuntimeError: If blocks have inconsistent dtypes.
         """
-        dtypes = {block.dtype for block in self._blocks}
-        if len(dtypes) > 1:
-            raise RuntimeError(f"Blocks have inconsistent dtypes: {dtypes}")
-        return dtypes.pop()
+        return _infer_dtype(self._blocks)
 
     def trace(self) -> Tensor:
         """Trace of the block-diagonal matrix.

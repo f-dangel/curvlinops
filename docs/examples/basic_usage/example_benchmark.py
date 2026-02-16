@@ -16,6 +16,7 @@ Let's get the imports out of the way.
 
 import inspect
 import json
+from collections.abc import Iterable
 from contextlib import nullcontext
 from itertools import product
 from math import floor
@@ -23,7 +24,6 @@ from os import environ, makedirs, path
 from shutil import which
 from subprocess import CalledProcessError, CompletedProcess, run
 from time import perf_counter
-from typing import Iterable, List, Tuple
 
 import matplotlib.pyplot as plt
 from benchmark_utils import (
@@ -53,10 +53,10 @@ from curvlinops import (
     FisherMCLinearOperator,
     GGNLinearOperator,
     HessianLinearOperator,
-    KFACInverseLinearOperator,
     KFACLinearOperator,
 )
 from curvlinops._torch_base import PyTorchLinearOperator
+from curvlinops.examples import gradient_and_loss
 
 # %%
 #
@@ -122,7 +122,7 @@ else:
 
 def setup_synthetic_mnist_cnn(
     batch_size: int = 512,
-) -> Tuple[Sequential, CrossEntropyLoss, List[Tuple[Tensor, Tensor]]]:
+) -> tuple[Sequential, CrossEntropyLoss, list[tuple[Tensor, Tensor]]]:
     """Set up a synthetic MNIST CNN problem for the benchmark.
 
     Args:
@@ -156,7 +156,7 @@ def setup_synthetic_mnist_cnn(
 
 def setup_problem(
     problem_str: str, linop_str: str, dev: device
-) -> Tuple[Module, Module, List[Parameter], Iterable[Tuple[Tensor, Tensor]]]:
+) -> tuple[Module, Module, list[Parameter], Iterable[tuple[Tensor, Tensor]]]:
     """Set up the neural net, loss function, parameters, and data.
 
     Args:
@@ -231,8 +231,8 @@ def setup_linop(
     linop_str: str,
     model: Module,
     loss_function: Module,
-    params: List[Parameter],
-    data: Iterable[Tuple[Tensor, Tensor]],
+    params: list[Parameter],
+    data: Iterable[tuple[Tensor, Tensor]],
     check_deterministic: bool = True,
 ) -> PyTorchLinearOperator:
     """Set up the linear operator.
@@ -294,13 +294,9 @@ def setup_linop(
     with sdpa_kernel(SDPBackend.MATH) if attention_double_backward else nullcontext():
         linop = linop_cls(*args, **kwargs)
 
-    if linop_str in {"KFAC inverse", "EKFAC inverse"}:
-        linop = KFACInverseLinearOperator(
-            linop,
-            damping=1e-3,
-            cache=True,
-            use_exact_damping=linop_str == "EKFAC inverse",
-        )
+    is_inverse = linop_str in {"KFAC inverse", "EKFAC inverse"}
+    if is_inverse:
+        linop = linop.inverse(damping=1e-3)
 
     return linop
 
@@ -384,30 +380,21 @@ def run_time_benchmark(  # noqa: C901
     dev = device(device_str)
     is_cuda = "cuda" in str(dev)
     model, loss_function, params, data = setup_problem(problem_str, linop_str, dev)
+
+    # Select function that will be profiled
+    def f_gradient_and_loss():
+        _ = gradient_and_loss(model, loss_function, params, data)
+
+    def f_precompute():
+        _ = setup_linop(
+            linop_str, model, loss_function, params, data, check_deterministic=False
+        )
+
+    # Generate one linear operator and vector for multiplication
     linop = setup_linop(
         linop_str, model, loss_function, params, data, check_deterministic=False
     )
     v = rand(linop.shape[1], device=dev)
-
-    # Select function that will be profiled
-    def f_gradient_and_loss():
-        if isinstance(linop, KFACInverseLinearOperator):
-            _ = linop._A.gradient_and_loss()
-        else:
-            _ = linop.gradient_and_loss()
-
-    def f_precompute():
-        if isinstance(linop, (KFACLinearOperator, EKFACLinearOperator)):
-            linop.compute_kronecker_factors()
-        if isinstance(linop, EKFACLinearOperator):
-            linop.compute_eigenvalue_correction()
-        if isinstance(linop, KFACInverseLinearOperator):
-            linop._A.compute_kronecker_factors()
-            if isinstance(linop._A, EKFACLinearOperator):
-                linop._A.compute_eigenvalue_correction()
-            # damp and invert the Kronecker matrices
-            for mod_name in linop._A._mapping:
-                linop._compute_or_get_cached_inverse(mod_name)
 
     def f_matvec():
         # Double-backward through efficient attention is unsupported, disable fused kernels
@@ -479,8 +466,8 @@ if __name__ == "__main__":
 
 
 def visualize_time_benchmark(
-    linop_strs: List[str], problem_str: str, device_str: str
-) -> Tuple[plt.Figure, plt.Axes]:
+    linop_strs: list[str], problem_str: str, device_str: str
+) -> tuple[plt.Figure, plt.Axes]:
     """Visualize the run time benchmark results.
 
     Args:
@@ -618,7 +605,7 @@ if __name__ == "__main__":
 # the call to ``memory_benchmark.py``, and troubleshoot if the call fails:
 
 
-def run_verbose(cmd: List[str]) -> CompletedProcess:
+def run_verbose(cmd: list[str]) -> CompletedProcess:
     """Run a command and print stdout & stderr if it fails.
 
     Args:
@@ -673,8 +660,8 @@ if __name__ == "__main__":
 
 
 def visualize_peakmem_benchmark(
-    linop_strs: List[str], problem_str: str, device_str: str
-) -> Tuple[plt.Figure, plt.Axes]:
+    linop_strs: list[str], problem_str: str, device_str: str
+) -> tuple[plt.Figure, plt.Axes]:
     """Visualize the peak memory benchmark results.
 
     Args:

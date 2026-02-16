@@ -1,7 +1,6 @@
 """Test ``curvlinops.diagonal.epperly2024xtrace``."""
 
 from functools import partial
-from typing import Union
 
 from pytest import mark
 from torch import Tensor, column_stack, manual_seed, rand
@@ -14,7 +13,7 @@ from test.diagonal import NUM_MATVEC_IDS, NUM_MATVECS
 from test.utils import check_estimator_convergence
 
 
-def xdiag_naive(A: Union[PyTorchLinearOperator, Tensor], num_matvecs: int) -> Tensor:
+def xdiag_naive(A: PyTorchLinearOperator | Tensor, num_matvecs: int) -> Tensor:
     """Naive reference implementation of XDiag.
 
     See Section 2.4 in https://arxiv.org/pdf/2301.07825.

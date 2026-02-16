@@ -14,6 +14,9 @@ Generalized Gauss-Newton
 .. autoclass:: curvlinops.GGNLinearOperator
    :members: __init__
 
+.. autoclass:: curvlinops.GGNDiagonalLinearOperator
+   :members: __init__
+
 Fisher (approximate)
 --------------------
 
@@ -21,10 +24,10 @@ Fisher (approximate)
    :members: __init__
 
 .. autoclass:: curvlinops.KFACLinearOperator
-   :members: __init__, trace, det, logdet, frobenius_norm, state_dict, load_state_dict, from_state_dict
+   :members: __init__, inverse, trace, det, logdet, frobenius_norm
 
 .. autoclass:: curvlinops.EKFACLinearOperator
-   :members: __init__, trace, det, logdet, frobenius_norm, state_dict, load_state_dict, from_state_dict
+   :members: __init__, inverse, trace, det, logdet, frobenius_norm
 
 .. autoclass:: curvlinops.FisherType
 
@@ -55,9 +58,6 @@ Inverses
    :members: __init__
 
 .. autoclass:: curvlinops.NeumannInverseLinearOperator
-   :members: __init__
-
-.. autoclass:: curvlinops.KFACInverseLinearOperator
    :members: __init__
 
 Sub-matrices

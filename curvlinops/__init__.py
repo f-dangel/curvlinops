@@ -5,11 +5,11 @@ from curvlinops.diagonal.hutchinson import hutchinson_diag
 from curvlinops.ekfac import EKFACLinearOperator
 from curvlinops.fisher import FisherMCLinearOperator
 from curvlinops.ggn import GGNLinearOperator
+from curvlinops.ggn_diagonal import GGNDiagonalLinearOperator
 from curvlinops.gradient_moments import EFLinearOperator
 from curvlinops.hessian import HessianLinearOperator
 from curvlinops.inverse import (
     CGInverseLinearOperator,
-    KFACInverseLinearOperator,
     LSMRInverseLinearOperator,
     NeumannInverseLinearOperator,
 )
@@ -31,6 +31,7 @@ __all__ = [
     # linear operators
     "HessianLinearOperator",
     "GGNLinearOperator",
+    "GGNDiagonalLinearOperator",
     "EFLinearOperator",
     "FisherMCLinearOperator",
     "KFACLinearOperator",
@@ -44,7 +45,6 @@ __all__ = [
     "CGInverseLinearOperator",
     "LSMRInverseLinearOperator",
     "NeumannInverseLinearOperator",
-    "KFACInverseLinearOperator",
     # slicing
     "SubmatrixLinearOperator",
     # spectral properties

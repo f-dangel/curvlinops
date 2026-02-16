@@ -33,7 +33,7 @@ from curvlinops import (
     GGNLinearOperator,
     NeumannInverseLinearOperator,
 )
-from curvlinops.examples import IdentityLinearOperator
+from curvlinops.examples import IdentityLinearOperator, gradient_and_loss
 from curvlinops.examples.functorch import functorch_ggn, functorch_gradient_and_loss
 from curvlinops.utils import allclose_report
 
@@ -104,9 +104,9 @@ inverse_damped_GGN = CGInverseLinearOperator(
 # Gradient
 # --------
 #
-# We can obtain the gradient via a convenience function of :code:`GGNLinearOperator`:
+# We can obtain the gradient via a convenience function from :code:`curvlinops.examples`:
 
-gradient, _ = GGN.gradient_and_loss()
+gradient, _ = gradient_and_loss(model, loss_function, params, data)
 # flatten and concatenate
 gradient = parameters_to_vector(gradient).detach()
 
