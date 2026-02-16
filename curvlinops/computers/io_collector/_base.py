@@ -1,7 +1,7 @@
 """Base classes and utilities for parameter usage pattern matching in FX graphs."""
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 from torch.fx import Node
 
@@ -29,16 +29,16 @@ class AffineLayerInfo:
 
     operation: str
     y: Node
-    W: Union[Node, None, str]
+    W: Node | None | str
     x: Node
-    b: Union[Node, None, str]
-    hyperparams: Dict[str, Any]
+    b: Node | None | str
+    hyperparams: dict[str, Any]
 
 
 def as_tuple(
     info: AffineLayerInfo,
-    node_name_to_param_name: Dict[str, str],
-) -> Tuple[str, Node, Node, Optional[str], Optional[str], Dict[str, Any]]:
+    node_name_to_param_name: dict[str, str],
+) -> tuple[str, Node, Node, str | None, str | None, dict[str, Any]]:
     """Create a layer info tuple from an AffineLayerInfo object.
 
     Args:
@@ -80,7 +80,7 @@ class _PatternMatcher:
     (e.g., linear layers with/without bias).
     """
 
-    def matches(self, p_node: Node) -> Tuple[List[Any], List[Tuple[Node, ...]]]:
+    def matches(self, p_node: Node) -> tuple[list[Any], list[tuple[Node, ...]]]:
         """Attempt to match a parameter node to known usage patterns.
 
         Args:

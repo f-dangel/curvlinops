@@ -1,6 +1,6 @@
 """Tests for with_param_io: collecting parameter in- and output relationships."""
 
-from typing import Any, Dict, Tuple, Union
+from typing import Any
 
 from pytest import raises
 from torch import Tensor, arange, manual_seed, rand, zeros, zeros_like
@@ -16,8 +16,8 @@ from curvlinops.utils import allclose_report
 
 
 def compare_io(
-    info: Tuple[Tuple[Union[str, Tensor, None, Dict[str, Any]], ...], ...],
-    info_true: Tuple[Tuple[Union[str, Tensor, None, Dict[str, Any]], ...], ...],
+    info: tuple[tuple[str | Tensor | None | dict[str, Any], ...], ...],
+    info_true: tuple[tuple[str | Tensor | None | dict[str, Any], ...], ...],
 ) -> None:
     """Compare two layer info tuple collections for equality.
 
@@ -44,8 +44,8 @@ def compare_io(
 def _verify_io(
     f,
     x: Tensor,
-    params: Dict[str, Tensor],
-    io_true: Tuple[Tuple[Union[str, Tensor, None, Dict[str, Any]], ...], ...],
+    params: dict[str, Tensor],
+    io_true: tuple[tuple[str | Tensor | None | dict[str, Any], ...], ...],
 ) -> None:
     """Verify that with_param_io produces correct outputs and IO information.
 

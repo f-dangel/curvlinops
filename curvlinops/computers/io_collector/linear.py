@@ -1,7 +1,5 @@
 """Pattern matching for detecting linear layer operations and parameter usage."""
 
-from typing import List, Tuple
-
 from torch.fx import Node
 from torch.ops import aten
 
@@ -22,7 +20,7 @@ class LinearWeightMatcher(_PatternMatcher):
 
     def matches(
         self, p_node: Node
-    ) -> Tuple[List[AffineLayerInfo], List[Tuple[Node, ...]]]:
+    ) -> tuple[list[AffineLayerInfo], list[tuple[Node, ...]]]:
         """Match a parameter node used as weight in linear layers.
 
         Args:
@@ -85,7 +83,7 @@ class LinearBiasMatcher(_PatternMatcher):
 
     def matches(
         self, p_node: Node
-    ) -> Tuple[List[AffineLayerInfo], List[Tuple[Node, ...]]]:
+    ) -> tuple[list[AffineLayerInfo], list[tuple[Node, ...]]]:
         """Match a parameter node used as bias in linear layers.
 
         Args:

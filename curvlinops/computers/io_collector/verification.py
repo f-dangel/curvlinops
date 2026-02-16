@@ -1,13 +1,13 @@
 """Function to verify that all usages of parameters were captured."""
 
-from typing import Iterator, List, Optional, Tuple
+from collections.abc import Iterator
 
 from torch.fx import Node
 
 
 def _truncate_to_mismatch(
-    path: Tuple[Node, ...], detected_paths_from_p: List[Tuple[Node, ...]]
-) -> Tuple[Node, ...]:
+    path: tuple[Node, ...], detected_paths_from_p: list[tuple[Node, ...]]
+) -> tuple[Node, ...]:
     """Truncate a path to show only up to the first mismatching node.
 
     Args:
@@ -36,8 +36,8 @@ def _truncate_to_mismatch(
 
 
 def _find_all_paths_from(
-    node: Node, max_length: Optional[int] = None
-) -> Iterator[Tuple[Node, ...]]:
+    node: Node, max_length: int | None = None
+) -> Iterator[tuple[Node, ...]]:
     """Find all usage paths starting from a node.
 
     Args:
@@ -50,8 +50,8 @@ def _find_all_paths_from(
     """
 
     def _traverse_from_node(
-        current_node: Node, path: Tuple[Node, ...]
-    ) -> Iterator[Tuple[Node, ...]]:
+        current_node: Node, path: tuple[Node, ...]
+    ) -> Iterator[tuple[Node, ...]]:
         # Always yield the current path (we want all paths up to max_length)
         yield path
 
@@ -72,8 +72,8 @@ def _find_all_paths_from(
 
 
 def verify_match_complete(
-    param_nodes: List[Node],
-    detected_paths: List[Tuple[Node, ...]],
+    param_nodes: list[Node],
+    detected_paths: list[tuple[Node, ...]],
 ) -> None:
     """Verify that all parameter usages were detected by pattern matching.
 
