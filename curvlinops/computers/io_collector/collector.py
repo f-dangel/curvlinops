@@ -217,7 +217,7 @@ def _process_layer_info_tuple(
     layer_info_tuple: LayerInfoTuple,
     op_to_prefix: dict[str, str],
     counts: dict[str, int],
-    fisher_type: str,
+    fisher_type: FisherType,
 ) -> tuple[str, bool, bool, dict[str, str], dict[str, Any]]:
     """Process a single layer info tuple to extract configuration.
 
@@ -244,7 +244,7 @@ def _process_layer_info_tuple(
 
     # Determine what to store based on parameter types and Fisher type
     store_input = weight_name != NOT_A_PARAM
-    store_output = fisher_type != "forward-only" and (
+    store_output = fisher_type != FisherType.FORWARD_ONLY and (
         weight_name != NOT_A_PARAM or bias_name not in {None, NOT_A_PARAM}
     )
 
@@ -262,7 +262,7 @@ def with_kfac_io(
     f: Callable[[Tensor, dict[str, Tensor]], Tensor],
     x: Tensor,
     named_params: dict[str, Tensor],
-    fisher_type: str,
+    fisher_type: FisherType,
 ) -> KFACIOFunction:
     """Return a function that collects layer inputs/outputs for KFAC computation.
 
@@ -277,8 +277,8 @@ def with_kfac_io(
         x: Example input tensor for tracing. Must be representative of actual inputs.
         named_params: Dictionary mapping parameter names to parameter tensors. Keys should
             match parameter names used in function f.
-        fisher_type: Type of Fisher information computation. Must be one of the values
-            from FisherType enum (e.g., "empirical", "forward-only").
+        fisher_type: Type of Fisher information computation (e.g.,
+            ``FisherType.EMPIRICAL``, ``FisherType.FORWARD_ONLY``).
 
     Returns:
         A traced function with the same signature as f but returning a 5-tuple:
@@ -290,8 +290,14 @@ def with_kfac_io(
             - Layer hyperparameters (dict[str, dict[str, Any]]): Maps layer names to
               hyperparameter dictionaries (empty for linear layers, contains stride/padding/etc
               for convolution layers)
+
+    Raises:
+        ValueError: If ``fisher_type`` is not a valid ``FisherType``.
     """
-    assert fisher_type in FisherType
+    if fisher_type not in FisherType:
+        raise ValueError(
+            f"Unknown fisher_type '{fisher_type}'. Must be one of {list(FisherType)}."
+        )
     f_with_param_io = with_param_io(f, x, named_params)
 
     # Extract layer info from the traced function's output structure

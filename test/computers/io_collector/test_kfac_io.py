@@ -33,7 +33,7 @@ def _verify_kfac_io(
     f,
     x: Tensor,
     params: dict[str, Tensor],
-    fisher_type: str,
+    fisher_type: FisherType,
     kfac_io_true: tuple[
         Tensor,
         dict[str, Tensor],
