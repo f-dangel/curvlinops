@@ -19,8 +19,8 @@ class AffineLayerInfo:
     Attributes:
         operation: Name of the operation (e.g., "Linear(y=W@x+b)").
         y: The FX node representing the output of the affine operation.
-        W: The FX node representing the weight parameter, None if no weight,
-            or NOT_A_PARAM if weight exists but is not tracked.
+        W: The FX node representing the weight parameter, or NOT_A_PARAM if
+            weight exists but is not a tracked parameter.
         x: The FX node representing the input to the affine operation.
         b: The FX node representing the bias parameter, None if no bias,
             or NOT_A_PARAM if bias exists but is not tracked.
@@ -29,7 +29,7 @@ class AffineLayerInfo:
 
     operation: str
     y: Node
-    W: Node | None | str
+    W: Node | str
     x: Node
     b: Node | None | str
     hyperparams: dict[str, Any]
@@ -51,10 +51,8 @@ def as_tuple(
     """
     if isinstance(info.W, str):
         weight_name = info.W  # Should be NOT_A_PARAM
-    elif info.W is not None:
-        weight_name = node_name_to_param_name.get(info.W.name, NOT_A_PARAM)
     else:
-        weight_name = NOT_A_PARAM
+        weight_name = node_name_to_param_name.get(info.W.name, NOT_A_PARAM)
 
     if isinstance(info.b, str):
         bias_name = info.b  # Should be NOT_A_PARAM
