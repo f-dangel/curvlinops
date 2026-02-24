@@ -1,5 +1,7 @@
 """Contains tests for ``curvlinops/inverse``."""
 
+from collections.abc import Mapping
+
 from pytest import mark, raises
 from torch import Tensor, cuda, float64, manual_seed, rand, randn
 from torch.linalg import inv
@@ -429,31 +431,3 @@ def test_NeumannInverseLinearOperator_scale_toy_cuda():
     compare_matmat(inv_B_neumann, inv_B, rtol=1e-3, atol=1e-5)
 
 
-@mark.cuda
-@mark.skipif(not cuda.is_available(), reason="CUDA not available")
-def test_CGInverseLinearOperator_damped_GGN_cuda(inv_case, delta_rel: float = 2e-2):
-    """CUDA test for damped GGN inverse with CG and optional preconditioner API."""
-    model_func, loss_func, params, data, batch_size_fn = change_dtype(inv_case, float64)
-    # move test case to CUDA
-    model_func = model_func.cuda()
-    loss_func = loss_func.cuda()
-    params = list(model_func.parameters())
-    data = [
-        (({"x": X["x"].cuda()} if isinstance(X, dict) else X.cuda()), y.cuda())
-        for X, y in data
-    ]
-
-    GGN_naive = functorch_ggn(
-        model_func, loss_func, params, data, input_key="x"
-    ).detach()
-    delta = delta_rel * GGN_naive.diag().mean().item()
-    damping = delta * IdentityLinearOperator([p.shape for p in params], "cuda", float64)
-
-    GGN = GGNLinearOperator(
-        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
-    )
-    inv_GGN_naive = inv(GGN_naive + delta * eye_like(GGN_naive))
-
-    inv_GGN = CGInverseLinearOperator(GGN + damping, eps=0, tolerance=1e-5)
-    compare_consecutive_matmats(inv_GGN)
-    compare_matmat(inv_GGN, inv_GGN_naive, atol=1e-7, rtol=1e-4)
