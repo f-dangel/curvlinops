@@ -278,9 +278,10 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
                 series. Default: ``True``.
             preconditioner: Optional preconditioner ``P`` used in the preconditioned
                 Neumann/Richardson iteration
-                ``A^{-1} \approx \sum_{k=0}^{K} (I - P A)^k P``. Should approximate
-                ``A^{-1}`` and have the same in-/out-shapes as ``A``. If provided,
-                ``scale`` is ignored. Default: ``None``.
+                ``A^{-1} \approx \alpha \sum_{k=0}^{K} (I - \alpha P A)^k P``,
+                where ``alpha`` is given by ``scale``. Should approximate
+                ``A^{-1}`` and have the same in-/out-shapes as ``A``.
+                Default: ``None``.
 
         Raises:
             ValueError: If ``preconditioner`` is provided with incompatible shapes.
@@ -332,13 +333,17 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
             return [result.mul_(self._scale) for result in result_list]
 
         # Preconditioned Neumann/Richardson series:
-        # A^{-1} ≈ Σ_{k=0}^{K} (I - P A)^k P
-        v_list = self._preconditioner._matmat(X)
+        # A^{-1} ≈ α Σ_{k=0}^{K} (I - α P A)^k P
+        # Use the public matmul interface so tensor/list pre-/post-processing stays
+        # consistent across all preconditioner operator types.
+        v_list = [v.mul(self._scale) for v in (self._preconditioner @ X)]
         result_list = [v.clone() for v in v_list]
 
         for idx in range(self._num_terms):
-            PA_v_list = self._preconditioner._matmat(self._A._matmat(v_list))
-            v_list = [v.sub_(PA_v) for v, PA_v in zip(v_list, PA_v_list)]
+            PA_v_list = self._preconditioner @ (self._A @ v_list)
+            v_list = [
+                v.sub_(PA_v, alpha=self._scale) for v, PA_v in zip(v_list, PA_v_list)
+            ]
             result_list = [result.add_(v) for result, v in zip(result_list, v_list)]
 
             if self._check_nan and any(isnan(v).any() for v in v_list):
