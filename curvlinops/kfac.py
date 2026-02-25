@@ -85,6 +85,7 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
     """
 
     _COMPUTER_CLS = KFACComputer
+    _MAKE_FX_COMPUTER_CLS = MakeFxKFACComputer
     _SUPPORTED_BACKENDS: tuple[str, ...] = ("hooks", "make_fx")
     SELF_ADJOINT: bool = True
 
@@ -178,7 +179,9 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
             raise ValueError(
                 f"Invalid backend: {backend!r}. Supported: {self._SUPPORTED_BACKENDS}."
             )
-        computer_cls = self._COMPUTER_CLS if backend == "hooks" else MakeFxKFACComputer
+        computer_cls = (
+            self._COMPUTER_CLS if backend == "hooks" else self._MAKE_FX_COMPUTER_CLS
+        )
         computer = computer_cls(
             model_func,
             loss_func,

@@ -3,6 +3,7 @@
 from curvlinops._torch_base import _ChainPyTorchLinearOperator
 from curvlinops.blockdiagonal import BlockDiagonalLinearOperator
 from curvlinops.computers.ekfac import EKFACComputer
+from curvlinops.computers.ekfac_make_fx import MakeFxEKFACComputer
 from curvlinops.eigh import EighDecomposedLinearOperator
 from curvlinops.kfac import KFACLinearOperator
 from curvlinops.kronecker import KroneckerProductLinearOperator
@@ -25,7 +26,8 @@ class EKFACLinearOperator(KFACLinearOperator):
     """
 
     _COMPUTER_CLS = EKFACComputer
-    _SUPPORTED_BACKENDS: tuple[str, ...] = ("hooks",)
+    _MAKE_FX_COMPUTER_CLS = MakeFxEKFACComputer
+    _SUPPORTED_BACKENDS: tuple[str, ...] = ("hooks", "make_fx")
 
     @staticmethod
     def _compute_canonical_op(computer: EKFACComputer) -> BlockDiagonalLinearOperator:

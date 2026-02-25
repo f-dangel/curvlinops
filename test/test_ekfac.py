@@ -865,3 +865,151 @@ def test_EKFAC_inverse_exactly_damped_matmat(
 
     compare_consecutive_matmats(inv_EKFAC)
     compare_matmat(inv_EKFAC, inv_EKFAC_naive)
+
+
+"""EKFACLinearOperator make_fx backend tests."""
+
+
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+@mark.parametrize(
+    "fisher_type",
+    [FisherType.TYPE2, FisherType.EMPIRICAL],
+    ids=["type2", "empirical"],
+)
+def test_ekfac_make_fx_vs_hooks_linear(
+    fisher_type: str,
+    separate_weight_and_bias: bool,
+):
+    """Test that the make_fx backend produces the same EKFAC as hooks for Linear models.
+
+    Note: MC Fisher type is not tested because ``make_fx`` cannot trace
+    ``torch._C.Generator`` objects used by the MC sampler.
+
+    Args:
+        fisher_type: The Fisher type to test.
+        separate_weight_and_bias: Whether to treat weights and biases separately.
+    """
+    manual_seed(0)
+    model = Sequential(Linear(6, 4), Linear(4, 3))
+    loss_func = MSELoss()
+    params = list(model.parameters())
+    data = [
+        (rand(2, 6), regression_targets((2, 3))),
+        (rand(5, 6), regression_targets((5, 3))),
+    ]
+
+    common_kwargs = dict(
+        check_deterministic=False,
+        fisher_type=fisher_type,
+        separate_weight_and_bias=separate_weight_and_bias,
+    )
+    EKFAC_hooks = EKFACLinearOperator(
+        model, loss_func, params, data, backend="hooks", **common_kwargs
+    )
+    EKFAC_make_fx = EKFACLinearOperator(
+        model, loss_func, params, data, backend="make_fx", **common_kwargs
+    )
+
+    hooks_mat = EKFAC_hooks @ eye_like(EKFAC_hooks)
+    make_fx_mat = EKFAC_make_fx @ eye_like(EKFAC_make_fx)
+    assert allclose_report(hooks_mat, make_fx_mat)
+
+
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+@mark.parametrize(
+    "fisher_type",
+    [FisherType.TYPE2, FisherType.EMPIRICAL],
+    ids=["type2", "empirical"],
+)
+def test_ekfac_make_fx_vs_hooks_cnn(
+    fisher_type: str,
+    separate_weight_and_bias: bool,
+):
+    """Test that the make_fx backend produces the same EKFAC as hooks for CNN models.
+
+    EKFAC requires 2d output, so we use a CNN with pooling + flatten + linear.
+
+    Args:
+        fisher_type: The Fisher type to test.
+        separate_weight_and_bias: Whether to treat weights and biases separately.
+    """
+    from torch.nn import AdaptiveAvgPool2d, Conv2d, Flatten, ReLU
+
+    manual_seed(0)
+    model = Sequential(
+        Conv2d(3, 2, kernel_size=3, padding=1),
+        ReLU(),
+        AdaptiveAvgPool2d(1),
+        Flatten(),
+        Linear(2, 3),
+    )
+    loss_func = MSELoss()
+    params = list(model.parameters())
+    data = [
+        (rand(2, 3, 4, 4), regression_targets((2, 3))),
+        (rand(3, 3, 4, 4), regression_targets((3, 3))),
+    ]
+
+    common_kwargs = dict(
+        check_deterministic=False,
+        fisher_type=fisher_type,
+        kfac_approx=KFACType.REDUCE,
+        separate_weight_and_bias=separate_weight_and_bias,
+    )
+    EKFAC_hooks = EKFACLinearOperator(
+        model, loss_func, params, data, backend="hooks", **common_kwargs
+    )
+    EKFAC_make_fx = EKFACLinearOperator(
+        model, loss_func, params, data, backend="make_fx", **common_kwargs
+    )
+
+    hooks_mat = EKFAC_hooks @ eye_like(EKFAC_hooks)
+    make_fx_mat = EKFAC_make_fx @ eye_like(EKFAC_make_fx)
+    assert allclose_report(hooks_mat, make_fx_mat)
+
+
+def test_ekfac_make_fx_flatten_different_batch_sizes():
+    """Test make_fx EKFAC with nn.Flatten and different batch sizes.
+
+    ``nn.Flatten`` produces ``aten.view`` with a baked-in batch size during
+    real-mode ``make_fx`` tracing, so a single traced function cannot handle
+    multiple batch sizes. This test verifies that the per-batch-size caching
+    in ``MakeFxEKFACComputer`` handles this correctly for both the Kronecker
+    factor pass and the eigenvalue correction pass.
+    """
+    from torch.nn import AdaptiveAvgPool2d, Conv2d, Flatten
+
+    manual_seed(0)
+    model = Sequential(
+        Conv2d(3, 2, kernel_size=3, padding=1),
+        AdaptiveAvgPool2d(2),
+        Flatten(),
+        Linear(2 * 2 * 2, 3),
+    )
+    loss_func = MSELoss()
+    params = list(model.parameters())
+    # Two batches with different sizes to exercise per-batch-size caching
+    data = [
+        (rand(2, 3, 4, 4), regression_targets((2, 3))),
+        (rand(5, 3, 4, 4), regression_targets((5, 3))),
+    ]
+
+    common_kwargs = dict(
+        check_deterministic=False,
+        fisher_type=FisherType.EMPIRICAL,
+        kfac_approx=KFACType.REDUCE,
+    )
+    EKFAC_hooks = EKFACLinearOperator(
+        model, loss_func, params, data, backend="hooks", **common_kwargs
+    )
+    EKFAC_make_fx = EKFACLinearOperator(
+        model, loss_func, params, data, backend="make_fx", **common_kwargs
+    )
+
+    hooks_mat = EKFAC_hooks @ eye_like(EKFAC_hooks)
+    make_fx_mat = EKFAC_make_fx @ eye_like(EKFAC_make_fx)
+    assert allclose_report(hooks_mat, make_fx_mat)

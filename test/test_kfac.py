@@ -5,7 +5,7 @@ from math import sqrt
 from pathlib import Path
 
 from einops.layers.torch import Rearrange
-from pytest import mark, raises
+from pytest import mark
 from torch import (
     Tensor,
     allclose,
@@ -1446,24 +1446,3 @@ def test_kfac_make_fx_flatten_different_batch_sizes():
     hooks_mat = KFAC_hooks @ eye_like(KFAC_hooks)
     make_fx_mat = KFAC_make_fx @ eye_like(KFAC_make_fx)
     assert allclose_report(hooks_mat, make_fx_mat)
-
-
-def test_ekfac_rejects_make_fx():
-    """Test that EKFACLinearOperator rejects the make_fx backend."""
-    from curvlinops.ekfac import EKFACLinearOperator
-
-    manual_seed(0)
-    model = Sequential(Linear(4, 3))
-    loss_func = MSELoss()
-    params = list(model.parameters())
-    data = [(rand(2, 4), regression_targets((2, 3)))]
-
-    with raises(ValueError, match="Invalid backend"):
-        EKFACLinearOperator(
-            model,
-            loss_func,
-            params,
-            data,
-            check_deterministic=False,
-            backend="make_fx",
-        )
