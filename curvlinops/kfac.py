@@ -30,6 +30,7 @@ from torch.nn import (
 from curvlinops._torch_base import _ChainPyTorchLinearOperator
 from curvlinops.blockdiagonal import BlockDiagonalLinearOperator
 from curvlinops.computers.kfac import FisherType, KFACComputer, KFACType
+from curvlinops.computers.kfac_make_fx import MakeFxKFACComputer
 from curvlinops.kfac_utils import (
     FromCanonicalLinearOperator,
     ToCanonicalLinearOperator,
@@ -84,6 +85,7 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
     """
 
     _COMPUTER_CLS = KFACComputer
+    _SUPPORTED_BACKENDS: tuple[str, ...] = ("hooks", "make_fx")
     SELF_ADJOINT: bool = True
 
     def __init__(
@@ -102,6 +104,7 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
         separate_weight_and_bias: bool = True,
         num_data: int | None = None,
         batch_size_fn: Callable[[MutableMapping | Tensor], int] | None = None,
+        backend: str = "hooks",
     ):
         """Kronecker-factored approximate curvature (KFAC) proxy of the Fisher/GGN.
 
@@ -163,8 +166,20 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
             batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
                 needs to be specified. The intended behavior is to consume the first
                 entry of the iterates from ``data`` and return their batch size.
+            backend: The backend to use for computing Kronecker factors.
+                ``"hooks"`` uses forward/backward hooks (default).
+                ``"make_fx"`` uses FX graph tracing via the IO collector.
+                Defaults to ``"hooks"``.
+
+        Raises:
+            ValueError: If ``backend`` is not supported.
         """
-        computer = self._COMPUTER_CLS(
+        if backend not in self._SUPPORTED_BACKENDS:
+            raise ValueError(
+                f"Invalid backend: {backend!r}. Supported: {self._SUPPORTED_BACKENDS}."
+            )
+        computer_cls = self._COMPUTER_CLS if backend == "hooks" else MakeFxKFACComputer
+        computer = computer_cls(
             model_func,
             loss_func,
             params,

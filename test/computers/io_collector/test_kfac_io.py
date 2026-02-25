@@ -344,3 +344,41 @@ def test_kfac_io_cnn(inplace: bool):
             },
         )
         _verify_kfac_io(f, x, params, fisher_type, kfac_io_true)
+
+
+def test_kfac_io_flatten_requires_per_batch_size_tracing():
+    """Demonstrate that ``nn.Flatten`` bakes in the batch size during real tracing.
+
+    ``with_kfac_io`` uses real-mode ``make_fx`` tracing, which produces
+    ``aten.view`` with a hardcoded batch dimension for operations like
+    ``nn.Flatten``. This means a single IO function cannot handle different
+    batch sizes, motivating the per-batch-size cache in ``MakeFxKFACComputer``.
+    """
+    manual_seed(0)
+    model = Sequential(
+        Conv2d(3, 2, kernel_size=3, padding=1),
+        AdaptiveAvgPool2d(2),
+        Flatten(),
+        Linear(2 * 2 * 2, 3),
+    )
+
+    def f(x: Tensor, params: dict[str, Tensor]) -> Tensor:
+        return functional_call(model, params, (x,))
+
+    params = dict(model.named_parameters())
+    x_batch2 = rand(2, 3, 4, 4)
+    x_batch5 = rand(5, 3, 4, 4)
+
+    # with_kfac_io traced with batch=2 works for batch=2
+    f_kfac_io = with_kfac_io(f, x_batch2, params, FisherType.EMPIRICAL)
+    out2, *_ = f_kfac_io(x_batch2, params)
+    assert out2.shape[0] == 2
+
+    # But fails for batch=5 due to hardcoded shapes from nn.Flatten
+    with raises(RuntimeError):
+        f_kfac_io(x_batch5, params)
+
+    # A separate IO function traced with batch=5 works for batch=5
+    f_kfac_io_5 = with_kfac_io(f, x_batch5, params, FisherType.EMPIRICAL)
+    out5, *_ = f_kfac_io_5(x_batch5, params)
+    assert out5.shape[0] == 5

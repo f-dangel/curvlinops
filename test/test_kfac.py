@@ -5,7 +5,7 @@ from math import sqrt
 from pathlib import Path
 
 from einops.layers.torch import Rearrange
-from pytest import mark
+from pytest import mark, raises
 from torch import (
     Tensor,
     allclose,
@@ -1280,3 +1280,190 @@ def test_KFAC_inverse_exactly_damped_matmat(
 
     compare_consecutive_matmats(inv_KFAC)
     compare_matmat(inv_KFAC, inv_KFAC_naive)
+
+
+###############################################################################
+#                     make_fx backend comparison tests                        #
+###############################################################################
+
+
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+@mark.parametrize(
+    "fisher_type",
+    [FisherType.TYPE2, FisherType.EMPIRICAL, FisherType.FORWARD_ONLY],
+    ids=["type2", "empirical", "forward_only"],
+)
+def test_kfac_make_fx_vs_hooks_linear(
+    fisher_type: str,
+    separate_weight_and_bias: bool,
+):
+    """Test that the make_fx backend produces the same KFAC as hooks for Linear models.
+
+    Args:
+        fisher_type: The Fisher type to test.
+        separate_weight_and_bias: Whether to treat weights and biases separately.
+    """
+    manual_seed(0)
+    model = Sequential(Linear(6, 4), Linear(4, 3))
+    loss_func = MSELoss()
+    params = list(model.parameters())
+    data = [
+        (rand(2, 6), regression_targets((2, 3))),
+        (rand(5, 6), regression_targets((5, 3))),
+    ]
+
+    common_kwargs = dict(
+        check_deterministic=False,
+        fisher_type=fisher_type,
+        separate_weight_and_bias=separate_weight_and_bias,
+    )
+    KFAC_hooks = KFACLinearOperator(
+        model, loss_func, params, data, backend="hooks", **common_kwargs
+    )
+    KFAC_make_fx = KFACLinearOperator(
+        model, loss_func, params, data, backend="make_fx", **common_kwargs
+    )
+
+    hooks_mat = KFAC_hooks @ eye_like(KFAC_hooks)
+    make_fx_mat = KFAC_make_fx @ eye_like(KFAC_make_fx)
+    assert allclose_report(hooks_mat, make_fx_mat)
+
+
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+@mark.parametrize(
+    "kfac_approx",
+    [KFACType.EXPAND, KFACType.REDUCE],
+    ids=["expand", "reduce"],
+)
+@mark.parametrize(
+    "fisher_type",
+    [FisherType.TYPE2, FisherType.EMPIRICAL, FisherType.FORWARD_ONLY],
+    ids=["type2", "empirical", "forward_only"],
+)
+def test_kfac_make_fx_vs_hooks_cnn(
+    fisher_type: str,
+    kfac_approx: str,
+    separate_weight_and_bias: bool,
+):
+    """Test that the make_fx backend produces the same KFAC as hooks for CNN models.
+
+    Args:
+        fisher_type: The Fisher type to test.
+        kfac_approx: The KFAC approximation type for weight-sharing layers.
+        separate_weight_and_bias: Whether to treat weights and biases separately.
+    """
+    from torch.nn import AdaptiveAvgPool2d, Conv2d, ReLU
+
+    manual_seed(0)
+
+    if kfac_approx == KFACType.EXPAND:
+        # For expand, output has spatial dimensions
+        model = Sequential(
+            Conv2d(3, 2, kernel_size=3, padding=1),
+            ReLU(),
+            Rearrange("batch c h w -> batch h w c"),
+        )
+        data = [
+            (rand(2, 3, 4, 4), regression_targets((2, 4, 4, 2))),
+            (rand(3, 3, 4, 4), regression_targets((3, 4, 4, 2))),
+        ]
+    else:
+        # For reduce, output is spatially pooled then flattened
+        model = Sequential(
+            Conv2d(3, 2, kernel_size=3, padding=1),
+            ReLU(),
+            AdaptiveAvgPool2d(1),
+            Flatten(),
+            Linear(2, 3),
+        )
+        data = [
+            (rand(2, 3, 4, 4), regression_targets((2, 3))),
+            (rand(3, 3, 4, 4), regression_targets((3, 3))),
+        ]
+
+    loss_func = MSELoss()
+    params = list(model.parameters())
+
+    common_kwargs = dict(
+        check_deterministic=False,
+        fisher_type=fisher_type,
+        kfac_approx=kfac_approx,
+        separate_weight_and_bias=separate_weight_and_bias,
+    )
+    KFAC_hooks = KFACLinearOperator(
+        model, loss_func, params, data, backend="hooks", **common_kwargs
+    )
+    KFAC_make_fx = KFACLinearOperator(
+        model, loss_func, params, data, backend="make_fx", **common_kwargs
+    )
+
+    hooks_mat = KFAC_hooks @ eye_like(KFAC_hooks)
+    make_fx_mat = KFAC_make_fx @ eye_like(KFAC_make_fx)
+    assert allclose_report(hooks_mat, make_fx_mat)
+
+
+def test_kfac_make_fx_flatten_different_batch_sizes():
+    """Test make_fx with nn.Flatten and different batch sizes.
+
+    ``nn.Flatten`` produces ``aten.view`` with a baked-in batch size during
+    real-mode ``make_fx`` tracing, so a single traced function cannot handle
+    multiple batch sizes. This test verifies that the per-batch-size caching
+    in ``MakeFxKFACComputer`` handles this correctly.
+    """
+    from torch.nn import AdaptiveAvgPool2d, Conv2d
+
+    manual_seed(0)
+    model = Sequential(
+        Conv2d(3, 2, kernel_size=3, padding=1),
+        AdaptiveAvgPool2d(2),
+        Flatten(),
+        Linear(2 * 2 * 2, 3),
+    )
+    loss_func = MSELoss()
+    params = list(model.parameters())
+    # Two batches with different sizes to exercise the per-batch-size cache
+    data = [
+        (rand(2, 3, 4, 4), regression_targets((2, 3))),
+        (rand(5, 3, 4, 4), regression_targets((5, 3))),
+    ]
+
+    common_kwargs = dict(
+        check_deterministic=False,
+        fisher_type=FisherType.EMPIRICAL,
+        kfac_approx=KFACType.REDUCE,
+    )
+    KFAC_hooks = KFACLinearOperator(
+        model, loss_func, params, data, backend="hooks", **common_kwargs
+    )
+    KFAC_make_fx = KFACLinearOperator(
+        model, loss_func, params, data, backend="make_fx", **common_kwargs
+    )
+
+    hooks_mat = KFAC_hooks @ eye_like(KFAC_hooks)
+    make_fx_mat = KFAC_make_fx @ eye_like(KFAC_make_fx)
+    assert allclose_report(hooks_mat, make_fx_mat)
+
+
+def test_ekfac_rejects_make_fx():
+    """Test that EKFACLinearOperator rejects the make_fx backend."""
+    from curvlinops.ekfac import EKFACLinearOperator
+
+    manual_seed(0)
+    model = Sequential(Linear(4, 3))
+    loss_func = MSELoss()
+    params = list(model.parameters())
+    data = [(rand(2, 4), regression_targets((2, 3)))]
+
+    with raises(ValueError, match="Invalid backend"):
+        EKFACLinearOperator(
+            model,
+            loss_func,
+            params,
+            data,
+            check_deterministic=False,
+            backend="make_fx",
+        )

@@ -25,6 +25,7 @@ class EKFACLinearOperator(KFACLinearOperator):
     """
 
     _COMPUTER_CLS = EKFACComputer
+    _SUPPORTED_BACKENDS: tuple[str, ...] = ("hooks",)
 
     @staticmethod
     def _compute_canonical_op(computer: EKFACComputer) -> BlockDiagonalLinearOperator:
