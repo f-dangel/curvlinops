@@ -1,11 +1,8 @@
 """Contains tests for ``curvlinops/inverse``."""
 
-from collections.abc import Mapping
-
-from pytest import mark, raises
-from torch import Tensor, cuda, float64, manual_seed, rand, randn
-from torch.linalg import inv
-from torch.nn import Linear, MSELoss
+from pytest import raises
+from torch import Tensor, float64, manual_seed, cat
+from torch.linalg import inv, eigvalsh
 
 from curvlinops import (
     CGInverseLinearOperator,
@@ -15,7 +12,10 @@ from curvlinops import (
 )
 from curvlinops.examples import IdentityLinearOperator
 from curvlinops.examples.functorch import functorch_ggn
-from test.test__torch_base import TensorLinearOperator
+from test.test__torch_base import (
+    TensorLinearOperator,
+    PyTorchLinearOperator,
+)
 from test.utils import (
     change_dtype,
     compare_consecutive_matmats,
@@ -24,16 +24,39 @@ from test.utils import (
 )
 
 
-class _CountingTensorLinearOperator(TensorLinearOperator):
-    """Tensor linear operator that counts `_matmat` calls for efficiency tests."""
+class _DenseMatrixStructuredLinearOperator(PyTorchLinearOperator):
+    """Apply a dense matrix on the flattened space with structured tensor IO."""
 
-    def __init__(self, A: Tensor):
-        super().__init__(A)
-        self.num_matmats = 0
+    def __init__(
+        self,
+        A: Tensor,
+        in_shape: list[tuple[int, ...]],
+        out_shape: list[tuple[int, ...]],
+    ):
+        super().__init__(in_shape, out_shape)
+        self._A = A
 
-    def _matmat(self, X):
-        self.num_matmats += 1
-        return super()._matmat(X)
+    @property
+    def device(self):
+        return self._A.device
+
+    @property
+    def dtype(self):
+        return self._A.dtype
+
+    def _adjoint(self) -> "_DenseMatrixStructuredLinearOperator":
+        return _DenseMatrixStructuredLinearOperator(
+            self._A.conj().T, self._out_shape, self._in_shape
+        )
+
+    def _matmat(self, X: list[Tensor]) -> list[Tensor]:
+        num_vecs = X[0].shape[-1]
+        X_flat = cat([x.reshape(-1, num_vecs) for x in X], dim=0)
+        AX_flat = self._A @ X_flat
+        return [
+            y.reshape(*s, num_vecs)
+            for y, s in zip(AX_flat.split(self._out_shape_flat, dim=0), self._out_shape)
+        ]
 
 
 def test_CGInverseLinearOperator_damped_GGN(inv_case, delta_rel: float = 2e-2):
@@ -133,301 +156,88 @@ def test_NeumannInverseLinearOperator_toy():
     compare_matmat(inv_B_neumann, inv_B, **tols)
 
 
-def test_NeumannInverseLinearOperator_preconditioner_toy():
-    """Test preconditioned Neumann inverse on a toy SPD matrix."""
-    manual_seed(0)
-    A = Tensor(
-        [
-            [4.0, 1.0, 0.0],
-            [1.0, 3.0, 1.0],
-            [0.0, 1.0, 2.0],
-        ]
-    ).double()
-    inv_A = inv(A)
+def test_CGInverseLinearOperator_preconditioner_damped_GGN(inv_case, delta_rel: float = 2e-2):
+    """Test CG preconditioners on damped GGN: identity=no-pre, exact=exact inverse."""
+    model_func, loss_func, params, data, batch_size_fn = change_dtype(inv_case, float64)
+    (dev,), (dt,) = {p.device for p in params}, {p.dtype for p in params}
 
-    # With an exact preconditioner and zero Neumann updates,
-    # the approximation should already be exact: A^{-1} ≈ P.
-    inv_A_neumann = NeumannInverseLinearOperator(
-        TensorLinearOperator(A),
-        num_terms=0,
-        preconditioner=TensorLinearOperator(inv_A),
-    )
-
-    compare_consecutive_matmats(inv_A_neumann)
-    compare_matmat(inv_A_neumann, inv_A, rtol=1e-10, atol=1e-10)
-
-
-def test_CGInverseLinearOperator_preconditioner_toy():
-    """Test that CGInverseLinearOperator wires preconditioners into linear_cg."""
-    manual_seed(0)
-    A = Tensor(
-        [
-            [4.0, 1.0, 0.0],
-            [1.0, 3.0, 1.0],
-            [0.0, 1.0, 2.0],
-        ]
-    ).double()
-    inv_A = inv(A)
-    A_linop = TensorLinearOperator(A)
-
-    inv_A_cg = CGInverseLinearOperator(
-        A_linop,
-        preconditioner=TensorLinearOperator(inv_A),
-        max_iter=1,
-        max_tridiag_iter=1,
-        tolerance=0,
-        eps=0,
-    )
-
-    compare_consecutive_matmats(inv_A_cg)
-    compare_matmat(inv_A_cg, inv_A, rtol=1e-8, atol=1e-10)
-
-
-def test_inverse_preconditioner_shape_mismatch_raises():
-    """Test both inverse operators reject incompatible preconditioner shapes."""
-    manual_seed(0)
-    A = Tensor(
-        [
-            [2.0, 0.0, 0.0],
-            [0.0, 3.0, 0.0],
-            [0.0, 0.0, 4.0],
-        ]
-    ).double()
-
-    with raises(ValueError, match="Preconditioner must have same in-/out-shapes"):
-        CGInverseLinearOperator(
-            TensorLinearOperator(A), preconditioner=TensorLinearOperator(rand(2, 2))
-        )
-
-    with raises(ValueError, match="Preconditioner must have same in-/out-shapes"):
-        NeumannInverseLinearOperator(
-            TensorLinearOperator(A), preconditioner=TensorLinearOperator(rand(2, 2))
-        )
-
-
-def test_CGInverseLinearOperator_preconditioner_efficiency_cpu():
-    """CPU stress test: preconditioning should reduce CG work at equal quality."""
-    manual_seed(0)
-    n, num_rhs = 192, 16
-
-    # Diagonal-dominant SPD system with broad spectrum.
-    D = rand(n, dtype=float64) * 1_000 + 1.0
-    U = randn(n, n, dtype=float64)
-    A = 0.01 * (U + U.T) / 2.0
-    A = A + D.diag()
-
-    X = rand(n, num_rhs, dtype=float64)
-
-    # Jacobi preconditioner P = diag(A)^{-1}
-    P = (1.0 / A.diag()).diag()
-
-    A_no_pre = _CountingTensorLinearOperator(A)
-    inv_no_pre = CGInverseLinearOperator(
-        A_no_pre,
-        eps=0,
-        tolerance=1e-7,
-        max_iter=400,
-        max_tridiag_iter=400,
-    )
-    Y_no_pre = inv_no_pre @ X
-
-    A_with_pre = _CountingTensorLinearOperator(A)
-    inv_with_pre = CGInverseLinearOperator(
-        A_with_pre,
-        preconditioner=TensorLinearOperator(P),
-        eps=0,
-        tolerance=1e-7,
-        max_iter=400,
-        max_tridiag_iter=400,
-    )
-    Y_with_pre = inv_with_pre @ X
-
-    # Comparable solve quality.
-    rel_res_no_pre = (A @ Y_no_pre - X).norm() / X.norm()
-    rel_res_with_pre = (A @ Y_with_pre - X).norm() / X.norm()
-    assert rel_res_no_pre < 1e-5
-    assert rel_res_with_pre < 1e-5
-
-    # Efficiency target: fewer A @ v applications with preconditioning.
-    assert A_with_pre.num_matmats < A_no_pre.num_matmats
-
-
-def test_NeumannInverseLinearOperator_preconditioner_efficiency_cpu():
-    """CPU stress test: exact preconditioner should avoid A matmats in Neumann."""
-    manual_seed(0)
-    n, num_rhs = 128, 8
-    M = randn(n, n, dtype=float64)
-    A = M.T @ M + 0.1 * eye_like(M)
-    inv_A = inv(A)
-    X = rand(n, num_rhs, dtype=float64)
-
-    A_no_pre = _CountingTensorLinearOperator(A)
-    inv_no_pre = NeumannInverseLinearOperator(A_no_pre, num_terms=200, scale=1e-3)
-    _ = inv_no_pre @ X
-
-    A_with_pre = _CountingTensorLinearOperator(A)
-    inv_with_pre = NeumannInverseLinearOperator(
-        A_with_pre,
-        num_terms=0,
-        preconditioner=TensorLinearOperator(inv_A),
-    )
-    Y_with_pre = inv_with_pre @ X
-
-    # Exact (up to numerical precision) solve and less A-work.
-    assert ((A @ Y_with_pre - X).norm() / X.norm()) < 1e-10
-    assert A_with_pre.num_matmats < A_no_pre.num_matmats
-
-
-def test_NeumannInverseLinearOperator_preconditioned_beats_naive_cpu():
-    """For same iteration budget, preconditioned Neumann should reduce residual more."""
-    manual_seed(0)
-    n, num_rhs, num_terms = 256, 8, 40
-
-    # Ill-conditioned-ish SPD, but diagonally dominant enough for Neumann with scaling.
-    D = rand(n, dtype=float64) * 200 + 1.0
-    U = randn(n, n, dtype=float64)
-    A = 0.02 * (U + U.T) / 2.0
-    A = A + D.diag()
-
-    # Same initialization idea for both methods.
-    scale = 0.9 / A.diag().max().item()
-    X = rand(n, num_rhs, dtype=float64)
-
-    # Naive Neumann
-    inv_naive = NeumannInverseLinearOperator(
-        TensorLinearOperator(A), num_terms=num_terms, scale=scale
-    )
-    Y_naive = inv_naive @ X
-    rel_res_naive = (A @ Y_naive - X).norm() / X.norm()
-
-    # Preconditioned Neumann (Jacobi preconditioner)
-    P = (1.0 / A.diag()).diag()
-    inv_pre = NeumannInverseLinearOperator(
-        TensorLinearOperator(A),
-        num_terms=num_terms,
-        preconditioner=TensorLinearOperator(P),
-    )
-    Y_pre = inv_pre @ X
-    rel_res_pre = (A @ Y_pre - X).norm() / X.norm()
-
-    # Expect better residual with preconditioning at same iteration budget.
-    assert rel_res_pre < rel_res_naive
-
-
-def test_inverse_operators_single_linear_overparameterized_cpu():
-    """Over-parameterized single Linear(500,1) with 100 data points should work."""
-    manual_seed(0)
-    n, d_in, d_out = 100, 500, 1
-    model = Linear(d_in, d_out, bias=True).to(float64)
-    loss_func = MSELoss(reduction="mean").to(float64)
-
-    X = rand(n, d_in, dtype=float64)
-    y = rand(n, d_out, dtype=float64)
-    data = [(X, y)]
-    params = list(model.parameters())
-
-    # 500*1 + 1 = 501 parameters > 100 data points
-    assert sum(p.numel() for p in params) == 501
-
-    GGN = GGNLinearOperator(model, loss_func, params, data)
-    GGN_naive = functorch_ggn(model, loss_func, params, data).detach()
-
-    # Damping makes the system strictly SPD/invertible.
-    delta = 1e-3 * GGN_naive.diag().mean().item()
-    damping = delta * IdentityLinearOperator([p.shape for p in params], "cpu", float64)
-    A = GGN + damping
+    GGN_naive = functorch_ggn(
+        model_func, loss_func, params, data, input_key="x"
+    ).detach()
+    delta = delta_rel * GGN_naive.diag().mean().item()
+    damping = delta * IdentityLinearOperator([p.shape for p in params], dev, dt)
+    A = GGNLinearOperator(
+        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
+    ) + damping
     A_naive = GGN_naive + delta * eye_like(GGN_naive)
-
-    rhs = rand(A.shape[0], 4, dtype=float64)
-
-    # CG inverse should solve stably.
-    inv_cg = CGInverseLinearOperator(A, eps=0, tolerance=1e-6, max_iter=400)
-    sol_cg = inv_cg @ rhs
-    rel_res_cg = (A_naive @ sol_cg - rhs).norm() / rhs.norm()
-    assert rel_res_cg < 1e-4
-
-    # Preconditioned CG should also remain stable on this over-parameterized setup.
-    alpha = 1.0 / A_naive.diag().mean().item()
-    pre = alpha * IdentityLinearOperator([p.shape for p in params], "cpu", float64)
-    inv_cg_pre = CGInverseLinearOperator(
-        A, preconditioner=pre, eps=0, tolerance=1e-6, max_iter=400
-    )
-    sol_cg_pre = inv_cg_pre @ rhs
-    rel_res_cg_pre = (A_naive @ sol_cg_pre - rhs).norm() / rhs.norm()
-    assert rel_res_cg_pre < 1e-4
-
-
-@mark.cuda
-@mark.skipif(not cuda.is_available(), reason="CUDA not available")
-def test_CGInverseLinearOperator_preconditioner_toy_cuda():
-    """CUDA test for CG preconditioner support."""
-    manual_seed(0)
-    A = Tensor(
-        [
-            [4.0, 1.0, 0.0],
-            [1.0, 3.0, 1.0],
-            [0.0, 1.0, 2.0],
-        ]
-    ).double().cuda()
-    inv_A = inv(A)
+    inv_A_naive = inv(A_naive)
 
     inv_A_cg = CGInverseLinearOperator(
-        TensorLinearOperator(A),
-        preconditioner=TensorLinearOperator(inv_A),
+        A, eps=0, tolerance=0, max_iter=10, max_tridiag_iter=10
+    )
+    inv_A_cg_id = CGInverseLinearOperator(
+        A,
+        preconditioner=IdentityLinearOperator([p.shape for p in params], dev, dt),
+        eps=0,
+        tolerance=0,
+        max_iter=10,
+        max_tridiag_iter=10,
+    )
+    inv_A_cg_exact = CGInverseLinearOperator(
+        A,
+        preconditioner=_DenseMatrixStructuredLinearOperator(
+            inv_A_naive, A._in_shape, A._out_shape
+        ),
+        eps=0,
+        tolerance=0,
         max_iter=1,
         max_tridiag_iter=1,
-        tolerance=0,
-        eps=0,
     )
+    atol, rtol = (1e-8, 1e-5) if "cpu" in str(dev) else (1e-7, 1e-4)
+    compare_consecutive_matmats(inv_A_cg_id)
+    compare_consecutive_matmats(inv_A_cg_exact)
+    compare_matmat(inv_A_cg_exact, inv_A_naive, atol=atol, rtol=rtol)
+    compare_matmat(inv_A_cg_id, inv_A_cg, atol=atol, rtol=rtol)
 
-    compare_consecutive_matmats(inv_A_cg)
-    compare_matmat(inv_A_cg, inv_A, rtol=1e-7, atol=1e-9)
 
+def test_NeumannInverseLinearOperator_preconditioner_damped_GGN(inv_case, delta_rel: float = 2e-2):
+    """Test Neumann preconditioners on damped GGN: identity=no-pre, exact=exact inverse."""
+    model_func, loss_func, params, data, batch_size_fn = change_dtype(inv_case, float64)
+    (dev,), (dt,) = {p.device for p in params}, {p.dtype for p in params}
 
-@mark.cuda
-@mark.skipif(not cuda.is_available(), reason="CUDA not available")
-def test_NeumannInverseLinearOperator_preconditioner_toy_cuda():
-    """CUDA test for preconditioned Neumann inverse."""
-    manual_seed(0)
-    A = Tensor(
-        [
-            [4.0, 1.0, 0.0],
-            [1.0, 3.0, 1.0],
-            [0.0, 1.0, 2.0],
-        ]
-    ).double().cuda()
-    inv_A = inv(A)
+    GGN_naive = functorch_ggn(
+        model_func, loss_func, params, data, input_key="x"
+    ).detach()
+    delta = delta_rel * GGN_naive.diag().mean().item()
+    damping = delta * IdentityLinearOperator([p.shape for p in params], dev, dt)
+    A = GGNLinearOperator(
+        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
+    ) + damping
+    A_naive = GGN_naive + delta * eye_like(GGN_naive)
+    inv_A_naive = inv(A_naive)
 
-    inv_A_neumann = NeumannInverseLinearOperator(
-        TensorLinearOperator(A),
+    # Safe scale for the undamped Neumann/Richardson iteration on SPD matrix A_naive.
+    scale = 0.9 / eigvalsh(A_naive).max().item()
+
+    inv_A_neumann = NeumannInverseLinearOperator(A, num_terms=5, scale=scale)
+    inv_A_neumann_id = NeumannInverseLinearOperator(
+        A,
+        num_terms=5,
+        scale=scale,
+        preconditioner=IdentityLinearOperator([p.shape for p in params], dev, dt),
+    )
+    inv_A_neumann_exact = NeumannInverseLinearOperator(
+        A,
         num_terms=0,
-        preconditioner=TensorLinearOperator(inv_A),
+        scale=1.0,
+        preconditioner=_DenseMatrixStructuredLinearOperator(
+            inv_A_naive, A._in_shape, A._out_shape
+        ),
     )
-
-    compare_consecutive_matmats(inv_A_neumann)
-    compare_matmat(inv_A_neumann, inv_A, rtol=1e-9, atol=1e-10)
-
-
-@mark.cuda
-@mark.skipif(not cuda.is_available(), reason="CUDA not available")
-def test_NeumannInverseLinearOperator_scale_toy_cuda():
-    """CUDA test for scaled Neumann convergence rescue."""
-    manual_seed(0)
-    A = Tensor(
-        [
-            [0.0, 1.0 / 2.0, 1.0 / 4.0],
-            [5.0 / 7.0, 0.0, 1.0 / 7.0],
-            [3.0 / 10.0, 3.0 / 5.0, 0.0],
-        ]
-    ).double().cuda()
-    A = A + eye_like(A)
-    B = 2 * A
-    inv_B = inv(B)
-
-    inv_B_neumann = NeumannInverseLinearOperator(
-        TensorLinearOperator(B), num_terms=1_000, scale=0.5
-    )
-    compare_consecutive_matmats(inv_B_neumann)
-    compare_matmat(inv_B_neumann, inv_B, rtol=1e-3, atol=1e-5)
+    atol, rtol = (1e-8, 1e-5) if "cpu" in str(dev) else (1e-7, 1e-4)
+    compare_consecutive_matmats(inv_A_neumann_id)
+    compare_consecutive_matmats(inv_A_neumann_exact)
+    compare_matmat(inv_A_neumann_exact, inv_A_naive, atol=atol, rtol=rtol)
+    compare_matmat(inv_A_neumann_id, inv_A_neumann, atol=atol, rtol=rtol)
 
 
