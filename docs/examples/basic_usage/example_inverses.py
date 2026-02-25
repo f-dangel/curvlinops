@@ -23,22 +23,59 @@ As always, let's first import the required functionality.
 
 import matplotlib.pyplot as plt
 from scipy.sparse.linalg import eigsh
-from torch import cuda, device, eye, float64, manual_seed, rand
-from torch.linalg import inv
+from torch import Tensor, cat, cuda, device, eye, float64, manual_seed, rand, tensor
+from torch.linalg import eigvalsh, inv, norm
 from torch.nn import Linear, MSELoss, ReLU, Sequential, Sigmoid
 from torch.nn.utils import parameters_to_vector
 
 from curvlinops import (
     CGInverseLinearOperator,
+    EKFACLinearOperator,
     GGNLinearOperator,
+    HessianLinearOperator,
+    KFACLinearOperator,
     NeumannInverseLinearOperator,
 )
-from curvlinops.examples import IdentityLinearOperator, gradient_and_loss
-from curvlinops.examples.functorch import functorch_ggn, functorch_gradient_and_loss
+from curvlinops._torch_base import PyTorchLinearOperator
+from curvlinops.examples import IdentityLinearOperator, TensorLinearOperator, gradient_and_loss
+from curvlinops.examples.functorch import (
+    functorch_ggn,
+    functorch_gradient_and_loss,
+    functorch_hessian,
+)
 from curvlinops.utils import allclose_report
 
 # make deterministic
 manual_seed(0)
+
+
+class DenseParameterSpaceLinearOperator(PyTorchLinearOperator):
+    """Dense matrix linear operator acting on parameter-list shaped vectors."""
+
+    def __init__(self, A: Tensor, param_shapes: list[tuple[int, ...]]):
+        super().__init__(param_shapes, param_shapes)
+        self._A = A
+        self.SELF_ADJOINT = A.shape[0] == A.shape[1] and A.allclose(A.T)
+
+    @property
+    def device(self):
+        return self._A.device
+
+    @property
+    def dtype(self):
+        return self._A.dtype
+
+    def _adjoint(self):
+        return DenseParameterSpaceLinearOperator(self._A.conj().T, self._in_shape)
+
+    def _matmat(self, X: list[Tensor]) -> list[Tensor]:
+        X_flat = cat([x.flatten(end_dim=-2) for x in X])
+        _, num_vecs = X_flat.shape
+        AX_flat = self._A @ X_flat
+        return [
+            block.reshape(*shape, num_vecs)
+            for block, shape in zip(AX_flat.split(self._out_shape_flat), self._out_shape)
+        ]
 
 # %%
 #
@@ -268,8 +305,10 @@ num_terms = [10]
 neumann_inverses = []
 
 for n in num_terms:
-    inv = NeumannInverseLinearOperator(damped_GGN, scale=scale, num_terms=n)
-    neumann_inverses.append(inv @ eye(inv.shape[1], device=DEVICE, dtype=DTYPE))
+    inv_neumann = NeumannInverseLinearOperator(damped_GGN, scale=scale, num_terms=n)
+    neumann_inverses.append(
+        inv_neumann @ eye(inv_neumann.shape[1], device=DEVICE, dtype=DTYPE)
+    )
 
 # %%
 #
@@ -278,10 +317,10 @@ for n in num_terms:
 fig, axes = plt.subplots(ncols=len(num_terms) + 1)
 plt.suptitle("Inverse damped Fisher (logarithm of absolute values)")
 
-for i, (n, inv) in enumerate(zip(num_terms, neumann_inverses)):
+for i, (n, inv_mat) in enumerate(zip(num_terms, neumann_inverses)):
     ax = axes.flat[i]
     ax.set_title(f"Neumann, {n} terms")
-    image = ax.imshow(inv.detach().cpu().abs().log10())
+    image = ax.imshow(inv_mat.detach().cpu().abs().log10())
     plt.colorbar(image, ax=ax, shrink=0.5)
 
 ax = axes.flat[-1]
@@ -294,3 +333,295 @@ plt.colorbar(image, ax=ax, shrink=0.5)
 # The Neumann inversion is usually more inaccurate than CG inversion. But it
 # might sometimes be preferred if only a rough approximation of the inverse
 # matrix product is needed.
+
+# %%
+#
+# Small-scale matrix examples (exact error comparison)
+# ----------------------------------------------------
+#
+# Before moving to preconditioned Hessian examples, let's compare CG and Neumann
+# on a few tiny SPD matrices where we can form the exact inverse directly. We
+# also test the ``preconditioner=...`` argument on these toy problems.
+#
+# For Neumann, note that passing ``preconditioner=...`` switches to a
+# preconditioned Richardson/Neumann iteration and the ``scale`` argument is
+# ignored. Therefore, ``preconditioner=Identity`` is generally *not* equivalent
+# to the plain Neumann solver unless we explicitly use a scaled identity.
+
+toy_matrices = {
+    "3x3 SPD": tensor(
+        [
+            [4.0, 1.0, 0.0],
+            [1.0, 3.0, 1.0],
+            [0.0, 1.0, 2.0],
+        ],
+        device=DEVICE,
+        dtype=DTYPE,
+    ),
+    "4x4 ill-conditioned SPD": (
+        tensor(
+            [
+                [1.0, 2.0, 0.0, 0.0],
+                [0.0, 1.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0, 2.0],
+                [1.0, 0.0, 0.0, 1.0],
+            ],
+            device=DEVICE,
+            dtype=DTYPE,
+        ).T
+        @ tensor(
+            [
+                [1.0, 2.0, 0.0, 0.0],
+                [0.0, 1.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0, 2.0],
+                [1.0, 0.0, 0.0, 1.0],
+            ],
+            device=DEVICE,
+            dtype=DTYPE,
+        )
+        + 1e-2 * eye(4, device=DEVICE, dtype=DTYPE)
+    ),
+}
+
+toy_errors = {}
+for name, A_toy in toy_matrices.items():
+    A_toy_op = TensorLinearOperator(A_toy)
+    identity_pre_toy = IdentityLinearOperator([(A_toy.shape[0],)], DEVICE, DTYPE)
+    exact_pre_toy = TensorLinearOperator(inv(A_toy))
+    rhs_toy = rand(A_toy.shape[0], 2, device=DEVICE, dtype=DTYPE)
+    exact_toy = inv(A_toy) @ rhs_toy
+
+    cg_toy = CGInverseLinearOperator(
+        A_toy_op, eps=0, tolerance=0, max_iter=2, max_tridiag_iter=2
+    )
+    cg_identity_toy = CGInverseLinearOperator(
+        A_toy_op,
+        preconditioner=identity_pre_toy,
+        eps=0,
+        tolerance=0,
+        max_iter=2,
+        max_tridiag_iter=2,
+    )
+    cg_exact_pre_toy = CGInverseLinearOperator(
+        A_toy_op,
+        preconditioner=exact_pre_toy,
+        eps=0,
+        tolerance=0,
+        max_iter=2,
+        max_tridiag_iter=2,
+    )
+    cg_toy_sol = cg_toy @ rhs_toy
+    cg_identity_toy_sol = cg_identity_toy @ rhs_toy
+    cg_exact_pre_toy_sol = cg_exact_pre_toy @ rhs_toy
+
+    max_eigval_toy = eigvalsh(A_toy).max().item()
+    scale_toy = 1.0 if max_eigval_toy < 2.0 else 1.99 / max_eigval_toy
+    neumann_toy = NeumannInverseLinearOperator(A_toy_op, num_terms=10, scale=scale_toy)
+    neumann_identity_toy = NeumannInverseLinearOperator(
+        A_toy_op, num_terms=10, preconditioner=identity_pre_toy, scale=scale_toy
+    )
+    neumann_exact_pre_toy = NeumannInverseLinearOperator(
+        A_toy_op,
+        num_terms=10,  # exact inverse preconditioner should solve in one term
+        preconditioner=exact_pre_toy,
+        scale=scale_toy,
+    )
+    neumann_toy_sol = neumann_toy @ rhs_toy
+    neumann_identity_toy_sol = neumann_identity_toy @ rhs_toy
+    neumann_exact_pre_toy_sol = neumann_exact_pre_toy @ rhs_toy
+
+    toy_errors[name] = {
+        "CG plain": (norm(cg_toy_sol - exact_toy) / norm(exact_toy)).item(),
+        "CG identity pre": (
+            norm(cg_identity_toy_sol - exact_toy) / norm(exact_toy)
+        ).item(),
+        "CG exact pre": (norm(cg_exact_pre_toy_sol - exact_toy) / norm(exact_toy)).item(),
+        "Neumann plain": (norm(neumann_toy_sol - exact_toy) / norm(exact_toy)).item(),
+        "Neumann identity pre": (
+            norm(neumann_identity_toy_sol - exact_toy) / norm(exact_toy)
+        ).item(),
+        "Neumann exact pre": (
+            norm(neumann_exact_pre_toy_sol - exact_toy) / norm(exact_toy)
+        ).item(),
+    }
+
+print("Small-matrix relative errors vs exact inverse action:")
+for name, vals in toy_errors.items():
+    print(f"  {name}")
+    print(
+        "    "
+        + f"CG plain={vals['CG plain']:.3e}, "
+        + f"CG identity-pre={vals['CG identity pre']:.3e}, "
+        + f"CG exact-pre={vals['CG exact pre']:.3e}"
+    )
+    print(
+        "    "
+        + f"Neumann plain={vals['Neumann plain']:.3e}, "
+        + f"Neumann identity-pre={vals['Neumann identity pre']:.3e}, "
+        + f"Neumann exact-pre={vals['Neumann exact pre']:.3e}"
+    )
+
+# %%
+#
+# Preconditioning in an over-parameterized regime
+# -----------------------------------------------
+#
+# Next, we demonstrate how to use the new ``preconditioner=...`` argument for
+# CG and Neumann inversion.
+#
+# We build an over-parameterized linear regression problem (many parameters, few
+# data points), form the Hessian, and compare inverse-Hessian-vector products
+# against a dense ground truth. We use KFAC and EKFAC inverse operators as
+# preconditioners.
+#
+# A linear model with mean-squared error has a PSD Hessian and, in this setup,
+# Hessian and GGN coincide. This makes KFAC/EKFAC natural preconditioners.
+
+N_small = 2000
+D_in_small = 20
+D_out_small = 10
+
+X_small = rand(N_small, D_in_small, device=DEVICE, dtype=DTYPE)
+y_small = rand(N_small, D_out_small, device=DEVICE, dtype=DTYPE)
+small_data = [(X_small, y_small)]
+
+small_model = Linear(D_in_small, D_out_small).to(DEVICE, DTYPE)
+small_params = [p for p in small_model.parameters() if p.requires_grad]
+small_loss = MSELoss(reduction="mean").to(DEVICE, DTYPE)
+
+num_params = sum(p.numel() for p in small_params)
+print(
+    "Over-parameterized setup:",
+    f"{num_params} parameters for {N_small} data points.",
+)
+
+H = HessianLinearOperator(small_model, small_loss, small_params, small_data)
+H_mat = functorch_hessian(small_model, small_loss, small_params, small_data).detach()
+
+delta_h = 1e-3 * H_mat.diag().mean().item()
+H_damped = H + delta_h * IdentityLinearOperator(
+    [p.shape for p in small_params], H.device, DTYPE
+)
+H_damped_mat = H_mat + delta_h * eye(H_mat.shape[0], device=DEVICE, dtype=DTYPE)
+H_damped_inv_mat = inv(H_damped_mat)
+
+rhs = rand(H.shape[1], 3, device=DEVICE, dtype=DTYPE)
+exact_solution = H_damped_inv_mat @ rhs
+
+# Build preconditioners (inverse linear operators in parameter space).
+identity_preconditioner = IdentityLinearOperator(
+    [p.shape for p in small_params], H.device, DTYPE
+)
+exact_hessian_preconditioner = DenseParameterSpaceLinearOperator(
+    H_damped_inv_mat, [p.shape for p in small_params]
+)
+kfac = KFACLinearOperator(small_model, small_loss, small_params, small_data)
+ekfac = EKFACLinearOperator(small_model, small_loss, small_params, small_data)
+kfac_preconditioner = kfac.inverse(damping=1e-3, use_heuristic_damping=True)
+ekfac_preconditioner = ekfac.inverse(damping=1e-3)
+
+# CG with and without preconditioning (few iterations on purpose).
+cg_plain = CGInverseLinearOperator(
+    H_damped, eps=1e-3, tolerance=0, max_iter=3, max_tridiag_iter=3
+)
+cg_identity = CGInverseLinearOperator(
+    H_damped,
+    preconditioner=identity_preconditioner,
+    eps=1e-3,
+    tolerance=0,
+    max_iter=3,
+    max_tridiag_iter=3,
+)
+cg_exact_hessian = CGInverseLinearOperator(
+    H_damped,
+    preconditioner=exact_hessian_preconditioner,
+    eps=1e-3,
+    tolerance=0,
+    max_iter=3,
+    max_tridiag_iter=3,
+)
+cg_kfac = CGInverseLinearOperator(
+    H_damped,
+    preconditioner=kfac_preconditioner,
+    eps=1e-3,
+    tolerance=0,
+    max_iter=3,
+    max_tridiag_iter=3,
+)
+cg_ekfac = CGInverseLinearOperator(
+    H_damped,
+    preconditioner=ekfac_preconditioner,
+    eps=1e-3,
+    tolerance=0,
+    max_iter=3,
+    max_tridiag_iter=3,
+)
+
+cg_plain_sol = cg_plain @ rhs
+cg_identity_sol = cg_identity @ rhs
+cg_exact_hessian_sol = cg_exact_hessian @ rhs
+cg_kfac_sol = cg_kfac @ rhs
+cg_ekfac_sol = cg_ekfac @ rhs
+
+# Neumann with and without preconditioning (few terms on purpose).
+max_eigval_h = eigvalsh(H_damped_mat).max().item()
+neumann_scale = 1.0 if max_eigval_h < 2.0 else 1.99 / max_eigval_h
+
+neumann_plain = NeumannInverseLinearOperator(
+    H_damped, num_terms=10, scale=neumann_scale
+)
+neumann_identity = NeumannInverseLinearOperator(
+    H_damped, num_terms=10, preconditioner=identity_preconditioner, scale=neumann_scale
+)
+neumann_exact_hessian = NeumannInverseLinearOperator(
+    H_damped,
+    num_terms=0,
+    preconditioner=exact_hessian_preconditioner,
+    scale=1.0,
+)
+neumann_kfac = NeumannInverseLinearOperator(
+    H_damped, num_terms=10, preconditioner=kfac_preconditioner, scale=neumann_scale
+)
+neumann_ekfac = NeumannInverseLinearOperator(
+    H_damped, num_terms=10, preconditioner=ekfac_preconditioner, scale=neumann_scale
+)
+
+neumann_plain_sol = neumann_plain @ rhs
+neumann_identity_sol = neumann_identity @ rhs
+neumann_exact_hessian_sol = neumann_exact_hessian @ rhs
+neumann_kfac_sol = neumann_kfac @ rhs
+neumann_ekfac_sol = neumann_ekfac @ rhs
+
+
+def relative_inverse_error(approx, exact):
+    """Relative error of inverse-operator applications."""
+    return (norm(approx - exact) / norm(exact)).item()
+
+
+errors = {
+    "CG": {
+        "plain": relative_inverse_error(cg_plain_sol, exact_solution),
+        "Identity pre": relative_inverse_error(cg_identity_sol, exact_solution),
+        "Exact-H pre": relative_inverse_error(cg_exact_hessian_sol, exact_solution),
+        "KFAC pre": relative_inverse_error(cg_kfac_sol, exact_solution),
+        "EKFAC pre": relative_inverse_error(cg_ekfac_sol, exact_solution),
+    },
+    "Neumann": {
+        "plain": relative_inverse_error(neumann_plain_sol, exact_solution),
+        "Identity pre": relative_inverse_error(neumann_identity_sol, exact_solution),
+        "Exact-H pre": relative_inverse_error(
+            neumann_exact_hessian_sol, exact_solution
+        ),
+        "KFAC pre": relative_inverse_error(neumann_kfac_sol, exact_solution),
+        "EKFAC pre": relative_inverse_error(neumann_ekfac_sol, exact_solution),
+    },
+}
+
+print("Relative error to exact dense inverse-Hessian action (lower is better):")
+for method, vals in errors.items():
+    print(
+        f"  {method:7s} plain={vals['plain']:.3e}  "
+        f"I-pre={vals['Identity pre']:.3e}  "
+        f"ExactH-pre={vals['Exact-H pre']:.3e}  "
+        f"KFAC-pre={vals['KFAC pre']:.3e}  EKFAC-pre={vals['EKFAC pre']:.3e}"
+    )
