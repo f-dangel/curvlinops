@@ -152,9 +152,9 @@ class MakeFxKFACComputer(KFACComputer):
         """Build the functional wrapper and extract static layer info.
 
         Traces the model once with the IO collector to detect affine layers and
-        extract their parameter names and hyperparameters. Returns the plain
-        functional wrapper ``f`` (not the traced IO function) so that per-batch-size
-        IO functions can be created later.
+        extract their parameter names and hyperparameters. Results are cached
+        so repeated calls (e.g. KFAC factors then EKFAC correction) reuse the
+        same trace.
 
         Returns:
             Tuple of (f, named_params, io_to_module, layer_param_names,
@@ -163,6 +163,9 @@ class MakeFxKFACComputer(KFACComputer):
         Raises:
             ValueError: If the data uses ``MutableMapping`` inputs.
         """
+        if hasattr(self, "_setup_cache"):
+            return self._setup_cache
+
         # Build named_params dict by matching self._params against model parameters
         param_ids = {p.data_ptr() for p in self._params}
         named_params: dict[str, Tensor] = {}
@@ -197,7 +200,54 @@ class MakeFxKFACComputer(KFACComputer):
             # "0.weight" -> "0", "layer.sub.weight" -> "layer.sub"
             io_to_module[io_layer_name] = any_param_name.rsplit(".", 1)[0]
 
-        return (f, named_params, io_to_module, layer_param_names, layer_hyperparams)
+        self._setup_cache = (
+            f,
+            named_params,
+            io_to_module,
+            layer_param_names,
+            layer_hyperparams,
+        )
+        return self._setup_cache
+
+    def _compute_batched_grads(
+        self,
+        output: Tensor,
+        y: Tensor,
+        layer_outputs: dict[str, Tensor],
+        io_to_module: dict[str, str],
+    ) -> tuple[list[str], tuple[Tensor, ...]]:
+        """Compute scaled batched gradients for all tracked layers.
+
+        Rearranges the output for >2d, computes Fisher-type-specific
+        ``grad_outputs``, scales by loss reduction, then backpropagates all
+        gradient vectors in parallel via ``autograd.grad(is_grads_batched=True)``.
+
+        Args:
+            output: Model output tensor.
+            y: Target tensor.
+            layer_outputs: Collected layer outputs from the IO function.
+            io_to_module: Mapping from IO collector layer names to module names.
+
+        Returns:
+            Tuple of (io_names_with_outputs, batched_grads).
+        """
+        output, y = self._rearrange_for_larger_than_2d_output(output, y)
+
+        io_names = [n for n in io_to_module if n in layer_outputs]
+        output_tensors = [layer_outputs[n] for n in io_names]
+
+        grad_outputs = self._grad_outputs_computer(output.detach(), y, self._generator)
+        num_loss_terms = output.shape[0]
+        scale = {"sum": 1.0, "mean": 1.0 / num_loss_terms}[self._loss_func.reduction]
+        grad_outputs.mul_(scale)
+
+        batched_grads = autograd.grad(
+            output,
+            output_tensors,
+            grad_outputs=grad_outputs,
+            is_grads_batched=True,
+        )
+        return io_names, batched_grads
 
     def _make_compute_kfac_batch(
         self,
@@ -207,8 +257,6 @@ class MakeFxKFACComputer(KFACComputer):
         layer_hparams: dict[str, dict[str, Any]],
     ) -> ComputeKfacBatchFn:
         """Build a function that computes KFAC factors for a single batch.
-
-        Creates a closure around the given IO function and static layer info.
 
         Args:
             f_with_kfac_io: IO-collecting function for a specific batch size.
@@ -223,20 +271,8 @@ class MakeFxKFACComputer(KFACComputer):
         def _compute_kfac_batch(
             params: dict[str, Tensor], X: Tensor, y: Tensor
         ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
-            """Compute unnormalized Kronecker factors for a single batch.
-
-            Args:
-                params: Named parameter tensors for the model.
-                X: Input tensor for the batch.
-                y: Target tensor for the batch.
-
-            Returns:
-                Tuple of (input_covariances, gradient_covariances) for this batch.
-                Neither dict is normalized by ``_N_data``.
-            """
             output, layer_inputs, layer_outputs, _, _ = f_with_kfac_io(X, params)
 
-            # Compute input covariances
             input_covs: dict[str, Tensor] = {}
             for io_name, x in layer_inputs.items():
                 mod_name, cov = self._input_covariance_from_io(
@@ -249,34 +285,12 @@ class MakeFxKFACComputer(KFACComputer):
                 )
                 self._set_or_add_(input_covs, mod_name, cov)
 
-            # Compute gradient covariances
             grad_covs: dict[str, Tensor] = {}
-
-            # Rearrange output for >2d
-            output, y = self._rearrange_for_larger_than_2d_output(output, y)
-
             if self._fisher_type != FisherType.FORWARD_ONLY:
-                io_names_with_outputs = [n for n in io_to_module if n in layer_outputs]
-                output_tensors = [layer_outputs[n] for n in io_names_with_outputs]
-
-                # Compute and scale grad_outputs
-                grad_outputs = self._grad_outputs_computer(
-                    output.detach(), y, self._generator
+                io_names, batched_grads = self._compute_batched_grads(
+                    output, y, layer_outputs, io_to_module
                 )
-                num_loss_terms = output.shape[0]
-                scale = {"sum": 1.0, "mean": 1.0 / num_loss_terms}[
-                    self._loss_func.reduction
-                ]
-                grad_outputs.mul_(scale)
-
-                # Backpropagate all gradient vectors in parallel (uses vmap)
-                batched_grads = autograd.grad(
-                    output,
-                    output_tensors,
-                    grad_outputs=grad_outputs,
-                    is_grads_batched=True,
-                )
-                for io_name, batched_g in zip(io_names_with_outputs, batched_grads):
+                for io_name, batched_g in zip(io_names, batched_grads):
                     mod_name, ggT = self._gradient_covariance_from_io(
                         io_name,
                         batched_g,
@@ -288,40 +302,6 @@ class MakeFxKFACComputer(KFACComputer):
             return input_covs, grad_covs
 
         return _compute_kfac_batch
-
-    def _trace_batch_fn(
-        self,
-        f: Callable,
-        named_params: dict[str, Tensor],
-        io_to_module: dict[str, str],
-        layer_param_names: dict[str, dict[str, str]],
-        layer_hparams: dict[str, dict[str, Any]],
-        X: Tensor,
-        y: Tensor,
-    ) -> ComputeKfacBatchFn:
-        """Create and trace a batch function for a specific batch size.
-
-        Creates a per-batch-size IO function via ``with_kfac_io``, builds the
-        batch computation closure, then traces it with ``make_fx`` into an
-        ATen-level graph with concrete shapes.
-
-        Args:
-            f: The plain functional model wrapper.
-            named_params: Named parameter tensors.
-            io_to_module: Mapping from IO collector layer names to module names.
-            layer_param_names: Parameter name mapping from IO collector.
-            layer_hparams: Hyperparameters from IO collector.
-            X: Example input tensor (determines the batch size for tracing).
-            y: Example target tensor.
-
-        Returns:
-            A traced function ``(params, X, y) -> (input_covs, grad_covs)``.
-        """
-        f_with_kfac_io = with_kfac_io(f, X, named_params, self._fisher_type)
-        compute_kfac_batch = self._make_compute_kfac_batch(
-            f_with_kfac_io, io_to_module, layer_param_names, layer_hparams
-        )
-        return make_fx(compute_kfac_batch)(named_params, X, y)
 
     def _compute_kronecker_factors(self) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
         """Compute KFAC's Kronecker factors using FX graph tracing.
@@ -354,14 +334,12 @@ class MakeFxKFACComputer(KFACComputer):
         for X, y in self._loop_over_data(desc="KFAC matrices"):
             batch_size = X.shape[0]
             if batch_size not in self._traced_batch_fns:
-                self._traced_batch_fns[batch_size] = self._trace_batch_fn(
-                    f,
-                    named_params,
-                    io_to_module,
-                    layer_param_names,
-                    layer_hparams,
-                    X,
-                    y,
+                f_io = with_kfac_io(f, X, named_params, self._fisher_type)
+                batch_fn = self._make_compute_kfac_batch(
+                    f_io, io_to_module, layer_param_names, layer_hparams
+                )
+                self._traced_batch_fns[batch_size] = make_fx(batch_fn)(
+                    named_params, X, y
                 )
 
             batch_input_covs, batch_grad_covs = self._traced_batch_fns[batch_size](

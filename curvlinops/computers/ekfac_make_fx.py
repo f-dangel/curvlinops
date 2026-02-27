@@ -9,7 +9,7 @@ from collections.abc import Callable
 from typing import Any
 
 from einops import rearrange
-from torch import Tensor, autograd, cat
+from torch import Tensor, cat
 from torch.fx.experimental.proxy_tensor import make_fx
 
 from curvlinops.computers.ekfac import (
@@ -73,18 +73,17 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
         for X, y in self._loop_over_data(desc="Eigenvalue correction"):
             batch_size = X.shape[0]
             if batch_size not in self._traced_correction_fns:
-                self._traced_correction_fns[batch_size] = (
-                    self._trace_correction_batch_fn(
-                        f,
-                        named_params,
-                        io_to_module,
-                        layer_param_names,
-                        layer_hyperparams,
-                        input_covariances_eigenvectors,
-                        gradient_covariances_eigenvectors,
-                        X,
-                        y,
-                    )
+                f_io = with_kfac_io(f, X, named_params, self._fisher_type)
+                batch_fn = self._make_compute_correction_batch(
+                    f_io,
+                    io_to_module,
+                    layer_param_names,
+                    layer_hyperparams,
+                    input_covariances_eigenvectors,
+                    gradient_covariances_eigenvectors,
+                )
+                self._traced_correction_fns[batch_size] = make_fx(batch_fn)(
+                    named_params, X, y
                 )
 
             batch_corrections = self._traced_correction_fns[batch_size](
@@ -106,48 +105,6 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
 
         return corrected_eigenvalues
 
-    def _trace_correction_batch_fn(
-        self,
-        f: Callable,
-        named_params: dict[str, Tensor],
-        io_to_module: dict[str, str],
-        layer_param_names: dict[str, dict[str, str]],
-        layer_hyperparams: dict[str, dict[str, Any]],
-        input_cov_eigvecs: dict[str, Tensor],
-        gradient_cov_eigvecs: dict[str, Tensor],
-        X: Tensor,
-        y: Tensor,
-    ) -> ComputeCorrectionBatchFn:
-        """Create and trace a correction batch function for a specific batch size.
-
-        Creates a per-batch-size IO function via ``with_kfac_io``, builds the
-        correction computation closure, then traces it with ``make_fx``.
-
-        Args:
-            f: The plain functional model wrapper.
-            named_params: Named parameter tensors.
-            io_to_module: Mapping from IO collector layer names to module names.
-            layer_param_names: Parameter name mapping from IO collector.
-            layer_hyperparams: Hyperparameters from IO collector.
-            input_cov_eigvecs: Input covariance eigenvectors per module.
-            gradient_cov_eigvecs: Gradient covariance eigenvectors per module.
-            X: Example input tensor (determines batch size for tracing).
-            y: Example target tensor.
-
-        Returns:
-            A traced function ``(params, X, y) -> corrections``.
-        """
-        f_with_kfac_io = with_kfac_io(f, X, named_params, self._fisher_type)
-        compute_correction_batch = self._make_compute_correction_batch(
-            f_with_kfac_io,
-            io_to_module,
-            layer_param_names,
-            layer_hyperparams,
-            input_cov_eigvecs,
-            gradient_cov_eigvecs,
-        )
-        return make_fx(compute_correction_batch)(named_params, X, y)
-
     def _make_compute_correction_batch(
         self,
         f_with_kfac_io: Callable,
@@ -158,8 +115,6 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
         gradient_cov_eigvecs: dict[str, Tensor],
     ) -> ComputeCorrectionBatchFn:
         """Build a function that computes eigenvalue corrections for one batch.
-
-        Creates a closure around the given IO function and eigenvectors.
 
         Args:
             f_with_kfac_io: IO-collecting function for a specific batch size.
@@ -176,44 +131,14 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
         def _compute_correction_batch(
             params: dict[str, Tensor], X: Tensor, y: Tensor
         ) -> dict[str, Tensor]:
-            """Compute eigenvalue corrections for a single batch.
-
-            Args:
-                params: Named parameter tensors for the model.
-                X: Input tensor for the batch.
-                y: Target tensor for the batch.
-
-            Returns:
-                Dictionary of eigenvalue corrections for this batch.
-            """
             output, layer_inputs, layer_outputs, _, _ = f_with_kfac_io(X, params)
-
-            output, y = self._rearrange_for_larger_than_2d_output(output, y)
 
             corrections: dict[str, Tensor] = {}
 
-            io_names_with_outputs = [n for n in io_to_module if n in layer_outputs]
-            output_tensors = [layer_outputs[n] for n in io_names_with_outputs]
-
-            # Compute grad_outputs (Fisher-type-specific)
-            grad_outputs = self._grad_outputs_computer(
-                output.detach(), y, self._generator
+            io_names, batched_grads = self._compute_batched_grads(
+                output, y, layer_outputs, io_to_module
             )
-            num_loss_terms = output.shape[0]
-            scale = {"sum": 1.0, "mean": 1.0 / num_loss_terms}[
-                self._loss_func.reduction
-            ]
-            grad_outputs.mul_(scale)
-
-            # Backpropagate all gradient vectors in parallel (uses vmap)
-            batched_grads = autograd.grad(
-                output,
-                output_tensors,
-                grad_outputs=grad_outputs,
-                is_grads_batched=True,
-            )
-
-            for io_name, batched_g in zip(io_names_with_outputs, batched_grads):
+            for io_name, batched_g in zip(io_names, batched_grads):
                 mod_name = io_to_module[io_name]
                 x = layer_inputs.get(io_name)
                 self._eigenvalue_correction_from_io(
