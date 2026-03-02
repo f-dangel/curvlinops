@@ -7,6 +7,7 @@ from numpy import column_stack
 from scipy.sparse.linalg import lsmr
 from torch import Tensor, as_tensor, cat, device, dtype, isnan
 
+from curvlinops._checks import _check_same_tensor_list_shape
 from curvlinops._torch_base import PyTorchLinearOperator
 
 
@@ -176,6 +177,10 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
     - Lorraine, J., Vicol, P., & Duvenaud, D. (2020). Optimizing millions of
       hyperparameters by implicit differentiation. In International Conference on
       Artificial Intelligence and Statistics (AISTATS).
+    - Wang, A., Nguyen, E., Yang, R., Bae, J., McIlraith, S. A., & Grosse,
+      R. B. (2025). Better Training Data Attribution via Better Inverse
+      Hessian-Vector Products. In Advances in Neural Information Processing
+      Systems (NeurIPS 2025).
 
     .. warning::
         The Neumann series can be non-convergent. In this case, the iterations
@@ -183,7 +188,7 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
 
     .. warning::
         The Neumann series can converge slowly.
-        Use :py:class:`curvlinops.CGInverLinearOperator` for better accuracy.
+        Use :py:class:`curvlinops.CGInverseLinearOperator` for better accuracy.
     """
 
     def __init__(
@@ -192,6 +197,7 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
         num_terms: int = 100,
         scale: float = 1.0,
         check_nan: bool = True,
+        preconditioner: None | PyTorchLinearOperator = None,
     ):
         r"""Store the linear operator whose inverse should be represented.
 
@@ -234,11 +240,24 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
                 for convergence of Neumann series (details above). Default: ``1.0``.
             check_nan: Whether to check for NaNs while applying the truncated Neumann
                 series. Default: ``True``.
+            preconditioner: Optional preconditioner :math:`\mathbf{P}` used in the
+                preconditioned Neumann/Richardson iteration
+                :math:`\mathbf{A}^{-1} \approx \alpha \sum_{k=0}^{K}
+                (\mathbf{I} - \alpha \mathbf{P}\mathbf{A})^k \mathbf{P}`,
+                where :math:`\alpha` is given by ``scale``. This preconditioned
+                formulation is inspired by Wang et al. (NeurIPS 2025). ``preconditioner``
+                should have the same in-/out-shapes as ``A``. Default: ``None``.
+
+        Raises:
+            ValueError: If ``preconditioner`` is provided with incompatible shapes.
         """
         super().__init__(A)
         self._num_terms = num_terms
         self._scale = scale
         self._check_nan = check_nan
+        self._preconditioner = preconditioner
+        if preconditioner is not None:
+            _check_same_tensor_list_shape(A, preconditioner)
 
     def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         """Multiply the inverse of A onto a matrix in list format.
@@ -247,25 +266,39 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
              X: Matrix for multiplication in list format.
 
         Returns:
-             Result of inverse matrix-vector multiplication, ``A⁻¹ @ x``.
+             Result of inverse matrix-matrix multiplication, ``A⁻¹ @ X``.
 
         Raises:
             ValueError: If ``NaN`` check is turned on and ``NaN`` values are detected.
         """
-        result_list, v_list = [x.clone() for x in X], [x.clone() for x in X]
+        preconditioned = self._preconditioner is not None
+        if not preconditioned:
+            rhs_list = X
+            apply_iteration_operator = self._A._matmat
+        else:
+            rhs_list = self._preconditioner @ X
+
+            # Use the public matmul interface for preconditioned updates so
+            # tensor/list pre-/post-processing stays consistent across all
+            # preconditioner operator types.
+            def apply_iteration_operator(v_list: list[Tensor]) -> list[Tensor]:
+                return self._preconditioner @ (self._A @ v_list)
+
+        result_list = [x.clone() for x in rhs_list]
+        v_list = [x.clone() for x in rhs_list]
 
         for idx in range(self._num_terms):
+            A_v_list = apply_iteration_operator(v_list)
             v_list = [
-                v.sub_(Av, alpha=self._scale)
-                for v, Av in zip(v_list, self._A._matmat(v_list))
+                v.sub_(A_v, alpha=self._scale) for v, A_v in zip(v_list, A_v_list)
             ]
             result_list = [result.add_(v) for result, v in zip(result_list, v_list)]
 
-            if self._check_nan and any(isnan(result).any() for result in result_list):
+            if self._check_nan and any(isnan(v).any() for v in v_list):
                 raise ValueError(
                     f"Detected NaNs after application of {idx}-th term."
                     + " This is probably because the Neumann series is non-convergent."
-                    + " Try decreasing `scale` and read the comment on convergence."
+                    + " Try using a better preconditioner or fewer terms."
                 )
 
         return [result.mul_(self._scale) for result in result_list]
@@ -276,9 +309,13 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
         Returns:
             A linear operator representing the adjoint.
         """
+        preconditioner = (
+            None if self._preconditioner is None else self._preconditioner._adjoint()
+        )
         return NeumannInverseLinearOperator(
             self._A._adjoint(),
             num_terms=self._num_terms,
             scale=self._scale,
             check_nan=self._check_nan,
+            preconditioner=preconditioner,
         )
