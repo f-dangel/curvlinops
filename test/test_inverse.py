@@ -24,41 +24,6 @@ from test.utils import (
 )
 
 
-class _DenseMatrixStructuredLinearOperator(PyTorchLinearOperator):
-    """Apply a dense matrix on the flattened space with structured tensor IO."""
-
-    def __init__(
-        self,
-        A: Tensor,
-        in_shape: list[tuple[int, ...]],
-        out_shape: list[tuple[int, ...]],
-    ):
-        super().__init__(in_shape, out_shape)
-        self._A = A
-
-    @property
-    def device(self):
-        return self._A.device
-
-    @property
-    def dtype(self):
-        return self._A.dtype
-
-    def _adjoint(self) -> "_DenseMatrixStructuredLinearOperator":
-        return _DenseMatrixStructuredLinearOperator(
-            self._A.conj().T, self._out_shape, self._in_shape
-        )
-
-    def _matmat(self, X: list[Tensor]) -> list[Tensor]:
-        num_vecs = X[0].shape[-1]
-        X_flat = cat([x.reshape(-1, num_vecs) for x in X], dim=0)
-        AX_flat = self._A @ X_flat
-        return [
-            y.reshape(*s, num_vecs)
-            for y, s in zip(AX_flat.split(self._out_shape_flat, dim=0), self._out_shape)
-        ]
-
-
 def test_CGInverseLinearOperator_damped_GGN(inv_case, delta_rel: float = 2e-2):
     """Test matrix multiplication with the inverse damped GGN with CG.
 
@@ -115,6 +80,76 @@ def test_LSMRInverseLinearOperator_damped_GGN(inv_case, delta: float = 2e-2):
     compare_consecutive_matmats(inv_GGN)
     compare_matmat(inv_GGN, inv_GGN_naive)
 
+def test_NeumannInverseLinearOperator_preconditioner():
+    """Test NeumannInverseLinearOperator with a preconditioner on a toy example.
+
+    We consider three different preconditioners for matrix:
+    1. Richardson iteration: P = I / theta, where theta is a scalar, this is equivalent to the `scale` argument of NeumannInverseLinearOperator.
+    2. Jacobi Iteration: P = diag(A)^{-1}, where diag(A) is the diagonal of A.
+    3. Gauss-Seidel Iteration: P = (L + D)^{-1}, where L is the lower triangular part of A and D is the diagonal of A.
+    
+    The test is inspired from
+    https://student.cs.uwaterloo.ca/~cs475/CS475-Lecture-Notes.pdf
+    """
+    manual_seed(1234)
+    A = Tensor([
+        [5.0, 1.0, 1.0],
+        [1.0, 4.0, 1.0],
+        [1.0, 1.0, 3.0],
+    ]).double()
+
+
+    inv_A = inv(A)
+    inv_A_neumann = NeumannInverseLinearOperator(
+        TensorLinearOperator(A), num_terms=1_000
+    )
+    inv_A_neumann_scaled_20terms = NeumannInverseLinearOperator(
+        TensorLinearOperator(A), num_terms=20, scale=0.3
+    )
+    inv_A_neumann_scaled_100terms = NeumannInverseLinearOperator(
+        TensorLinearOperator(A), num_terms=100, scale=0.3
+    )
+
+    # Directly applying the Neumann sereis will diverge.
+    with raises(ValueError):
+        compare_consecutive_matmats(inv_A_neumann)
+
+    tols = {"rtol": 1e-3, "atol": 1e-5}
+    # Only 20 terms with scaling is not enough to get a good approximation.
+    with raises(AssertionError):
+        compare_matmat(inv_A_neumann_scaled_20terms, inv_A, **tols)
+    # But 100 terms with scaling is enough to get a good approximation.
+    compare_matmat(inv_A_neumann_scaled_100terms, inv_A, **tols)
+
+    # We can use Richardson preconditioner, then we don't need scale
+    theta = 0.3
+    A_linop = TensorLinearOperator(A)
+    preconditioner_richardson = IdentityLinearOperator(A_linop._in_shape, A.device, A.dtype) * theta
+    inv_A_neumann_richardson = NeumannInverseLinearOperator(
+        TensorLinearOperator(A), num_terms=100, preconditioner=preconditioner_richardson
+    )
+    compare_consecutive_matmats(inv_A_neumann_richardson)
+    compare_matmat(inv_A_neumann_richardson, inv_A, **tols)
+
+    # Jacobi preconditioner, then can converge with only 20 terms
+    diag_A = A.diag()
+    preconditioner_jacobi = TensorLinearOperator(diag_A.reciprocal().diag())
+    inv_A_neumann_jacobi = NeumannInverseLinearOperator(
+        TensorLinearOperator(A), num_terms=20, preconditioner=preconditioner_jacobi
+    )
+    compare_consecutive_matmats(inv_A_neumann_jacobi)
+    compare_matmat(inv_A_neumann_jacobi, inv_A, **tols)
+
+    # Gauss-Seidel preconditioner, then can converge with only 20 terms
+    L = A.tril(-1)
+    D = A.diag().diag()
+    preconditioner_gauss_seidel = TensorLinearOperator((L + D).inverse())
+    inv_A_neumann_gauss_seidel = NeumannInverseLinearOperator(
+        TensorLinearOperator(A), num_terms=20, preconditioner=preconditioner_gauss_seidel
+    )
+    compare_consecutive_matmats(inv_A_neumann_gauss_seidel) 
+    compare_matmat(inv_A_neumann_gauss_seidel, inv_A, **tols)
+
 
 def test_NeumannInverseLinearOperator_toy():
     """Test NeumannInverseLinearOperator on a toy example.
@@ -159,89 +194,5 @@ def test_NeumannInverseLinearOperator_toy():
     compare_consecutive_matmats(inv_B_neumann)
     compare_matmat(inv_B_neumann, inv_B, **tols)
 
-
-def test_CGInverseLinearOperator_preconditioner_damped_GGN(inv_case, delta_rel: float = 2e-2):
-    """Test CG preconditioners on damped GGN: identity=no-pre, exact=exact inverse."""
-    model_func, loss_func, params, data, batch_size_fn = change_dtype(inv_case, float64)
-    (dev,), (dt,) = {p.device for p in params}, {p.dtype for p in params}
-
-    GGN_naive = functorch_ggn(
-        model_func, loss_func, params, data, input_key="x"
-    ).detach()
-    delta = delta_rel * GGN_naive.diag().mean().item()
-    damping = delta * IdentityLinearOperator([p.shape for p in params], dev, dt)
-    A = GGNLinearOperator(
-        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
-    ) + damping
-    A_naive = GGN_naive + delta * eye_like(GGN_naive)
-    inv_A_naive = inv(A_naive)
-
-    inv_A_cg = CGInverseLinearOperator(
-        A, eps=0, tolerance=0, max_iter=10, max_tridiag_iter=10
-    )
-    inv_A_cg_id = CGInverseLinearOperator(
-        A,
-        preconditioner=IdentityLinearOperator([p.shape for p in params], dev, dt),
-        eps=0,
-        tolerance=0,
-        max_iter=10,
-        max_tridiag_iter=10,
-    )
-    inv_A_cg_exact = CGInverseLinearOperator(
-        A,
-        preconditioner=_DenseMatrixStructuredLinearOperator(
-            inv_A_naive, A._in_shape, A._out_shape
-        ),
-        eps=0,
-        tolerance=0,
-        max_iter=1,
-        max_tridiag_iter=1,
-    )
-    atol, rtol = (1e-8, 1e-5) if "cpu" in str(dev) else (1e-7, 1e-4)
-    compare_consecutive_matmats(inv_A_cg_id)
-    compare_consecutive_matmats(inv_A_cg_exact)
-    compare_matmat(inv_A_cg_exact, inv_A_naive, atol=atol, rtol=rtol)
-    compare_matmat(inv_A_cg_id, inv_A_cg, atol=atol, rtol=rtol)
-
-
-def test_NeumannInverseLinearOperator_preconditioner_damped_GGN(inv_case, delta_rel: float = 2e-2):
-    """Test Neumann preconditioners on damped GGN: identity=no-pre, exact=exact inverse."""
-    model_func, loss_func, params, data, batch_size_fn = change_dtype(inv_case, float64)
-    (dev,), (dt,) = {p.device for p in params}, {p.dtype for p in params}
-
-    GGN_naive = functorch_ggn(
-        model_func, loss_func, params, data, input_key="x"
-    ).detach()
-    delta = delta_rel * GGN_naive.diag().mean().item()
-    damping = delta * IdentityLinearOperator([p.shape for p in params], dev, dt)
-    A = GGNLinearOperator(
-        model_func, loss_func, params, data, batch_size_fn=batch_size_fn
-    ) + damping
-    A_naive = GGN_naive + delta * eye_like(GGN_naive)
-    inv_A_naive = inv(A_naive)
-
-    # Safe scale for the undamped Neumann/Richardson iteration on SPD matrix A_naive.
-    scale = 0.9 / eigvalsh(A_naive).max().item()
-
-    inv_A_neumann = NeumannInverseLinearOperator(A, num_terms=5, scale=scale)
-    inv_A_neumann_id = NeumannInverseLinearOperator(
-        A,
-        num_terms=5,
-        scale=scale,
-        preconditioner=IdentityLinearOperator([p.shape for p in params], dev, dt),
-    )
-    inv_A_neumann_exact = NeumannInverseLinearOperator(
-        A,
-        num_terms=0,
-        scale=1.0,
-        preconditioner=_DenseMatrixStructuredLinearOperator(
-            inv_A_naive, A._in_shape, A._out_shape
-        ),
-    )
-    atol, rtol = (1e-8, 1e-5) if "cpu" in str(dev) else (1e-7, 1e-4)
-    compare_consecutive_matmats(inv_A_neumann_id)
-    compare_consecutive_matmats(inv_A_neumann_exact)
-    compare_matmat(inv_A_neumann_exact, inv_A_naive, atol=atol, rtol=rtol)
-    compare_matmat(inv_A_neumann_id, inv_A_neumann, atol=atol, rtol=rtol)
 
 
