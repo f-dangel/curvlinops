@@ -50,7 +50,6 @@ from tueplots import bundles
 from curvlinops import (
     EFLinearOperator,
     EKFACLinearOperator,
-    FisherMCLinearOperator,
     GGNLinearOperator,
     HessianLinearOperator,
     KFACLinearOperator,
@@ -81,7 +80,6 @@ makedirs(RESULTDIR, exist_ok=True)
 HAS_JVP = (
     HessianLinearOperator,
     GGNLinearOperator,
-    FisherMCLinearOperator,
     EFLinearOperator,
 )
 
@@ -276,12 +274,15 @@ def setup_linop(
 
         kwargs["block_sizes"] = [len(block) for block in blocks]
 
+    if linop_str == "Monte-Carlo Fisher":
+        kwargs["mc_samples"] = 1
+
     linop_cls = {
         "Hessian": HessianLinearOperator,
         "Block-diagonal Hessian": HessianLinearOperator,
         "Generalized Gauss-Newton": GGNLinearOperator,
         "Empirical Fisher": EFLinearOperator,
-        "Monte-Carlo Fisher": FisherMCLinearOperator,
+        "Monte-Carlo Fisher": GGNLinearOperator,
         "KFAC": KFACLinearOperator,
         "KFAC inverse": KFACLinearOperator,
         "EKFAC": EKFACLinearOperator,

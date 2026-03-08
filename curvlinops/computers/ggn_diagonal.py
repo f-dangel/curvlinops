@@ -12,7 +12,7 @@ from curvlinops._checks import (
     _register_userdict_as_pytree,
 )
 from curvlinops._empirical_risk import _EmpiricalRiskMixin
-from curvlinops.kfac_utils import (
+from curvlinops.ggn_utils import (
     _check_binary_if_BCEWithLogitsLoss,
     make_grad_output_fn,
 )
@@ -23,7 +23,6 @@ def make_batch_ggn_diagonal_func(
     model_func: Module,
     loss_func: Module,
     params: tuple[Parameter, ...],
-    mode: str,
     mc_samples: int,
     batch_size_fn: Callable[[Tensor | MutableMapping], int],
 ) -> Callable[
@@ -36,8 +35,8 @@ def make_batch_ggn_diagonal_func(
         model_func: PyTorch module representing the neural network.
         loss_func: Loss function module.
         params: Tuple of model parameters.
-        mode: Computation mode, either ``'exact'`` or ``'mc'``.
-        mc_samples: Number of Monte Carlo samples (used when ``mode='mc'``).
+        mc_samples: Number of Monte Carlo samples. ``0`` uses the exact GGN diagonal
+            via the loss Hessian's square root. Positive values use MC approximation.
         batch_size_fn: Function that returns the batch size given an input ``X``.
             If ``None``, defaults to using ``X.shape[0]`` for tensors or the first
             value's shape for MutableMapping inputs.
@@ -48,6 +47,9 @@ def make_batch_ggn_diagonal_func(
     """
     # Create functional version of the model: (*params, x) -> prediction
     f, _ = make_functional_model_and_loss(model_func, loss_func, params)
+
+    # Map mc_samples to internal mode string for make_grad_output_fn
+    mode = "exact" if mc_samples == 0 else "mc"
 
     # Set up gradient output vector computation (binary target check is disabled
     # inside because it is incompatible with vmap; checked in batch_ggn_diagonal)
@@ -121,12 +123,9 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
     diagonal as a list of tensors.
 
     Attributes:
-        SUPPORTED_MODES: Supported computation modes.
         FIXED_DATA_ORDER: Whether the data loader must return the same data
-            for every iteration.
+            for every iteration. Set to ``True`` when ``mc_samples > 0``.
     """
-
-    SUPPORTED_MODES: tuple[str, ...] = ("exact", "mc")
 
     def __init__(
         self,
@@ -138,9 +137,8 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
         check_deterministic: bool = True,
         num_data: int | None = None,
         batch_size_fn: Callable[[MutableMapping | Tensor], int] | None = None,
-        mode: str = "exact",
+        mc_samples: int = 0,
         seed: int = 2_147_483_647,
-        mc_samples: int = 1,
     ):
         """Set up the GGN diagonal computation.
 
@@ -160,7 +158,8 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
                 could be a ``dict`` or ``UserDict``; this is useful for custom models.
                 In this case, you must (i) specify the ``batch_size_fn`` argument, and
                 (ii) take care of preprocessing like ``X.to(device)`` inside of your
-                ``model.forward()`` function.
+                ``model.forward()`` function. When using MC sampling, batches must be
+                presented in the same deterministic order (no shuffling!).
             progressbar: Show a progressbar during computation.
                 Default: ``False``.
             check_deterministic: Probe that model and data are deterministic, i.e.
@@ -174,25 +173,16 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
                 ``torch.Tensor`` inputs, this should typically return ``X.shape[0]``.
                 For ``dict``/``UserDict`` inputs, this should return the batch size of
                 the contained tensors.
-            mode: Computation mode for the GGN diagonal. ``'exact'`` computes the
-                exact diagonal using the loss Hessian's square root. ``'mc'`` uses
-                Monte Carlo approximation with sampled gradients. Default: ``'exact'``.
-            seed: Random seed for Monte Carlo sampling when ``mode='mc'``.
-                Default: ``2147483647``.
-            mc_samples: Number of Monte Carlo samples when ``mode='mc'``.
-                Default: ``1``.
-
-        Raises:
-            ValueError: If mode is not one of the supported modes.
+            mc_samples: Number of Monte-Carlo samples to approximate the loss Hessian.
+                ``0`` (default) uses the exact GGN diagonal. Positive values activate
+                the MC approximation.
+            seed: Seed for the internal random number generator used for MC sampling.
+                Only used when ``mc_samples > 0``. Default: ``2147483647``.
         """
-        if mode not in self.SUPPORTED_MODES:
-            raise ValueError(
-                f"Invalid mode {mode!r}. Must be one of {self.SUPPORTED_MODES}."
-            )
-        self.FIXED_DATA_ORDER = {"exact": False, "mc": True}[mode]
-        self._mode = mode
-        self._seed = seed
         self._mc_samples = mc_samples
+        if mc_samples > 0:
+            self.FIXED_DATA_ORDER = True
+        self._seed = seed
 
         super().__init__(
             model_func,
@@ -226,20 +216,20 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
             self._model_func,
             self._loss_func,
             tuple(self._params),
-            self._mode,
             self._mc_samples,
             self._batch_size_fn,
         )
 
         generator = (
             None
-            if self._mode == "exact"
+            if self._mc_samples == 0
             else _seed_generator(None, self.device, self._seed)
         )
 
         result = [zeros_like(p) for p in self._params]
 
-        for X, y in self._loop_over_data(desc=f"GGN diagonal ({self._mode})"):
+        mode_str = "exact" if self._mc_samples == 0 else "mc"
+        for X, y in self._loop_over_data(desc=f"GGN diagonal ({mode_str})"):
             batch_result = batch_ggn_diagonal_func(X, y, generator)
             normalization_factor = self._get_normalization_factor(X, y)
             for res_p, batch_p in zip(result, batch_result, strict=True):

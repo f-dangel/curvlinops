@@ -139,8 +139,8 @@ for task_idx in range(T):
 per_task_fishers = {
     # Diagonal approximation as used in the seminal paper
     # (Precisely speaking, the seminal paper uses a randomized approximation of the
-    # Fisher based on sampling that can be achieved with `fisher_type='mc'` and
-    # `mc_samples=1`. For simplicity we compute the exact GGN/Fisher diagonal here.)
+    # Fisher based on sampling that can be achieved with `mc_samples=1`.
+    # For simplicity we compute the exact GGN/Fisher diagonal here.)
     "diag(F)": [
         GGNDiagonalLinearOperator(
             model,

@@ -45,7 +45,6 @@ from torch.nn import (
 from curvlinops import (
     EFLinearOperator,
     EKFACLinearOperator,
-    FisherMCLinearOperator,
     FisherType,
     GGNLinearOperator,
     KFACLinearOperator,
@@ -661,7 +660,7 @@ def compare_consecutive_matmats(
 
 
 def compare_matmat_expectation(
-    op: FisherMCLinearOperator,
+    op: GGNLinearOperator,
     mat: Tensor,
     max_repeats: int,
     check_every: int,
@@ -911,10 +910,12 @@ def _test_ekfac_closer_to_exact_than_kfac(
     # Compute exact block-wise ground truth quantity.
     linop_cls = {
         FisherType.TYPE2: GGNLinearOperator,
-        FisherType.MC: FisherMCLinearOperator,
+        FisherType.MC: GGNLinearOperator,
         FisherType.EMPIRICAL: EFLinearOperator,
     }[fisher_type]
-    optional_linop_args = {"seed": 1} if fisher_type == FisherType.MC else {}
+    optional_linop_args = (
+        {"mc_samples": 1, "seed": 1} if fisher_type == FisherType.MC else {}
+    )
     exact = block_diagonal(
         linop_cls,
         model,

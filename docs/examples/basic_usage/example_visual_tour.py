@@ -28,7 +28,6 @@ from tueplots import bundles
 
 from curvlinops import (
     EFLinearOperator,
-    FisherMCLinearOperator,
     GGNLinearOperator,
     HessianLinearOperator,
     KFACLinearOperator,
@@ -102,7 +101,7 @@ Hessian_blocked_linop = HessianLinearOperator(
     dataloader,
     block_sizes=[s for s in num_tensors_layer if s != 0],
 )
-F_linop = FisherMCLinearOperator(model, loss_function, params, dataloader)
+F_linop = GGNLinearOperator(model, loss_function, params, dataloader, mc_samples=1)
 KFAC_linop = KFACLinearOperator(
     model, loss_function, params, dataloader, separate_weight_and_bias=False
 )

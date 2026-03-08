@@ -20,9 +20,6 @@ Generalized Gauss-Newton
 Fisher (approximate)
 --------------------
 
-.. autoclass:: curvlinops.FisherMCLinearOperator
-   :members: __init__
-
 .. autoclass:: curvlinops.KFACLinearOperator
    :members: __init__, inverse, trace, det, logdet, frobenius_norm
 

@@ -8,10 +8,8 @@ from curvlinops.examples.functorch import functorch_ggn
 from curvlinops.utils import allclose_report
 from test.utils import change_dtype
 
-DIAGONAL_CASES = [{"mode": "exact"}, {"mode": "mc", "mc_samples": 20_000}]
-DIAGONAL_IDS = [
-    "_".join(f"{k}_{v}" for k, v in case.items()) for case in DIAGONAL_CASES
-]
+DIAGONAL_CASES = [{"mc_samples": 0}, {"mc_samples": 20_000}]
+DIAGONAL_IDS = ["mc_samples_0", "mc_samples_20000"]
 
 
 @mark.parametrize("kwargs", DIAGONAL_CASES, ids=DIAGONAL_IDS)
@@ -39,7 +37,7 @@ def test_GGNDiagonalComputer(case, kwargs: dict):
         .diag()
     )
 
-    tols = {"exact": {}, "mc": {"atol": 1e-4, "rtol": 2e-2}}[kwargs["mode"]]
+    tols = {} if kwargs["mc_samples"] == 0 else {"atol": 1e-4, "rtol": 2e-2}
     assert allclose_report(diag_flat, diag_ref, **tols)
 
 
@@ -70,7 +68,7 @@ def test_GGNDiagonalComputer_mc_different_seed(case):
     """
     model_func, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
     args = (model_func, loss_func, params, data)
-    kwargs = {"batch_size_fn": batch_size_fn, "mode": "mc", "mc_samples": 1}
+    kwargs = {"batch_size_fn": batch_size_fn, "mc_samples": 1}
 
     diag1 = GGNDiagonalComputer(*args, **kwargs, seed=0).compute()
     diag2 = GGNDiagonalComputer(*args, **kwargs, seed=1).compute()
