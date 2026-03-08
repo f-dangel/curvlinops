@@ -16,7 +16,9 @@ def make_batch_hessian_matrix_product(
     loss_func: Module,
     params: tuple[Parameter, ...],
     block_sizes: list[int] | None = None,
-) -> Callable[[Tensor, Tensor, tuple[Tensor, ...]], tuple[Tensor, ...]]:
+) -> Callable[
+    [Tensor | MutableMapping, Tensor, tuple[Tensor, ...]], tuple[Tensor, ...]
+]:
     r"""Set up function that multiplies the mini-batch Hessian onto a matrix in list format.
 
     Args:
@@ -46,7 +48,7 @@ def make_batch_hessian_matrix_product(
 
     @no_grad()
     def hessian_vector_product(
-        X: Tensor, y: Tensor, v: tuple[Tensor, ...]
+        X: Tensor | MutableMapping, y: Tensor, v: tuple[Tensor, ...]
     ) -> tuple[Tensor, ...]:
         """Multiply the mini-batch Hessian on a vector in list format.
 
@@ -174,9 +176,9 @@ class HessianLinearOperator(CurvatureLinearOperator):
         """Lazy initialization of batch-Hessian matrix product function.
 
         Returns:
-            Function that computes mini-batch Hessian-vector products, given inputs
-            ``X``, labels ``y``, and the entries ``v1, v2, ...`` of the vector in list
-            format. Produces a list of tensors with the same shape as the input vector
+            Function that computes mini-batch Hessian-matrix products, given inputs
+            ``X``, labels ``y``, and a matrix ``M`` as a tuple of tensors in list
+            format. Produces a tuple of tensors with the same shape as ``M``
             that represents the result of the batch-Hessian multiplication.
         """
         return make_batch_hessian_matrix_product(

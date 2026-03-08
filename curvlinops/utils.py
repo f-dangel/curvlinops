@@ -185,7 +185,7 @@ def assert_divisible_by(num: int, divisor: int, name: str):
 
 def make_functional_call(
     module: Module, free_param_names: list[str]
-) -> Callable[[tuple[Parameter, ...]], Tensor]:
+) -> Callable[..., Tensor]:
     """Create a function that calls a module with given free parameters.
 
     Args:
@@ -226,7 +226,10 @@ def make_functional_call(
 
 def make_functional_model_and_loss(
     model_func: Module, loss_func: Module, params: tuple[Parameter, ...]
-) -> tuple[Callable[[tuple[Tensor, ...]], Tensor], Callable[[Tensor, Tensor], Tensor]]:
+) -> tuple[
+    Callable[[tuple[Tensor, ...], Tensor | MutableMapping], Tensor],
+    Callable[[Tensor, Tensor], Tensor],
+]:
     """Create functional versions of model and loss functions.
 
     Args:
@@ -256,7 +259,8 @@ def make_functional_model_and_loss(
 def make_functional_flattened_model_and_loss(
     model_func: Module, loss_func: Module, params: tuple[Parameter, ...]
 ) -> tuple[
-    Callable[[tuple[Tensor, ...], Tensor], Tensor], Callable[[Tensor, Tensor], Tensor]
+    Callable[[tuple[Tensor, ...], Tensor | MutableMapping], Tensor],
+    Callable[[Tensor, Tensor], Tensor],
 ]:
     """Create flattened versions of model and loss functions.
 

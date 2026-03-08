@@ -145,10 +145,10 @@ class EFLinearOperator(CurvatureLinearOperator):
         """Lazy initialization of the batch empirical Fisher matrix product function.
 
         Returns:
-            Function that computes mini-batch EF-vector products, given inputs ``X``,
-            labels ``y``, and the entries ``v1, v2, ...`` of the vector in list format.
-            Produces a list of tensors with the same shape as the input vector that re-
-            presents the result of the batch-EF multiplication.
+            Function that computes mini-batch EF-matrix products, given inputs ``X``,
+            labels ``y``, and a matrix ``M`` as a tuple of tensors in list format.
+            Produces a tuple of tensors with the same shape as ``M`` that represents
+            the result of the batch-EF multiplication.
 
         Raises:
             NotImplementedError: If the loss function is not supported.

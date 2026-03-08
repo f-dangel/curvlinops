@@ -385,10 +385,10 @@ class GGNLinearOperator(CurvatureLinearOperator):
         """Lazy initialization of batch-GGN matrix product function.
 
         Returns:
-            Function that computes mini-batch GGN-vector products. In exact mode,
-            takes inputs ``X``, ``y``, and vector or matrix entries. In MC mode,
-            additionally takes a ``generator`` argument; the number of MC samples is
-            fixed when this function is constructed.
+            Function that computes mini-batch GGN-matrix products. In exact mode,
+            takes inputs ``X``, ``y``, and a matrix ``M`` as a tuple of tensors in
+            list format. In MC mode, additionally takes a ``generator`` argument;
+            the number of MC samples is fixed when this function is constructed.
         """
         if self._mc_samples > 0:
             return make_batch_ggn_mc_matrix_product(
