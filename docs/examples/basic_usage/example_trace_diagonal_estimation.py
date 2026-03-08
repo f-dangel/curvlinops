@@ -1,5 +1,4 @@
-"""
-Trace and diagonal estimation
+"""Trace and diagonal estimation
 =============================
 
 In this example we will explore estimators for the trace and diagonal of a matrix.
@@ -10,7 +9,7 @@ Here are the imports:
 """
 
 from os import getenv
-from typing import Dict
+from shutil import which
 
 import matplotlib.pyplot as plt
 from torch import (
@@ -32,13 +31,12 @@ from tueplots import bundles
 from curvlinops import hutchinson_diag, hutchinson_trace, hutchpp_trace, xdiag, xtrace
 from curvlinops.examples import TensorLinearOperator
 
-# LaTeX is not available on RTD and we also want to analyze smaller matrices
-# to reduce build time
+# We want to analyze smaller matrices on RTD to reduce build time
 RTD = getenv("READTHEDOCS")
+# Use LaTeX if available
+USETEX = which("latex") is not None
 
-PLOT_CONFIG = bundles.icml2024(
-    column="full" if RTD else "half", usetex=not RTD, nrows=2
-)
+PLOT_CONFIG = bundles.icml2024(column="full" if RTD else "half", usetex=USETEX, nrows=2)
 
 # Dimension of the matrices whose traces we will estimate
 DIM = 200 if RTD else 1000
@@ -179,7 +177,7 @@ NUM_MATVECS_HUTCHPP = (NUM_MATVECS_HUTCH + (3 - NUM_MATVECS_HUTCH % 3)).unique()
 NUM_MATVECS_XTRACE = (NUM_MATVECS_HUTCH + (2 - NUM_MATVECS_HUTCH % 2)).unique()
 
 
-def compute_relative_trace_errors(Y_mat: Tensor) -> Dict[str, Dict[str, Tensor]]:
+def compute_relative_trace_errors(Y_mat: Tensor) -> dict[str, dict[str, Tensor]]:
     """Compute the relative trace errors for Hutchinson's method, Hutch++, and XTrace.
 
     Args:
@@ -254,7 +252,7 @@ for method, data in results.items():
 
 
 def plot_estimation_results(
-    results: Dict[str, Dict[str, Tensor]], ax: plt.Axes, target: str = "trace"
+    results: dict[str, dict[str, Tensor]], ax: plt.Axes, target: str = "trace"
 ) -> None:
     """Plot the trace estimation results on the given Axes.
 
@@ -392,7 +390,7 @@ NUM_MATVECS_HUTCH = linspace(1, 100, 50, dtype=int32).unique()
 NUM_MATVECS_XDIAG = (NUM_MATVECS_HUTCH + (2 - NUM_MATVECS_HUTCH % 2)).unique()
 
 
-def compute_relative_diagonal_errors(Y_mat: Tensor) -> Dict[str, Dict[str, Tensor]]:
+def compute_relative_diagonal_errors(Y_mat: Tensor) -> dict[str, dict[str, Tensor]]:
     """Compute the relative diagonal errors for Hutchinson's method and XDiag.
 
     Args:

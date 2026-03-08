@@ -1,16 +1,73 @@
 """General utility functions."""
 
+from collections.abc import Callable, Iterable, MutableMapping
 from functools import partial
-from typing import Any, Callable, List, MutableMapping, Tuple, Union
 
 from einops import rearrange
 from numpy import cumsum, ndarray
-from torch import Tensor, as_tensor
+from torch import Generator, Tensor, as_tensor, device, dtype
 from torch.func import functional_call
 from torch.nn import CrossEntropyLoss, Module, Parameter
 
 
-def split_list(x: Union[List, Tuple], sizes: List[int]) -> List[List]:
+def _infer_device(objects: Iterable) -> device:
+    """Infer a single device from objects that have a ``.device`` attribute.
+
+    Args:
+        objects: Iterable of objects with a ``.device`` attribute (e.g. tensors,
+            parameters, or linear operators).
+
+    Returns:
+        The common device.
+
+    Raises:
+        RuntimeError: If the objects live on different devices.
+    """
+    devices = {obj.device for obj in objects}
+    if len(devices) != 1:
+        raise RuntimeError(f"Expected single device, got {devices}.")
+    return devices.pop()
+
+
+def _infer_dtype(objects: Iterable) -> dtype:
+    """Infer a single data type from objects that have a ``.dtype`` attribute.
+
+    Args:
+        objects: Iterable of objects with a ``.dtype`` attribute (e.g. tensors,
+            parameters, or linear operators).
+
+    Returns:
+        The common data type.
+
+    Raises:
+        RuntimeError: If the objects have different data types.
+    """
+    dtypes = {obj.dtype for obj in objects}
+    if len(dtypes) != 1:
+        raise RuntimeError(f"Expected single dtype, got {dtypes}.")
+    return dtypes.pop()
+
+
+def _seed_generator(generator: Generator | None, dev: device, seed: int) -> Generator:
+    """Create (if needed) and seed a random number generator on the given device.
+
+    Re-uses an existing generator when it already lives on the correct device.
+
+    Args:
+        generator: An existing generator, or ``None`` to create a new one.
+        dev: The device the generator must live on.
+        seed: The seed to set on the generator.
+
+    Returns:
+        A seeded generator on ``dev``.
+    """
+    if generator is None or generator.device != dev:
+        generator = Generator(device=dev)
+    generator.manual_seed(seed)
+    return generator
+
+
+def split_list(x: list | tuple, sizes: list[int]) -> list[list]:
     """Split a list into multiple lists of specified size.
 
     Args:
@@ -33,12 +90,12 @@ def split_list(x: Union[List, Tuple], sizes: List[int]) -> List[List]:
 
 
 def allclose_report(
-    tensor1: Union[Tensor, ndarray],
-    tensor2: Union[Tensor, ndarray],
+    tensor1: Tensor | ndarray,
+    tensor2: Tensor | ndarray,
     rtol: float = 1e-5,
     atol: float = 1e-8,
 ) -> bool:
-    """Same as ``allclose``, but prints entries that differ.
+    """Compare tensors like ``allclose`` and print entries that differ.
 
     Args:
         tensor1: First tensor for comparison.
@@ -49,8 +106,8 @@ def allclose_report(
     Returns:
         ``True`` if the tensors are close, ``False`` otherwise.
     """
-    tensor1, tensor2 = as_tensor(tensor1), as_tensor(tensor2)
-
+    tensor1 = as_tensor(tensor1)
+    tensor2 = as_tensor(tensor2, device=tensor1.device)
     close = tensor1.allclose(tensor2, rtol=rtol, atol=atol)
     if not close:
         # print non-close values
@@ -127,8 +184,8 @@ def assert_divisible_by(num: int, divisor: int, name: str):
 
 
 def make_functional_call(
-    module: Module, free_param_names: List[str]
-) -> Callable[[Tuple[Tensor, ...], Any], Tensor]:
+    module: Module, free_param_names: list[str]
+) -> Callable[[tuple[Parameter, ...]], Tensor]:
     """Create a function that calls a module with given free parameters.
 
     Args:
@@ -136,9 +193,9 @@ def make_functional_call(
         free_param_names: Names of parameters that will be passed as arguments.
 
     Returns:
-        A function that takes free parameters as a tuple and module inputs,
-        returning the module's output. For model functions, inputs are typically (X,).
-        For loss functions, inputs are typically (predictions, targets).
+        A function ``(params, *module_inputs) -> output`` where ``params`` is a
+        tuple of the free parameters. For model functions, inputs are typically
+        ``(X,)``. For loss functions, inputs are typically ``(predictions, targets)``.
     """
     # Detect frozen parameters and buffers not in free_param_names
     frozen_params = {
@@ -146,20 +203,18 @@ def make_functional_call(
     }
     frozen_buffers = dict(module.named_buffers())
 
-    def functional_module(
-        free_param_values: Tuple[Tensor, ...], *module_inputs: Any
-    ) -> Tensor:
+    def functional_module(params: tuple[Parameter, ...], *module_inputs) -> Tensor:
         """Call the module functionally with free parameters and module inputs.
 
         Args:
-            free_param_values: Tuple of values for the free parameters.
-            *module_inputs: Inputs to the module.
+            params: Tuple of free parameter values.
+            *module_inputs: Inputs to the module (e.g. X for models, or
+                (prediction, target) for loss functions).
 
         Returns:
             Module output.
         """
-        # Create parameter dictionary from tuple
-        free_params = dict(zip(free_param_names, free_param_values))
+        free_params = dict(zip(free_param_names, params))
 
         # Call module with all parameters and buffers
         return functional_call(
@@ -170,11 +225,8 @@ def make_functional_call(
 
 
 def make_functional_model_and_loss(
-    model_func: Module, loss_func: Module, params: Tuple[Parameter, ...]
-) -> Tuple[
-    Callable[[Tuple[Tensor, ...], Any], Tensor],
-    Callable[[Tensor, Any], Tensor],
-]:
+    model_func: Module, loss_func: Module, params: tuple[Parameter, ...]
+) -> tuple[Callable[[tuple[Tensor, ...]], Tensor], Callable[[Tensor, Tensor], Tensor]]:
     """Create functional versions of model and loss functions.
 
     Args:
@@ -185,8 +237,8 @@ def make_functional_model_and_loss(
 
     Returns:
         A tuple containing:
-        - f: Functional model with signature (params, *module_args) -> prediction
-        - c: Functional loss with signature (prediction, *loss_args) -> loss
+        - f: Functional model with signature (params, X) -> prediction
+        - c: Functional loss with signature (prediction, y) -> loss
     """
     # detect the parameters w.r.t. which the functions are made functional
     free_param_names = []
@@ -195,22 +247,16 @@ def make_functional_model_and_loss(
         free_param_names.append(name)
 
     # Create functional versions of model and loss
-    f = make_functional_call(
-        model_func, free_param_names
-    )  # module_params, *module_args -> prediction
-    c = make_functional_call(
-        loss_func, []
-    )  # loss_params, prediction, loss_args -> loss
-    c = partial(c, tuple())  # loss function has empty parameters
+    f = make_functional_call(model_func, free_param_names)  # (params, X) -> prediction
+    c = partial(make_functional_call(loss_func, []), ())  # (prediction, y) -> loss
 
     return f, c
 
 
 def make_functional_flattened_model_and_loss(
-    model_func: Module, loss_func: Module, params: Tuple[Parameter, ...]
-) -> Tuple[
-    Callable[[Tuple[Tensor, ...], Union[Tensor, MutableMapping]], Tensor],
-    Callable[[Tensor, Tensor], Tensor],
+    model_func: Module, loss_func: Module, params: tuple[Parameter, ...]
+) -> tuple[
+    Callable[[tuple[Tensor, ...], Tensor], Tensor], Callable[[Tensor, Tensor], Tensor]
 ]:
     """Create flattened versions of model and loss functions.
 
@@ -245,7 +291,7 @@ def make_functional_flattened_model_and_loss(
     )
 
     # Set up functions that operate on flattened quantities
-    def f_flat(params: Tuple[Tensor, ...], X: Union[Tensor, MutableMapping]) -> Tensor:
+    def f_flat(params: tuple[Tensor, ...], X: Tensor | MutableMapping) -> Tensor:
         """Execute model and flatten batch and shared axes.
 
         If >2d output we convert to an equivalent 2d output for loss computation.
@@ -253,7 +299,7 @@ def make_functional_flattened_model_and_loss(
         For other losses: (batch, ..., c) -> (batch*..., c)
 
         Args:
-            params: Neural network parameters.
+            params: Model parameters as a tuple.
             X: Input data.
 
         Returns:

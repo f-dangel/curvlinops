@@ -79,7 +79,11 @@ KFAC_WEIGHT_SHARING_EXACT_CASES_NO_DEVICE_NO_LOSS_FUNC = [
     ###############################################################################
     # deep linear network with vector output and weight-sharing dimensions
     {
-        "model_func": lambda: WeightShareModel(Linear(5, 4), Linear(4, 3)),
+        # Sequential output shape: (batch, seq1=4, seq2=8 seq3=3)
+        # -> num_output_feature_dims=3
+        "model_func": lambda: WeightShareModel(
+            Linear(5, 4), Linear(4, 3), num_output_feature_dims=3
+        ),
         "data": lambda: {
             KFACType.EXPAND: [
                 (rand(2, 4, 8, 5), regression_targets((2, 4, 8, 3))),
@@ -94,15 +98,15 @@ KFAC_WEIGHT_SHARING_EXACT_CASES_NO_DEVICE_NO_LOSS_FUNC = [
     },
     # Conv2d module with vector output (uses average pooling for reduce setting)
     {
-        "model_func": lambda: Conv2dModel(),
+        "model_func": Conv2dModel,
         "data": lambda: {
             KFACType.EXPAND: [
-                (rand(2, 3, 32, 32), regression_targets((2, 33, 33, 2))),
-                (rand(7, 3, 32, 32), regression_targets((7, 33, 33, 2))),
+                (rand(2, 3, 20, 20), regression_targets((2, 21, 21, 2))),
+                (rand(7, 3, 20, 20), regression_targets((7, 21, 21, 2))),
             ],
             KFACType.REDUCE: [
-                (rand(1, 3, 32, 32), regression_targets((1, 2))),
-                (rand(8, 3, 32, 32), regression_targets((8, 2))),
+                (rand(1, 3, 20, 20), regression_targets((1, 2))),
+                (rand(8, 3, 20, 20), regression_targets((8, 2))),
             ],
         },
         "seed": 0,
@@ -210,7 +214,9 @@ SINGLE_LAYER_WEIGHT_SHARING_CASES_NO_DEVICE_NO_LOSS_FUNC = [
     ###############################################################################
     # single linear layer with vector output and weight-sharing dimensions
     {
-        "model_func": lambda: WeightShareModel(Linear(5, 3)),
+        # Sequential output shape: (batch, seq1=4, seq2=8 seq3=3)
+        # -> num_output_feature_dims=3
+        "model_func": lambda: WeightShareModel(Linear(5, 3), num_output_feature_dims=3),
         "data": lambda: {
             KFACType.EXPAND: [
                 (rand(7, 4, 8, 5), regression_targets((7, 4, 8, 3))),
@@ -225,15 +231,15 @@ SINGLE_LAYER_WEIGHT_SHARING_CASES_NO_DEVICE_NO_LOSS_FUNC = [
     },
     # Conv2d module with vector output (uses average pooling for reduce setting)
     {
-        "model_func": lambda: Conv2dModel(),
+        "model_func": Conv2dModel,
         "data": lambda: {
             KFACType.EXPAND: [
-                (rand(7, 3, 32, 32), regression_targets((7, 33, 33, 2))),
-                (rand(7, 3, 32, 32), regression_targets((7, 33, 33, 2))),
+                (rand(7, 3, 20, 20), regression_targets((7, 21, 21, 2))),
+                (rand(7, 3, 20, 20), regression_targets((7, 21, 21, 2))),
             ],
             KFACType.REDUCE: [
-                (rand(8, 3, 32, 32), regression_targets((8, 2))),
-                (rand(8, 3, 32, 32), regression_targets((8, 2))),
+                (rand(8, 3, 20, 20), regression_targets((8, 2))),
+                (rand(8, 3, 20, 20), regression_targets((8, 2))),
             ],
         },
         "seed": 0,

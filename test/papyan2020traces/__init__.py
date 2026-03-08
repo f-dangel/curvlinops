@@ -1,1 +1,1 @@
-"""Contains tests of ``curvlinops/papyan2020``"""
+"""Contains tests of ``curvlinops/papyan2020``."""

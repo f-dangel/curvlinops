@@ -48,6 +48,11 @@ dataset = Dataset.from_list(data)
 
 
 def tokenize(row):
+    """Tokenize a dataset row for GPT-2.
+
+    Returns:
+        Tokenized dictionary for the given row.
+    """
     return tokenizer(row["text"])
 
 
@@ -82,8 +87,7 @@ for k, v in data.items():
 
 
 class MyGPT2(Module):
-    """
-    Huggingface LLM wrapper.
+    """Huggingface LLM wrapper.
 
     Args:
         tokenizer: The tokenizer used for preprocessing the text data. Needed
@@ -91,6 +95,7 @@ class MyGPT2(Module):
     """
 
     def __init__(self, tokenizer: PreTrainedTokenizer) -> None:
+        """Initialize the wrapper with a tokenizer."""
         super().__init__()
         config = GPT2Config.from_pretrained("gpt2")
         config.pad_token_id = tokenizer.pad_token_id
@@ -107,9 +112,7 @@ class MyGPT2(Module):
             p.requires_grad = True
 
     def forward(self, data: MutableMapping) -> Tensor:
-        """
-        Custom forward function. Handles things like moving the
-        input tensor to the correct device inside.
+        """Run the model forward pass and move inputs to the correct device.
 
         Args:
             data: A dict-like data structure with `input_ids` inside.
@@ -144,6 +147,11 @@ with no_grad():
 
 
 def batch_size_fn(x: MutableMapping):
+    """Return the batch size for a dict-like batch.
+
+    Returns:
+        Batch size for the input batch.
+    """
     return x["input_ids"].shape[0]
 
 

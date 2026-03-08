@@ -1,12 +1,11 @@
 """Contains linear operator implementation of gradient moment matrices."""
 
-from collections.abc import MutableMapping
+from collections.abc import Callable, MutableMapping
 from functools import cached_property, partial
-from typing import Any, Callable, List, Tuple, Union
 
 from einops import einsum
-from torch import Tensor, vmap
-from torch.func import grad
+from torch import Tensor
+from torch.func import grad, vmap
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, Module, MSELoss, Parameter
 
 from curvlinops._torch_base import CurvatureLinearOperator
@@ -15,9 +14,9 @@ from curvlinops.utils import make_functional_flattened_model_and_loss
 
 
 def make_batch_ef_matrix_product(
-    model_func: Module, loss_func: Module, params: Tuple[Parameter, ...]
+    model_func: Module, loss_func: Module, params: tuple[Parameter, ...]
 ) -> Callable[
-    [Tuple[Tensor, ...], Union[Tensor, MutableMapping], Any], Tuple[Tensor, ...]
+    [Tensor | MutableMapping, Tensor, tuple[Tensor, ...]], tuple[Tensor, ...]
 ]:
     r"""Set up function that multiplies the mini-batch empirical Fisher onto a matrix.
 
@@ -38,9 +37,9 @@ def make_batch_ef_matrix_product(
             All parameters must be part of ``model_func.parameters()``.
 
     Returns:
-        A function that takes a matrix ``M`` in list format, the input ``X``, and
-        additional arguments (e.g. labels ``y``) to the criterion function, and returns
-        the mini-batch empirical Fisher applied to ``M`` in list format.
+        A function ``(X, y, M) -> EFM`` that takes inputs ``X``, labels ``y``, and a
+        matrix ``M`` as a tuple of tensors in list format, and returns the mini-batch
+        empirical Fisher applied to ``M`` in list format.
     """
     f_flat, c_flat = make_functional_flattened_model_and_loss(
         model_func, loss_func, params
@@ -48,7 +47,7 @@ def make_batch_ef_matrix_product(
     # function that computes gradients of the loss w.r.t. the flattened outputs
     c_flat_grad = grad(c_flat, argnums=0)
 
-    def c_pseudo_flat(output_flat: Tensor, *args: Any) -> Tensor:
+    def c_pseudo_flat(output_flat: Tensor, y: Tensor) -> Tensor:
         """Compute pseudo-loss: L' = 0.5 / c * sum_n <f_n, g_n>^2.
 
         This pseudo-loss L' := 0.5 / c ∑ₙ fₙᵀ (gₙ gₙᵀ) fₙ where gₙ = ∂ℓₙ/∂fₙ
@@ -59,13 +58,13 @@ def make_batch_ef_matrix_product(
 
         Args:
             output_flat: Flattened model outputs for the mini-batch.
-            *args: Additional arguments to the criterion function, e.g. labels ``y``.
+            y: Un-flattened labels for the mini-batch.
 
         Returns:
             The pseudo-loss whose GGN is the empirical Fisher on the batch.
         """
         # Compute ∂ℓₙ/∂fₙ without reduction factor of L (detached)
-        grad_output_flat = c_flat_grad(output_flat.detach(), *args)
+        grad_output_flat = c_flat_grad(output_flat.detach(), y)
 
         # Adjust the scale depending on the loss reduction used
         num_loss_terms, C = output_flat.shape
@@ -86,16 +85,17 @@ def make_batch_ef_matrix_product(
     # Create the functional EF-vector product using GGN of pseudo-loss
     ef_vp = make_ggn_vector_product(f_flat, c_pseudo_flat)
 
-    # Freeze parameter values
-    efvp = partial(ef_vp, params)  # v, X, *args -> *EFv
+    # Freeze parameter values: (X, y, v) -> EFv
+    efvp = partial(ef_vp, params)
 
     # Parallelize over vectors to multiply onto a matrix in list format
+    list_format_vmap_dims = tuple(p.ndim for p in params)  # last axis
     return vmap(
         efvp,
-        # Last axis vmap over vectors, no vmap in X, y
-        in_dims=(-1, None, None),  # NOTE Currently assumes len(args) == 1
+        # No vmap in X, y; last-axis vmap over the vector tuple
+        in_dims=(None, None, list_format_vmap_dims),
         # Vmapped output axis is last
-        out_dims=-1,
+        out_dims=list_format_vmap_dims,
         # We want each vector to be multiplied with the same mini-batch EF
         randomness="same",
     )
@@ -140,15 +140,15 @@ class EFLinearOperator(CurvatureLinearOperator):
     def _mp(
         self,
     ) -> Callable[
-        [Tuple[Tensor, ...], Union[Tensor, MutableMapping], Tensor], Tuple[Tensor, ...]
+        [Tensor | MutableMapping, Tensor, tuple[Tensor, ...]], tuple[Tensor, ...]
     ]:
         """Lazy initialization of the batch empirical Fisher matrix product function.
 
         Returns:
-            Function that computes mini-batch EF-vector products, given the matrix
-            ``(M1, M2, ...)`` in list format, inputs ``X``, and labels ``y``. Produces a
-            list of tensors with the same shape as the input vector that represents the
-            result of the batch-EF multiplication.
+            Function that computes mini-batch EF-vector products, given inputs ``X``,
+            labels ``y``, and the entries ``v1, v2, ...`` of the vector in list format.
+            Produces a list of tensors with the same shape as the input vector that re-
+            presents the result of the batch-EF multiplication.
 
         Raises:
             NotImplementedError: If the loss function is not supported.
@@ -162,8 +162,8 @@ class EFLinearOperator(CurvatureLinearOperator):
         )
 
     def _matmat_batch(
-        self, X: Union[Tensor, MutableMapping], y: Tensor, M: List[Tensor]
-    ) -> List[Tensor]:
+        self, X: Tensor | MutableMapping, y: Tensor, M: list[Tensor]
+    ) -> list[Tensor]:
         """Apply the mini-batch empirical Fisher to a matrix in tensor list format.
 
         Args:
@@ -178,4 +178,4 @@ class EFLinearOperator(CurvatureLinearOperator):
             ``M``, i.e. each tensor in the list has the shape of a parameter and a
             trailing dimension of matrix columns.
         """
-        return list(self._mp(tuple(M), X, y))
+        return list(self._mp(X, y, tuple(M)))

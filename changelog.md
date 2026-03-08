@@ -8,9 +8,149 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added/New
 
+- **Backward-incompatible:** Add MC-sampling option (`mc_samples`) to
+  `GGNLinearOperator` as replacement for the Fisher, remove `FisherMCLinearOperator`
+  and the `mode` parameter from `GGNDiagonalLinearOperator`/`GGNDiagonalComputer`.
+  Use `mc_samples=0` (default) for the exact GGN, positive values for MC approximation
+  ([PR](https://github.com/f-dangel/curvlinops/pull/255))
+
+- Add a linear operator for the exact or Monte-Carlo-approximated GGN diagonal
+  ([PR](https://github.com/f-dangel/curvlinops/pull/241))
+
+- Support left multiplication with linear operators (`X @ A` with `X` a tensor or tensor list)
+  ([PR](https://github.com/f-dangel/curvlinops/pull/226))
+
+- Support division of linear operators by scalars (i.e. `A_scaled = A / scale`)
+  ([PR](https://github.com/f-dangel/curvlinops/pull/237))
+
+- **Backward-incompatible:** (E)KFAC's `det, logdet, trace, frobenius_norm` properties are now functions
+  ([PR](https://github.com/f-dangel/curvlinops/pull/232))
+
+- **Backward-incompatible:** Reduce side effects in (E)KFAC's computation, modifying the entries of `state_dict`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/228))
+
+- **Backward-incompatible:** Remove `KFACInverseLinearOperator`, replace with `(E)KFACLinearOperator.inverse()`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/244))
+
+### Fixed/Removed
+
+- **Backward-incompatible:** Remove `(E)KFACLinearOperator`'s `state_dict` and `from_state_dict` methods, use `torch.save(K, path)` and `torch.load(path)` instead
+  ([PR](https://github.com/f-dangel/curvlinops/pull/249))
+
+### Internal
+
+- Move shared GGN utilities (`loss_hessian_matrix_sqrt`, `make_grad_output_fn`,
+  `_check_binary_if_BCEWithLogitsLoss`, `_make_single_datum_sampler`) from
+  `kfac_utils.py` to new `ggn_utils.py`; `kfac_utils.py` now only contains
+  KFAC-specific code (patch extraction, canonical space converters)
+  ([PR](https://github.com/f-dangel/curvlinops/pull/255))
+
+- Add a collector for in/outputs of linear weight sharing layers based on `make_fx`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/252))
+
+- Add KFAC-specific IO collector (`with_kfac_io`) that wraps the generic collector
+  with validation and structured output for KFAC computation
+  ([PR](https://github.com/f-dangel/curvlinops/pull/253))
+
+- Unify KFAC's gradient output computation for all Fisher types (`TYPE2`, `MC`,
+  `EMPIRICAL`, `FORWARD_ONLY`) via `make_grad_output_fn` in `kfac_utils.py`,
+  removing `_maybe_adjust_loss_scale`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/251))
+
+- Modernize type annotations
+  ([PR](https://github.com/f-dangel/curvlinops/pull/250))
+
+- Introduce computer classes for KFAC and EKFAC in a `computer` submodule (move GGN diagonal computer, too).
+  Computers compute Kronecker factors and eigencorrections.
+  The linear operators handle assembling them into linear operators.
+  ([PR](https://github.com/f-dangel/curvlinops/pull/249))
+
+- Cache `.pytest_cache` in CI and run tests with `--ff` (failed-first) for faster feedback cycles
+  ([PR](https://github.com/f-dangel/curvlinops/pull/248))
+
+- Add sequence protocol (`__iter__`, `__len__`, `__getitem__`, `__setitem__`) to
+  `BlockDiagonalLinearOperator`, `KroneckerProductLinearOperator`, and
+  `_ChainPyTorchLinearOperator`; add `eigenvalues` property to
+  `EighDecomposedLinearOperator`; extract reusable shape/device/dtype validation helpers
+  ([PR](https://github.com/f-dangel/curvlinops/pull/247))
+
+- Merge tests for testing matrix-matrix & matrix-vector products
+  with the original and transposed operator, reducing number of tests
+  ([PR](https://github.com/f-dangel/curvlinops/pull/222))
+
+- Merge GitHub actions for linting and formatting with `ruff`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/225))
+
+- Execute many tests in `float64`, allowing to lower many tolerances
+  ([PR](https://github.com/f-dangel/curvlinops/pull/224))
+
+- Add linear operators for basic mathematical structures
+  - `BlockDiagonalLinearOperator` for matrices `block_diag(B_1, B_2, ...)`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/212))
+  - `KroneckerProductLinearOperator` for matrices `S_1 ⊗ S_2 ⊗ ...`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/211))
+  - `EighDecomposedLinearOperator` for `eigh`-decomposed matrices `Q diag(λ) Q^T` with orthogonal `Q`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/210))
+  - `DiagonalLinearOperator` for diagonal matrices `diag(λ)`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/238))
+
+- Major simplification of `KFACLinearOperator` and `EKFACLinearOperator`
+  - Reduce side effects in (E)KFAC's computation and reduce caching logic
+    ([PR1](https://github.com/f-dangel/curvlinops/pull/227) (**backward-incompatible**),
+     [PR2](https://github.com/f-dangel/curvlinops/pull/228))
+  - Introduce canonicalization operators that convert from parameter space (determined by order of parameters) to KFAC's canonical space (block-diagonal Kronecker-factored matrix) and back
+    ([PR](https://github.com/f-dangel/curvlinops/pull/229))
+  - Implement (E)KFAC using structured operators, i.e. `P @ K @ PT` with `P, PT` converters to and back from the canonical basis and `K` block-diagonal Kronecker-factored. Modifies the entries of `state_dict`.
+    ([PR](https://github.com/f-dangel/curvlinops/pull/230)) (**backward-incompatible**)
+
+- Generalize computing the loss function's Hessian square root for sequence-valued predictions
+  ([PR](https://github.com/f-dangel/curvlinops/pull/231))
+
+- Use `ruff` for docstring linting (remove `darglint` and `pydocstyle`)
+  ([PR](https://github.com/f-dangel/curvlinops/pull/234))
+
+- Introduce `_EmpiricalRiskMixin` interface to allow separating deterministic checks and state pre-computation from linear operators
+  ([PR](https://github.com/f-dangel/curvlinops/pull/236))
+
+- Generalize sampling output gradients for sequence-valued predictions
+  ([PR](https://github.com/f-dangel/curvlinops/pull/235))
+
+- Introduce a computer class for the GGN diagonal
+  ([PR](https://github.com/f-dangel/curvlinops/pull/240))
+
+- **Backward-incompatible:** Remove `CurvatureLinearOperator.gradient_and_loss()` and provide
+  `curvlinops.examples.gradient_and_loss` as the replacement utility function
+  ([PR](https://github.com/f-dangel/curvlinops/pull/245))
+
+- Make `_ChainPyTorchLinearOperator` support more than two operators
+  ([PR](https://github.com/f-dangel/curvlinops/pull/246))
+
+## [3.0.1] - 2026-01-14
+
+This patch provides major performance improvements for all curvature matrices (by using `torch.func`, and by improving EKFAC's eigenvalue correction) and deprecates Python 3.9 (we now require at least 3.10).
+
+### Added/New
+
 ### Fixed/Removed
 
 ### Internal
+
+- Add EKFAC and a new problem (ResNet18 on CIFAR10) to benchmark
+  ([PR](https://github.com/f-dangel/curvlinops/pull/214)),
+  expose a run time and memory inefficiency in EKFAC
+  ([issue](https://github.com/f-dangel/curvlinops/issues/193)).
+  This issue is successfully resolved with:
+
+  - Improve performance of EKFAC by merging gradient computation and basis rotation into a single `einsum`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/215))
+
+  - Improve performance of EKFAC by efficiently taking the square and sum over the batch dimension in the absence of weight sharing
+  ([PR](https://github.com/f-dangel/curvlinops/pull/216))
+
+  - Generalize trick for no weight sharing to mild weight sharing, further improve memory performance of EKFAC
+  ([PR](https://github.com/f-dangel/curvlinops/pull/219))
+
+- Minor fixes in docs, code and examples to reduce CI pipeline errors ([PR](https://github.com/f-dangel/curvlinops/pull/218))
 
 - Updated supported Python version from 3.9 (deprecated) to 3.10 ([PR](https://github.com/f-dangel/curvlinops/pull/213))
 
@@ -451,7 +591,8 @@ Adds various new features:
 
 Initial release
 
-[Unreleased]: https://github.com/f-dangel/curvlinops/compare/3.0.0...HEAD
+[Unreleased]: https://github.com/f-dangel/curvlinops/compare/3.0.1...HEAD
+[3.0.1]: https://github.com/f-dangel/curvlinops/releases/tag/3.0.1
 [3.0.0]: https://github.com/f-dangel/curvlinops/releases/tag/3.0.0
 [2.0.1]: https://github.com/f-dangel/curvlinops/releases/tag/2.0.1
 [2.0.0]: https://github.com/f-dangel/curvlinops/releases/tag/2.0.0

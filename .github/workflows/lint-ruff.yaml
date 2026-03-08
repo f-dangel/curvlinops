@@ -19,3 +19,6 @@ jobs:
     - name: Run ruff
       run: |
         make ruff-check
+    - name: Run ruff format
+      run: |
+        make ruff-format-check

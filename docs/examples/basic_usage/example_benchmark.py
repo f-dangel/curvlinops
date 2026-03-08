@@ -1,5 +1,4 @@
-r"""
-Benchmarking linear operators
+r"""Benchmarking linear operators
 =============================
 
 In this tutorial, we demonstrate how to evaluate the run time and memory performance
@@ -17,17 +16,19 @@ Let's get the imports out of the way.
 
 import inspect
 import json
+from collections.abc import Iterable
 from contextlib import nullcontext
 from itertools import product
 from math import floor
 from os import environ, makedirs, path
+from shutil import which
 from subprocess import CalledProcessError, CompletedProcess, run
 from time import perf_counter
-from typing import Iterable, List, Tuple
 
 import matplotlib.pyplot as plt
 from benchmark_utils import (
     GPTWrapper,
+    setup_synthetic_cifar10_resnet18,
     setup_synthetic_imagenet_resnet50,
     setup_synthetic_shakespeare_nanogpt,
 )
@@ -48,13 +49,13 @@ from tueplots import bundles
 
 from curvlinops import (
     EFLinearOperator,
-    FisherMCLinearOperator,
+    EKFACLinearOperator,
     GGNLinearOperator,
     HessianLinearOperator,
-    KFACInverseLinearOperator,
     KFACLinearOperator,
 )
 from curvlinops._torch_base import PyTorchLinearOperator
+from curvlinops.examples import gradient_and_loss
 
 # %%
 #
@@ -79,17 +80,16 @@ makedirs(RESULTDIR, exist_ok=True)
 HAS_JVP = (
     HessianLinearOperator,
     GGNLinearOperator,
-    FisherMCLinearOperator,
     EFLinearOperator,
 )
 
-# When running on RTD, we only want to execute the small example and also
-# take into account that there is no LaTeX installation
+# When running on RTD, we only want to execute the small example
 ON_RTD = environ.get("READTHEDOCS", "False") == "True"
-USETEX = not ON_RTD
+# Use LaTeX if available
+USETEX = which("latex") is not None
 
 # Devices to run the benchmark on
-DEVICE_STRS = ["cpu"] if ON_RTD else ["cuda"]
+DEVICE_STRS = ["cuda"] if cuda.is_available() else ["cpu"]
 
 # Whether to skip runs for which measurements already exists
 SKIP_EXISTING = True
@@ -112,6 +112,7 @@ if ON_RTD:
 else:
     PROBLEM_STRS = [
         "synthetic_mnist_cnn",
+        "synthetic_cifar10_resnet18",
         "synthetic_imagenet_resnet50",
         "synthetic_shakespeare_nanogpt",
     ]
@@ -119,11 +120,11 @@ else:
 
 def setup_synthetic_mnist_cnn(
     batch_size: int = 512,
-) -> Tuple[Sequential, CrossEntropyLoss, List[Tuple[Tensor, Tensor]]]:
+) -> tuple[Sequential, CrossEntropyLoss, list[tuple[Tensor, Tensor]]]:
     """Set up a synthetic MNIST CNN problem for the benchmark.
 
     Args:
-        batch_size: The batch size to use. Default is ``64``.
+        batch_size: The batch size to use. Default is ``512``.
 
     Returns:
         The neural net, loss function, and data.
@@ -153,7 +154,7 @@ def setup_synthetic_mnist_cnn(
 
 def setup_problem(
     problem_str: str, linop_str: str, dev: device
-) -> Tuple[Module, Module, List[Parameter], Iterable[Tuple[Tensor, Tensor]]]:
+) -> tuple[Module, Module, list[Parameter], Iterable[tuple[Tensor, Tensor]]]:
     """Set up the neural net, loss function, parameters, and data.
 
     Args:
@@ -166,6 +167,7 @@ def setup_problem(
     """
     setup_func = {
         "synthetic_mnist_cnn": setup_synthetic_mnist_cnn,
+        "synthetic_cifar10_resnet18": setup_synthetic_cifar10_resnet18,
         "synthetic_imagenet_resnet50": setup_synthetic_imagenet_resnet50,
         "synthetic_shakespeare_nanogpt": setup_synthetic_shakespeare_nanogpt,
     }[problem_str]
@@ -177,7 +179,7 @@ def setup_problem(
     loss_function = loss_function.to(dev)
 
     # Only use parameters of supported layers for KFAC
-    if linop_str in {"KFAC", "KFAC inverse"}:
+    if linop_str in {"KFAC", "KFAC inverse", "EKFAC", "EKFAC inverse"}:
         params = []
         supported_layers = [
             m for m in model.modules() if isinstance(m, (Linear, Conv2d))
@@ -205,6 +207,8 @@ LINOP_STRS = [
     "Generalized Gauss-Newton",
     "Empirical Fisher",
     "Monte-Carlo Fisher",
+    "EKFAC",
+    "EKFAC inverse",
     "KFAC",
     "KFAC inverse",
 ]
@@ -225,8 +229,8 @@ def setup_linop(
     linop_str: str,
     model: Module,
     loss_function: Module,
-    params: List[Parameter],
-    data: Iterable[Tuple[Tensor, Tensor]],
+    params: list[Parameter],
+    data: Iterable[tuple[Tensor, Tensor]],
     check_deterministic: bool = True,
 ) -> PyTorchLinearOperator:
     """Set up the linear operator.
@@ -270,14 +274,19 @@ def setup_linop(
 
         kwargs["block_sizes"] = [len(block) for block in blocks]
 
+    if linop_str == "Monte-Carlo Fisher":
+        kwargs["mc_samples"] = 1
+
     linop_cls = {
         "Hessian": HessianLinearOperator,
         "Block-diagonal Hessian": HessianLinearOperator,
         "Generalized Gauss-Newton": GGNLinearOperator,
         "Empirical Fisher": EFLinearOperator,
-        "Monte-Carlo Fisher": FisherMCLinearOperator,
+        "Monte-Carlo Fisher": GGNLinearOperator,
         "KFAC": KFACLinearOperator,
         "KFAC inverse": KFACLinearOperator,
+        "EKFAC": EKFACLinearOperator,
+        "EKFAC inverse": EKFACLinearOperator,
     }[linop_str]
 
     # Double-backward through efficient attention is unsupported, disable fused kernels
@@ -286,8 +295,9 @@ def setup_linop(
     with sdpa_kernel(SDPBackend.MATH) if attention_double_backward else nullcontext():
         linop = linop_cls(*args, **kwargs)
 
-    if linop_str == "KFAC inverse":
-        linop = KFACInverseLinearOperator(linop, damping=1e-3, cache=True)
+    is_inverse = linop_str in {"KFAC inverse", "EKFAC inverse"}
+    if is_inverse:
+        linop = linop.inverse(damping=1e-3)
 
     return linop
 
@@ -371,26 +381,21 @@ def run_time_benchmark(  # noqa: C901
     dev = device(device_str)
     is_cuda = "cuda" in str(dev)
     model, loss_function, params, data = setup_problem(problem_str, linop_str, dev)
+
+    # Select function that will be profiled
+    def f_gradient_and_loss():
+        _ = gradient_and_loss(model, loss_function, params, data)
+
+    def f_precompute():
+        _ = setup_linop(
+            linop_str, model, loss_function, params, data, check_deterministic=False
+        )
+
+    # Generate one linear operator and vector for multiplication
     linop = setup_linop(
         linop_str, model, loss_function, params, data, check_deterministic=False
     )
     v = rand(linop.shape[1], device=dev)
-
-    # Select function that will be profiled
-    def f_gradient_and_loss():
-        if isinstance(linop, KFACInverseLinearOperator):
-            _ = linop._A.gradient_and_loss()
-        else:
-            _ = linop.gradient_and_loss()
-
-    def f_precompute():
-        if isinstance(linop, KFACLinearOperator):
-            linop.compute_kronecker_factors()
-        if isinstance(linop, KFACInverseLinearOperator):
-            linop._A.compute_kronecker_factors()
-            # damp and invert the Kronecker matrices
-            for mod_name in linop._A._mapping:
-                linop._compute_or_get_cached_inverse(mod_name)
 
     def f_matvec():
         # Double-backward through efficient attention is unsupported, disable fused kernels
@@ -462,8 +467,8 @@ if __name__ == "__main__":
 
 
 def visualize_time_benchmark(
-    linop_strs: List[str], problem_str: str, device_str: str
-) -> Tuple[plt.Figure, plt.Axes]:
+    linop_strs: list[str], problem_str: str, device_str: str
+) -> tuple[plt.Figure, plt.Axes]:
     """Visualize the run time benchmark results.
 
     Args:
@@ -485,7 +490,7 @@ def visualize_time_benchmark(
             with open(benchpath(name, problem_str, device_str, op_str), "r") as f:
                 results[op_str] = json.load(f)["time"]
 
-        if name in {"KFAC", "KFAC inverse"}:
+        if name in {"KFAC", "KFAC inverse", "EKFAC", "EKFAC inverse"}:
             ax.barh(
                 idx - 0.2,
                 width=results["precompute"],
@@ -580,12 +585,12 @@ if __name__ == "__main__":
 #
 # Measuring the memory consumption of some routines comes with some additional
 # challenges. We use the
-# :ref:`memory_profiler <https://github.com/pythonprofilers/memory_profiler>`
+# `memory_profiler <https://github.com/pythonprofilers/memory_profiler>`_
 # library on CPU, whereas we rely on :func:`torch.cuda.max_memory_allocated` on GPU.
 #
 # To avoid memory allocations from previous operations to impact the currently
 # benchmarked function, we run each benchmark in a separate Python session by executing
-# a Python script :download:`py <memory_benchmark.py>`. This script
+# a separate script (`memory_benchmark.py`). This script
 # re-uses most of the functionality developed in this tutorial, and the function that
 # is profiled looks very similar to the one we used for the run time benchmark.
 # Also, since memory consumption is more deterministic, we don't have to repeat each
@@ -601,7 +606,7 @@ if __name__ == "__main__":
 # the call to ``memory_benchmark.py``, and troubleshoot if the call fails:
 
 
-def run_verbose(cmd: List[str]) -> CompletedProcess:
+def run_verbose(cmd: list[str]) -> CompletedProcess:
     """Run a command and print stdout & stderr if it fails.
 
     Args:
@@ -640,7 +645,7 @@ if __name__ == "__main__":
     ):
         cmd = [
             "python",
-            "memory_benchmark.py",
+            path.join(path.dirname(__file__), "memory_benchmark.py"),
             f"--linop={linop_str}",
             f"--problem={problem_str}",
             f"--device={device_str}",
@@ -656,8 +661,8 @@ if __name__ == "__main__":
 
 
 def visualize_peakmem_benchmark(
-    linop_strs: List[str], problem_str: str, device_str: str
-) -> Tuple[plt.Figure, plt.Axes]:
+    linop_strs: list[str], problem_str: str, device_str: str
+) -> tuple[plt.Figure, plt.Axes]:
     """Visualize the peak memory benchmark results.
 
     Args:

@@ -1,5 +1,4 @@
-r"""
-Sub-matrices of linear operators
+r"""Sub-matrices of linear operators
 ================================
 
 This tutorial explains how to create linear operators that correspond to a sub-matrix
@@ -14,7 +13,6 @@ First, the imports.
 """
 
 from time import time
-from typing import List
 
 from torch import Tensor, cuda, device, eye, manual_seed, rand
 from torch.nn import Linear, MSELoss, ReLU, Sequential, Sigmoid
@@ -86,7 +84,7 @@ assert allclose_report(H_functorch, H @ identity)
 # Let's define a function to extract these blocks from the Hessian:
 
 
-def extract_block(mat: Tensor, params: List[Tensor], i: int, j: int) -> Tensor:
+def extract_block(mat: Tensor, params: list[Tensor], i: int, j: int) -> Tensor:
     """Extract the Hessian block from parameters ``i`` and ``j``.
 
     Args:

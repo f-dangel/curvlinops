@@ -7,7 +7,6 @@ From Papyan, 2020:
 """
 
 from math import log, sqrt
-from typing import List, Tuple, Union
 
 from scipy.linalg import eigh_tridiagonal
 from scipy.sparse.linalg import eigsh
@@ -32,12 +31,12 @@ def lanczos_approximate_spectrum(
     num_points: int = 1024,
     num_repeats: int = 1,
     kappa: float = 3.0,
-    boundaries: Union[
-        Tuple[float, float], Tuple[float, None], Tuple[None, float], None
-    ] = None,
+    boundaries: (
+        tuple[float, float] | tuple[float, None] | tuple[None, float] | None
+    ) = None,
     margin: float = 0.05,
     boundaries_tol: float = 1e-2,
-) -> Tuple[Tensor, Tensor]:
+) -> tuple[Tensor, Tensor]:
     """Approximate the spectral density p(λ) = 1/d ∑ᵢ δ(λ - λᵢ) of A ∈ Rᵈˣᵈ.
 
     Implements algorithm 2 (:code:`LanczosApproxSpec`) of Papyan, 2020
@@ -83,12 +82,24 @@ def lanczos_approximate_spectrum(
 
 
 def lanczos_approximate_spectrum_from_iter(
-    lanczos_iter: Tuple[Tensor, Tensor],
-    boundaries: Tuple[float, float],
+    lanczos_iter: tuple[Tensor, Tensor],
+    boundaries: tuple[float, float],
     num_points: int,
     kappa: float,
     margin: float,
-) -> Tuple[Tensor, Tensor]:
+) -> tuple[Tensor, Tensor]:
+    """Compute a spectrum approximation from a Lanczos iteration.
+
+    Args:
+        lanczos_iter: Pair ``(evals, evecs)`` from a Lanczos run.
+        boundaries: Approximate minimum and maximum eigenvalues of the operator.
+        num_points: Number of grid points.
+        kappa: Width parameter for the Gaussian bumps.
+        margin: Relative margin added around the spectral boundary.
+
+    Returns:
+        Grid points and estimated spectral density.
+    """
     eval_min, eval_max = boundaries
     _width = eval_max - eval_min
     _padding = margin * _width
@@ -136,9 +147,9 @@ class _LanczosSpectrumCached:
         """
         self._A = A
         self._ncv = ncv
-        self._lanczos_iters: List[Tuple[Tensor, Tensor]] = []
+        self._lanczos_iters: list[tuple[Tensor, Tensor]] = []
 
-    def _get_lanczos_iters(self, num_iters: int) -> List[Tuple[Tensor, Tensor]]:
+    def _get_lanczos_iters(self, num_iters: int) -> list[tuple[Tensor, Tensor]]:
         while len(self._lanczos_iters) < num_iters:
             self._lanczos_iters.append(fast_lanczos(self._A, self._ncv))
 
@@ -156,9 +167,9 @@ class LanczosApproximateSpectrumCached(_LanczosSpectrumCached):
         self,
         A: PyTorchLinearOperator,
         ncv: int,
-        boundaries: Union[
-            Tuple[float, float], Tuple[float, None], Tuple[None, float], None
-        ] = None,
+        boundaries: (
+            tuple[float, float] | tuple[float, None] | tuple[None, float] | None
+        ) = None,
         boundaries_tol: float = 1e-2,
     ):
         """Initialize.
@@ -184,7 +195,7 @@ class LanczosApproximateSpectrumCached(_LanczosSpectrumCached):
         num_points: int = 1024,
         kappa: float = 3.0,
         margin: float = 0.05,
-    ) -> Tuple[Tensor, Tensor]:
+    ) -> tuple[Tensor, Tensor]:
         """Approximate the spectal density of A.
 
         Args:
@@ -217,14 +228,14 @@ def lanczos_approximate_log_spectrum(
     num_points: int = 1024,
     num_repeats: int = 1,
     kappa: float = 1.04,
-    boundaries: Union[
-        Tuple[float, float], Tuple[float, None], Tuple[None, float], None
-    ] = None,
+    boundaries: (
+        tuple[float, float] | tuple[float, None] | tuple[None, float] | None
+    ) = None,
     margin: float = 0.05,
     boundaries_tol: float = 1e-2,
     epsilon: float = 1e-5,
-) -> Tuple[Tensor, Tensor]:
-    """Approximate the spectral density p(λ) = 1/d ∑ᵢ δ(λ - λᵢ) of log(|A| + εI) ∈ Rᵈˣᵈ.
+) -> tuple[Tensor, Tensor]:
+    """Approximate the spectral density ``p(λ) = 1/d ∑ᵢ δ(λ - λᵢ)`` of ``log(|A| + εI) ∈ Rᵈˣᵈ``.
 
     Follows the idea of Section C.7 in Papyan, 2020
     (https://jmlr.org/papers/v21/20-933.html).
@@ -244,7 +255,7 @@ def lanczos_approximate_log_spectrum(
         kappa: Width of the Gaussian used to approximate delta peaks in [-1; 1]. Must
             be greater than 1. Default: ``1.04``. Obtained by tweaking while reproducing
             Fig. 15b from papyan2020traces (not specified by the paper).
-        boundaries: Estimates of the minimum and maximum eigenvalues of ``|A|``. If left
+        boundaries: Estimates of the minimum and maximum eigenvalues of :math:`|A|`. If left
             unspecified, they will be estimated internally.
         margin: Relative margin added around the spectral boundary. Default: ``0.05``.
             Taken from papyan2020traces, Section D.2.
@@ -256,7 +267,7 @@ def lanczos_approximate_log_spectrum(
             papyan2020traces, Section D.2.
 
     Returns:
-        Grid points λ and approximated spectral density p(λ) of log(|A| + εI).
+        Grid points λ and approximated spectral density p(λ) of ``log(|A| + εI)``.
     """
     boundaries = approximate_boundaries_abs(
         A, tol=boundaries_tol, boundaries=boundaries
@@ -276,13 +287,26 @@ def lanczos_approximate_log_spectrum(
 
 
 def lanczos_approximate_log_spectrum_from_iter(
-    lanczos_iter: Tuple[Tensor, Tensor],
-    boundaries: Tuple[float, float],
+    lanczos_iter: tuple[Tensor, Tensor],
+    boundaries: tuple[float, float],
     num_points: int,
     kappa: float,
     margin: float,
     epsilon: float,
-) -> Tuple[Tensor, Tensor]:
+) -> tuple[Tensor, Tensor]:
+    """Compute a log-spectrum approximation from a Lanczos iteration.
+
+    Args:
+        lanczos_iter: Pair ``(evals, evecs)`` from a Lanczos run.
+        boundaries: Approximate spectral boundary of ``|A|``.
+        num_points: Number of grid points.
+        kappa: Width parameter for the Gaussian bumps.
+        margin: Relative margin added around the boundary.
+        epsilon: Positive shift for numerical stability.
+
+    Returns:
+        Grid points and estimated spectral density of ``log(|A| + εI)``.
+    """
     log_eval_min, log_eval_max = (log(boundary + epsilon) for boundary in boundaries)
     _width = log_eval_max - log_eval_min
     _padding = margin * _width
@@ -328,9 +352,9 @@ class LanczosApproximateLogSpectrumCached(_LanczosSpectrumCached):
         self,
         A: PyTorchLinearOperator,
         ncv: int,
-        boundaries: Union[
-            Tuple[float, float], Tuple[float, None], Tuple[None, float], None
-        ] = None,
+        boundaries: (
+            tuple[float, float] | tuple[float, None] | tuple[None, float] | None
+        ) = None,
         boundaries_tol: float = 1e-2,
     ):
         """Initialize.
@@ -357,7 +381,7 @@ class LanczosApproximateLogSpectrumCached(_LanczosSpectrumCached):
         kappa: float = 3.0,
         margin: float = 0.05,
         epsilon: float = 1e-5,
-    ) -> Tuple[Tensor, Tensor]:
+    ) -> tuple[Tensor, Tensor]:
         """Approximate the spectal density of A.
 
         Args:
@@ -388,7 +412,7 @@ class LanczosApproximateLogSpectrumCached(_LanczosSpectrumCached):
 
 def fast_lanczos(
     A: PyTorchLinearOperator, ncv: int, use_eigh_tridiagonal: bool = False
-) -> Tuple[Tensor, Tensor]:
+) -> tuple[Tensor, Tensor]:
     """Lanczos iterations for large-scale problems (no reorthogonalization step).
 
     Implements algorithm 2 of Papyan, 2020 (https://jmlr.org/papers/v21/20-933.html).
@@ -453,10 +477,10 @@ def fast_lanczos(
 def approximate_boundaries(
     A: PyTorchLinearOperator,
     tol: float = 1e-2,
-    boundaries: Union[
-        Tuple[float, float], Tuple[float, None], Tuple[None, float], None
-    ] = None,
-) -> Tuple[float, float]:
+    boundaries: (
+        tuple[float, float] | tuple[float, None] | tuple[None, float] | None
+    ) = None,
+) -> tuple[float, float]:
     """Approximate λₘᵢₙ(A) and λₘₐₓ(A) using SciPy's ``eigsh``.
 
     Args:
@@ -489,10 +513,10 @@ def approximate_boundaries(
 def approximate_boundaries_abs(
     A: PyTorchLinearOperator,
     tol: float = 1e-2,
-    boundaries: Union[
-        Tuple[float, float], Tuple[float, None], Tuple[None, float], None
-    ] = None,
-) -> Tuple[float, float]:
+    boundaries: (
+        tuple[float, float] | tuple[float, None] | tuple[None, float] | None
+    ) = None,
+) -> tuple[float, float]:
     """Approximate λₘᵢₙ(|A|) and λₘₐₓ(|A|) using SciPy's ``eigsh``.
 
     Args:
@@ -504,7 +528,7 @@ def approximate_boundaries_abs(
             which consequently won't be recomputed. Default: ``None``.
 
     Returns:
-        Estimates of λₘᵢₙ and λₘₐₓ of |A|.
+        Estimates of λₘᵢₙ and λₘₐₓ of :math:`|A|`.
     """
     eval_min, eval_max = (None, None) if boundaries is None else boundaries
 

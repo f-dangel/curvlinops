@@ -1,7 +1,5 @@
 """Implements the XTrace algorithm from Epperly 2024."""
 
-from typing import Union
-
 from torch import Tensor, column_stack, dot, einsum, mean
 from torch.linalg import inv, qr
 
@@ -15,7 +13,7 @@ from curvlinops.utils import (
 
 
 def xtrace(
-    A: Union[PyTorchLinearOperator, Tensor],
+    A: PyTorchLinearOperator | Tensor,
     num_matvecs: int,
     distribution: str = "rademacher",
 ) -> Tensor:
@@ -46,9 +44,9 @@ def xtrace(
 
     # draw random vectors and compute their matrix-vector products
     num_vecs = num_matvecs // 2
-    W = column_stack(
-        [random_vector(dim, distribution, A.device, A.dtype) for _ in range(num_vecs)]
-    )
+    W = column_stack([
+        random_vector(dim, distribution, A.device, A.dtype) for _ in range(num_vecs)
+    ])
     A_W = A @ W
 
     # compute the orthogonal basis for all test vectors, and its associated trace

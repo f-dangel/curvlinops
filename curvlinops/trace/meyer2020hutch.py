@@ -1,7 +1,5 @@
 """Implementation of Hutch++ trace estimation from Meyer et al."""
 
-from typing import Union
-
 from torch import Tensor, column_stack, einsum
 from torch.linalg import qr
 
@@ -15,7 +13,7 @@ from curvlinops.utils import (
 
 
 def hutchpp_trace(
-    A: Union[PyTorchLinearOperator, Tensor],
+    A: PyTorchLinearOperator | Tensor,
     num_matvecs: int,
     distribution: str = "rademacher",
 ) -> Tensor:
