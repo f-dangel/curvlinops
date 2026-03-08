@@ -58,7 +58,7 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
         \approx
         \mathbf{A}_{(\text{KFAC})} \otimes \mathbf{B}_{(\text{KFAC})}
 
-    (see :class:`curvlinops.FisherMCLinearOperator` for the Fisher's definition).
+    (see :class:`curvlinops.GGNLinearOperator` with ``mc_samples > 0``).
     Loosely speaking, the first Kronecker factor is the un-centered covariance of the
     inputs to a layer. The second Kronecker factor is the un-centered covariance of
     'would-be' gradients w.r.t. the layer's output. Those 'would-be' gradients result

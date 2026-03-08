@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added/New
 
+- **Backward-incompatible:** Add MC-sampling option (`mc_samples`) to
+  `GGNLinearOperator` as replacement for the Fisher, remove `FisherMCLinearOperator`
+  and the `mode` parameter from `GGNDiagonalLinearOperator`/`GGNDiagonalComputer`.
+  Use `mc_samples=0` (default) for the exact GGN, positive values for MC approximation
+  ([PR](https://github.com/f-dangel/curvlinops/pull/255))
+
 - Add a linear operator for the exact or Monte-Carlo-approximated GGN diagonal
   ([PR](https://github.com/f-dangel/curvlinops/pull/241))
 
@@ -32,6 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([PR](https://github.com/f-dangel/curvlinops/pull/249))
 
 ### Internal
+
+- Move shared GGN utilities (`loss_hessian_matrix_sqrt`, `make_grad_output_fn`,
+  `_check_binary_if_BCEWithLogitsLoss`, `_make_single_datum_sampler`) from
+  `kfac_utils.py` to new `ggn_utils.py`; `kfac_utils.py` now only contains
+  KFAC-specific code (patch extraction, canonical space converters)
+  ([PR](https://github.com/f-dangel/curvlinops/pull/255))
 
 - Add a collector for in/outputs of linear weight sharing layers based on `make_fx`
   ([PR](https://github.com/f-dangel/curvlinops/pull/252))

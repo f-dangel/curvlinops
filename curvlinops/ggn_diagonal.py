@@ -26,9 +26,8 @@ class GGNDiagonalLinearOperator(DiagonalLinearOperator):
         check_deterministic: bool = True,
         num_data: int | None = None,
         batch_size_fn: Callable[[MutableMapping | Tensor], int] | None = None,
-        mode: str = "exact",
+        mc_samples: int = 0,
         seed: int = 2_147_483_647,
-        mc_samples: int = 1,
     ):
         """Initialize the GGN diagonal linear operator.
 
@@ -46,7 +45,8 @@ class GGNDiagonalLinearOperator(DiagonalLinearOperator):
                 could be a ``dict`` or ``UserDict``; this is useful for custom models.
                 In this case, you must (i) specify the ``batch_size_fn`` argument, and
                 (ii) take care of preprocessing like ``X.to(device)`` inside of your
-                ``model.forward()`` function.
+                ``model.forward()`` function. When using MC sampling, batches must be
+                presented in the same deterministic order (no shuffling!).
             progressbar: Show a progressbar during computation.
                 Default: ``False``.
             check_deterministic: Probe that model and data are deterministic, i.e.
@@ -60,13 +60,11 @@ class GGNDiagonalLinearOperator(DiagonalLinearOperator):
                 ``torch.Tensor`` inputs, this should typically return ``X.shape[0]``.
                 For ``dict``/``UserDict`` inputs, this should return the batch size of
                 the contained tensors.
-            mode: Computation mode for the GGN diagonal. ``'exact'`` computes the
-                exact diagonal using the loss Hessian's square root. ``'mc'`` uses
-                Monte Carlo approximation with sampled gradients. Default: ``'exact'``.
-            seed: Random seed for Monte Carlo sampling when ``mode='mc'``.
-                Default: ``2147483647``.
-            mc_samples: Number of Monte Carlo samples when ``mode='mc'``.
-                Default: ``1``.
+            mc_samples: Number of Monte-Carlo samples to approximate the loss Hessian.
+                ``0`` (default) uses the exact GGN diagonal. Positive values activate
+                the MC approximation.
+            seed: Seed for the internal random number generator used for MC sampling.
+                Only used when ``mc_samples > 0``. Default: ``2147483647``.
         """
         computer = GGNDiagonalComputer(
             model_func,
@@ -77,9 +75,8 @@ class GGNDiagonalLinearOperator(DiagonalLinearOperator):
             check_deterministic=check_deterministic,
             num_data=num_data,
             batch_size_fn=batch_size_fn,
-            mode=mode,
-            seed=seed,
             mc_samples=mc_samples,
+            seed=seed,
         )
         diagonal = computer.compute()
         super().__init__(diagonal)
