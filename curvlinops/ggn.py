@@ -247,9 +247,41 @@ class GGNLinearOperator(CurvatureLinearOperator):
             f_{\mathbf{\theta}}(\mathbf{x}_n)
         \right)\,.
 
-    Optionally, the loss Hessian can be approximated via Monte-Carlo sampling
-    (``mc_samples > 0``). For exponential family losses (MSE, CrossEntropy,
-    BCEWithLogitsLoss), the MC estimate converges to the exact GGN.
+    Denoting :math:`\mathbf{f}_n = f_{\mathbf{\theta}}(\mathbf{x}_n)` and using a
+    matrix square root :math:`\mathbf{S}_n \mathbf{S}_n^\top =
+    \nabla_{\mathbf{f}_n}^2 \ell(\mathbf{f}_n, \mathbf{y}_n)`, this can be rewritten
+    as
+
+    .. math::
+        c \sum_{n=1}^{N}
+        \left(
+            \mathbf{J}_{\mathbf{\theta}} \mathbf{f}_n
+        \right)^\top
+        \mathbf{S}_n \mathbf{S}_n^\top
+        \left(
+            \mathbf{J}_{\mathbf{\theta}} \mathbf{f}_n
+        \right)\,.
+
+    When ``mc_samples > 0``, the loss Hessian's square root is approximated via
+    Monte-Carlo sampling. For exponential family losses (``MSELoss``,
+    ``CrossEntropyLoss``, ``BCEWithLogitsLoss``), the loss Hessian equals
+    :math:`\mathbb{E}_{\tilde{\mathbf{y}}_n \sim q(\cdot \mid \mathbf{f}_n)}
+    [\nabla_{\mathbf{f}_n} \ell(\mathbf{f}_n, \tilde{\mathbf{y}}_n)
+    \nabla_{\mathbf{f}_n} \ell(\mathbf{f}_n, \tilde{\mathbf{y}}_n)^\top]`,
+    where :math:`q` is the model's predictive distribution. This expectation is
+    approximated by drawing :math:`M` samples :math:`\tilde{\mathbf{y}}_n^{(m)}`
+    and using the sampled gradients
+    :math:`\mathbf{g}_{nm} = \nabla_{\mathbf{f}_n}
+    \ell(\mathbf{f}_n, \tilde{\mathbf{y}}_n^{(m)})` as columns of
+    :math:`\mathbf{S}_n`:
+
+    .. math::
+        \nabla_{\mathbf{f}_n}^2 \ell
+        \approx
+        \frac{1}{M} \sum_{m=1}^{M}
+        \mathbf{g}_{nm} \mathbf{g}_{nm}^\top\,.
+
+    The MC estimate converges to the exact GGN as :math:`M \to \infty`.
 
     Attributes:
         SELF_ADJOINT: Whether the linear operator is self-adjoint. ``True`` for GGNs.

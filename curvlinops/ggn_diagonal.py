@@ -10,7 +10,13 @@ from curvlinops.diag import DiagonalLinearOperator
 
 
 class GGNDiagonalLinearOperator(DiagonalLinearOperator):
-    """Diagonal linear operator representing the GGN diagonal.
+    r"""Diagonal linear operator representing the GGN diagonal.
+
+    Computes :math:`\mathrm{diag}(\mathbf{G})` where :math:`\mathbf{G}` is the
+    generalized Gauss-Newton matrix (see :class:`GGNLinearOperator` for the full
+    definition). When ``mc_samples > 0``, the loss Hessian is approximated via
+    Monte-Carlo sampling from the model's predictive distribution (see
+    :class:`GGNLinearOperator` for details).
 
     Internally uses a :class:`GGNDiagonalComputer` to compute the diagonal,
     then initializes the parent :class:`DiagonalLinearOperator` with the result.
