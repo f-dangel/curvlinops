@@ -50,11 +50,10 @@ def make_batch_jacobian_matrix_product(
         return f_jvp
 
     # Vectorize over vectors to multiply onto a matrix in list format
-    list_format_vmap_dims = tuple(p.ndim for p in params)
     return vmap(
         jacobian_vector_product,
         # No vmap in X; last-axis vmap over the vector tuple
-        in_dims=(None, list_format_vmap_dims),
+        in_dims=(None, -1),
         # Vmapped output axis is last
         out_dims=-1,
         # We want each vector to be multiplied with the same mini-batch Jacobian
@@ -105,7 +104,7 @@ def make_batch_transposed_jacobian_matrix_product(
         # No vmap in X, assume last axis is vmapped in the input matrix
         in_dims=(None, -1),
         # Vmapped output axis is last
-        out_dims=tuple(p.ndim for p in params),
+        out_dims=-1,
         # We want each vector to be multiplied with the same mini-batch transposed Jacobian
         randomness="same",
     )
