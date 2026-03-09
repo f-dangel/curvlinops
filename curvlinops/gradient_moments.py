@@ -46,7 +46,7 @@ def make_batch_ef_matrix_product(
     # function that computes gradients of the loss w.r.t. the flattened outputs
     c_flat_grad = grad(c_flat, argnums=0)
 
-    def c_pseudo_flat(output_flat: Tensor, y: Tensor) -> Tensor:
+    def c_pseudo_flat(output_flat: Tensor, loss_args: tuple) -> Tensor:
         """Compute pseudo-loss: L' = 0.5 / c * sum_n <f_n, g_n>^2.
 
         This pseudo-loss L' := 0.5 / c ∑ₙ fₙᵀ (gₙ gₙᵀ) fₙ where gₙ = ∂ℓₙ/∂fₙ
@@ -57,13 +57,15 @@ def make_batch_ef_matrix_product(
 
         Args:
             output_flat: Flattened model outputs for the mini-batch.
-            y: Un-flattened labels for the mini-batch.
+            loss_args: Tuple of ``(y,)`` with un-flattened labels for the mini-batch.
 
         Returns:
             The pseudo-loss whose GGN is the empirical Fisher on the batch.
         """
+        (y,) = loss_args
+
         # Compute ∂ℓₙ/∂fₙ without reduction factor of L (detached)
-        grad_output_flat = c_flat_grad(output_flat.detach(), y)
+        grad_output_flat = c_flat_grad(output_flat.detach(), (y,))
 
         # Adjust the scale depending on the loss reduction used
         num_loss_terms, C = output_flat.shape

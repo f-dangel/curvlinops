@@ -17,7 +17,8 @@ from curvlinops.utils import _seed_generator, make_functional_model_and_loss
 
 
 def make_ggn_vector_product(
-    f: Callable[..., Tensor], c: Callable[..., Tensor]
+    f: Callable[[tuple[Tensor, ...], Tensor | MutableMapping], Tensor],
+    c: Callable[[Tensor, tuple], Tensor],
 ) -> Callable[
     [tuple[Tensor, ...], Tensor | MutableMapping, tuple, tuple[Tensor, ...]],
     tuple[Tensor, ...],
@@ -27,14 +28,14 @@ def make_ggn_vector_product(
     Args:
         f: Function that takes parameters (as a tuple) and input, returns prediction.
             Signature: ``(params, X) -> prediction``
-        c: Function that takes prediction and loss arguments.
-            Signature: ``(prediction, *loss_args) -> loss``
+        c: Function that takes prediction and a tuple of loss arguments.
+            Signature: ``(prediction, loss_args) -> loss``
 
     Returns:
         A function that computes GGN-vector products.
         Signature: ``(params, X, loss_args, v) -> GGN @ v``
         where ``X`` is the model input, ``loss_args`` is a tuple of arguments
-        forwarded to the loss function ``c`` (typically ``(y,)`` or
+        passed to the loss function ``c`` (typically ``(y,)`` or
         ``(y, generator)``), and ``v`` is a tuple of tensors in list format.
     """
 
@@ -61,7 +62,7 @@ def make_ggn_vector_product(
         f_val, f_jvp = jvp(lambda p: f(p, X), (params,), (v,))
 
         # Apply the criterion's Hessian onto Jv: Jv → HJv
-        c_grad_func = jacrev(lambda pred: c(pred, *loss_args))
+        c_grad_func = jacrev(lambda pred: c(pred, loss_args))
         _, c_hvp = jvp(c_grad_func, (f_val,), (f_jvp,))
 
         # Apply the transposed Jacobian of f onto HJv: HJv → JᵀHJv
@@ -91,7 +92,7 @@ def make_batch_ggn_matrix_product(
         list format, and returns the mini-batch GGN applied to ``M`` in list format.
     """
     # Create functional versions of the model (f: (params, X) -> prediction) and
-    # criterion function (c: (prediction, y) -> loss)
+    # criterion function (c: (prediction, loss_args) -> loss)
     f, c = make_functional_model_and_loss(model_func, loss_func, params)
 
     # Create the functional GGN-vector product: (params, X, loss_args, v) -> Gv
@@ -153,7 +154,7 @@ def make_batch_ggn_mc_matrix_product(
         randomness="different",
     )
 
-    def c_pseudo(prediction: Tensor, y: Tensor, generator: Generator) -> Tensor:
+    def c_pseudo(prediction: Tensor, loss_args: tuple) -> Tensor:
         r"""Pseudo-loss whose GGN equals the MC-approximated GGN.
 
         Constructs :math:`L' = \frac{1}{2c} \sum_n \sum_k
@@ -163,12 +164,13 @@ def make_batch_ggn_mc_matrix_product(
 
         Args:
             prediction: Batched model predictions.
-            y: Batched labels.
-            generator: Random generator for MC sampling.
+            loss_args: Tuple of ``(y, generator)`` with labels and random generator.
 
         Returns:
             Scalar pseudo-loss.
         """
+        y, generator = loss_args
+
         # [batch, mc_samples, *output_shape], scaled by 1/sqrt(mc_samples)
         grad_outputs = batched_grad_output_fn(prediction.detach(), y, generator)
 

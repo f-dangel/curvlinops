@@ -83,7 +83,7 @@ def make_batch_hessian_matrix_product(
             Returns:
                 Mini-batch loss.
             """
-            return c(f(params, X), y)
+            return c(f(params, X), (y,))
 
         for f_block in block_functionals:
             # Define the loss function composition for this block

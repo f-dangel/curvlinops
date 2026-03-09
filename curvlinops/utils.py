@@ -228,7 +228,7 @@ def make_functional_model_and_loss(
     model_func: Module, loss_func: Module, params: tuple[Parameter, ...]
 ) -> tuple[
     Callable[[tuple[Tensor, ...], Tensor | MutableMapping], Tensor],
-    Callable[[Tensor, Tensor], Tensor],
+    Callable[[Tensor, tuple], Tensor],
 ]:
     """Create functional versions of model and loss functions.
 
@@ -251,7 +251,19 @@ def make_functional_model_and_loss(
 
     # Create functional versions of model and loss
     f = make_functional_call(model_func, free_param_names)  # (params, X) -> prediction
-    c = partial(make_functional_call(loss_func, []), ())  # (prediction, y) -> loss
+    c_raw = partial(make_functional_call(loss_func, []), ())  # (prediction, y) -> loss
+
+    def c(prediction: Tensor, loss_args: tuple) -> Tensor:
+        """Evaluate the loss function on a prediction and loss arguments.
+
+        Args:
+            prediction: Model prediction.
+            loss_args: Tuple of loss function arguments, e.g. ``(y,)``.
+
+        Returns:
+            Scalar loss value.
+        """
+        return c_raw(prediction, *loss_args)
 
     return f, c
 
@@ -260,7 +272,7 @@ def make_functional_flattened_model_and_loss(
     model_func: Module, loss_func: Module, params: tuple[Parameter, ...]
 ) -> tuple[
     Callable[[tuple[Tensor, ...], Tensor | MutableMapping], Tensor],
-    Callable[[Tensor, Tensor], Tensor],
+    Callable[[Tensor, tuple], Tensor],
 ]:
     """Create flattened versions of model and loss functions.
 
@@ -277,7 +289,7 @@ def make_functional_flattened_model_and_loss(
         - f_flat: Function that executes model and flattens batch and shared axes:
           (params, X) -> output_flat
         - c_flat: Function that executes loss with flattened labels:
-          (output_flat, y) -> loss
+          (output_flat, loss_args) -> loss
     """
     # Create functional versions of model and loss
     f, c = make_functional_model_and_loss(model_func, loss_func, params)
@@ -312,7 +324,7 @@ def make_functional_flattened_model_and_loss(
         output = f(params, X)
         return rearrange(output, output_flattening)
 
-    def c_flat(output_flat: Tensor, y: Tensor) -> Tensor:
+    def c_flat(output_flat: Tensor, loss_args: tuple) -> Tensor:
         """Execute loss with flattened labels.
 
         Flattens the labels to match the flattened output format:
@@ -320,13 +332,14 @@ def make_functional_flattened_model_and_loss(
         For other losses: (batch, ..., c) -> (batch*..., c)
 
         Args:
-            output_flat: Flattened model_output.
-            y: Un-flattened labels
+            output_flat: Flattened model output.
+            loss_args: Tuple of ``(y,)`` with un-flattened labels.
 
         Returns:
             The loss.
         """
+        (y,) = loss_args
         y_flat = rearrange(y, label_flattening)
-        return c(output_flat, y_flat)
+        return c(output_flat, (y_flat,))
 
     return f_flat, c_flat
