@@ -1,49 +1,24 @@
 """Test utility functions related to the GGN (loss Hessian, sampling)."""
 
-from contextlib import nullcontext
 from math import sqrt
 
-from pytest import mark, raises, warns
+from pytest import mark
 from torch import (
     Generator,
     Tensor,
-    as_tensor,
     manual_seed,
-    ones,
+    rand,
     randint,
     randn,
-    zeros,
 )
 from torch.func import hessian, vmap
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 
 from curvlinops.ggn_utils import (
-    _check_binary_if_BCEWithLogitsLoss,
     _make_single_datum_sampler,
     loss_hessian_matrix_sqrt,
 )
 from curvlinops.utils import allclose_report
-
-
-def test_check_binary_if_BCEWithLogitsLoss():
-    """Test checking for binary entries of a tensor for BCEWithLogitsLoss."""
-    bce_loss, mse_loss = BCEWithLogitsLoss(), MSELoss()
-
-    # This should not raise an error
-    # tensor containing zeros and ones
-    binary_tensor = as_tensor([1.0, 0.0, 0.0, 0.0])
-    _check_binary_if_BCEWithLogitsLoss(binary_tensor, bce_loss)
-    # only zeros
-    _check_binary_if_BCEWithLogitsLoss(zeros(3), bce_loss)
-    # only ones
-    _check_binary_if_BCEWithLogitsLoss(ones(3), bce_loss)
-
-    # A non-binary tensor should raise a NotImplementedError only if the loss if BCE
-    nonbinary_tensor = as_tensor([0.5, 0.0, 1.0])
-    _check_binary_if_BCEWithLogitsLoss(nonbinary_tensor, mse_loss)
-    with raises(NotImplementedError):
-        _check_binary_if_BCEWithLogitsLoss(nonbinary_tensor, bce_loss)
-
 
 OUTPUT_SHAPES = [(3,), (3, 4), (3, 2, 5)]
 OUTPUT_SHAPE_IDS = [f"{len(s)}d_sequence" for s in OUTPUT_SHAPES]
@@ -92,23 +67,11 @@ def test_loss_hessian_matrix_sqrt(
         # For MSELoss, all dims are feature axes; target shape matches output
         target_one_datum = randn(*output_shape)
     elif loss_func_cls == BCEWithLogitsLoss:
-        # For BCEWithLogitsLoss, all dims are feature axes; target has binary values
-        target_one_datum = randint(0, 2, output_shape).float()
+        # For BCEWithLogitsLoss, all dims are feature axes; targets in [0, 1]
+        target_one_datum = rand(*output_shape)
 
     # Compute Hessian square root using the function under test
-    # Check that the warning is raised for BCEWithLogitsLoss
-    _check_binary_if_BCEWithLogitsLoss(target_one_datum, loss_func)
-    with (
-        warns(
-            UserWarning,
-            match="BCEWithLogitsLoss only supports binary targets.*not being verified",
-        )
-        if loss_func_cls == BCEWithLogitsLoss
-        else nullcontext()
-    ):
-        hess_sqrt = loss_hessian_matrix_sqrt(
-            output_one_datum, target_one_datum, loss_func
-        )
+    hess_sqrt = loss_hessian_matrix_sqrt(output_one_datum, target_one_datum, loss_func)
 
     # hess_sqrt has shape [*output_shape, *output_shape] = [C, *seq, C, *seq]
     # Flatten to [C * prod(seq), C * prod(seq)] for matrix multiplication
@@ -172,7 +135,7 @@ def test_grad_output_sampler_convergence(
     elif loss_func_cls == MSELoss:
         target_one_datum = randn(1, *output_shape).double()
     elif loss_func_cls == BCEWithLogitsLoss:
-        target_one_datum = randint(0, 2, (1, *output_shape)).float()
+        target_one_datum = rand(1, *output_shape).double()
     else:
         raise NotImplementedError(f"Unsupported loss function: {loss_func_cls}")
 
@@ -188,19 +151,7 @@ def test_grad_output_sampler_convergence(
     generator = Generator().manual_seed(42)
     mc_samples = 600_000
 
-    # Check that the warning is raised for BCEWithLogitsLoss
-    _check_binary_if_BCEWithLogitsLoss(target_one_datum, loss_func)
-    with (
-        warns(
-            UserWarning,
-            match="BCEWithLogitsLoss only supports binary targets.*not being verified",
-        )
-        if loss_func_cls == BCEWithLogitsLoss
-        else nullcontext()
-    ):
-        grad_samples = sampler(
-            output_one_datum, mc_samples, target_one_datum, generator
-        )
+    grad_samples = sampler(output_one_datum, mc_samples, target_one_datum, generator)
 
     # Compute empirical covariance: E[g g^T]
     # grad_samples has shape [num_samples, 1, *output_shape]

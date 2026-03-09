@@ -12,10 +12,7 @@ from curvlinops._checks import (
     _register_userdict_as_pytree,
 )
 from curvlinops._empirical_risk import _EmpiricalRiskMixin
-from curvlinops.ggn_utils import (
-    _check_binary_if_BCEWithLogitsLoss,
-    make_grad_output_fn,
-)
+from curvlinops.ggn_utils import make_grad_output_fn
 from curvlinops.utils import _seed_generator, make_functional_model_and_loss
 
 
@@ -51,8 +48,6 @@ def make_batch_ggn_diagonal_func(
     # Map mc_samples to internal mode string for make_grad_output_fn
     mode = "exact" if mc_samples == 0 else "mc"
 
-    # Set up gradient output vector computation (binary target check is disabled
-    # inside because it is incompatible with vmap; checked in batch_ggn_diagonal)
     grad_output_fn = make_grad_output_fn(loss_func, mode, mc_samples)
     reduction = loss_func.reduction
 
@@ -102,11 +97,6 @@ def make_batch_ggn_diagonal_func(
         # Register UserDict as PyTree if needed for vmap compatibility
         if isinstance(X, UserDict):
             _register_userdict_as_pytree()
-        # We turn off this check in the function that computes the GGN diagonal for a
-        # single datum due to incompatibility with vmap. Therefore we need to re-introduce
-        # this check here.
-        _check_binary_if_BCEWithLogitsLoss(y, loss_func)
-
         # For mean reduction, we have to divide by the batch size to obtain correct
         # scale
         scale = {"sum": 1.0, "mean": 1.0 / batch_size_fn(X)}[reduction]

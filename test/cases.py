@@ -23,7 +23,6 @@ from torch.utils.data import DataLoader, TensorDataset
 from curvlinops.kfac import KFACType
 from test.utils import (
     WeightShareModel,
-    binary_classification_targets,
     classification_targets,
     get_available_devices,
     regression_targets,
@@ -85,33 +84,33 @@ INV_CASES_NO_DEVICE = [
         ],
         "seed": 0,
     },
-    # binary softmax cross-entropy loss, one output
+    # BCE loss, one output, soft labels in [0, 1]
     {
         "model_func": lambda: Sequential(Linear(10, 5), ReLU(), Linear(5, 1)),
         "loss_func": lambda: BCEWithLogitsLoss(reduction="mean"),
         "data": lambda: [
-            (rand(3, 10), binary_classification_targets((3, 1))),
-            (rand(4, 10), binary_classification_targets((4, 1))),
+            (rand(3, 10), rand(3, 1)),
+            (rand(4, 10), rand(4, 1)),
         ],
         "seed": 0,
     },
-    # binary softmax cross-entropy loss, multiple outputs (tests the reduction factor)
+    # BCE loss, multiple outputs, soft labels (tests the reduction factor)
     {
         "model_func": lambda: Sequential(Linear(10, 5), ReLU(), Linear(5, 2)),
         "loss_func": lambda: BCEWithLogitsLoss(reduction="mean"),
         "data": lambda: [
-            (rand(3, 10), binary_classification_targets((3, 2))),
-            (rand(4, 10), binary_classification_targets((4, 2))),
+            (rand(3, 10), rand(3, 2)),
+            (rand(4, 10), rand(4, 2)),
         ],
         "seed": 0,
     },
-    # binary softmax cross-entropy loss, multiple outputs and sum reduction
+    # BCE loss, multiple outputs, sum reduction, soft labels
     {
         "model_func": lambda: Sequential(Linear(10, 5), ReLU(), Linear(5, 2)),
         "loss_func": lambda: BCEWithLogitsLoss(reduction="sum"),
         "data": lambda: [
-            (rand(3, 10), binary_classification_targets((3, 2))),
-            (rand(4, 10), binary_classification_targets((4, 2))),
+            (rand(3, 10), rand(3, 2)),
+            (rand(4, 10), rand(4, 2)),
         ],
         "seed": 0,
     },
@@ -150,13 +149,13 @@ INV_CASES_NO_DEVICE = [
         ],
         "seed": 0,
     },
-    # BCE
+    # BCE with soft labels
     {
         "model_func": lambda: ModelWithDictInput(num_classes=1),
         "loss_func": lambda: BCEWithLogitsLoss(reduction="mean"),
         "data": lambda: [
-            (UserDict({"x": rand(3, 10)}), binary_classification_targets((3, 1))),
-            ({"x": rand(4, 10)}, binary_classification_targets((4, 1))),
+            (UserDict({"x": rand(3, 10)}), rand(3, 1)),
+            ({"x": rand(4, 10)}, rand(4, 1)),
         ],
         "seed": 0,
     },
@@ -212,25 +211,25 @@ CASES_NO_DEVICE = INV_CASES_NO_DEVICE + [
         ],
         "seed": 0,
     },
-    # binary softmax cross-entropy loss, multiple outputs, additional input/output
-    # dimension, and mean reduction (tests the reduction factor)
+    # BCE loss, multiple outputs, additional input/output dimension, soft labels,
+    # mean reduction (tests the reduction factor)
     {
         "model_func": lambda: Sequential(Linear(10, 5), ReLU(), Linear(5, 2)),
         "loss_func": lambda: BCEWithLogitsLoss(reduction="mean"),
         "data": lambda: [
-            (rand(3, 5, 10), binary_classification_targets((3, 5, 2))),
-            (rand(4, 5, 10), binary_classification_targets((4, 5, 2))),
+            (rand(3, 5, 10), rand(3, 5, 2)),
+            (rand(4, 5, 10), rand(4, 5, 2)),
         ],
         "seed": 0,
     },
-    # binary softmax cross-entropy loss, multiple outputs, additional input/output
-    # dimension, and sum reduction
+    # BCE loss, multiple outputs, additional input/output dimension, soft labels,
+    # sum reduction
     {
         "model_func": lambda: Sequential(Linear(10, 5), ReLU(), Linear(5, 2)),
         "loss_func": lambda: BCEWithLogitsLoss(reduction="sum"),
         "data": lambda: [
-            (rand(3, 5, 10), binary_classification_targets((3, 5, 2))),
-            (rand(4, 5, 10), binary_classification_targets((4, 5, 2))),
+            (rand(3, 5, 10), rand(3, 5, 2)),
+            (rand(4, 5, 10), rand(4, 5, 2)),
         ],
         "seed": 0,
     },

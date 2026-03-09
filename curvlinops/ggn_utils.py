@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from functools import partial
 from math import sqrt
-from warnings import warn
 
 from einops import einsum, rearrange
 from torch import (
@@ -26,51 +25,10 @@ from torch.nn.functional import one_hot
 from curvlinops.utils import make_functional_call
 
 
-def _warn_BCEWithLogitsLoss_targets_unchecked(
-    loss_func: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
-) -> None:
-    """Warn that BCEWithLogitsLoss targets are not verified to be binary.
-
-    Args:
-        loss_func: The loss function being used.
-    """
-    if isinstance(loss_func, BCEWithLogitsLoss):
-        warn(
-            "BCEWithLogitsLoss only supports binary targets (0, 1), but this is "
-            "not being verified. Ensure your targets are binary to avoid "
-            "incorrect results (using _check_binary_if_BCEWithLogitsLoss).",
-            UserWarning,
-            stacklevel=3,
-        )
-
-
-def _check_binary_if_BCEWithLogitsLoss(
-    target: Tensor, loss_func: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss
-) -> None:
-    """Check if targets are binary (0 or 1) when using BCEWithLogitsLoss.
-
-    Args:
-        target: Target tensor.
-        loss_func: The loss function being used.
-
-    Raises:
-        NotImplementedError: If the loss function is BCEWithLogitsLoss but targets
-            are not binary (0 or 1).
-    """
-    if isinstance(loss_func, BCEWithLogitsLoss):
-        unique = set(target.unique().tolist())
-        if not unique.issubset({0, 1}):
-            raise NotImplementedError(
-                "Only binary targets (0, 1) are currently supported with"
-                + f" BCEWithLogitsLoss. Got values {unique}."
-            )
-
-
 def loss_hessian_matrix_sqrt(
     output_one_datum: Tensor,
     target_one_datum: Tensor,
     loss_func: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
-    warn_BCEWithLogitsLoss_targets_unchecked: bool = True,
 ) -> Tensor:
     r"""Compute the loss function's matrix square root for a sample's output.
 
@@ -82,8 +40,6 @@ def loss_hessian_matrix_sqrt(
         target_one_datum: The label of the single datum. Has shape ``[*D]``.
             Has no batch axis.
         loss_func: The loss function.
-        warn_BCEWithLogitsLoss_targets_unchecked: Whether to warn that targets are
-            not verified to be binary for BCEWithLogitsLoss. Default: ``True``.
 
     Returns:
         The matrix square root
@@ -136,7 +92,7 @@ def loss_hessian_matrix_sqrt(
     Note:
         For :class:`torch.nn.BCEWithLogitsLoss` (with :math:`c = 1` for ``reduction='sum'``
         and :math:`c = 1/C` for ``reduction='mean'``) we have (:math:`\sigma` is the sigmoid
-        function, and assuming binary labels):
+        function; targets may be any value in :math:`[0, 1]`):
 
         .. math::
             \ell(\mathbf{f})
@@ -155,8 +111,6 @@ def loss_hessian_matrix_sqrt(
 
     Raises:
         NotImplementedError: If the loss function is not supported.
-        NotImplementedError: If the loss function is ``BCEWithLogitsLoss`` but the
-            target is not binary.
     """
     # Number of losses contributed from a datum's sequence-valued prediction
     num_features = (
@@ -204,9 +158,6 @@ def loss_hessian_matrix_sqrt(
         hess_sqrt_flat = hess_sqrt_flat.reshape(C * D, C * D)
 
     elif isinstance(loss_func, BCEWithLogitsLoss):
-        if warn_BCEWithLogitsLoss_targets_unchecked:
-            _warn_BCEWithLogitsLoss_targets_unchecked(loss_func)
-
         p = output_one_datum.flatten().sigmoid()
         hess_sqrt_diag = sqrt(c) * (p * (1 - p)).sqrt()
         hess_sqrt_flat = hess_sqrt_diag.diag()
@@ -221,7 +172,6 @@ def loss_hessian_matrix_sqrt(
 
 def _make_single_datum_sampler(
     loss_func: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
-    warn_BCEWithLogitsLoss_targets_unchecked: bool = True,
 ) -> Callable[[Tensor, int, Tensor, Generator], Tensor]:
     """Create a function that samples gradients w.r.t. a single datum's output.
 
@@ -230,8 +180,6 @@ def _make_single_datum_sampler(
 
     Args:
         loss_func: The loss function to create the sampler for.
-        warn_BCEWithLogitsLoss_targets_unchecked: Whether to warn that targets are
-            not verified to be binary for BCEWithLogitsLoss. Default: ``True``.
 
     Returns:
         A function that samples gradients w.r.t. the model prediction for one datum.
@@ -310,9 +258,6 @@ def _make_single_datum_sampler(
             grad_samples = grad_samples_flat.reshape(out_shape)
 
         elif isinstance(loss_func, BCEWithLogitsLoss):
-            if warn_BCEWithLogitsLoss_targets_unchecked:
-                _warn_BCEWithLogitsLoss_targets_unchecked(loss_func)
-
             prob = output_one_datum.sigmoid()
             # repeat ``num_sample`` times along a new leading axis
             prob = prob.unsqueeze(0).expand(num_samples, *prob.shape)
@@ -340,11 +285,6 @@ def make_grad_output_fn(
     For MC mode, returns Monte-Carlo sampled gradient vectors.
     For empirical mode, returns the gradient of the loss w.r.t. the output.
     For forward-only mode, returns an empty tensor (no backward passes needed).
-
-    Note:
-        The binary target check for ``BCEWithLogitsLoss`` is disabled inside this
-        function (incompatible with ``vmap``). Callers must run
-        ``_check_binary_if_BCEWithLogitsLoss`` themselves before entering ``vmap``.
 
     Note:
         For MC mode, the returned vectors are scaled by ``1 / sqrt(mc_samples)``
@@ -376,9 +316,7 @@ def make_grad_output_fn(
             "Must be 'exact', 'mc', 'empirical', or 'forward-only'."
         )
 
-    sample_grad_output = _make_single_datum_sampler(
-        loss_func, warn_BCEWithLogitsLoss_targets_unchecked=False
-    )
+    sample_grad_output = _make_single_datum_sampler(loss_func)
 
     if mode == "empirical":
         functional_loss_func = partial(make_functional_call(loss_func, []), ())
@@ -431,12 +369,7 @@ def make_grad_output_fn(
         if mode == "forward-only":
             return output.new_empty(0, *output.shape)
         elif mode == "exact":
-            hessian_sqrt = loss_hessian_matrix_sqrt(
-                output,
-                target,
-                loss_func,
-                warn_BCEWithLogitsLoss_targets_unchecked=False,
-            )
+            hessian_sqrt = loss_hessian_matrix_sqrt(output, target, loss_func)
             return hessian_sqrt.reshape(*output.shape, output.numel()).movedim(-1, 0)
         elif mode == "mc":
             return sample_grad_output(output, mc_samples, target, generator).div_(

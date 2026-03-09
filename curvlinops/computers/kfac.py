@@ -36,7 +36,7 @@ from torch.nn import (
 from torch.utils.hooks import RemovableHandle
 
 from curvlinops._empirical_risk import _EmpiricalRiskMixin
-from curvlinops.ggn_utils import _check_binary_if_BCEWithLogitsLoss, make_grad_output_fn
+from curvlinops.ggn_utils import make_grad_output_fn
 from curvlinops.kfac_utils import extract_averaged_patches, extract_patches
 from curvlinops.utils import _seed_generator
 
@@ -334,9 +334,6 @@ class KFACComputer(_EmpiricalRiskMixin):
                 shape ``[num_vectors, *output.shape]`` where ``num_vectors`` depends on
                 the Fisher type.
             """
-            # Binary label check is data-dependent and not supported in vmap,
-            # so we check outside and disable it inside (via make_grad_output_fn).
-            _check_binary_if_BCEWithLogitsLoss(y, loss_func)
             return batched_grad_output_fn(output, y, generator)
 
         return compute_grad_outputs
