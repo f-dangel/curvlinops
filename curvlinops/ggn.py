@@ -17,69 +17,67 @@ from curvlinops.utils import _seed_generator, make_functional_model_and_loss
 
 
 def make_ggn_vector_product(
-    f: Callable[..., Tensor], c: Callable[..., Tensor], num_c_extra_args: int = 0
-) -> Callable[..., tuple[Tensor, ...]]:
+    f: Callable[[tuple[Tensor, ...], Tensor | MutableMapping], Tensor],
+    c: Callable[[Tensor, tuple], Tensor],
+) -> Callable[
+    [tuple[Tensor, ...], Tensor | MutableMapping, tuple, tuple[Tensor, ...]],
+    tuple[Tensor, ...],
+]:
     """Create a function that computes GGN-vector products for given f and c functions.
 
     Args:
-        f: Function that takes parameters and input, returns prediction.
-            Signature: (*params, X) -> prediction
-        c: Function that takes prediction, target, and optional additional args.
-            Signature: (prediction, y, *args) -> loss
-        num_c_extra_args: Number of additional arguments that the loss function c expects
-            beyond prediction and target. Used to correctly split the input arguments
-            between the vector to multiply and the additional loss function arguments.
+        f: Function that takes parameters (as a tuple) and input, returns prediction.
+            Signature: ``(params, X) -> prediction``
+        c: Function that takes prediction and a tuple of loss arguments.
+            Signature: ``(prediction, loss_args) -> loss``
 
     Returns:
         A function that computes GGN-vector products.
-        Signature: (params, X, y, *c_args, *v) -> GGN @ v
-        where c_args are additional arguments passed to the loss function c.
+        Signature: ``(params, X, loss_args, v) -> GGN @ v``
+        where ``X`` is the model input, ``loss_args`` is a tuple of arguments
+        passed to the loss function ``c`` (typically ``(y,)`` or
+        ``(y, generator)``), and ``v`` is a tuple of tensors in list format.
     """
 
     @no_grad()
     def ggn_vector_product(
         params: tuple[Tensor, ...],
-        X: Tensor,
-        y: Tensor,
-        *args_and_v: tuple[Tensor, ...],
+        X: Tensor | MutableMapping,
+        loss_args: tuple,
+        v: tuple[Tensor, ...],
     ) -> tuple[Tensor, ...]:
         """Multiply the GGN on a vector in list format.
 
         Args:
-            params: Parameters of the model.
-            X: Input to the DNN.
-            y: Ground truth.
-            *args_and_v: Additional arguments for the loss function c,
-                followed by vector to be multiplied with in tensor list format.
+            params: Parameters of the model as a tuple.
+            X: Input to the model.
+            loss_args: Arguments forwarded to the loss function ``c``, e.g.
+                ``(y,)`` or ``(y, generator)``.
+            v: Vector to be multiplied with in tensor list format (tuple of tensors).
 
         Returns:
-            Result of GGN multiplication in list format. Has the same shape as
-            the vector part of args_and_v.
+            Result of GGN multiplication in list format. Has the same shape as ``v``.
         """
-        # Split args_and_v into additional loss function arguments and vector v
-        c_args, v = args_and_v[:num_c_extra_args], args_and_v[num_c_extra_args:]
-
         # Apply the Jacobian of f onto v: v → Jv
-        f_val, f_jvp = jvp(lambda *params_inner: f(*params_inner, X), params, v)
+        f_val, f_jvp = jvp(lambda p: f(p, X), (params,), (v,))
 
         # Apply the criterion's Hessian onto Jv: Jv → HJv
-        c_grad_func = jacrev(lambda pred: c(pred, y, *c_args))
+        c_grad_func = jacrev(lambda pred: c(pred, loss_args))
         _, c_hvp = jvp(c_grad_func, (f_val,), (f_jvp,))
 
         # Apply the transposed Jacobian of f onto HJv: HJv → JᵀHJv
         # NOTE This re-evaluates the net's forward pass. [Unverified] It should be op-
         # timized away by common sub-expression elimination if you compile the function.
-        _, f_vjp_func = vjp(lambda *params_inner: f(*params_inner, X), *params)
-        return f_vjp_func(c_hvp)
+        _, f_vjp_func = vjp(lambda p: f(p, X), params)
+        (result,) = f_vjp_func(c_hvp)
+        return result
 
     return ggn_vector_product
 
 
 def make_batch_ggn_matrix_product(
     model_func: Module, loss_func: Module, params: tuple[Parameter, ...]
-) -> Callable[
-    [Tensor | MutableMapping, Tensor, tuple[Tensor, ...]], tuple[Tensor, ...]
-]:
+) -> Callable[[Tensor | MutableMapping, tuple, tuple[Tensor, ...]], tuple[Tensor, ...]]:
     r"""Set up function that multiplies the mini-batch GGN onto a matrix in list format.
 
     Args:
@@ -89,27 +87,27 @@ def make_batch_ggn_matrix_product(
             All parameters must be part of ``model_func.parameters()``.
 
     Returns:
-        A function that takes inputs ``X``, ``y``, and a matrix ``M`` in list
-        format, and returns the mini-batch GGN applied to ``M`` in list format.
+        A function ``(X, loss_args, M) -> GM`` that takes model input ``X``, loss
+        arguments ``loss_args = (y,)``, and a matrix ``M`` as a tuple of tensors in
+        list format, and returns the mini-batch GGN applied to ``M`` in list format.
     """
-    # Create functional versions of the model (f: *params, X -> prediction) and
-    # criterion function (c: prediction, y -> loss)
+    # Create functional versions of the model (f: (params, X) -> prediction) and
+    # criterion function (c: (prediction, loss_args) -> loss)
     f, c = make_functional_model_and_loss(model_func, loss_func, params)
 
-    # Create the functional GGN-vector product
-    ggn_vp = make_ggn_vector_product(f, c)  # params, X, y, *v -> *Gv
+    # Create the functional GGN-vector product: (params, X, loss_args, v) -> Gv
+    ggn_vp = make_ggn_vector_product(f, c)
 
-    # Fix the parameters
-    ggnvp = partial(ggn_vp, params)  # X, y, *c_args, *v -> *Gv
+    # Fix the parameters: (X, loss_args, v) -> Gv
+    ggnvp = partial(ggn_vp, params)
 
     # Parallelize over vectors to multiply onto a matrix in list format
-    list_format_vmap_dims = tuple(p.ndim for p in params)  # last axis
     return vmap(
         ggnvp,
-        # No vmap in X, y, last-axis vmap over vector in list format
-        in_dims=(None, None, *list_format_vmap_dims),
+        # No vmap in X, loss_args; last-axis vmap over the vector tuple
+        in_dims=(None, None, -1),
         # Vmapped output axis is last
-        out_dims=list_format_vmap_dims,
+        out_dims=-1,
         # We want each vector to be multiplied with the same mini-batch GGN
         randomness="same",
     )
@@ -142,8 +140,9 @@ def make_batch_ggn_mc_matrix_product(
         mc_samples: Number of Monte-Carlo samples.
 
     Returns:
-        A function that takes inputs ``X``, ``y``, ``generator``, and a matrix ``M``
-        in list format, and returns the mini-batch MC-GGN applied to ``M``.
+        A function ``(X, y, generator, M) -> GM`` that takes model input ``X``,
+        labels ``y``, a random ``generator``, and a matrix ``M`` as a tuple of
+        tensors in list format, and returns the mini-batch MC-GGN applied to ``M``.
     """
     f, _ = make_functional_model_and_loss(model_func, loss_func, params)
 
@@ -155,7 +154,7 @@ def make_batch_ggn_mc_matrix_product(
         randomness="different",
     )
 
-    def c_pseudo(prediction: Tensor, y: Tensor, generator: Generator) -> Tensor:
+    def c_pseudo(prediction: Tensor, loss_args: tuple) -> Tensor:
         r"""Pseudo-loss whose GGN equals the MC-approximated GGN.
 
         Constructs :math:`L' = \frac{1}{2c} \sum_n \sum_k
@@ -165,12 +164,13 @@ def make_batch_ggn_mc_matrix_product(
 
         Args:
             prediction: Batched model predictions.
-            y: Batched labels.
-            generator: Random generator for MC sampling.
+            loss_args: Tuple of ``(y, generator)`` with labels and random generator.
 
         Returns:
             Scalar pseudo-loss.
         """
+        y, generator = loss_args
+
         # [batch, mc_samples, *output_shape], scaled by 1/sqrt(mc_samples)
         grad_outputs = batched_grad_output_fn(prediction.detach(), y, generator)
 
@@ -182,16 +182,16 @@ def make_batch_ggn_mc_matrix_product(
 
         return 0.5 / reduction_factor * (ip**2).sum()
 
-    # Create GGN-vp of pseudo-loss (generator is the extra arg to c)
-    mc_ggn_vp = make_ggn_vector_product(f, c_pseudo, num_c_extra_args=1)
-    mc_ggnvp = partial(mc_ggn_vp, params)  # X, y, generator, *v -> *Gv
+    # Create GGN-vp of pseudo-loss: (params, X, loss_args, v) -> Gv
+    mc_ggn_vp = make_ggn_vector_product(f, c_pseudo)
+    mc_ggnvp = partial(mc_ggn_vp, params)  # (X, loss_args, v) -> Gv
 
     # Parallelize over matrix columns
-    list_format_vmap_dims = tuple(p.ndim for p in params)
     mc_ggnmp = vmap(
         mc_ggnvp,
-        in_dims=(None, None, None, *list_format_vmap_dims),
-        out_dims=list_format_vmap_dims,
+        # No vmap in X, loss_args; last-axis vmap over the matrix tuple
+        in_dims=(None, None, -1),
+        out_dims=-1,
         randomness="same",
     )
 
@@ -199,7 +199,7 @@ def make_batch_ggn_mc_matrix_product(
         X: Tensor | MutableMapping,
         y: Tensor,
         generator: Generator,
-        *M: Tensor,
+        M: tuple[Tensor, ...],
     ) -> tuple[Tensor, ...]:
         """Multiply MC-GGN onto a matrix, with BCEWithLogitsLoss target validation.
 
@@ -207,13 +207,13 @@ def make_batch_ggn_mc_matrix_product(
             X: Input to the model.
             y: Target labels for the batch.
             generator: Random number generator for sampling.
-            *M: Matrix columns in tensor list format.
+            M: Matrix in tensor list format (tuple of tensors).
 
         Returns:
             Result of MC-GGN matrix multiplication in tensor list format.
         """
         _check_binary_if_BCEWithLogitsLoss(y, loss_func)
-        return mc_ggnmp(X, y, generator, *M)
+        return mc_ggnmp(X, (y, generator), M)
 
     return _mc_ggnmp_with_check
 
@@ -388,10 +388,12 @@ class GGNLinearOperator(CurvatureLinearOperator):
         """Lazy initialization of batch-GGN matrix product function.
 
         Returns:
-            Function that computes mini-batch GGN-vector products. In exact mode,
-            takes inputs ``X``, ``y``, and vector or matrix entries. In MC mode,
-            additionally takes a ``generator`` argument; the number of MC samples is
-            fixed when this function is constructed.
+            Function that computes mini-batch GGN-matrix products. In exact mode,
+            takes model input ``X``, loss args ``(y,)``, and a matrix ``M`` as a
+            tuple of tensors in list format. In MC mode, takes
+            ``(X, y, generator, M)`` (the loss args packing is handled
+            internally); the number of MC samples is fixed when this function is
+            constructed.
         """
         if self._mc_samples > 0:
             return make_batch_ggn_mc_matrix_product(
@@ -422,5 +424,5 @@ class GGNLinearOperator(CurvatureLinearOperator):
             trailing dimension of matrix columns.
         """
         if self._mc_samples > 0:
-            return list(self._mp(X, y, self._generator, *M))
-        return list(self._mp(X, y, *M))
+            return list(self._mp(X, y, self._generator, tuple(M)))
+        return list(self._mp(X, (y,), tuple(M)))

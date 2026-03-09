@@ -16,7 +16,7 @@ def make_batch_hessian_matrix_product(
     loss_func: Module,
     params: tuple[Parameter, ...],
     block_sizes: list[int] | None = None,
-) -> Callable[[Tensor, Tensor, tuple[Tensor, ...]], tuple[Tensor, ...]]:
+) -> Callable[[Tensor | MutableMapping, tuple, tuple[Tensor, ...]], tuple[Tensor, ...]]:
     r"""Set up function that multiplies the mini-batch Hessian onto a matrix in list format.
 
     Args:
@@ -28,13 +28,15 @@ def make_batch_hessian_matrix_product(
             If ``None``, the full Hessian is used.
 
     Returns:
-        A function that takes inputs ``X``, ``y``, and a matrix ``M`` in list
-        format, and returns the mini-batch Hessian applied to ``M`` in list format.
+        A function ``(X, loss_args, M) -> HM`` that takes model input ``X``, loss
+        arguments ``loss_args = (y,)``, and a matrix ``M`` as a tuple of tensors in
+        list format, and returns the mini-batch Hessian applied to ``M`` in list
+        format.
     """
     # Determine block structure
     block_sizes = [len(params)] if block_sizes is None else block_sizes
 
-    # Create block-specific functional calls: *block_params, X -> prediction
+    # Create block-specific functional calls: (block_params, X) -> prediction
     block_params = split_list(list(params), block_sizes)
     block_functionals = []
 
@@ -45,19 +47,23 @@ def make_batch_hessian_matrix_product(
 
     @no_grad()
     def hessian_vector_product(
-        X: Tensor, y: Tensor, *v: tuple[Tensor, ...]
+        X: Tensor | MutableMapping,
+        loss_args: tuple,
+        v: tuple[Tensor, ...],
     ) -> tuple[Tensor, ...]:
         """Multiply the mini-batch Hessian on a vector in list format.
 
         Args:
-            X: Input to the DNN.
-            y: Ground truth.
-            *v: Vector to be multiplied with in tensor list format.
+            X: Input to the model.
+            loss_args: Arguments forwarded to the loss function, e.g. ``(y,)``.
+            v: Vector to be multiplied with in tensor list format (tuple of tensors).
 
         Returns:
             Result of Hessian multiplication in list format. Has the same shape as
             ``v``, i.e. each tensor in the list has the shape of a parameter.
         """
+        (y,) = loss_args
+
         # Split input vectors by blocks
         v_blocks = split_list(list(v), block_sizes)
 
@@ -66,41 +72,40 @@ def make_batch_hessian_matrix_product(
 
         def loss_fn(
             f: Callable[[tuple[Tensor, ...], Tensor | MutableMapping], Tensor],
-            *params: tuple[Tensor, ...],
+            params: tuple[Tensor, ...],
         ) -> Tensor:
             """Compute the mini-batch loss given the neural net and its parameters.
 
             Args:
-                f: Functional model with signature (*params, X) -> prediction
-                *params: Parameters for the functional model.
+                f: Functional model with signature (params, X) -> prediction
+                params: Parameters for the functional model as a tuple.
 
             Returns:
                 Mini-batch loss.
             """
-            return c(f(*params, X), y)
+            return c(f(params, X), (y,))
 
-        for f_block, ps in zip(block_functionals, block_params):
+        for f_block in block_functionals:
             # Define the loss function composition for this block
             block_loss_fn = partial(loss_fn, f_block)
-            block_grad_fn = jacrev(block_loss_fn, argnums=tuple(range(len(ps))))
+            block_grad_fn = jacrev(block_loss_fn)
             block_grad_fns.append(block_grad_fn)
 
         # Compute the HVPs per block and concatenate the results
         hvps = []
         for grad_fn, ps, vs in zip(block_grad_fns, block_params, v_blocks):
-            _, hvp_block = jvp(grad_fn, tuple(ps), tuple(vs))
+            _, hvp_block = jvp(grad_fn, (tuple(ps),), (tuple(vs),))
             hvps.extend(hvp_block)
 
         return tuple(hvps)
 
     # Parallelize over vectors to multiply onto a matrix in list format
-    list_format_vmap_dims = tuple(p.ndim for p in params)  # last axis
     return vmap(
         hessian_vector_product,
-        # No vmap in X, y, last-axis vmap over vector in list format
-        in_dims=(None, None, *list_format_vmap_dims),
+        # No vmap in X, loss_args; last-axis vmap over the vector tuple
+        in_dims=(None, None, -1),
         # Vmapped output axis is last
-        out_dims=list_format_vmap_dims,
+        out_dims=-1,
         # We want each vector to be multiplied with the same mini-batch Hessian
         randomness="same",
     )
@@ -168,15 +173,16 @@ class HessianLinearOperator(CurvatureLinearOperator):
     def _mp(
         self,
     ) -> Callable[
-        [Tensor | MutableMapping, Tensor, tuple[Tensor, ...]], tuple[Tensor, ...]
+        [Tensor | MutableMapping, tuple, tuple[Tensor, ...]], tuple[Tensor, ...]
     ]:
         """Lazy initialization of batch-Hessian matrix product function.
 
         Returns:
-            Function that computes mini-batch Hessian-vector products, given inputs
-            ``X``, labels ``y``, and the entries ``v1, v2, ...`` of the vector in list
-            format. Produces a list of tensors with the same shape as the input vector
-            that represents the result of the batch-Hessian multiplication.
+            Function that computes mini-batch Hessian-matrix products, given
+            model input ``X``, loss args ``(y,)``, and a matrix ``M`` as a tuple
+            of tensors in list format. Produces a tuple of tensors with the same
+            shape as ``M`` that represents the result of the batch-Hessian
+            multiplication.
         """
         return make_batch_hessian_matrix_product(
             self._model_func, self._loss_func, tuple(self._params), self._block_sizes
@@ -199,4 +205,4 @@ class HessianLinearOperator(CurvatureLinearOperator):
             ``M``, i.e. each tensor in the list has the shape of a parameter and a
             trailing dimension of matrix columns.
         """
-        return list(self._mp(X, y, *M))
+        return list(self._mp(X, (y,), tuple(M)))

@@ -24,33 +24,36 @@ def make_batch_jacobian_matrix_product(
             All parameters must be part of ``model_func.parameters()``.
 
     Returns:
-        A function that takes input ``X`` and a matrix ``M`` in list format,
-        and returns the mini-batch Jacobian applied to ``M`` as a Tensor.
+        A function ``(X, M) -> JM`` that takes input ``X`` and a matrix ``M`` as a
+        tuple of tensors in list format, and returns the mini-batch Jacobian applied
+        to ``M`` as a Tensor.
     """
     dummy_loss_func = MSELoss()
     f, _ = make_functional_model_and_loss(model_func, dummy_loss_func, params)
 
     @no_grad()
-    def jacobian_vector_product(X: Tensor, *v: tuple[Tensor, ...]) -> Tensor:
+    def jacobian_vector_product(
+        X: Tensor | MutableMapping, v: tuple[Tensor, ...]
+    ) -> Tensor:
         """Multiply the mini-batch Jacobian on a vector in list format.
 
         Args:
             X: Input to the DNN.
-            *v: Vector to be multiplied with in tensor list format.
+            v: Vector to be multiplied with in tensor list format (tuple of tensors).
 
         Returns:
             Result of Jacobian multiplication as a Tensor with shape
             (batch_size, *output_shape).
         """
         # Apply the Jacobian of f onto v: v → Jv
-        _, f_jvp = jvp(lambda *params: f(*params, X), params, v)
+        _, f_jvp = jvp(lambda p: f(p, X), (params,), (v,))
         return f_jvp
 
     # Vectorize over vectors to multiply onto a matrix in list format
     return vmap(
         jacobian_vector_product,
-        # No vmap in X, assume last axis is vmapped in the matrix list
-        in_dims=(None,) + tuple(p.ndim for p in params),
+        # No vmap in X; last-axis vmap over the vector tuple
+        in_dims=(None, -1),
         # Vmapped output axis is last
         out_dims=-1,
         # We want each vector to be multiplied with the same mini-batch Jacobian
@@ -60,7 +63,7 @@ def make_batch_jacobian_matrix_product(
 
 def make_batch_transposed_jacobian_matrix_product(
     model_func: Module, params: tuple[Parameter, ...]
-) -> Callable[[Tensor, tuple[Tensor, ...]], tuple[Tensor, ...]]:
+) -> Callable[[Tensor, Tensor], tuple[Tensor, ...]]:
     r"""Set up function to multiply with the mini-batch transposed Jacobian.
 
     Args:
@@ -69,14 +72,17 @@ def make_batch_transposed_jacobian_matrix_product(
             All parameters must be part of ``model_func.parameters()``.
 
     Returns:
-        A function that takes input ``X`` and a matrix ``M`` in list format,
-        and returns the mini-batch transposed Jacobian applied to ``M`` in list format.
+        A function ``(X, v) -> JTv`` that takes input ``X`` and a matrix ``v`` as a
+        single tensor, and returns the mini-batch transposed Jacobian applied to ``v``
+        in list format.
     """
     dummy_loss_func = MSELoss()
     f, _ = make_functional_model_and_loss(model_func, dummy_loss_func, params)
 
     @no_grad()
-    def transposed_jacobian_vector_product(X: Tensor, v: Tensor) -> tuple[Tensor, ...]:
+    def transposed_jacobian_vector_product(
+        X: Tensor | MutableMapping, v: Tensor
+    ) -> tuple[Tensor, ...]:
         """Multiply the mini-batch transposed Jacobian on a vector.
 
         Args:
@@ -88,8 +94,9 @@ def make_batch_transposed_jacobian_matrix_product(
             Each tensor has the shape of a parameter.
         """
         # Apply the transposed Jacobian of f onto v: v → J^T v
-        _, vjp_func = vjp(lambda *params: f(*params, X), *params)
-        return vjp_func(v)
+        _, vjp_func = vjp(lambda p: f(p, X), params)
+        (result,) = vjp_func(v)
+        return result
 
     # Vectorize over vectors to multiply onto a matrix in list format
     return vmap(
@@ -97,7 +104,7 @@ def make_batch_transposed_jacobian_matrix_product(
         # No vmap in X, assume last axis is vmapped in the input matrix
         in_dims=(None, -1),
         # Vmapped output axis is last
-        out_dims=tuple(p.ndim for p in params),
+        out_dims=-1,
         # We want each vector to be multiplied with the same mini-batch transposed Jacobian
         randomness="same",
     )
@@ -120,7 +127,7 @@ class JacobianLinearOperator(CurvatureLinearOperator):
 
         Returns:
             Function that computes mini-batch Jacobian-matrix products, given input
-            ``X`` and the entries ``v1, v2, ...`` of the matrix in list format.
+            ``X`` and a matrix ``M`` as a tuple of tensors in list format.
             Produces a tensor that represents the result of the batch-Jacobian
             multiplication.
         """
@@ -204,7 +211,7 @@ class JacobianLinearOperator(CurvatureLinearOperator):
         # Apply mini-batch Jacobians and collect results
         JM = []
         for X, _ in self._loop_over_data(desc="_matmat"):
-            JM.append(self._mp(X, *M))
+            JM.append(self._mp(X, tuple(M)))
 
         # concatenate over batches
         return [cat(JM)]

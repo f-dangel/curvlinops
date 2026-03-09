@@ -1,6 +1,7 @@
 """General utility functions."""
 
 from collections.abc import Callable, Iterable, MutableMapping
+from functools import partial
 
 from einops import rearrange
 from numpy import cumsum, ndarray
@@ -184,7 +185,7 @@ def assert_divisible_by(num: int, divisor: int, name: str):
 
 def make_functional_call(
     module: Module, free_param_names: list[str]
-) -> Callable[[tuple[Parameter, ...]], Tensor]:
+) -> Callable[..., Tensor]:
     """Create a function that calls a module with given free parameters.
 
     Args:
@@ -192,30 +193,28 @@ def make_functional_call(
         free_param_names: Names of parameters that will be passed as arguments.
 
     Returns:
-        A function that takes free parameters and module inputs, returning the
-        module's output. For model functions, inputs are typically (X,). For loss
-        functions, inputs are typically (predictions, targets).
+        A function ``(params, *module_inputs) -> output`` where ``params`` is a
+        tuple of the free parameters. For model functions, inputs are typically
+        ``(X,)``. For loss functions, inputs are typically ``(predictions, targets)``.
     """
     # Detect frozen parameters and buffers not in free_param_names
     frozen_params = {
         n: p for n, p in module.named_parameters() if n not in free_param_names
     }
     frozen_buffers = dict(module.named_buffers())
-    num_free_params = len(free_param_names)
 
-    def functional_module(*args: tuple[Parameter, ...]) -> Tensor:
+    def functional_module(params: tuple[Parameter, ...], *module_inputs) -> Tensor:
         """Call the module functionally with free parameters and module inputs.
 
         Args:
-            *args: First len(free_param_names) arguments are free parameters,
-                remaining arguments are inputs to the module.
+            params: Tuple of free parameter values.
+            *module_inputs: Inputs to the module (e.g. X for models, or
+                (prediction, target) for loss functions).
 
         Returns:
             Module output.
         """
-        # Separate free parameters and module inputs
-        free_params = dict(zip(free_param_names, args[:num_free_params]))
-        module_inputs = args[num_free_params:]
+        free_params = dict(zip(free_param_names, params))
 
         # Call module with all parameters and buffers
         return functional_call(
@@ -227,7 +226,10 @@ def make_functional_call(
 
 def make_functional_model_and_loss(
     model_func: Module, loss_func: Module, params: tuple[Parameter, ...]
-) -> tuple[Callable[[tuple[Tensor, ...]], Tensor], Callable[[Tensor, Tensor], Tensor]]:
+) -> tuple[
+    Callable[[tuple[Tensor, ...], Tensor | MutableMapping], Tensor],
+    Callable[[Tensor, tuple], Tensor],
+]:
     """Create functional versions of model and loss functions.
 
     Args:
@@ -238,7 +240,7 @@ def make_functional_model_and_loss(
 
     Returns:
         A tuple containing:
-        - f: Functional model with signature (*params, X) -> prediction
+        - f: Functional model with signature (params, X) -> prediction
         - c: Functional loss with signature (prediction, y) -> loss
     """
     # detect the parameters w.r.t. which the functions are made functional
@@ -248,8 +250,20 @@ def make_functional_model_and_loss(
         free_param_names.append(name)
 
     # Create functional versions of model and loss
-    f = make_functional_call(model_func, free_param_names)  # *params, X -> prediction
-    c = make_functional_call(loss_func, [])  # prediction, y -> loss
+    f = make_functional_call(model_func, free_param_names)  # (params, X) -> prediction
+    c_raw = partial(make_functional_call(loss_func, []), ())  # (prediction, y) -> loss
+
+    def c(prediction: Tensor, loss_args: tuple) -> Tensor:
+        """Evaluate the loss function on a prediction and loss arguments.
+
+        Args:
+            prediction: Model prediction.
+            loss_args: Tuple of loss function arguments, e.g. ``(y,)``.
+
+        Returns:
+            Scalar loss value.
+        """
+        return c_raw(prediction, *loss_args)
 
     return f, c
 
@@ -257,7 +271,8 @@ def make_functional_model_and_loss(
 def make_functional_flattened_model_and_loss(
     model_func: Module, loss_func: Module, params: tuple[Parameter, ...]
 ) -> tuple[
-    Callable[[tuple[Tensor, ...], Tensor], Tensor], Callable[[Tensor, Tensor], Tensor]
+    Callable[[tuple[Tensor, ...], Tensor | MutableMapping], Tensor],
+    Callable[[Tensor, tuple], Tensor],
 ]:
     """Create flattened versions of model and loss functions.
 
@@ -272,9 +287,9 @@ def make_functional_flattened_model_and_loss(
     Returns:
         Tuple of (f_flat, c_flat) where:
         - f_flat: Function that executes model and flattens batch and shared axes:
-          (*params, X) -> output_flat
+          (params, X) -> output_flat
         - c_flat: Function that executes loss with flattened labels:
-          (output_flat, y) -> loss
+          (output_flat, loss_args) -> loss
     """
     # Create functional versions of model and loss
     f, c = make_functional_model_and_loss(model_func, loss_func, params)
@@ -292,7 +307,7 @@ def make_functional_flattened_model_and_loss(
     )
 
     # Set up functions that operate on flattened quantities
-    def f_flat(*params_and_X: Tensor | MutableMapping) -> Tensor:
+    def f_flat(params: tuple[Tensor, ...], X: Tensor | MutableMapping) -> Tensor:
         """Execute model and flatten batch and shared axes.
 
         If >2d output we convert to an equivalent 2d output for loss computation.
@@ -300,15 +315,16 @@ def make_functional_flattened_model_and_loss(
         For other losses: (batch, ..., c) -> (batch*..., c)
 
         Args:
-            params_and_X: Parameters and input data X.
+            params: Model parameters as a tuple.
+            X: Input data.
 
         Returns:
             Flattened model output.
         """
-        output = f(*params_and_X)
+        output = f(params, X)
         return rearrange(output, output_flattening)
 
-    def c_flat(output_flat: Tensor, y: Tensor) -> Tensor:
+    def c_flat(output_flat: Tensor, loss_args: tuple) -> Tensor:
         """Execute loss with flattened labels.
 
         Flattens the labels to match the flattened output format:
@@ -316,13 +332,14 @@ def make_functional_flattened_model_and_loss(
         For other losses: (batch, ..., c) -> (batch*..., c)
 
         Args:
-            output_flat: Flattened model_output.
-            y: Un-flattened labels
+            output_flat: Flattened model output.
+            loss_args: Tuple of ``(y,)`` with un-flattened labels.
 
         Returns:
             The loss.
         """
+        (y,) = loss_args
         y_flat = rearrange(y, label_flattening)
-        return c(output_flat, y_flat)
+        return c(output_flat, (y_flat,))
 
     return f_flat, c_flat

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from functools import partial
 from math import sqrt
 from warnings import warn
 
@@ -380,7 +381,7 @@ def make_grad_output_fn(
     )
 
     if mode == "empirical":
-        functional_loss_func = make_functional_call(loss_func, [])
+        functional_loss_func = partial(make_functional_call(loss_func, []), ())
 
         def _scaled_datum_loss(prediction: Tensor, target: Tensor) -> Tensor:
             """Compute a scaled loss for one sample, adjusting for mean reduction.

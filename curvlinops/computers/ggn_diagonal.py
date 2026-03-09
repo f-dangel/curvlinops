@@ -45,7 +45,7 @@ def make_batch_ggn_diagonal_func(
         Function with signature ``(X, y, generator) -> List[Tensor]``
         that computes the GGN diagonal on the batch ``(X, y)``.
     """
-    # Create functional version of the model: (*params, x) -> prediction
+    # Create functional version of the model: (params, x) -> prediction
     f, _ = make_functional_model_and_loss(model_func, loss_func, params)
 
     # Map mc_samples to internal mode string for make_grad_output_fn
@@ -70,11 +70,11 @@ def make_batch_ggn_diagonal_func(
             List of tensors containing the diagonal elements for each parameter.
             Items have the same shape as the neural network's parameters.
         """
-        f_x, f_vjp = vjp(lambda *p: f(*p, x), *params)
+        f_x, f_vjp = vjp(lambda p: f(p, x), params)
         # Detach f_x: only values are needed for the grad output vectors;
         # actual parameter gradients are computed via f_vjp.
         grad_outputs = grad_output_fn(f_x.detach(), y, generator)
-        grad_params = vmap(f_vjp)(grad_outputs)
+        (grad_params,) = vmap(f_vjp)(grad_outputs)
         return [(g**2).sum(0) for g in grad_params]
 
     randomness = {"mc": "different", "exact": "same"}[mode]
