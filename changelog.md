@@ -168,10 +168,11 @@ This patch provides major performance improvements for all curvature matrices (b
     ([PR](https://github.com/f-dangel/curvlinops/pull/204))
   - (Transpose) Jacobian-vector products
     ([PR](https://github.com/f-dangel/curvlinops/pull/206))
-  - Refactor `torch.func` code: treat parameters as a single tuple argument,
-    split data arguments into model input `X` and loss arguments `loss_args`,
-    simplify `vmap` dims to `-1`
-    ([PR](https://github.com/f-dangel/curvlinops/pull/220))
+
+- Refactor `torch.func` code: treat parameters as a single tuple argument,
+  split data arguments into model input `X` and loss arguments `loss_args`,
+  simplify `vmap` dims to `-1`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/220))
 
 ## [3.0.0] - 2025-10-16
 
