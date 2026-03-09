@@ -174,6 +174,10 @@ This patch provides major performance improvements for all curvature matrices (b
   simplify `vmap` dims to `-1`
   ([PR](https://github.com/f-dangel/curvlinops/pull/220))
 
+- Centralize `vmap` over matrix columns in `CurvatureLinearOperator._matmat_batch`;
+  subclasses now implement `_matvec_batch` (single vector) instead
+  ([PR](https://github.com/f-dangel/curvlinops/pull/256))
+
 ## [3.0.0] - 2025-10-16
 
 This new major release realizes all features described in our [position paper](https://arxiv.org/abs/2501.19183).

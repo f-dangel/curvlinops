@@ -17,6 +17,7 @@ from torch import (
     rand,
     zeros_like,
 )
+from torch.func import vmap
 from torch.nn import Parameter
 
 from curvlinops._checks import (
@@ -967,7 +968,11 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
     def _matmat_batch(
         self, X: MutableMapping | Tensor, y: Tensor, M: list[Tensor]
     ) -> list[Tensor]:
-        """Apply the mini-batch matrix to a vector.
+        """Apply the mini-batch matrix to a matrix in tensor list format.
+
+        Vmaps :meth:`_matvec_batch` over the trailing (column) dimension of ``M``.
+        Subclasses that need custom matrix-level logic (e.g. reusing intermediate
+        computations across columns) can override this method directly.
 
         Args:
             X: Input to the DNN.
@@ -975,8 +980,30 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
             M: Matrix in list format (same shape as trainable model parameters with
                 additional trailing dimension of size number of columns).
 
-        Returns: # noqa: D402
+        Returns:
            Result of matrix-multiplication in list format.
+        """
+        mp = vmap(
+            self._matvec_batch,
+            in_dims=(None, None, -1),
+            out_dims=-1,
+            randomness="same",
+        )
+        return list(mp(X, y, tuple(M)))
+
+    def _matvec_batch(
+        self, X: MutableMapping | Tensor, y: Tensor, v: tuple[Tensor, ...]
+    ) -> tuple[Tensor, ...]:
+        """Apply the mini-batch matrix to a vector in tensor list format.
+
+        Args:
+            X: Input to the DNN.
+            y: Ground truth.
+            v: Vector in tensor list format (tuple of tensors with same shapes as
+                the trainable model parameters).
+
+        Returns: # noqa: D402
+           Result of matrix-vector multiplication in tensor list format.
 
         Raises:
             NotImplementedError: Must be implemented by descendants.
