@@ -2,11 +2,12 @@
 
 from collections.abc import Callable, Iterable, MutableMapping
 
-from torch import Tensor
+from torch import Tensor, float64
 
 from curvlinops.examples import gradient_and_loss
 from curvlinops.examples.functorch import functorch_gradient_and_loss
 from curvlinops.utils import allclose_report
+from test.utils import change_dtype
 
 
 def test_gradient_and_loss(
@@ -23,7 +24,7 @@ def test_gradient_and_loss(
     Args:
         case: Tuple of model, loss function, parameters, data, and batch size getter.
     """
-    model, loss_func, params, data, batch_size_fn = case
+    model, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
 
     gradient, loss = gradient_and_loss(
         model, loss_func, params, data, batch_size_fn=batch_size_fn

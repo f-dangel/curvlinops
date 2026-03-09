@@ -966,7 +966,10 @@ def change_dtype(case: tuple, dt: dtype) -> tuple:
 
     model_func, loss_func = model_func.to(dt), loss_func.to(dt)
     data = [
-        (cast_input(X, dt), y.to(dt) if isinstance(loss_func, MSELoss) else y)
+        (
+            cast_input(X, dt),
+            y.to(dt) if isinstance(loss_func, (MSELoss, BCEWithLogitsLoss)) else y,
+        )
         for (X, y) in data
     ]
 
