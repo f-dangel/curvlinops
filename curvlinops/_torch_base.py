@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, MutableMapping
+from functools import cached_property
 
 import numpy
 from scipy.sparse.linalg import LinearOperator
@@ -965,14 +966,31 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
 
         return AM
 
+    @cached_property
+    def _mp(self) -> Callable:
+        """Cached vmap wrapper that parallelizes :meth:`_matvec_batch` over columns.
+
+        Returns:
+            Function ``(X, y, M) -> result`` that applies the mini-batch matrix to
+            a matrix ``M`` in tensor list format by vmapping the single-vector
+            :meth:`_matvec_batch` over the trailing dimension.
+        """
+        return vmap(
+            self._matvec_batch,
+            in_dims=(None, None, -1),
+            out_dims=-1,
+            randomness="same",
+        )
+
     def _matmat_batch(
         self, X: MutableMapping | Tensor, y: Tensor, M: list[Tensor]
     ) -> list[Tensor]:
         """Apply the mini-batch matrix to a matrix in tensor list format.
 
-        Vmaps :meth:`_matvec_batch` over the trailing (column) dimension of ``M``.
-        Subclasses that need custom matrix-level logic (e.g. reusing intermediate
-        computations across columns) can override this method directly.
+        Uses :attr:`_mp`, a cached vmap of :meth:`_matvec_batch`, over the trailing
+        (column) dimension of ``M``. Subclasses that need custom matrix-level logic
+        (e.g. reusing intermediate computations across columns) can override this
+        method directly.
 
         Args:
             X: Input to the DNN.
@@ -983,13 +1001,7 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
         Returns:
            Result of matrix-multiplication in list format.
         """
-        mp = vmap(
-            self._matvec_batch,
-            in_dims=(None, None, -1),
-            out_dims=-1,
-            randomness="same",
-        )
-        return list(mp(X, y, tuple(M)))
+        return list(self._mp(X, y, tuple(M)))
 
     def _matvec_batch(
         self, X: MutableMapping | Tensor, y: Tensor, v: tuple[Tensor, ...]
