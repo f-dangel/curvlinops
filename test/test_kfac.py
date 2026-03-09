@@ -40,7 +40,6 @@ from test.utils import (
     WeightShareModel,
     _test_inplace_activations,
     _test_property,
-    binary_classification_targets,
     block_diagonal,
     change_dtype,
     classification_targets,
@@ -497,8 +496,8 @@ def test_multi_dim_output(
         model = Sequential(Linear(5, 4), Linear(4, 3)).to(dev)
     elif issubclass(loss, BCEWithLogitsLoss):
         data = [
-            (X1, binary_classification_targets((2, 7, 5, 3))),
-            (X2, binary_classification_targets((4, 7, 5, 3))),
+            (X1, rand(2, 7, 5, 3)),
+            (X2, rand(4, 7, 5, 3)),
         ]
         manual_seed(711)
         model = Sequential(Linear(5, 4), Linear(4, 3)).to(dev)
@@ -579,8 +578,8 @@ def test_expand_setting_scaling(
         ]
     elif issubclass(loss, BCEWithLogitsLoss):
         data = [
-            (X1, binary_classification_targets((2, 32, 32, 3))),
-            (X2, binary_classification_targets((4, 32, 32, 3))),
+            (X1, rand(2, 32, 32, 3)),
+            (X2, rand(4, 32, 32, 3)),
         ]
     else:
         data = [

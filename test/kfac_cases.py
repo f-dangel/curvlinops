@@ -18,7 +18,6 @@ from test.cases import ModelWithDictInput
 from test.utils import (
     Conv2dModel,
     WeightShareModel,
-    binary_classification_targets,
     classification_targets,
     get_available_devices,
     regression_targets,
@@ -147,13 +146,13 @@ KFAC_EXACT_ONE_DATUM_CASES_NO_DEVICE = [
     {
         "model_func": lambda: Sequential(Linear(4, 3), Linear(3, 2)),
         "loss_func": lambda: BCEWithLogitsLoss(reduction="mean"),
-        "data": lambda: [(rand(1, 4), binary_classification_targets((1, 2)))],
+        "data": lambda: [(rand(1, 4), rand(1, 2))],
         "seed": 0,
     },
     {
         "model_func": lambda: Sequential(Linear(4, 3), Linear(3, 2)),
         "loss_func": lambda: BCEWithLogitsLoss(reduction="sum"),
-        "data": lambda: [(rand(1, 4), binary_classification_targets((1, 2)))],
+        "data": lambda: [(rand(1, 4), rand(1, 2))],
         "seed": 0,
     },
 ]

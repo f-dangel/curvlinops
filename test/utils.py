@@ -80,18 +80,6 @@ def classification_targets(size: tuple[int], num_classes: int) -> Tensor:
     return randint(size=size, low=0, high=num_classes)
 
 
-def binary_classification_targets(size: tuple[int]) -> Tensor:
-    """Create random binary targets.
-
-    Args:
-        size: Size of the targets to create.
-
-    Returns:
-        Random targets (float).
-    """
-    return classification_targets(size, 2).float()
-
-
 def regression_targets(size: tuple[int]) -> Tensor:
     """Create random targets for regression.
 
