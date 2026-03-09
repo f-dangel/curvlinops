@@ -999,7 +999,7 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
                 additional trailing dimension of size number of columns).
 
         Returns:
-           Result of matrix-multiplication in list format.
+            Result of matrix-multiplication in list format.
         """
         return list(self._mp(X, y, tuple(M)))
 
