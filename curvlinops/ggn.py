@@ -9,10 +9,7 @@ from torch.func import jacrev, jvp, vjp, vmap
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, Module, MSELoss, Parameter
 
 from curvlinops._torch_base import CurvatureLinearOperator
-from curvlinops.ggn_utils import (
-    _check_binary_if_BCEWithLogitsLoss,
-    make_grad_output_fn,
-)
+from curvlinops.ggn_utils import make_grad_output_fn
 from curvlinops.utils import _seed_generator, make_functional_model_and_loss
 
 
@@ -362,30 +359,6 @@ class GGNLinearOperator(CurvatureLinearOperator):
         return make_batch_ggn_vector_product(
             self._model_func, self._loss_func, tuple(self._params)
         )
-
-    def _matmat_batch(
-        self, X: Tensor | MutableMapping, y: Tensor, M: list[Tensor]
-    ) -> list[Tensor]:
-        """Apply the mini-batch GGN to a matrix.
-
-        Validates targets for ``BCEWithLogitsLoss`` in MC mode before delegating
-        to the base class, which vmaps :meth:`_matvec_batch` over columns.
-
-        Args:
-            X: Input to the DNN.
-            y: Ground truth.
-            M: Matrix to be multiplied with in tensor list format.
-                Tensors have same shape as trainable model parameters, and an
-                additional trailing axis for the matrix columns.
-
-        Returns:
-            Result of GGN multiplication in list format. Has the same shape as
-            ``M``, i.e. each tensor in the list has the shape of a parameter and a
-            trailing dimension of matrix columns.
-        """
-        if self._mc_samples > 0:
-            _check_binary_if_BCEWithLogitsLoss(y, self._loss_func)
-        return super()._matmat_batch(X, y, M)
 
     def _matvec_batch(
         self, X: Tensor | MutableMapping, y: Tensor, v: tuple[Tensor, ...]

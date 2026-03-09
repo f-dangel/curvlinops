@@ -32,15 +32,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Backward-incompatible:** Remove `KFACInverseLinearOperator`, replace with `(E)KFACLinearOperator.inverse()`
   ([PR](https://github.com/f-dangel/curvlinops/pull/244))
 
+- Support non-binary (soft) labels in `[0, 1]` for `BCEWithLogitsLoss` across all
+  operators (GGN, Fisher, KFAC, diagonal). The loss Hessian `diag(σ(f)·(1-σ(f)))` is
+  independent of targets, so the exact and MC GGN are valid for any target in `[0, 1]`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/257))
+
 ### Fixed/Removed
 
 - **Backward-incompatible:** Remove `(E)KFACLinearOperator`'s `state_dict` and `from_state_dict` methods, use `torch.save(K, path)` and `torch.load(path)` instead
   ([PR](https://github.com/f-dangel/curvlinops/pull/249))
 
+- Remove `_check_binary_if_BCEWithLogitsLoss` safeguard; BCE targets are no longer
+  restricted to binary values
+  ([PR](https://github.com/f-dangel/curvlinops/pull/257))
+
 ### Internal
 
 - Move shared GGN utilities (`loss_hessian_matrix_sqrt`, `make_grad_output_fn`,
-  `_check_binary_if_BCEWithLogitsLoss`, `_make_single_datum_sampler`) from
+  `_make_single_datum_sampler`) from
   `kfac_utils.py` to new `ggn_utils.py`; `kfac_utils.py` now only contains
   KFAC-specific code (patch extraction, canonical space converters)
   ([PR](https://github.com/f-dangel/curvlinops/pull/255))

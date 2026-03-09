@@ -36,7 +36,7 @@ from torch.nn import (
 from torch.utils.hooks import RemovableHandle
 
 from curvlinops._empirical_risk import _EmpiricalRiskMixin
-from curvlinops.ggn_utils import _check_binary_if_BCEWithLogitsLoss, make_grad_output_fn
+from curvlinops.ggn_utils import make_grad_output_fn
 from curvlinops.kfac_utils import extract_averaged_patches, extract_patches
 from curvlinops.utils import _seed_generator
 
@@ -315,31 +315,9 @@ class KFACComputer(_EmpiricalRiskMixin):
             "empirical": "same",
             "forward-only": "same",
         }[mode]
-        batched_grad_output_fn = vmap(
+        return vmap(
             grad_output_fn, in_dims=(0, 0, None), out_dims=1, randomness=randomness
         )
-
-        def compute_grad_outputs(
-            output: Tensor, y: Tensor, generator: Generator | None = None
-        ) -> Tensor:
-            """Compute the gradients that are backpropagated from the network's output.
-
-            Args:
-                output: Neural network prediction with batch axis.
-                y: Target labels with batch axis.
-                generator: Random generator (used for MC mode).
-
-            Returns:
-                Gradients to be backpropagated from the network's output as a tensor of
-                shape ``[num_vectors, *output.shape]`` where ``num_vectors`` depends on
-                the Fisher type.
-            """
-            # Binary label check is data-dependent and not supported in vmap,
-            # so we check outside and disable it inside (via make_grad_output_fn).
-            _check_binary_if_BCEWithLogitsLoss(y, loss_func)
-            return batched_grad_output_fn(output, y, generator)
-
-        return compute_grad_outputs
 
     def _compute_kronecker_factors(self) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
         """Compute KFAC's Kronecker factors.
