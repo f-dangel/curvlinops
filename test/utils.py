@@ -784,7 +784,9 @@ def check_estimator_convergence(
 
 
 def _test_inplace_activations(
-    linop_cls: type[KFACLinearOperator | EKFACLinearOperator], dev: device
+    linop_cls: type[KFACLinearOperator | EKFACLinearOperator],
+    dev: device,
+    backend: str = "hooks",
 ):
     """Test that (E)KFAC works if the network has in-place activations.
 
@@ -794,6 +796,7 @@ def _test_inplace_activations(
     Args:
         linop_cls: The linear operator class to test.
         dev: The device to run the test on.
+        backend: The backend to use for computing Kronecker factors.
     """
     manual_seed(0)
     model = Sequential(Linear(6, 3), ReLU(inplace=True), Linear(3, 2)).to(dev)
@@ -804,7 +807,9 @@ def _test_inplace_activations(
 
     # 1) compare (E)KFAC and GGN
     ggn = block_diagonal(GGNLinearOperator, model, loss_func, params, data)
-    linop = linop_cls(model, loss_func, params, data, fisher_type=FisherType.TYPE2)
+    linop = linop_cls(
+        model, loss_func, params, data, fisher_type=FisherType.TYPE2, backend=backend
+    )
     linop_mat = linop @ eye_like(linop)
     assert allclose_report(ggn, linop_mat)
 
@@ -828,6 +833,7 @@ def _test_property(  # noqa: C901
     check_deterministic: bool,
     rtol: float = 1e-5,
     atol: float = 1e-8,
+    backend: str = "hooks",
 ):
     """Test a property of (E)KFAC.
 
@@ -845,6 +851,7 @@ def _test_property(  # noqa: C901
             operator.
         rtol: Relative tolerance for the comparison. Default: ``1e-5``.
         atol: Absolute tolerance for the comparison. Default: ``1e-8``.
+        backend: The backend to use for computing Kronecker factors.
     """
     # Create instance of linear operator
     linop = linop_cls(
@@ -855,6 +862,7 @@ def _test_property(  # noqa: C901
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
         check_deterministic=check_deterministic,
+        backend=backend,
     )
 
     # Add damping manually to avoid singular matrices for logdet
@@ -893,6 +901,7 @@ def _test_ekfac_closer_to_exact_than_kfac(
     separate_weight_and_bias: bool,
     fisher_type: FisherType,
     kfac_approx: bool,
+    backend: str = "hooks",
 ):
     """Test that EKFAC is closer in Frobenius norm to the exact quantity than KFAC.
 
@@ -907,6 +916,7 @@ def _test_ekfac_closer_to_exact_than_kfac(
         exclude: Parameter to exclude.
         fisher_type: The type of Fisher approximation.
         kfac_approx: THe type of KFAC approximation.
+        backend: The backend to use for computing Kronecker factors.
     """
     # Compute exact block-wise ground truth quantity.
     linop_cls = {
@@ -936,6 +946,7 @@ def _test_ekfac_closer_to_exact_than_kfac(
         separate_weight_and_bias=separate_weight_and_bias,
         fisher_type=fisher_type,
         kfac_approx=kfac_approx,
+        backend=backend,
         **optional_linop_args,
     )
     kfac_mat = kfac @ eye_like(kfac)
@@ -948,6 +959,7 @@ def _test_ekfac_closer_to_exact_than_kfac(
         separate_weight_and_bias=separate_weight_and_bias,
         fisher_type=fisher_type,
         kfac_approx=kfac_approx,
+        backend=backend,
         **optional_linop_args,
     )
     ekfac_mat = ekfac @ eye_like(ekfac)

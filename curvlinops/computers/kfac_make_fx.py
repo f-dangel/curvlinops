@@ -186,6 +186,8 @@ class MakeFxKFACComputer(KFACComputer):
                 "The make_fx backend does not support MutableMapping inputs. "
                 "Use the hooks backend instead."
             )
+        # Move to model device (data may be on CPU while model is on GPU)
+        x_example = x_example.to(self.device)
 
         # Trace once with example data to extract static layer info
         f_with_kfac_io = with_kfac_io(f, x_example, named_params, self._fisher_type)
