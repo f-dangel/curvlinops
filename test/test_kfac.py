@@ -56,22 +56,19 @@ MC_SAMPLES = 3_000
 MC_TOLS = {"rtol": 1e-1, "atol": 1.5e-2}
 
 # Backend parametrization
-BACKENDS = ["hooks", "make_fx"]
-BACKENDS_IDS = ["hooks", "make_fx"]
+BACKENDS = list(KFACLinearOperator._BACKENDS)
+BACKENDS_IDS = BACKENDS
 
 
-def _skip_if_make_fx_incompatible(backend, fisher_type=None, data=None):
+def _skip_if_make_fx_incompatible(backend, data=None):
     """Skip test if make_fx backend is incompatible with the configuration.
 
     Args:
         backend: The backend being tested.
-        fisher_type: The Fisher type, if applicable.
         data: The dataset, to check for MutableMapping inputs.
     """
     if backend != "make_fx":
         return
-    if fisher_type is not None and (fisher_type in (FisherType.MC, "mc")):
-        skip("make_fx cannot trace torch._C.Generator")
     if data is not None:
         X = data[0][0] if isinstance(data, list) else next(iter(data))[0]
         if isinstance(X, MutableMapping):

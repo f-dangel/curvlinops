@@ -87,9 +87,10 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
         SELF_ADJOINT: Whether the operator is self-adjoint. ``True`` for KFAC.
     """
 
-    _COMPUTER_CLS = KFACComputer
-    _MAKE_FX_COMPUTER_CLS = MakeFxKFACComputer
-    _SUPPORTED_BACKENDS: tuple[str, ...] = ("hooks", "make_fx")
+    _BACKENDS: dict[str, type] = {
+        "hooks": KFACComputer,
+        "make_fx": MakeFxKFACComputer,
+    }
     SELF_ADJOINT: bool = True
 
     def __init__(
@@ -178,13 +179,11 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
         Raises:
             ValueError: If ``backend`` is not supported.
         """
-        if backend not in self._SUPPORTED_BACKENDS:
+        if backend not in self._BACKENDS:
             raise ValueError(
-                f"Invalid backend: {backend!r}. Supported: {self._SUPPORTED_BACKENDS}."
+                f"Invalid backend: {backend!r}. Supported: {tuple(self._BACKENDS)}."
             )
-        computer_cls = (
-            self._COMPUTER_CLS if backend == "hooks" else self._MAKE_FX_COMPUTER_CLS
-        )
+        computer_cls = self._BACKENDS[backend]
         computer = computer_cls(
             model_func,
             loss_func,
