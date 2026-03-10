@@ -64,8 +64,38 @@ class CGInverseLinearOperator(_InversePyTorchLinearOperator):
             A: PyTorch linear operator whose inverse is formed. Must represent a
                 symmetric and positive-definite matrix.
             cg_hyperparameters: Keyword arguments for GPyTorch's CG implementation.
-                For details, see the documentation of the ``linear_cg`` function in
+                In particular, this includes optional arguments such as ``max_iter``,
+                ``tolerance``, and ``preconditioner``.
+                The ``preconditioner`` should be a callable that applies a left
+                preconditioning operation to a supplied vector. This can be
+                implemented via a `PyTorchLinearOperator`'s ``__matmul__`` method. For
+                details, see the documentation of the ``linear_cg`` function in
                 https://github.com/cornellius-gp/linear_operator/blob/main/linear_operator/utils/linear_cg.py.
+
+        Example:
+            >>> from torch import allclose, tensor
+            >>> from curvlinops import CGInverseLinearOperator
+            >>> from curvlinops.examples import TensorLinearOperator
+            >>> A = tensor([[4.0, 1.0, 0.0], [1.0, 3.0, 1.0], [0.0, 1.0, 2.0]])
+            >>> b = tensor([1.0, 2.0, 3.0])
+            >>> A_linop = TensorLinearOperator(A)
+            >>> solution = CGInverseLinearOperator(
+            ...     A_linop, max_iter=10, max_tridiag_iter=10, tolerance=1e-7
+            ... ) @ b
+            >>> inverse_diagonal = TensorLinearOperator(A.diag().reciprocal().diag())
+            >>> solution_preconditioned = CGInverseLinearOperator(
+            ...     A_linop,
+            ...     max_iter=10,
+            ...     max_tridiag_iter=10,
+            ...     tolerance=1e-7,
+            ...     preconditioner=inverse_diagonal.__matmul__,
+            ... ) @ b
+            >>> solution.round(decimals=4)
+            tensor([0.2222, 0.1111, 1.4444])
+            >>> solution_preconditioned.round(decimals=4)
+            tensor([0.2222, 0.1111, 1.4444])
+            >>> allclose(solution, solution_preconditioned)
+            True
         """
         super().__init__(A)
         self._cg_hyperparameters = cg_hyperparameters
