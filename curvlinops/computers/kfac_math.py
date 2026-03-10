@@ -29,7 +29,7 @@ Examples of the conversion:
 
 from typing import Any
 
-from einops import reduce
+from einops import rearrange, reduce
 from torch import Tensor, cat
 
 from curvlinops.kfac_utils import (
@@ -131,17 +131,12 @@ def grad_to_weight_sharing_format(
         # [leading..., C_out, spatial...] -> [leading..., spatial..., C_out]
         g = g.movedim(num_leading_dims, -1)
 
-    # Step 2: Collapse sharing dimensions
+    # Step 2: Collapse sharing dimensions [*leading, batch, *sharing, d_out]
+    leading = {1: "", 2: "v "}[num_leading_dims]
     if kfac_approx == KFACType.EXPAND:
-        # hooks: [batch, s1, s2, d] -> [(batch s1 s2), d]
-        # FX:    [v, batch, s1, s2, d] -> [v, (batch s1 s2), d]
-        leading = g.shape[: num_leading_dims - 1]
-        d_out = g.shape[-1]
-        g = g.reshape(*leading, -1, d_out)
+        g = rearrange(g, f"{leading}batch ... d_out -> {leading}(batch ...) d_out")
     else:
-        spatial_dims = tuple(range(num_leading_dims, g.ndim - 1))
-        if spatial_dims:
-            g = g.sum(dim=spatial_dims)
+        g = reduce(g, f"{leading}batch ... d_out -> {leading}batch d_out", "sum")
 
     return g
 
