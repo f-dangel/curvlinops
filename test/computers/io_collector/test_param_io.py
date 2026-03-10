@@ -2,6 +2,7 @@
 
 from typing import Any
 
+import pytest
 from pytest import raises
 from torch import Tensor, arange, manual_seed, rand, zeros, zeros_like
 from torch.func import functional_call
@@ -139,7 +140,8 @@ def test_convolution():
 
     x = rand(N, C_in, I1, I2)
     params = {"weight": rand(C_out, C_in, K1, K2), "bias": rand(C_out)}
-    io_true = ((CONV_STR, f(x, params), x, "weight", "bias", CONV2D_DEFAULT_PARAMS),)
+    hparams = {**CONV2D_DEFAULT_PARAMS, "kernel_size": [K1, K2]}
+    io_true = ((CONV_STR, f(x, params), x, "weight", "bias", hparams),)
     _verify_io(f, x, params, io_true)
 
     # 2) Non-standard convolution with weight and bias
@@ -153,7 +155,9 @@ def test_convolution():
     params = {"weight": rand(C_out, C_in, K1, K2), "bias": rand(C_out)}
     hyperparams_true = {
         **CONV2D_DEFAULT_PARAMS,
-        **{"stride": [2, 2], "padding": [1, 1]},
+        "kernel_size": [K1, K2],
+        "stride": [2, 2],
+        "padding": [1, 1],
     }
     io_true = ((CONV_STR, f(x, params), x, "weight", "bias", hyperparams_true),)
     _verify_io(f, x, params, io_true)
@@ -164,7 +168,8 @@ def test_convolution():
 
     x = rand(N, C_in, I1, I2)
     params = {"weight": rand(C_out, C_in, K1, K2)}
-    io_true = ((CONV_STR, f(x, params), x, "weight", None, CONV2D_DEFAULT_PARAMS),)
+    hparams = {**CONV2D_DEFAULT_PARAMS, "kernel_size": [K1, K2]}
+    io_true = ((CONV_STR, f(x, params), x, "weight", None, hparams),)
     _verify_io(f, x, params, io_true)
 
     # 4) Use torch.nn nn
@@ -173,7 +178,11 @@ def test_convolution():
     def f(x: Tensor, params: dict) -> Tensor:
         return functional_call(conv, params, x)
 
-    hyperparams_true = {**CONV2D_DEFAULT_PARAMS, **{"stride": [2, 1]}}
+    hyperparams_true = {
+        **CONV2D_DEFAULT_PARAMS,
+        "kernel_size": [K1, K2],
+        "stride": [2, 1],
+    }
     x, params = (rand(N, C_in, I1, I2), {"weight": rand(C_out, C_in, K1, K2)})
     io_true = ((CONV_STR, f(x, params), x, "weight", None, hyperparams_true),)
     _verify_io(f, x, params, io_true)
@@ -251,3 +260,35 @@ def test_supports_multiple_batch_sizes():
         io_true = ((LINEAR_STR, f(x, params), x, "weight", "bias", {}),)
         io = f_with_io(x, params)[1:]
         compare_io(io, io_true)
+
+
+@pytest.mark.parametrize("bias", [True, False], ids=["bias", "no_bias"])
+@pytest.mark.parametrize(
+    "x_shape",
+    [(2, 8, 5), (2, 4, 8, 5)],
+    ids=["3D", "4D"],
+)
+def test_fully_connected_higher_dim_input(x_shape, bias):
+    """Test with_param_io preserves original input shape for >2D Linear inputs.
+
+    For 3D inputs, PyTorch decomposes ``F.linear`` as ``view → addmm → view``;
+    for 4D+ inputs it uses ``view → mm → _unsafe_view → add(bias)``. The IO
+    collector must resolve these paired reshapes to capture the original
+    (unflattened) input and output tensors.
+    """
+    manual_seed(0)
+    D_in, D_out = x_shape[-1], 4
+
+    fc = Linear(D_in, D_out, bias=bias)
+
+    def f(x: Tensor, params: dict) -> Tensor:
+        return functional_call(fc, params, x)
+
+    params = {"weight": rand(D_out, D_in)}
+    if bias:
+        params["bias"] = rand(D_out)
+
+    x = rand(*x_shape)
+    bias_name = "bias" if bias else None
+    io_true = ((LINEAR_STR, f(x, params), x, "weight", bias_name, {}),)
+    _verify_io(f, x, params, io_true)

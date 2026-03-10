@@ -337,8 +337,16 @@ def test_kfac_io_cnn(inplace: bool):
                 "Linear1": {"weight": "9.weight", "bias": "9.bias"},
             },
             {
-                "Conv0": {**CONV2D_DEFAULT_PARAMS, **{"padding": [1, 1]}},
-                "Conv1": {**CONV2D_DEFAULT_PARAMS, **{"stride": [2, 2]}},
+                "Conv0": {
+                    **CONV2D_DEFAULT_PARAMS,
+                    "kernel_size": [3, 3],
+                    "padding": [1, 1],
+                },
+                "Conv1": {
+                    **CONV2D_DEFAULT_PARAMS,
+                    "kernel_size": [4, 4],
+                    "stride": [2, 2],
+                },
                 "Linear0": {},  # Linear layers have empty hyperparams
                 "Linear1": {},  # Linear layers have empty hyperparams
             },

@@ -44,7 +44,7 @@ class ConvolutionWeightMatcher(_PatternMatcher):
             inputs, weight, bias = p_user.args[:3]
             # Verify this parameter is the weight (second argument)
             if weight == p_node:
-                hyperparams = _extract_conv_hyperparams(p_user.args)
+                hyperparams = _extract_conv_hyperparams(p_user.args, weight)
                 layer_info = AffineLayerInfo(
                     CONV_STR, p_user, p_node, inputs, bias, hyperparams
                 )
@@ -88,7 +88,7 @@ class ConvolutionBiasMatcher(_PatternMatcher):
             inputs, weight, bias = p_user.args[:3]
             # Verify this parameter is the bias (third argument)
             if bias == p_node:
-                hyperparams = _extract_conv_hyperparams(p_user.args)
+                hyperparams = _extract_conv_hyperparams(p_user.args, weight)
                 layer_info = AffineLayerInfo(
                     CONV_STR,
                     p_user,
@@ -103,14 +103,18 @@ class ConvolutionBiasMatcher(_PatternMatcher):
         return matches, paths
 
 
-def _extract_conv_hyperparams(args: tuple[Any, ...]) -> dict[str, Any]:
+def _extract_conv_hyperparams(
+    args: tuple[Any, ...], weight_node: Node
+) -> dict[str, Any]:
     """Extract hyperparameters from convolution arguments.
 
     Args:
         args: Arguments tuple from aten.convolution.default call.
+        weight_node: The FX node for the weight parameter, used to infer
+            ``kernel_size`` from the weight tensor's shape metadata.
 
     Returns:
-        Dictionary of hyperparameters.
+        Dictionary of hyperparameters including ``kernel_size``.
 
     Raises:
         ValueError: If args doesn't have exactly 9 elements.
@@ -124,7 +128,20 @@ def _extract_conv_hyperparams(args: tuple[Any, ...]) -> dict[str, Any]:
 
     _, _, _, stride, padding, dilation, transposed, output_padding, groups = args
 
+    # Infer kernel_size from weight tensor shape metadata (shape[2:] for Conv2d)
+    # Try tensor_meta first (symbolic tracing), fall back to val (real tracing)
+    if "tensor_meta" in weight_node.meta:
+        kernel_size = list(weight_node.meta["tensor_meta"].shape[2:])
+    elif "val" in weight_node.meta:
+        kernel_size = list(weight_node.meta["val"].shape[2:])
+    else:
+        raise ValueError(
+            f"Cannot infer kernel_size: weight node {weight_node} has no shape "
+            f"metadata. Available meta keys: {list(weight_node.meta.keys())}"
+        )
+
     return {
+        "kernel_size": kernel_size,
         "stride": stride,
         "padding": padding,
         "dilation": dilation,

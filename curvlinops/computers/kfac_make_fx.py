@@ -38,44 +38,12 @@ class MakeFxKFACComputer(KFACComputer):
     (MC sampling + gradient covariances) runs eagerly.
     """
 
-    @staticmethod
-    def _conv_info(
-        io_layer_name: str,
-        layer_hyperparams: dict[str, dict[str, Any]],
-        layer_param_names: dict[str, dict[str, str]] | None = None,
-        named_params: dict[str, Tensor] | None = None,
-    ) -> tuple[bool, tuple[int, ...] | None, dict[str, Any]]:
-        """Extract convolution detection flag, kernel size, and hyperparams.
-
-        Linear layers have empty hyperparams dicts; Conv2d layers have non-empty
-        ones (stride, padding, etc.). This convention is set by the IO collector.
-
-        Args:
-            io_layer_name: IO collector layer name.
-            layer_hyperparams: Hyperparameters from IO collector.
-            layer_param_names: Parameter name mapping (needed for kernel_size).
-            named_params: Named parameter tensors (needed for kernel_size).
-
-        Returns:
-            Tuple of (is_conv2d, kernel_size, hyperparams).
-        """
-        hyperparams = layer_hyperparams[io_layer_name]
-        is_conv2d = bool(hyperparams)
-        kernel_size = None
-        if is_conv2d and layer_param_names is not None and named_params is not None:
-            pnames = layer_param_names[io_layer_name]
-            if "weight" in pnames:
-                kernel_size = named_params[pnames["weight"]].shape[2:]
-        return is_conv2d, kernel_size, hyperparams
-
     def _input_covariance_from_io(
         self,
         io_layer_name: str,
         x: Tensor,
         module_name: str,
-        layer_param_names: dict[str, dict[str, str]],
         layer_hyperparams: dict[str, dict[str, Any]],
-        named_params: dict[str, Tensor],
     ) -> tuple[str, Tensor]:
         """Compute the input covariance for one layer from collected IO.
 
@@ -85,29 +53,22 @@ class MakeFxKFACComputer(KFACComputer):
             io_layer_name: IO collector layer name.
             x: The collected layer input tensor.
             module_name: Module name in ``self._mapping``.
-            layer_param_names: Parameter name mapping from IO collector.
             layer_hyperparams: Hyperparameters from IO collector.
-            named_params: Named parameter tensors.
 
         Returns:
             Tuple of (module_name, covariance).
         """
         x = x.data.detach()
 
-        is_conv2d, kernel_size, hyperparams = self._conv_info(
-            io_layer_name, layer_hyperparams, layer_param_names, named_params
-        )
-
         params = self._mapping[module_name]
         has_joint_wb = _has_joint_weight_and_bias(
             self._separate_weight_and_bias, params
         )
 
-        hparams = {**hyperparams, "kernel_size": kernel_size} if is_conv2d else {}
         x = input_to_weight_sharing_format(
             x,
             self._kfac_approx,
-            layer_hyperparams=hparams,
+            layer_hyperparams=layer_hyperparams[io_layer_name],
             append_ones_for_bias=has_joint_wb,
         )
         scale = x.shape[1]
@@ -164,7 +125,6 @@ class MakeFxKFACComputer(KFACComputer):
         Callable,
         dict[str, Tensor],
         dict[str, str],
-        dict[str, dict[str, str]],
         dict[str, dict[str, Any]],
     ]:
         """Build the functional wrapper and extract static layer info.
@@ -175,8 +135,7 @@ class MakeFxKFACComputer(KFACComputer):
         same trace.
 
         Returns:
-            Tuple of (f, named_params, io_to_module, layer_param_names,
-            layer_hyperparams).
+            Tuple of (f, named_params, io_to_module, layer_hyperparams).
         """
         if hasattr(self, "_setup_cache"):
             return self._setup_cache
@@ -228,7 +187,6 @@ class MakeFxKFACComputer(KFACComputer):
             f,
             named_params,
             io_to_module,
-            layer_param_names,
             layer_hyperparams,
         )
         return self._setup_cache
@@ -277,7 +235,6 @@ class MakeFxKFACComputer(KFACComputer):
         self,
         f_with_kfac_io: Callable,
         io_to_module: dict[str, str],
-        layer_param_names: dict[str, dict[str, str]],
         layer_hparams: dict[str, dict[str, Any]],
     ) -> Callable:
         """Build a function for the traced forward pass.
@@ -290,7 +247,6 @@ class MakeFxKFACComputer(KFACComputer):
         Args:
             f_with_kfac_io: IO-collecting function for a specific batch size.
             io_to_module: Mapping from IO collector layer names to module names.
-            layer_param_names: Parameter name mapping from IO collector.
             layer_hparams: Hyperparameters from IO collector.
 
         Returns:
@@ -308,9 +264,7 @@ class MakeFxKFACComputer(KFACComputer):
                     io_name,
                     x,
                     io_to_module[io_name],
-                    layer_param_names,
                     layer_hparams,
-                    params,
                 )
                 self._set_or_add_(input_covs, mod_name, cov)
 
@@ -329,9 +283,7 @@ class MakeFxKFACComputer(KFACComputer):
         Returns:
             Tuple containing (input_covariances, gradient_covariances) dictionaries.
         """
-        f, named_params, io_to_module, layer_param_names, layer_hparams = (
-            self._setup_model()
-        )
+        f, named_params, io_to_module, layer_hparams = self._setup_model()
 
         if not hasattr(self, "_traced_forward_fns"):
             self._traced_forward_fns: dict[int, Callable] = {}
@@ -354,9 +306,7 @@ class MakeFxKFACComputer(KFACComputer):
             batch_size = self._batch_size_fn(X)
             if batch_size not in self._traced_forward_fns:
                 f_io = with_kfac_io(f, X, named_params, self._fisher_type)
-                forward_fn = self._make_forward_fn(
-                    f_io, io_to_module, layer_param_names, layer_hparams
-                )
+                forward_fn = self._make_forward_fn(f_io, io_to_module, layer_hparams)
                 self._traced_forward_fns[batch_size] = make_fx(forward_fn)(
                     named_params, X
                 )
