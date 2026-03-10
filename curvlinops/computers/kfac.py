@@ -37,6 +37,8 @@ from torch.utils.hooks import RemovableHandle
 from curvlinops._empirical_risk import _EmpiricalRiskMixin
 from curvlinops.computers.kfac_math import (
     compute_loss_correction,
+    conv2d_grad_to_kfac_format,
+    conv2d_input_to_kfac_format,
     prepare_grad_output,
     prepare_layer_input,
 )
@@ -452,9 +454,10 @@ class KFACComputer(_EmpiricalRiskMixin):
         g = grad_output.data.detach()
         batch_size = g.shape[0]
 
-        g = prepare_grad_output(
-            g, self._kfac_approx, isinstance(module, Conv2d), num_leading_dims=1
-        )
+        if isinstance(module, Conv2d):
+            g = conv2d_grad_to_kfac_format(g, num_leading_dims=1)
+
+        g = prepare_grad_output(g, self._kfac_approx, num_leading_dims=1)
 
         # Note: mc_samples scaling is already handled inside make_grad_output_fn.
         correction = compute_loss_correction(
@@ -496,15 +499,19 @@ class KFACComputer(_EmpiricalRiskMixin):
             self._separate_weight_and_bias, params
         )
 
+        if isinstance(module, Conv2d):
+            x = conv2d_input_to_kfac_format(
+                x,
+                self._kfac_approx,
+                module.kernel_size,
+                module.stride,
+                module.padding,
+                module.dilation,
+                module.groups,
+            )
+
         x, scale = prepare_layer_input(
-            x,
-            self._kfac_approx,
-            kernel_size=module.kernel_size if isinstance(module, Conv2d) else None,
-            stride=module.stride if isinstance(module, Conv2d) else None,
-            padding=module.padding if isinstance(module, Conv2d) else None,
-            dilation=module.dilation if isinstance(module, Conv2d) else None,
-            groups=module.groups if isinstance(module, Conv2d) else None,
-            append_ones_for_bias=has_joint_wb,
+            x, self._kfac_approx, append_ones_for_bias=has_joint_wb
         )
 
         covariance = einsum(x, x, "b i,b j -> i j").div_(self._N_data * scale)

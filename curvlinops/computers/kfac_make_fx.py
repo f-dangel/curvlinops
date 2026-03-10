@@ -21,6 +21,8 @@ from curvlinops.computers.io_collector import with_kfac_io
 from curvlinops.computers.kfac import KFACComputer
 from curvlinops.computers.kfac_math import (
     compute_loss_correction,
+    conv2d_grad_to_kfac_format,
+    conv2d_input_to_kfac_format,
     prepare_grad_output,
     prepare_layer_input,
 )
@@ -98,20 +100,24 @@ class MakeFxKFACComputer(KFACComputer):
             io_layer_name, layer_hyperparams, layer_param_names, named_params
         )
 
+        if is_conv2d:
+            x = conv2d_input_to_kfac_format(
+                x,
+                self._kfac_approx,
+                kernel_size,
+                hyperparams["stride"],
+                hyperparams["padding"],
+                hyperparams["dilation"],
+                hyperparams["groups"],
+            )
+
         params = self._mapping[module_name]
         has_joint_wb = _has_joint_weight_and_bias(
             self._separate_weight_and_bias, params
         )
 
         x, scale = prepare_layer_input(
-            x,
-            self._kfac_approx,
-            kernel_size=kernel_size,
-            stride=hyperparams.get("stride") if is_conv2d else None,
-            padding=hyperparams.get("padding") if is_conv2d else None,
-            dilation=hyperparams.get("dilation") if is_conv2d else None,
-            groups=hyperparams.get("groups") if is_conv2d else None,
-            append_ones_for_bias=has_joint_wb,
+            x, self._kfac_approx, append_ones_for_bias=has_joint_wb
         )
 
         covariance = einsum(x, x, "b i,b j -> i j").div_(scale)
@@ -149,12 +155,10 @@ class MakeFxKFACComputer(KFACComputer):
 
         is_conv2d, _, _ = self._conv_info(io_layer_name, layer_hyperparams)
 
-        g = prepare_grad_output(
-            g,
-            self._kfac_approx,
-            is_conv2d,
-            num_leading_dims=2,
-        )
+        if is_conv2d:
+            g = conv2d_grad_to_kfac_format(g, num_leading_dims=2)
+
+        g = prepare_grad_output(g, self._kfac_approx, num_leading_dims=2)
 
         correction = compute_loss_correction(
             batch_size, self._num_per_example_loss_terms, self._loss_func.reduction
