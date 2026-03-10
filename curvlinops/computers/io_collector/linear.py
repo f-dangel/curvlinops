@@ -83,20 +83,22 @@ def _match_addmm_weight(p: Node, pT: Node, addmm: Node) -> AffineLayerInfo | Non
     """
     if len(addmm.args) != 3 or addmm.kwargs:
         return None
-    bias, inputs, mat2 = addmm.args
+    bias, x, mat2 = addmm.args
     if mat2 != pT:
         return None
 
     # Check for paired view → addmm → view (3D F.linear)
+    x_view = x
     if (
-        _is_last_dim_preserving_view(inputs)
+        _is_last_dim_preserving_view(x_view)
         and len(addmm.users) == 1
-        and _is_last_dim_preserving_view(view_out := next(iter(addmm.users)))
+        and _is_last_dim_preserving_view(y_view := next(iter(addmm.users)))
     ):
-        return AffineLayerInfo(LINEAR_STR, view_out, p, inputs.args[0], bias, {})
+        x = x_view.args[0]
+        return AffineLayerInfo(LINEAR_STR, y_view, p, x, bias, {})
 
     # 2D case: no reshapes
-    return AffineLayerInfo(LINEAR_STR, addmm, p, inputs, bias, {})
+    return AffineLayerInfo(LINEAR_STR, addmm, p, x, bias, {})
 
 
 def _match_mm_weight(p: Node, pT: Node, mm: Node) -> AffineLayerInfo | None:
@@ -119,31 +121,32 @@ def _match_mm_weight(p: Node, pT: Node, mm: Node) -> AffineLayerInfo | None:
     """
     if len(mm.args) != 2 or mm.kwargs:
         return None
-    mm_input, mat2 = mm.args
+    x, mat2 = mm.args
     if mat2 != pT:
         return None
 
     # Check for view → mm → view pattern (>2D F.linear)
+    x_view = x
     if (
-        _is_last_dim_preserving_view(mm_input)
+        _is_last_dim_preserving_view(x_view)
         and len(mm.users) == 1
-        and _is_last_dim_preserving_view(view_out := next(iter(mm.users)))
+        and _is_last_dim_preserving_view(y_view := next(iter(mm.users)))
     ):
-        original_input = mm_input.args[0]
-        add_result = _find_add_bias(view_out)
+        x = x_view.args[0]
+        add_result = _find_add_bias(y_view)
         if add_result is not None:
             return AffineLayerInfo(
-                LINEAR_STR, add_result[0], p, original_input, add_result[1], {}
+                LINEAR_STR, add_result[0], p, x, add_result[1], {}
             )
-        return AffineLayerInfo(LINEAR_STR, view_out, p, original_input, None, {})
+        return AffineLayerInfo(LINEAR_STR, y_view, p, x, None, {})
 
     # 2D case: mm [→ add]
     add_result = _find_add_bias(mm)
     if add_result is not None:
         return AffineLayerInfo(
-            LINEAR_STR, add_result[0], p, mm_input, add_result[1], {}
+            LINEAR_STR, add_result[0], p, x, add_result[1], {}
         )
-    return AffineLayerInfo(LINEAR_STR, mm, p, mm_input, None, {})
+    return AffineLayerInfo(LINEAR_STR, mm, p, x, None, {})
 
 
 def _match_addmm_bias(p: Node, addmm: Node) -> AffineLayerInfo | None:
@@ -158,21 +161,23 @@ def _match_addmm_bias(p: Node, addmm: Node) -> AffineLayerInfo | None:
     """
     if len(addmm.args) != 3 or addmm.kwargs:
         return None
-    bias, inputs, WT = addmm.args
+    bias, x, WT = addmm.args
     if bias != p:
         return None
     W = _extract_weight(WT)
 
     # Check for paired view → addmm → view (3D F.linear)
+    x_view = x
     if (
-        _is_last_dim_preserving_view(inputs)
+        _is_last_dim_preserving_view(x_view)
         and len(addmm.users) == 1
-        and _is_last_dim_preserving_view(view_out := next(iter(addmm.users)))
+        and _is_last_dim_preserving_view(y_view := next(iter(addmm.users)))
     ):
-        return AffineLayerInfo(LINEAR_STR, view_out, W, inputs.args[0], bias, {})
+        x = x_view.args[0]
+        return AffineLayerInfo(LINEAR_STR, y_view, W, x, bias, {})
 
     # 2D case
-    return AffineLayerInfo(LINEAR_STR, addmm, W, inputs, bias, {})
+    return AffineLayerInfo(LINEAR_STR, addmm, W, x, bias, {})
 
 
 def _match_add_bias(p: Node, add: Node) -> AffineLayerInfo | None:
@@ -190,22 +195,23 @@ def _match_add_bias(p: Node, add: Node) -> AffineLayerInfo | None:
     if len(add.args) != 2:
         return None
     lhs, rhs = add.args
-    other = lhs if rhs == p else rhs if lhs == p else None
-    if other is None:
+    y_view = lhs if rhs == p else rhs if lhs == p else None
+    if y_view is None:
         return None
 
-    # Expect: view → mm → view (= other) → add
-    if not _is_last_dim_preserving_view(other):
+    # Expect: view → mm → view (= y_view) → add
+    if not _is_last_dim_preserving_view(y_view):
         return None
-    mm = other.args[0]
+    mm = y_view.args[0]
     if not (mm.op == "call_function" and mm.target == aten.mm.default):
         return None
-    mm_input, WT = mm.args
-    if not _is_last_dim_preserving_view(mm_input):
+    x_view, WT = mm.args
+    if not _is_last_dim_preserving_view(x_view):
         return None
 
     W = _extract_weight(WT)
-    return AffineLayerInfo(LINEAR_STR, add, W, mm_input.args[0], p, {})
+    x = x_view.args[0]
+    return AffineLayerInfo(LINEAR_STR, add, W, x, p, {})
 
 
 class LinearWeightMatcher(_PatternMatcher):
