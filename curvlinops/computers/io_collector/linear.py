@@ -12,110 +12,47 @@ from curvlinops.computers.io_collector._base import (
 LINEAR_STR = "Linear(y=W@x+b)"
 
 # Reshape ops inserted by F.linear for >2D inputs (view → mm/addmm → view)
-_RESHAPE_OPS = {aten._unsafe_view.default, aten.view.default}
+_VIEW_OPS = {aten._unsafe_view.default, aten.view.default}
 
 
-def _trace_forward_through_reshapes(node: Node) -> Node:
-    """Follow a chain of reshape operations forward (toward outputs).
-
-    Starting from a node, walk through single-user reshape operations
-    (``view``, ``_unsafe_view``) that preserve the last dimension (feature
-    dimension).  This ensures we only follow F.linear's paired reshapes
-    (which unflatten batch dimensions) and stop at model reshapes that
-    alter the feature dimension.
-
-    Args:
-        node: Starting node (typically the output of ``aten.mm``/``aten.addmm``).
+def _is_last_dim_preserving_view(node: Node) -> bool:
+    """Check if a node is a last-dim-preserving reshape (``view``/``_unsafe_view``).
 
     Returns:
-        The last node after following single-user, last-dim-preserving
-        reshape chains (which may be the input itself if there are no
-        such reshapes).
+        ``True`` if the node is a view that preserves the last dimension.
     """
-    while (
-        len(node.users) == 1
-        and (user := next(iter(node.users))).op == "call_function"
-        and user.target in _RESHAPE_OPS
-        and len(user.args) >= 2
-        and isinstance(user.args[1], list)
-        and user.args[1][-1] == node.meta["val"].shape[-1]
-    ):
-        node = user
-    return node
-
-
-def _trace_backward_through_reshapes(node: Node) -> Node:
-    """Follow a chain of reshape operations backward (toward inputs).
-
-    Starting from a node, walk backward through reshape operations that
-    preserve the last dimension (feature dimension), finding the original
-    tensor before any flattening/reshaping by F.linear.
-
-    Args:
-        node: Starting node (typically the first argument of ``aten.mm``).
-
-    Returns:
-        The first node before any last-dim-preserving reshape chain.
-    """
-    while (
+    return (
         node.op == "call_function"
-        and node.target in _RESHAPE_OPS
-        and len(node.args) >= 1
-        and node.meta["val"].shape[-1] == node.args[0].meta["val"].shape[-1]
-    ):
-        node = node.args[0]
-    return node
+        and node.target in _VIEW_OPS
+        and len(node.args) >= 2
+        and isinstance(node.args[1], list)
+        and node.args[1][-1] == node.args[0].meta["val"].shape[-1]
+    )
 
 
-def _find_add_bias(mm_or_reshape: Node) -> tuple[Node, Node] | None:
+def _find_add_bias(node: Node) -> tuple[Node, Node] | None:
     """Check if a node feeds into ``aten.add.Tensor`` with a bias parameter.
 
-    Looks for the pattern ``add(mm_result, bias)`` or ``add(bias, mm_result)``
-    among the users of ``mm_or_reshape``.
+    Looks for the pattern ``add(node, bias)`` or ``add(bias, node)``
+    among the users of ``node``.
 
     Args:
-        mm_or_reshape: Node whose users to inspect (mm output or reshape output).
+        node: Node whose users to inspect.
 
     Returns:
         ``(add_node, bias_node)`` if a matching add is found, else ``None``.
     """
-    for user in mm_or_reshape.users:
+    for user in node.users:
         if (
             user.op == "call_function"
             and user.target == aten.add.Tensor
             and len(user.args) == 2
         ):
             lhs, rhs = user.args
-            # Bias can be either argument of the add
-            if lhs == mm_or_reshape:
+            if lhs == node:
                 return user, rhs
-            if rhs == mm_or_reshape:
+            if rhs == node:
                 return user, lhs
-
-
-def _resolve_paired_reshapes(input_node: Node, output_node: Node) -> tuple[Node, Node]:
-    """Resolve paired reshapes inserted by ``F.linear`` for >2D inputs.
-
-    ``F.linear`` inserts ``view → mm/addmm → view`` for inputs with more than
-    2 dimensions.  This function traces forward from ``output_node`` and
-    backward from ``input_node`` through reshapes, but **only** if both sides
-    have reshapes (indicating paired F.linear views). If only one side has a
-    reshape it belongs to the model (e.g. ``Flatten``) and is left alone.
-
-    Args:
-        input_node: Node feeding the ``mm``/``addmm`` input (may be a view).
-        output_node: Node produced by ``mm``/``addmm`` (may feed a view).
-
-    Returns:
-        ``(original_input, final_output)`` with reshapes resolved on both
-        sides, or the original nodes if there are no paired reshapes.
-    """
-    final_output = _trace_forward_through_reshapes(output_node)
-    if final_output is output_node:
-        # No forward reshape → no paired F.linear views
-        return input_node, output_node
-    original_input = _trace_backward_through_reshapes(input_node)
-    return original_input, final_output
 
 
 def _extract_weight_node(WT: Node) -> Node | str:
@@ -136,7 +73,7 @@ def _extract_weight_node(WT: Node) -> Node | str:
 def _match_addmm_weight(
     p_node: Node, pT: Node, addmm_node: Node
 ) -> AffineLayerInfo | None:
-    """Try to match ``addmm(bias, x, W.T)`` from the weight side.
+    """Match ``addmm(bias, x, W.T)`` or ``view → addmm → view`` from weight side.
 
     Args:
         p_node: The weight parameter node.
@@ -151,14 +88,28 @@ def _match_addmm_weight(
     bias, inputs, mat2 = addmm_node.args
     if mat2 != pT:
         return None
-    original_input, output_node = _resolve_paired_reshapes(inputs, addmm_node)
-    return AffineLayerInfo(LINEAR_STR, output_node, p_node, original_input, bias, {})
+
+    # Check for paired view → addmm → view (3D F.linear)
+    if (
+        _is_last_dim_preserving_view(inputs)
+        and len(addmm_node.users) == 1
+        and _is_last_dim_preserving_view(view_out := next(iter(addmm_node.users)))
+    ):
+        return AffineLayerInfo(LINEAR_STR, view_out, p_node, inputs.args[0], bias, {})
+
+    # 2D case: no reshapes
+    return AffineLayerInfo(LINEAR_STR, addmm_node, p_node, inputs, bias, {})
 
 
-def _match_mm_weight(
-    p_node: Node, pT: Node, mm_node: Node
-) -> AffineLayerInfo | None:
-    """Try to match ``mm(x, W.T)`` optionally followed by reshapes and bias add.
+def _match_mm_weight(p_node: Node, pT: Node, mm_node: Node) -> AffineLayerInfo | None:
+    """Match ``mm(x, W.T)`` or ``view → mm → view [→ add]`` from weight side.
+
+    Supported patterns::
+
+        2D no bias:  mm(x, W.T)
+        2D + bias:   add(mm(x, W.T), b)
+        >2D no bias: view → mm → view
+        >2D + bias:  view → mm → view → add(_, b)
 
     Args:
         p_node: The weight parameter node.
@@ -174,25 +125,31 @@ def _match_mm_weight(
     if mat2 != pT:
         return None
 
-    last_node = _trace_forward_through_reshapes(mm_node)
-    has_reshapes = last_node is not mm_node
-    add_result = _find_add_bias(last_node)
+    # Check for view → mm → view pattern (>2D F.linear)
+    if (
+        _is_last_dim_preserving_view(mm_input)
+        and len(mm_node.users) == 1
+        and _is_last_dim_preserving_view(view_out := next(iter(mm_node.users)))
+    ):
+        original_input = mm_input.args[0]
+        add_result = _find_add_bias(view_out)
+        if add_result is not None:
+            return AffineLayerInfo(
+                LINEAR_STR, add_result[0], p_node, original_input, add_result[1], {}
+            )
+        return AffineLayerInfo(LINEAR_STR, view_out, p_node, original_input, None, {})
 
+    # 2D case: mm [→ add]
+    add_result = _find_add_bias(mm_node)
     if add_result is not None:
-        output_node, bias_node = add_result
-    else:
-        output_node, bias_node = last_node, None
-
-    original_input = (
-        _trace_backward_through_reshapes(mm_input) if has_reshapes else mm_input
-    )
-    return AffineLayerInfo(
-        LINEAR_STR, output_node, p_node, original_input, bias_node, {}
-    )
+        return AffineLayerInfo(
+            LINEAR_STR, add_result[0], p_node, mm_input, add_result[1], {}
+        )
+    return AffineLayerInfo(LINEAR_STR, mm_node, p_node, mm_input, None, {})
 
 
 def _match_addmm_bias(p_node: Node, addmm_node: Node) -> AffineLayerInfo | None:
-    """Try to match ``addmm(bias, x, W.T)`` from the bias side.
+    """Match ``addmm(bias, x, W.T)`` or ``view → addmm → view`` from bias side.
 
     Args:
         p_node: The bias parameter node.
@@ -207,12 +164,23 @@ def _match_addmm_bias(p_node: Node, addmm_node: Node) -> AffineLayerInfo | None:
     if bias != p_node:
         return None
     W_node = _extract_weight_node(WT)
-    original_input, output_node = _resolve_paired_reshapes(inputs, addmm_node)
-    return AffineLayerInfo(LINEAR_STR, output_node, W_node, original_input, bias, {})
+
+    # Check for paired view → addmm → view (3D F.linear)
+    if (
+        _is_last_dim_preserving_view(inputs)
+        and len(addmm_node.users) == 1
+        and _is_last_dim_preserving_view(view_out := next(iter(addmm_node.users)))
+    ):
+        return AffineLayerInfo(LINEAR_STR, view_out, W_node, inputs.args[0], bias, {})
+
+    # 2D case
+    return AffineLayerInfo(LINEAR_STR, addmm_node, W_node, inputs, bias, {})
 
 
 def _match_add_bias(p_node: Node, add_node: Node) -> AffineLayerInfo | None:
-    """Try to match ``add(mm_result_or_reshape, bias)`` from the bias side.
+    """Match ``view → mm → view → add(_, bias)`` from the bias side.
+
+    This pattern is produced by F.linear for 4D+ inputs with bias.
 
     Args:
         p_node: The bias parameter node.
@@ -228,24 +196,30 @@ def _match_add_bias(p_node: Node, add_node: Node) -> AffineLayerInfo | None:
     if other is None:
         return None
 
-    # Trace back through reshapes to find the mm node
-    mm_node = _trace_backward_through_reshapes(other)
+    # Expect: view → mm → view (= other) → add
+    if not _is_last_dim_preserving_view(other):
+        return None
+    mm_node = other.args[0]
     if not (mm_node.op == "call_function" and mm_node.target == aten.mm.default):
         return None
-
     mm_input, WT = mm_node.args
+    if not _is_last_dim_preserving_view(mm_input):
+        return None
+
     W_node = _extract_weight_node(WT)
-    original_input = _trace_backward_through_reshapes(mm_input)
-    return AffineLayerInfo(LINEAR_STR, add_node, W_node, original_input, p_node, {})
+    return AffineLayerInfo(LINEAR_STR, add_node, W_node, mm_input.args[0], p_node, {})
 
 
 class LinearWeightMatcher(_PatternMatcher):
     """Matcher for weight parameters in linear layers.
 
     Detects patterns:
-    - ``x @ W.T + b`` (addmm)
-    - ``x @ W.T`` (mm, no bias)
-    - ``x @ W.T`` (mm) followed by optional reshapes and ``add(result, b)``
+    - ``addmm(b, x, W.T)`` (2D with bias)
+    - ``view → addmm → view`` (3D with bias)
+    - ``mm(x, W.T)`` (2D, no bias)
+    - ``mm(x, W.T) → add(_, b)`` (2D with bias, rare)
+    - ``view → mm → view`` (>2D, no bias)
+    - ``view → mm → view → add(_, b)`` (>2D with bias)
     """
 
     def matches(
@@ -289,8 +263,9 @@ class LinearBiasMatcher(_PatternMatcher):
     """Matcher for bias parameters in linear layers.
 
     Detects patterns:
-    - ``x @ W.T + b`` (addmm) where the node is ``b``
-    - ``add(mm_result_or_reshape, b)`` where ``b`` is the bias parameter
+    - ``addmm(b, x, W.T)`` where the node is ``b`` (2D)
+    - ``view → addmm → view`` where the node is ``b`` (3D)
+    - ``view → mm → view → add(_, b)`` where the node is ``b`` (>2D)
     """
 
     def matches(
