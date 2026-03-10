@@ -11,31 +11,34 @@ from curvlinops.computers.io_collector._base import (
 
 LINEAR_STR = "Linear(y=W@x+b)"
 
-# Reshape ops that may appear between mm and bias addition
-_RESHAPE_OPS = frozenset({
-    aten._unsafe_view.default,
-    aten.view.default,
-    aten.reshape.default,
-})
+# Reshape ops inserted by F.linear for >2D inputs (view → mm/addmm → view)
+_RESHAPE_OPS = {aten._unsafe_view.default, aten.view.default}
 
 
 def _trace_forward_through_reshapes(node: Node) -> Node:
     """Follow a chain of reshape operations forward (toward outputs).
 
     Starting from a node, walk through single-user reshape operations
-    (``view``, ``_unsafe_view``, ``reshape``).  Return the last node in
-    that chain (which may be the input itself if there are no reshapes).
+    (``view``, ``_unsafe_view``) that preserve the last dimension (feature
+    dimension).  This ensures we only follow F.linear's paired reshapes
+    (which unflatten batch dimensions) and stop at model reshapes that
+    alter the feature dimension.
 
     Args:
-        node: Starting node (typically the output of ``aten.mm``).
+        node: Starting node (typically the output of ``aten.mm``/``aten.addmm``).
 
     Returns:
-        The last node after following single-user reshape chains.
+        The last node after following single-user, last-dim-preserving
+        reshape chains (which may be the input itself if there are no
+        such reshapes).
     """
     while (
         len(node.users) == 1
         and (user := next(iter(node.users))).op == "call_function"
         and user.target in _RESHAPE_OPS
+        and len(user.args) >= 2
+        and isinstance(user.args[1], list)
+        and user.args[1][-1] == node.meta["val"].shape[-1]
     ):
         node = user
     return node
@@ -44,20 +47,21 @@ def _trace_forward_through_reshapes(node: Node) -> Node:
 def _trace_backward_through_reshapes(node: Node) -> Node:
     """Follow a chain of reshape operations backward (toward inputs).
 
-    Starting from a node, walk backward through reshape operations whose
-    first argument is a reshape, finding the original tensor before any
-    flattening/reshaping.
+    Starting from a node, walk backward through reshape operations that
+    preserve the last dimension (feature dimension), finding the original
+    tensor before any flattening/reshaping by F.linear.
 
     Args:
         node: Starting node (typically the first argument of ``aten.mm``).
 
     Returns:
-        The first node before any reshape chain.
+        The first node before any last-dim-preserving reshape chain.
     """
     while (
         node.op == "call_function"
         and node.target in _RESHAPE_OPS
         and len(node.args) >= 1
+        and node.meta["val"].shape[-1] == node.args[0].meta["val"].shape[-1]
     ):
         node = node.args[0]
     return node
@@ -88,6 +92,31 @@ def _find_add_bias(mm_or_reshape: Node) -> tuple[Node, Node] | None:
             if rhs == mm_or_reshape:
                 return user, lhs
     return None
+
+
+def _resolve_paired_reshapes(input_node: Node, output_node: Node) -> tuple[Node, Node]:
+    """Resolve paired reshapes inserted by ``F.linear`` for >2D inputs.
+
+    ``F.linear`` inserts ``view → mm/addmm → view`` for inputs with more than
+    2 dimensions.  This function traces forward from ``output_node`` and
+    backward from ``input_node`` through reshapes, but **only** if both sides
+    have reshapes (indicating paired F.linear views). If only one side has a
+    reshape it belongs to the model (e.g. ``Flatten``) and is left alone.
+
+    Args:
+        input_node: Node feeding the ``mm``/``addmm`` input (may be a view).
+        output_node: Node produced by ``mm``/``addmm`` (may feed a view).
+
+    Returns:
+        ``(original_input, final_output)`` with reshapes resolved on both
+        sides, or the original nodes if there are no paired reshapes.
+    """
+    final_output = _trace_forward_through_reshapes(output_node)
+    if final_output is output_node:
+        # No forward reshape → no paired F.linear views
+        return input_node, output_node
+    original_input = _trace_backward_through_reshapes(input_node)
+    return original_input, final_output
 
 
 class LinearWeightMatcher(_PatternMatcher):
@@ -135,8 +164,11 @@ class LinearWeightMatcher(_PatternMatcher):
                 ):
                     bias, inputs, mat2 = pT_user.args
                     if mat2 == pT:
+                        original_input, output_node = _resolve_paired_reshapes(
+                            inputs, pT_user
+                        )
                         layer_info = AffineLayerInfo(
-                            LINEAR_STR, pT_user, p_node, inputs, bias, {}
+                            LINEAR_STR, output_node, p_node, original_input, bias, {}
                         )
                         matches.append(layer_info)
                         paths.append((p_node, pT, pT_user))
@@ -172,8 +204,13 @@ class LinearWeightMatcher(_PatternMatcher):
                         paths.append((p_node, pT, pT_user))
                     else:
                         # No bias addition found — pure mm
+                        # Only trace through paired reshapes (from F.linear)
+                        if last_node is pT_user:
+                            original_input = mm_input
+                        else:
+                            original_input = _trace_backward_through_reshapes(mm_input)
                         layer_info = AffineLayerInfo(
-                            LINEAR_STR, pT_user, p_node, mm_input, None, {}
+                            LINEAR_STR, last_node, p_node, original_input, None, {}
                         )
                         matches.append(layer_info)
                         paths.append((p_node, pT, pT_user))
@@ -229,8 +266,9 @@ class LinearBiasMatcher(_PatternMatcher):
                     else [NOT_A_PARAM]
                 )
 
+                original_input, output_node = _resolve_paired_reshapes(inputs, p_user)
                 layer_info = AffineLayerInfo(
-                    LINEAR_STR, p_user, W_node, inputs, bias, {}
+                    LINEAR_STR, output_node, W_node, original_input, bias, {}
                 )
                 matches.append(layer_info)
                 paths.append((p_node, p_user))

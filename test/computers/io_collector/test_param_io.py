@@ -188,6 +188,27 @@ def test_convolution():
     _verify_io(f, x, params, io_true)
 
 
+def test_reshape_altering_last_dim_not_matched():
+    """Test that reshapes altering the feature dimension are not matched.
+
+    ``Linear(6, 4, bias=False) → reshape(batch, 2, 2) → add(bias)`` should NOT
+    be detected as a single linear layer, because the reshape changes the last
+    dimension from 4 to 2.
+    """
+    manual_seed(0)
+
+    def f(x: Tensor, params: dict) -> Tensor:
+        out = linear(x, params["weight"])
+        out = out.reshape(x.shape[0], 2, 2)
+        return out + params["bias"]
+
+    x_dummy = zeros(3, 6)
+    params_dummy = {"weight": zeros(4, 6), "bias": zeros(2)}
+
+    with raises(ValueError, match="Some parameters are used in unsupported patterns."):
+        _ = with_param_io(f, x_dummy, params_dummy)
+
+
 def test_unsupported_patterns():
     """Test that unsupported patterns raise ValueError."""
     manual_seed(0)
