@@ -5,7 +5,6 @@ from curvlinops.blockdiagonal import BlockDiagonalLinearOperator
 from curvlinops.computers.ekfac import EKFACComputer
 from curvlinops.eigh import EighDecomposedLinearOperator
 from curvlinops.kfac import KFACLinearOperator
-from curvlinops.kfac_utils import _has_joint_weight_and_bias
 from curvlinops.kronecker import KroneckerProductLinearOperator
 
 
@@ -26,7 +25,6 @@ class EKFACLinearOperator(KFACLinearOperator):
     """
 
     _COMPUTER_CLS = EKFACComputer
-    _SUPPORTED_BACKENDS: tuple[str, ...] = ("hooks",)
 
     @staticmethod
     def _compute_canonical_op(computer: EKFACComputer) -> BlockDiagonalLinearOperator:
@@ -48,9 +46,11 @@ class EKFACLinearOperator(KFACLinearOperator):
             Q_g = gradient_eigvecs[mod_name]
             lambdas = corrected_eigenvalues[mod_name]
 
-            if _has_joint_weight_and_bias(
-                computer._separate_weight_and_bias, param_pos
+            # Handle joint weight+bias case
+            if not computer._separate_weight_and_bias and {"weight", "bias"} == set(
+                param_pos.keys()
             ):
+                # Single Kronecker product block for weight+bias
                 bases.append([Q_g, Q_a])
                 corrections.append(lambdas)
             else:
