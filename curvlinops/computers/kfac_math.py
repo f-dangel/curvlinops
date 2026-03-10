@@ -111,52 +111,6 @@ def prepare_grad_output(
     return g
 
 
-def prepare_io_for_ekfac(
-    g: Tensor,
-    a: Tensor | None,
-    is_conv2d: bool = False,
-    kernel_size: tuple[int, ...] | None = None,
-    stride: tuple[int, ...] | None = None,
-    padding: tuple[int, ...] | str | None = None,
-    dilation: tuple[int, ...] | None = None,
-    groups: int | None = None,
-) -> tuple[Tensor, Tensor | None]:
-    """Prepare layer I/O for EKFAC eigenvalue correction.
-
-    Both backends flatten any leading vector dimension into the batch dimension
-    BEFORE calling this function.
-
-    Args:
-        g: Output gradient ``[N, ...]`` (after flattening any vector dim).
-        a: Layer input ``[N, ...]`` or ``None`` for bias-only layers.
-        is_conv2d: Whether this is a Conv2d layer (affects ``g`` rearrangement).
-        kernel_size: Conv2d kernel size for patch extraction on ``a``.
-            Only needed when ``a is not None`` and the layer is Conv2d.
-        stride: Conv2d stride.
-        padding: Conv2d padding.
-        dilation: Conv2d dilation.
-        groups: Conv2d groups.
-
-    Returns:
-        ``(g_prepared, a_prepared)`` each with shape ``[N, S, D]`` or ``None``.
-    """
-    if is_conv2d:
-        # Channel dim from position 1 to last: [N, c, o1, o2] -> [N, o1, o2, c]
-        dims = list(range(g.ndim))
-        dims.pop(1)
-        dims.append(1)
-        g = g.permute(*dims)
-    # [N, ..., d_out] -> [N, S, d_out]
-    g = g.reshape(g.shape[0], -1, g.shape[-1])
-
-    if a is not None:
-        if kernel_size is not None:
-            a = extract_patches(a, kernel_size, stride, padding, dilation, groups)
-        a = a.reshape(a.shape[0], -1, a.shape[-1])
-
-    return g, a
-
-
 def compute_loss_correction(
     batch_size: int,
     num_per_example_loss_terms: int,
