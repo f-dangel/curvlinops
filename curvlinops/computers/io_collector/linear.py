@@ -91,7 +91,6 @@ def _find_add_bias(mm_or_reshape: Node) -> tuple[Node, Node] | None:
                 return user, rhs
             if rhs == mm_or_reshape:
                 return user, lhs
-    return None
 
 
 def _resolve_paired_reshapes(input_node: Node, output_node: Node) -> tuple[Node, Node]:
@@ -119,6 +118,127 @@ def _resolve_paired_reshapes(input_node: Node, output_node: Node) -> tuple[Node,
     return original_input, final_output
 
 
+def _extract_weight_node(WT: Node) -> Node | str:
+    """Extract weight node from a transpose node, or return NOT_A_PARAM.
+
+    Args:
+        WT: Node expected to be ``aten.t(weight)``.
+
+    Returns:
+        The weight node if ``WT`` is a transpose, else ``NOT_A_PARAM``.
+    """
+    if (WT.op, WT.target) == ("call_function", aten.t.default):
+        (W_node,) = WT.all_input_nodes
+        return W_node
+    return NOT_A_PARAM
+
+
+def _match_addmm_weight(
+    p_node: Node, pT: Node, addmm_node: Node
+) -> AffineLayerInfo | None:
+    """Try to match ``addmm(bias, x, W.T)`` from the weight side.
+
+    Args:
+        p_node: The weight parameter node.
+        pT: The transpose node ``aten.t(p_node)``.
+        addmm_node: A candidate ``aten.addmm`` node.
+
+    Returns:
+        ``AffineLayerInfo`` if matched, else ``None``.
+    """
+    if len(addmm_node.args) != 3 or addmm_node.kwargs:
+        return None
+    bias, inputs, mat2 = addmm_node.args
+    if mat2 != pT:
+        return None
+    original_input, output_node = _resolve_paired_reshapes(inputs, addmm_node)
+    return AffineLayerInfo(LINEAR_STR, output_node, p_node, original_input, bias, {})
+
+
+def _match_mm_weight(
+    p_node: Node, pT: Node, mm_node: Node
+) -> AffineLayerInfo | None:
+    """Try to match ``mm(x, W.T)`` optionally followed by reshapes and bias add.
+
+    Args:
+        p_node: The weight parameter node.
+        pT: The transpose node ``aten.t(p_node)``.
+        mm_node: A candidate ``aten.mm`` node.
+
+    Returns:
+        ``AffineLayerInfo`` if matched, else ``None``.
+    """
+    if len(mm_node.args) != 2 or mm_node.kwargs:
+        return None
+    mm_input, mat2 = mm_node.args
+    if mat2 != pT:
+        return None
+
+    last_node = _trace_forward_through_reshapes(mm_node)
+    has_reshapes = last_node is not mm_node
+    add_result = _find_add_bias(last_node)
+
+    if add_result is not None:
+        output_node, bias_node = add_result
+    else:
+        output_node, bias_node = last_node, None
+
+    original_input = (
+        _trace_backward_through_reshapes(mm_input) if has_reshapes else mm_input
+    )
+    return AffineLayerInfo(
+        LINEAR_STR, output_node, p_node, original_input, bias_node, {}
+    )
+
+
+def _match_addmm_bias(p_node: Node, addmm_node: Node) -> AffineLayerInfo | None:
+    """Try to match ``addmm(bias, x, W.T)`` from the bias side.
+
+    Args:
+        p_node: The bias parameter node.
+        addmm_node: A candidate ``aten.addmm`` node.
+
+    Returns:
+        ``AffineLayerInfo`` if matched, else ``None``.
+    """
+    if len(addmm_node.args) != 3 or addmm_node.kwargs:
+        return None
+    bias, inputs, WT = addmm_node.args
+    if bias != p_node:
+        return None
+    W_node = _extract_weight_node(WT)
+    original_input, output_node = _resolve_paired_reshapes(inputs, addmm_node)
+    return AffineLayerInfo(LINEAR_STR, output_node, W_node, original_input, bias, {})
+
+
+def _match_add_bias(p_node: Node, add_node: Node) -> AffineLayerInfo | None:
+    """Try to match ``add(mm_result_or_reshape, bias)`` from the bias side.
+
+    Args:
+        p_node: The bias parameter node.
+        add_node: A candidate ``aten.add.Tensor`` node.
+
+    Returns:
+        ``AffineLayerInfo`` if matched, else ``None``.
+    """
+    if len(add_node.args) != 2:
+        return None
+    lhs, rhs = add_node.args
+    other = lhs if rhs == p_node else rhs if lhs == p_node else None
+    if other is None:
+        return None
+
+    # Trace back through reshapes to find the mm node
+    mm_node = _trace_backward_through_reshapes(other)
+    if not (mm_node.op == "call_function" and mm_node.target == aten.mm.default):
+        return None
+
+    mm_input, WT = mm_node.args
+    W_node = _extract_weight_node(WT)
+    original_input = _trace_backward_through_reshapes(mm_input)
+    return AffineLayerInfo(LINEAR_STR, add_node, W_node, original_input, p_node, {})
+
+
 class LinearWeightMatcher(_PatternMatcher):
     """Matcher for weight parameters in linear layers.
 
@@ -143,77 +263,24 @@ class LinearWeightMatcher(_PatternMatcher):
         """
         matches, paths = [], []
 
-        # Iterate over all usages where p is transposed
-        for pT in [
-            n
-            for n in p_node.users
-            if (n.op, n.target) == ("call_function", aten.t.default)
-        ]:
-            # Check all users of p.T
+        for pT in p_node.users:
+            if (pT.op, pT.target) != ("call_function", aten.t.default):
+                continue
+
             for pT_user in pT.users:
                 if pT_user.op != "call_function":
                     continue
 
-                target = pT_user.target
+                if pT_user.target == aten.addmm.default:
+                    info = _match_addmm_weight(p_node, pT, pT_user)
+                elif pT_user.target == aten.mm.default:
+                    info = _match_mm_weight(p_node, pT, pT_user)
+                else:
+                    continue
 
-                # Case: x @ W.T + b (addmm)
-                if (
-                    target == aten.addmm.default
-                    and len(pT_user.args) == 3
-                    and not pT_user.kwargs
-                ):
-                    bias, inputs, mat2 = pT_user.args
-                    if mat2 == pT:
-                        original_input, output_node = _resolve_paired_reshapes(
-                            inputs, pT_user
-                        )
-                        layer_info = AffineLayerInfo(
-                            LINEAR_STR, output_node, p_node, original_input, bias, {}
-                        )
-                        matches.append(layer_info)
-                        paths.append((p_node, pT, pT_user))
-
-                # Case: x @ W.T (mm)
-                elif (
-                    target == aten.mm.default
-                    and len(pT_user.args) == 2
-                    and not pT_user.kwargs
-                ):
-                    mm_input, mat2 = pT_user.args
-                    if mat2 != pT:
-                        continue
-
-                    # Check for mm → (optional reshapes) → add(result, bias)
-                    last_node = _trace_forward_through_reshapes(pT_user)
-                    add_result = _find_add_bias(last_node)
-
-                    if add_result is not None:
-                        add_node, bias_node = add_result
-                        # Trace back through reshapes on the input side to
-                        # recover the original (unflattened) input tensor
-                        original_input = _trace_backward_through_reshapes(mm_input)
-                        layer_info = AffineLayerInfo(
-                            LINEAR_STR,
-                            add_node,
-                            p_node,
-                            original_input,
-                            bias_node,
-                            {},
-                        )
-                        matches.append(layer_info)
-                        paths.append((p_node, pT, pT_user))
-                    else:
-                        # No bias addition found — pure mm
-                        # Only trace through paired reshapes (from F.linear)
-                        if last_node is pT_user:
-                            original_input = mm_input
-                        else:
-                            original_input = _trace_backward_through_reshapes(mm_input)
-                        layer_info = AffineLayerInfo(
-                            LINEAR_STR, last_node, p_node, original_input, None, {}
-                        )
-                        matches.append(layer_info)
-                        paths.append((p_node, pT, pT_user))
+                if info is not None:
+                    matches.append(info)
+                    paths.append((p_node, pT, pT_user))
 
         return matches, paths
 
@@ -239,71 +306,21 @@ class LinearBiasMatcher(_PatternMatcher):
                 - List of AffineLayerInfo for all bias usage matches found.
                 - List of paths from parameter node to detected output nodes.
         """
-        matches = []
-        paths = []
+        matches, paths = [], []
 
-        # Check all users of the parameter node
         for p_user in p_node.users:
             if p_user.op != "call_function":
                 continue
 
-            # Case: addmm(bias, x, W.T)
-            if (
-                p_user.target == aten.addmm.default
-                and len(p_user.args) == 3
-                and not p_user.kwargs
-            ):
-                bias, inputs, WT = p_user.args
+            if p_user.target == aten.addmm.default:
+                info = _match_addmm_bias(p_node, p_user)
+            elif p_user.target == aten.add.Tensor:
+                info = _match_add_bias(p_node, p_user)
+            else:
+                continue
 
-                # Verify this parameter is the bias (first argument)
-                if bias != p_node:
-                    continue
-
-                # Check if WT is a valid weight transpose operation and extract W_node
-                (W_node,) = (
-                    list(WT.all_input_nodes)
-                    if (WT.op, WT.target) == ("call_function", aten.t.default)
-                    else [NOT_A_PARAM]
-                )
-
-                original_input, output_node = _resolve_paired_reshapes(inputs, p_user)
-                layer_info = AffineLayerInfo(
-                    LINEAR_STR, output_node, W_node, original_input, bias, {}
-                )
-                matches.append(layer_info)
-                paths.append((p_node, p_user))
-
-            # Case: add(mm_result_or_reshape, bias)
-            elif p_user.target == aten.add.Tensor and len(p_user.args) == 2:
-                lhs, rhs = p_user.args
-                other = lhs if rhs == p_node else rhs if lhs == p_node else None
-                if other is None:
-                    continue
-
-                # Trace back through reshapes to find the mm node
-                mm_node = _trace_backward_through_reshapes(other)
-
-                # Check if we arrived at an mm node
-                if not (
-                    mm_node.op == "call_function" and mm_node.target == aten.mm.default
-                ):
-                    continue
-
-                # Extract the weight node and input from mm(x, W.T)
-                mm_input, WT = mm_node.args
-                (W_node,) = (
-                    list(WT.all_input_nodes)
-                    if (WT.op, WT.target) == ("call_function", aten.t.default)
-                    else [NOT_A_PARAM]
-                )
-
-                # Trace back through reshapes on input side to get original input
-                original_input = _trace_backward_through_reshapes(mm_input)
-
-                layer_info = AffineLayerInfo(
-                    LINEAR_STR, p_user, W_node, original_input, p_node, {}
-                )
-                matches.append(layer_info)
+            if info is not None:
+                matches.append(info)
                 paths.append((p_node, p_user))
 
         return matches, paths
