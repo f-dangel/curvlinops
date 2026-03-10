@@ -21,8 +21,8 @@ from curvlinops.computers.io_collector import with_kfac_io
 from curvlinops.computers.kfac import KFACComputer
 from curvlinops.computers.kfac_math import (
     compute_loss_correction,
-    conv2d_grad_to_kfac_format,
-    conv2d_input_to_kfac_format,
+    conv2d_grad_to_weight_sharing_format,
+    conv2d_input_to_weight_sharing_format,
     prepare_grad_output,
     prepare_layer_input,
 )
@@ -101,7 +101,7 @@ class MakeFxKFACComputer(KFACComputer):
         )
 
         if is_conv2d:
-            x = conv2d_input_to_kfac_format(
+            x = conv2d_input_to_weight_sharing_format(
                 x,
                 self._kfac_approx,
                 kernel_size,
@@ -156,7 +156,7 @@ class MakeFxKFACComputer(KFACComputer):
         is_conv2d, _, _ = self._conv_info(io_layer_name, layer_hyperparams)
 
         if is_conv2d:
-            g = conv2d_grad_to_kfac_format(g, num_leading_dims=2)
+            g = conv2d_grad_to_weight_sharing_format(g, num_leading_dims=2)
 
         g = prepare_grad_output(g, self._kfac_approx, num_leading_dims=2)
 

@@ -37,8 +37,8 @@ from torch.utils.hooks import RemovableHandle
 from curvlinops._empirical_risk import _EmpiricalRiskMixin
 from curvlinops.computers.kfac_math import (
     compute_loss_correction,
-    conv2d_grad_to_kfac_format,
-    conv2d_input_to_kfac_format,
+    conv2d_grad_to_weight_sharing_format,
+    conv2d_input_to_weight_sharing_format,
     prepare_grad_output,
     prepare_layer_input,
 )
@@ -455,7 +455,7 @@ class KFACComputer(_EmpiricalRiskMixin):
         batch_size = g.shape[0]
 
         if isinstance(module, Conv2d):
-            g = conv2d_grad_to_kfac_format(g, num_leading_dims=1)
+            g = conv2d_grad_to_weight_sharing_format(g, num_leading_dims=1)
 
         g = prepare_grad_output(g, self._kfac_approx, num_leading_dims=1)
 
@@ -500,7 +500,7 @@ class KFACComputer(_EmpiricalRiskMixin):
         )
 
         if isinstance(module, Conv2d):
-            x = conv2d_input_to_kfac_format(
+            x = conv2d_input_to_weight_sharing_format(
                 x,
                 self._kfac_approx,
                 module.kernel_size,

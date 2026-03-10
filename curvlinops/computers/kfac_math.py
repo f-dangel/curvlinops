@@ -14,7 +14,7 @@ from curvlinops.kfac_utils import (
 )
 
 
-def conv2d_input_to_kfac_format(
+def conv2d_input_to_weight_sharing_format(
     x: Tensor,
     kfac_approx: str,
     kernel_size: tuple[int, ...],
@@ -49,7 +49,9 @@ def conv2d_input_to_kfac_format(
     return patch_extractor_fn(x, kernel_size, stride, padding, dilation, groups)
 
 
-def conv2d_grad_to_kfac_format(g: Tensor, num_leading_dims: int = 1) -> Tensor:
+def conv2d_grad_to_weight_sharing_format(
+    g: Tensor, num_leading_dims: int = 1
+) -> Tensor:
     """Move Conv2d channel dimension to last position.
 
     Converts from ``[..., batch, C_out, H, W]`` to ``[..., batch, H, W, C_out]``
