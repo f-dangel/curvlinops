@@ -453,7 +453,7 @@ class KFACComputer(_EmpiricalRiskMixin):
         batch_size = g.shape[0]
 
         g = grad_to_weight_sharing_format(
-            g, self._kfac_approx, layer_hyperparams=self._conv_hyperparams(module)
+            g, self._kfac_approx, layer_hyperparams=self._layer_hyperparams(module)
         )
 
         # Note: mc_samples scaling is already handled inside make_grad_output_fn.
@@ -499,21 +499,21 @@ class KFACComputer(_EmpiricalRiskMixin):
         x = input_to_weight_sharing_format(
             x,
             self._kfac_approx,
-            layer_hyperparams=self._conv_hyperparams(module),
+            layer_hyperparams=self._layer_hyperparams(module),
             append_ones_for_bias=has_joint_wb,
         )
         scale = x.shape[1]
-        x = rearrange(x, "batch shared d_in -> (batch shared) d_in")
-
-        covariance = einsum(x, x, "b i,b j -> i j").div_(self._N_data * scale)
+        covariance = einsum(x, x, "batch shared i, batch shared j -> i j").div_(
+            self._N_data * scale
+        )
         self._set_or_add_(input_covariances, module_name, covariance)
 
     @staticmethod
-    def _conv_hyperparams(module: Module) -> dict[str, Any]:
-        """Extract convolution hyperparameters from a module.
+    def _layer_hyperparams(module: Module) -> dict[str, Any]:
+        """Extract layer hyperparameters from a module.
 
-        Returns an empty dict for non-Conv2d modules, following the IO collector
-        convention where empty hyperparams means Linear.
+        Returns an empty dict for Linear modules and convolution hyperparameters
+        for Conv2d modules, following the IO collector convention.
 
         Args:
             module: The layer module.

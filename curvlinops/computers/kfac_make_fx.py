@@ -11,7 +11,7 @@ from collections import UserDict
 from collections.abc import Callable, MutableMapping
 from typing import Any
 
-from einops import einsum, rearrange
+from einops import einsum
 from torch import Tensor, autograd, eye
 from torch.func import functional_call
 from torch.fx.experimental.proxy_tensor import make_fx
