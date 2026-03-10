@@ -467,7 +467,7 @@ def test_ekfac_inplace_activations(dev: device):
     Args:
         dev: The device to run the test on.
     """
-    _test_inplace_activations(EKFACLinearOperator, dev)
+    _test_inplace_activations(EKFACLinearOperator, dev, backend="hooks")
 
 
 @mark.parametrize("fisher_type", EKFACComputer._SUPPORTED_FISHER_TYPE)

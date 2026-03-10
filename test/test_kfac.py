@@ -233,10 +233,10 @@ def test_kfac_mc(
             the KFAC matrix.
         backend: The backend to use for computing Kronecker factors.
     """
-    _skip_if_make_fx_incompatible(backend, fisher_type=FisherType.MC)
     model, loss_func, params, data, batch_size_fn = change_dtype(
         kfac_exact_case, float64
     )
+    _skip_if_make_fx_incompatible(backend, data=data)
     params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     ggn = block_diagonal(
@@ -301,7 +301,7 @@ def test_kfac_mc_weight_sharing(
         shuffle: Whether to shuffle the parameters before computing the KFAC matrix.
         backend: The backend to use for computing Kronecker factors.
     """
-    _skip_if_make_fx_incompatible(backend, fisher_type=FisherType.MC)
+    _skip_if_make_fx_incompatible(backend)
     model, loss_func, params, data, batch_size_fn = kfac_weight_sharing_exact_case
     model.setting = setting
     if isinstance(model, Conv2dModel):
@@ -410,10 +410,10 @@ def test_kfac_mc_one_datum(
     backend: str,
 ):
     """Test KFAC-MC for the one-datum exact case."""
-    _skip_if_make_fx_incompatible(backend, fisher_type=FisherType.MC)
     model, loss_func, params, data, batch_size_fn = change_dtype(
         kfac_exact_one_datum_case, float64
     )
+    _skip_if_make_fx_incompatible(backend, data=data)
     params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     ggn = block_diagonal(
@@ -510,7 +510,7 @@ def test_kfac_inplace_activations(dev: device, backend: str):
         dev: The device to run the test on.
         backend: The backend to use for computing Kronecker factors.
     """
-    _test_inplace_activations(KFACLinearOperator, dev, backend=backend)
+    _test_inplace_activations(KFACLinearOperator, dev, backend)
 
 
 @mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
@@ -536,7 +536,7 @@ def test_multi_dim_output(
         dev: The device to run the test on.
         backend: The backend to use for computing Kronecker factors.
     """
-    _skip_if_make_fx_incompatible(backend, fisher_type=fisher_type)
+    _skip_if_make_fx_incompatible(backend)
     manual_seed(0)
     # set up loss function, data, and model
     loss_func = loss(reduction=reduction).to(dev)
@@ -627,7 +627,7 @@ def test_expand_setting_scaling(
         dev: The device to run the test on.
         backend: The backend to use for computing Kronecker factors.
     """
-    _skip_if_make_fx_incompatible(backend, fisher_type=fisher_type)
+    _skip_if_make_fx_incompatible(backend)
     manual_seed(0)
 
     # set up data, loss function, and model
@@ -1188,7 +1188,7 @@ def test_string_in_enum(fisher_type: str, kfac_approx: str, backend: str):
 
     To reproduce issue #118.
     """
-    _skip_if_make_fx_incompatible(backend, fisher_type=fisher_type)
+    _skip_if_make_fx_incompatible(backend)
     model = Linear(2, 2)
     KFACLinearOperator(
         model,
@@ -1266,7 +1266,7 @@ def test_KFAC_inverse_damped_matmat(
 ):
     """Test matrix-matrix multiplication by an inverse damped KFAC approximation."""
     model_func, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
-    _skip_if_make_fx_incompatible(backend, fisher_type=fisher_type, data=data)
+    _skip_if_make_fx_incompatible(backend, data=data)
     params = maybe_exclude_or_shuffle_parameters(params, model_func, exclude, shuffle)
 
     KFAC = KFACLinearOperator(
