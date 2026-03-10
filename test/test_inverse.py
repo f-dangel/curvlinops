@@ -46,15 +46,24 @@ def test_CGInverseLinearOperator_damped_GGN(inv_case, delta_rel: float = 2e-2):
     GGN = GGNLinearOperator(
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn
     )
-    inv_GGN_naive = inv(GGN_naive + delta * eye_like(GGN_naive))
+    damped_GGN_naive = GGN_naive + delta * eye_like(GGN_naive)
+    inv_GGN_naive = inv(damped_GGN_naive)
 
     # specify tolerance and turn off internal damping to get solution with accuracy
-    inv_GGN = CGInverseLinearOperator(GGN + damping, eps=0, tolerance=1e-5)
+    jacobi_preconditioner = TensorLinearOperator(damped_GGN_naive.diag().reciprocal().diag())
+    cg_kwargs = {"eps": 0, "tolerance": 1e-10, "max_iter": 500, "max_tridiag_iter": 500}
+    inv_GGN = CGInverseLinearOperator(GGN + damping, **cg_kwargs)
     compare_consecutive_matmats(inv_GGN)
+    inv_GGN_precond = CGInverseLinearOperator(
+        GGN + damping,
+        **cg_kwargs,
+        preconditioner=jacobi_preconditioner.__matmul__,
+    )
+    compare_consecutive_matmats(inv_GGN_precond)
     # Need to use larger tolerances on GPU, despite float64
     atol, rtol = (5e-8, 5e-5) if "cpu" in str(dev) else (5e-7, 5e-4)
     compare_matmat(inv_GGN, inv_GGN_naive, atol=atol, rtol=rtol)
-
+    compare_matmat(inv_GGN_precond, inv_GGN_naive, atol=atol, rtol=rtol)
 
 def test_LSMRInverseLinearOperator_damped_GGN(inv_case, delta: float = 2e-2):
     """Test matrix multiplication with the inverse damped GGN with LSMR."""
@@ -193,6 +202,3 @@ def test_NeumannInverseLinearOperator_toy():
 
     compare_consecutive_matmats(inv_B_neumann)
     compare_matmat(inv_B_neumann, inv_B, **tols)
-
-
-
