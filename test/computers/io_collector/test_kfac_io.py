@@ -355,19 +355,14 @@ def test_kfac_io_flatten_requires_per_batch_size_tracing():
     batch sizes, motivating the per-batch-size cache in ``MakeFxKFACComputer``.
     """
     manual_seed(0)
-    model = Sequential(
-        Conv2d(3, 2, kernel_size=3, padding=1),
-        AdaptiveAvgPool2d(2),
-        Flatten(),
-        Linear(2 * 2 * 2, 3),
-    )
+    model = Sequential(Flatten(), Linear(6, 3))
 
     def f(x: Tensor, params: dict[str, Tensor]) -> Tensor:
         return functional_call(model, params, (x,))
 
     params = dict(model.named_parameters())
-    x_batch2 = rand(2, 3, 4, 4)
-    x_batch5 = rand(5, 3, 4, 4)
+    x_batch2 = rand(2, 2, 3)
+    x_batch5 = rand(5, 2, 3)
 
     # with_kfac_io traced with batch=2 works for batch=2
     f_kfac_io = with_kfac_io(f, x_batch2, params, FisherType.EMPIRICAL)
