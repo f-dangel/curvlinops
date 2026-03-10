@@ -44,12 +44,15 @@ def input_to_weight_sharing_format(
     kfac_approx: str,
     layer_hyperparams: dict[str, Any] | None = None,
     append_ones_for_bias: bool = False,
-) -> tuple[Tensor, float]:
-    """Convert a layer's input to weight sharing format and prepare for covariance.
+) -> Tensor:
+    """Convert a layer's input to weight sharing format ``[batch, shared, d_in]``.
 
     Converts the input to ``[batch, *sharing, d_in]``, then collapses the
-    sharing dimensions (flatten for expand, mean for reduce) and optionally
-    appends a ones column for joint weight+bias treatment.
+    sharing dimensions into a single axis (flatten for expand, mean for reduce)
+    and optionally appends a ones column for joint weight+bias treatment.
+
+    The weight-sharing normalization factor is encoded in the returned shape
+    as ``x.shape[1]`` (the ``shared`` dimension).
 
     For Conv2d layers, pass the convolution hyperparameters (``kernel_size``,
     ``stride``, ``padding``, ``dilation``, ``groups``) to trigger patch
@@ -68,8 +71,8 @@ def input_to_weight_sharing_format(
             weight+bias treatment.
 
     Returns:
-        ``(x_prepared, scale)`` where ``x_prepared`` has shape ``[B, d_in]``
-        and ``scale`` is the weight-sharing normalization factor.
+        Tensor of shape ``[batch, shared, d_in]`` where ``shared`` is the
+        number of weight-sharing positions (expand) or 1 (reduce).
     """
     # Step 1: Convert to weight sharing format [batch, *sharing, d_in]
     if layer_hyperparams:
@@ -86,19 +89,17 @@ def input_to_weight_sharing_format(
             layer_hyperparams["groups"],
         )
 
-    # Step 2: Collapse sharing dimensions
+    # Step 2: Collapse sharing dimensions into a single axis
     if kfac_approx == KFACType.EXPAND:
-        scale = x.shape[1:-1].numel()
-        x = x.flatten(end_dim=-2)  # [batch, *sharing, d_in] -> [(batch *sharing), d_in]
+        x = rearrange(x, "batch ... d_in -> batch (...) d_in")
     else:
-        scale = 1.0
-        x = reduce(x, "batch ... d_in -> batch d_in", "mean")
+        x = reduce(x, "batch ... d_in -> batch 1 d_in", "mean")
 
     # Step 3: Optionally append ones column for joint weight+bias
     if append_ones_for_bias:
-        x = cat([x, x.new_ones(x.shape[0], 1)], dim=1)
+        x = cat([x, x.new_ones(*x.shape[:-1], 1)], dim=-1)
 
-    return x, scale
+    return x
 
 
 def grad_to_weight_sharing_format(

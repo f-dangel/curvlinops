@@ -496,12 +496,14 @@ class KFACComputer(_EmpiricalRiskMixin):
             self._separate_weight_and_bias, params
         )
 
-        x, scale = input_to_weight_sharing_format(
+        x = input_to_weight_sharing_format(
             x,
             self._kfac_approx,
             layer_hyperparams=self._conv_hyperparams(module),
             append_ones_for_bias=has_joint_wb,
         )
+        scale = x.shape[1]
+        x = rearrange(x, "batch shared d_in -> (batch shared) d_in")
 
         covariance = einsum(x, x, "b i,b j -> i j").div_(self._N_data * scale)
         self._set_or_add_(input_covariances, module_name, covariance)

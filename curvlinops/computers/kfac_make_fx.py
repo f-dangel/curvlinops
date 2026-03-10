@@ -11,7 +11,7 @@ from collections import UserDict
 from collections.abc import Callable, MutableMapping
 from typing import Any
 
-from einops import einsum
+from einops import einsum, rearrange
 from torch import Tensor, autograd, eye
 from torch.func import functional_call
 from torch.fx.experimental.proxy_tensor import make_fx
@@ -104,14 +104,14 @@ class MakeFxKFACComputer(KFACComputer):
         )
 
         hparams = {**hyperparams, "kernel_size": kernel_size} if is_conv2d else {}
-        x, scale = input_to_weight_sharing_format(
+        x = input_to_weight_sharing_format(
             x,
             self._kfac_approx,
             layer_hyperparams=hparams,
             append_ones_for_bias=has_joint_wb,
         )
-
-        covariance = einsum(x, x, "b i,b j -> i j").div_(scale)
+        scale = x.shape[1]
+        covariance = einsum(x, x, "batch shared i, batch shared j -> i j").div_(scale)
         return module_name, covariance
 
     def _gradient_covariance_from_io(
