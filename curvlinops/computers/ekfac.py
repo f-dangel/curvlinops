@@ -3,14 +3,15 @@
 from functools import partial
 from typing import Any
 
-from einops import einsum, rearrange
+from einops import einsum
 from torch import Tensor, cat
 from torch.linalg import eigh
 from torch.nn import Conv2d, Module
 from torch.utils.hooks import RemovableHandle
 
-from curvlinops.computers.kfac import FisherType, KFACComputer
-from curvlinops.kfac_utils import extract_patches
+from curvlinops.computers.kfac import KFACComputer
+from curvlinops.computers.kfac_math import compute_loss_correction, prepare_io_for_ekfac
+from curvlinops.kfac_utils import FisherType, _has_joint_weight_and_bias
 from curvlinops.utils import _seed_generator
 
 
@@ -459,9 +460,6 @@ class EKFACComputer(KFACComputer):
         """
         g = grad_output.data.detach()
         batch_size = g.shape[0]
-        if isinstance(module, Conv2d):
-            g = rearrange(g, "batch c o1 o2 -> batch o1 o2 c")
-        g = rearrange(g, "batch ... d_out -> batch (...) d_out")
 
         # We only need layer inputs to extract information w.r.t. the weights
         param_pos = self._mapping[module_name]
@@ -471,27 +469,24 @@ class EKFACComputer(KFACComputer):
             raise ValueError("Modules with multiple inputs are not supported.")
         a = inputs[0].data.detach() if a_required else None
 
-        if a_required:
-            # Perform patch extraction for convolution
-            if isinstance(module, Conv2d):
-                a = extract_patches(
-                    a,
-                    module.kernel_size,
-                    module.stride,
-                    module.padding,
-                    module.dilation,
-                    module.groups,
-                )
-            # Rearrange the activations for computing per-example gradients
-            a = rearrange(a, "batch ... d_in -> batch (...) d_in")
+        is_conv2d = isinstance(module, Conv2d)
+        g, a = prepare_io_for_ekfac(
+            g,
+            a,
+            is_conv2d=is_conv2d,
+            kernel_size=module.kernel_size if is_conv2d else None,
+            stride=module.stride if is_conv2d else None,
+            padding=module.padding if is_conv2d else None,
+            dilation=module.dilation if is_conv2d else None,
+            groups=module.groups if is_conv2d else None,
+        )
 
-        # Compute correction for the loss scaling depending on the loss reduction used
-        num_loss_terms = batch_size * self._num_per_example_loss_terms
-        correction = {
-            "sum": 1.0,
-            "mean": num_loss_terms**2
-            / (self._N_data * self._num_per_example_loss_terms),
-        }[self._loss_func.reduction]
+        correction = compute_loss_correction(
+            batch_size,
+            self._num_per_example_loss_terms,
+            self._loss_func.reduction,
+            self._N_data,
+        )
 
         # Compute the corrected eigenvalues for the EKFAC approximation
         # aaT_eigenvectors does not exist if the weight matrix of the module is excluded
@@ -499,9 +494,7 @@ class EKFACComputer(KFACComputer):
         # ggT_eigenvectors always exists
         ggT_eigenvectors = gradient_covariances_eigenvectors[module_name]
 
-        if not self._separate_weight_and_bias and {"weight", "bias"} == set(
-            param_pos.keys()
-        ):
+        if _has_joint_weight_and_bias(self._separate_weight_and_bias, param_pos):
             a_augmented = cat([a, a.new_ones(*a.shape[:-1], 1)], dim=-1)
             eigencorrection = compute_eigenvalue_correction_linear_weight_sharing(
                 g, ggT_eigenvectors, a_augmented, aaT_eigenvectors

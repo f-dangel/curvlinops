@@ -17,12 +17,11 @@ and generalized to all linear layers with weight sharing in
 """
 
 from collections.abc import Callable, Iterable, MutableMapping
-from enum import Enum, EnumMeta
 from functools import partial
 from typing import Any
 
-from einops import einsum, rearrange, reduce
-from torch import Generator, Tensor, autograd, cat, eye
+from einops import einsum, rearrange
+from torch import Generator, Tensor, autograd, eye
 from torch.func import vmap
 from torch.nn import (
     BCEWithLogitsLoss,
@@ -36,67 +35,14 @@ from torch.nn import (
 from torch.utils.hooks import RemovableHandle
 
 from curvlinops._empirical_risk import _EmpiricalRiskMixin
+from curvlinops.computers.kfac_math import (
+    compute_loss_correction,
+    prepare_grad_output,
+    prepare_layer_input,
+)
 from curvlinops.ggn_utils import make_grad_output_fn
-from curvlinops.kfac_utils import extract_averaged_patches, extract_patches
+from curvlinops.kfac_utils import FisherType, KFACType, _has_joint_weight_and_bias
 from curvlinops.utils import _seed_generator
-
-
-class MetaEnum(EnumMeta):
-    """Metaclass for the Enum class for desired behavior of the `in` operator."""
-
-    def __contains__(cls, item):
-        """Return whether ``item`` is a valid Enum value.
-
-        Args:
-            item: Candidate value.
-
-        Returns:
-            ``True`` if ``item`` is a valid Enum value.
-        """
-        try:
-            cls(item)
-        except ValueError:
-            return False
-        return True
-
-
-class FisherType(str, Enum, metaclass=MetaEnum):
-    """Enum for the Fisher type.
-
-    Attributes:
-        TYPE2 (str): ``'type-2'`` - Type-2 Fisher, i.e. the exact Hessian of the
-            loss w.r.t. the model outputs is used. This requires as many backward
-            passes as the output dimension, i.e. the number of classes for
-            classification.
-        MC (str): ``'mc'`` - Monte-Carlo approximation of the expectation by sampling
-            ``mc_samples`` labels from the model's predictive distribution.
-        EMPIRICAL (str): ``'empirical'`` - Empirical gradients are used which
-            corresponds to the uncentered gradient covariance, or the empirical Fisher.
-        FORWARD_ONLY (str): ``'forward-only'`` - The gradient covariances will be
-            identity matrices, see the FOOF method in
-            `Benzing, 2022 <https://arxiv.org/abs/2201.12250>`_ or ISAAC in
-            `Petersen et al., 2023 <https://arxiv.org/abs/2305.00604>`_.
-    """
-
-    TYPE2 = "type-2"
-    MC = "mc"
-    EMPIRICAL = "empirical"
-    FORWARD_ONLY = "forward-only"
-
-
-class KFACType(str, Enum, metaclass=MetaEnum):
-    """Enum for the KFAC approximation type.
-
-    KFAC-expand and KFAC-reduce are defined in
-    `Eschenhagen et al., 2023 <https://arxiv.org/abs/2311.00636>`_.
-
-    Attributes:
-        EXPAND (str): ``'expand'`` - KFAC-expand approximation.
-        REDUCE (str): ``'reduce'`` - KFAC-reduce approximation.
-    """
-
-    EXPAND = "expand"
-    REDUCE = "reduce"
 
 
 class KFACComputer(_EmpiricalRiskMixin):
@@ -505,24 +451,18 @@ class KFACComputer(_EmpiricalRiskMixin):
         """
         g = grad_output.data.detach()
         batch_size = g.shape[0]
-        if isinstance(module, Conv2d):
-            g = rearrange(g, "batch c o1 o2 -> batch o1 o2 c")
 
-        if self._kfac_approx == KFACType.EXPAND:
-            # KFAC-expand approximation
-            g = rearrange(g, "batch ... d_out -> (batch ...) d_out")
-        else:
-            # KFAC-reduce approximation
-            g = reduce(g, "batch ... d_out -> batch d_out", "sum")
+        g = prepare_grad_output(
+            g, self._kfac_approx, isinstance(module, Conv2d), num_leading_dims=1
+        )
 
-        # Compute correction for the loss scaling depending on the loss reduction used.
         # Note: mc_samples scaling is already handled inside make_grad_output_fn.
-        num_loss_terms = batch_size * self._num_per_example_loss_terms
-        correction = {
-            "sum": 1.0,
-            "mean": num_loss_terms**2
-            / (self._N_data * self._num_per_example_loss_terms),
-        }[self._loss_func.reduction]
+        correction = compute_loss_correction(
+            batch_size,
+            self._num_per_example_loss_terms,
+            self._loss_func.reduction,
+            self._N_data,
+        )
 
         covariance = einsum(g, g, "b i,b j->i j").mul_(correction)
         self._set_or_add_(gradient_covariances, module_name, covariance)
@@ -551,34 +491,21 @@ class KFACComputer(_EmpiricalRiskMixin):
             raise ValueError("Modules with multiple inputs are not supported.")
         x = inputs[0].data.detach()
 
-        if isinstance(module, Conv2d):
-            patch_extractor_fn = {
-                KFACType.EXPAND: extract_patches,
-                KFACType.REDUCE: extract_averaged_patches,
-            }[self._kfac_approx]
-            x = patch_extractor_fn(
-                x,
-                module.kernel_size,
-                module.stride,
-                module.padding,
-                module.dilation,
-                module.groups,
-            )
-
-        if self._kfac_approx == KFACType.EXPAND:
-            # KFAC-expand approximation
-            scale = x.shape[1:-1].numel()  # weight-sharing dimensions size
-            x = rearrange(x, "batch ... d_in -> (batch ...) d_in")
-        else:
-            # KFAC-reduce approximation
-            scale = 1.0  # since we use a mean reduction
-            x = reduce(x, "batch ... d_in -> batch d_in", "mean")
-
         params = self._mapping[module_name]
-        if not self._separate_weight_and_bias and {"weight", "bias"} == set(
-            params.keys()
-        ):
-            x = cat([x, x.new_ones(x.shape[0], 1)], dim=1)
+        has_joint_wb = _has_joint_weight_and_bias(
+            self._separate_weight_and_bias, params
+        )
+
+        x, scale = prepare_layer_input(
+            x,
+            self._kfac_approx,
+            kernel_size=module.kernel_size if isinstance(module, Conv2d) else None,
+            stride=module.stride if isinstance(module, Conv2d) else None,
+            padding=module.padding if isinstance(module, Conv2d) else None,
+            dilation=module.dilation if isinstance(module, Conv2d) else None,
+            groups=module.groups if isinstance(module, Conv2d) else None,
+            append_ones_for_bias=has_joint_wb,
+        )
 
         covariance = einsum(x, x, "b i,b j -> i j").div_(self._N_data * scale)
         self._set_or_add_(input_covariances, module_name, covariance)

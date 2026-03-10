@@ -103,7 +103,7 @@ def with_param_io(
             number of traced parameter nodes doesn't match named_params, or
             if not all parameter usage paths are detected by the pattern matchers.
     """
-    # Use functionalize to remove inplace operations, then trace the function
+    # Use functionalize to remove inplace operations, then trace the function.
     gm = make_fx(functionalize(f))(x, named_params)
 
     # Find placeholder nodes (inputs to the graph)
