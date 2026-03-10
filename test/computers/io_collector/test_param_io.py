@@ -200,6 +200,29 @@ def test_reshape_altering_last_dim_not_matched():
         _ = with_param_io(f, x_dummy, params_dummy)
 
 
+def test_model_view_after_linear_not_absorbed():
+    """Test that a model view after a 2D linear is not absorbed into the linear.
+
+    ``Linear(3, 4) → view(batch, 2, 4)`` should detect the linear with its
+    original 2D output ``[batch, 4]``, not the reshaped ``[batch, 2, 4]``.
+    The view preserves the last dimension, so without the paired-view guard
+    it could be mistaken for F.linear's output view.
+    """
+    manual_seed(0)
+    N, D_in, D_out = 2, 3, 4
+
+    def f(x: Tensor, params: dict) -> Tensor:
+        out = linear(x, params["weight"], params["bias"])
+        return out.view(x.shape[0], 1, D_out)
+
+    x = rand(N, D_in)
+    params = {"weight": rand(D_out, D_in), "bias": rand(D_out)}
+    # Output should be the addmm result (2D), not the view (3D)
+    expected_out = linear(x, params["weight"], params["bias"])
+    io_true = ((LINEAR_STR, expected_out, x, "weight", "bias", {}),)
+    _verify_io(f, x, params, io_true)
+
+
 def test_unsupported_patterns():
     """Test that unsupported patterns raise ValueError."""
     manual_seed(0)
