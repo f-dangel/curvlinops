@@ -888,7 +888,6 @@ def _test_ekfac_closer_to_exact_than_kfac(
     separate_weight_and_bias: bool,
     fisher_type: FisherType,
     kfac_approx: bool,
-    backend: str = "hooks",
 ):
     """Test that EKFAC is closer in Frobenius norm to the exact quantity than KFAC.
 
@@ -903,7 +902,6 @@ def _test_ekfac_closer_to_exact_than_kfac(
         exclude: Parameter to exclude.
         fisher_type: The type of Fisher approximation.
         kfac_approx: THe type of KFAC approximation.
-        backend: The backend to use for computing Kronecker factors.
     """
     # Compute exact block-wise ground truth quantity.
     linop_cls = {
@@ -935,7 +933,6 @@ def _test_ekfac_closer_to_exact_than_kfac(
         separate_weight_and_bias=separate_weight_and_bias,
         fisher_type=fisher_type,
         kfac_approx=kfac_approx,
-        backend=backend,
         **optional_linop_args,
     )
     kfac_mat = kfac @ eye_like(kfac)
@@ -948,7 +945,6 @@ def _test_ekfac_closer_to_exact_than_kfac(
         separate_weight_and_bias=separate_weight_and_bias,
         fisher_type=fisher_type,
         kfac_approx=kfac_approx,
-        backend=backend,
         **optional_linop_args,
     )
     ekfac_mat = ekfac @ eye_like(ekfac)

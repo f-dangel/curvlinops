@@ -7,6 +7,7 @@ Only the forward pass is traced with ``make_fx``; the backward pass runs
 eagerly to avoid tracing issues with ``torch._C.Generator``.
 """
 
+from collections import UserDict
 from collections.abc import Callable, MutableMapping
 from typing import Any
 
@@ -15,6 +16,7 @@ from torch import Tensor, autograd, eye
 from torch.func import functional_call
 from torch.fx.experimental.proxy_tensor import make_fx
 
+from curvlinops._checks import _register_userdict_as_pytree
 from curvlinops.computers.io_collector import with_kfac_io
 from curvlinops.computers.kfac import KFACComputer
 from curvlinops.computers.kfac_math import (
@@ -180,9 +182,6 @@ class MakeFxKFACComputer(KFACComputer):
         Returns:
             Tuple of (f, named_params, io_to_module, layer_param_names,
             layer_hyperparams).
-
-        Raises:
-            ValueError: If the data uses ``MutableMapping`` inputs.
         """
         if hasattr(self, "_setup_cache"):
             return self._setup_cache
@@ -197,18 +196,21 @@ class MakeFxKFACComputer(KFACComputer):
         # Create functional wrapper
         model = self._model_func
 
-        def f(x: Tensor, params: dict[str, Tensor]) -> Tensor:
-            return functional_call(model, params, (x,))
-
         # Get example input from the first data batch
         x_example = next(iter(self._data))[0]
         if isinstance(x_example, MutableMapping):
-            raise ValueError(
-                "The make_fx backend does not support MutableMapping inputs. "
-                "Use the hooks backend instead."
-            )
-        # Move to model device (data may be on CPU while model is on GPU)
-        x_example = x_example.to(self.device)
+            if isinstance(x_example, UserDict):
+                _register_userdict_as_pytree()
+
+            def f(x: MutableMapping, params: dict[str, Tensor]) -> Tensor:
+                return functional_call(model, params, (x,))
+
+        else:
+            # Move to model device (data may be on CPU while model is on GPU)
+            x_example = x_example.to(self.device)
+
+            def f(x: Tensor, params: dict[str, Tensor]) -> Tensor:
+                return functional_call(model, params, (x,))
 
         # Trace once with example data to extract static layer info
         f_with_kfac_io = with_kfac_io(f, x_example, named_params, self._fisher_type)
@@ -354,7 +356,7 @@ class MakeFxKFACComputer(KFACComputer):
         }[self._loss_func.reduction]
 
         for X, y in self._loop_over_data(desc="KFAC matrices"):
-            batch_size = X.shape[0]
+            batch_size = self._batch_size_fn(X)
             if batch_size not in self._traced_forward_fns:
                 f_io = with_kfac_io(f, X, named_params, self._fisher_type)
                 forward_fn = self._make_forward_fn(
