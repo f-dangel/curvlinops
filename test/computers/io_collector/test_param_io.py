@@ -2,8 +2,7 @@
 
 from typing import Any
 
-import pytest
-from pytest import raises
+from pytest import mark, raises
 from torch import Tensor, arange, manual_seed, rand, zeros, zeros_like
 from torch.func import functional_call
 from torch.nn import Conv2d, Linear
@@ -275,8 +274,8 @@ def test_supports_multiple_batch_sizes():
         compare_io(io, io_true)
 
 
-@pytest.mark.parametrize("bias", [True, False], ids=["bias", "no_bias"])
-@pytest.mark.parametrize(
+@mark.parametrize("bias", [True, False], ids=["bias", "no_bias"])
+@mark.parametrize(
     "x_shape",
     [(2, 8, 5), (2, 4, 8, 5)],
     ids=["3D", "4D"],
