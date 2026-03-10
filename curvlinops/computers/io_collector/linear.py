@@ -83,8 +83,8 @@ def _match_addmm_weight(p: Node, pT: Node, addmm: Node) -> AffineLayerInfo | Non
     """
     if len(addmm.args) != 3 or addmm.kwargs:
         return None
-    bias, x, mat2 = addmm.args
-    if mat2 != pT:
+    bias, x, WT = addmm.args
+    if WT != pT:
         return None
 
     # Check for paired view → addmm → view (3D F.linear)
@@ -94,8 +94,8 @@ def _match_addmm_weight(p: Node, pT: Node, addmm: Node) -> AffineLayerInfo | Non
         and len(addmm.users) == 1
         and _is_last_dim_preserving_view(y_view := next(iter(addmm.users)))
     ):
-        x = x_view.args[0]
-        return AffineLayerInfo(LINEAR_STR, y_view, p, x, bias, {})
+        x, y = x_view.args[0], y_view
+        return AffineLayerInfo(LINEAR_STR, y, p, x, bias, {})
 
     # 2D case: no reshapes
     return AffineLayerInfo(LINEAR_STR, addmm, p, x, bias, {})
@@ -121,8 +121,8 @@ def _match_mm_weight(p: Node, pT: Node, mm: Node) -> AffineLayerInfo | None:
     """
     if len(mm.args) != 2 or mm.kwargs:
         return None
-    x, mat2 = mm.args
-    if mat2 != pT:
+    x, WT = mm.args
+    if WT != pT:
         return None
 
     # Check for view → mm → view pattern (>2D F.linear)
@@ -135,18 +135,18 @@ def _match_mm_weight(p: Node, pT: Node, mm: Node) -> AffineLayerInfo | None:
         x = x_view.args[0]
         add_result = _find_add_bias(y_view)
         if add_result is not None:
-            return AffineLayerInfo(
-                LINEAR_STR, add_result[0], p, x, add_result[1], {}
-            )
-        return AffineLayerInfo(LINEAR_STR, y_view, p, x, None, {})
+            y, bias = add_result
+            return AffineLayerInfo(LINEAR_STR, y, p, x, bias, {})
+        y = y_view
+        return AffineLayerInfo(LINEAR_STR, y, p, x, None, {})
 
     # 2D case: mm [→ add]
     add_result = _find_add_bias(mm)
     if add_result is not None:
-        return AffineLayerInfo(
-            LINEAR_STR, add_result[0], p, x, add_result[1], {}
-        )
-    return AffineLayerInfo(LINEAR_STR, mm, p, x, None, {})
+        y, bias = add_result
+        return AffineLayerInfo(LINEAR_STR, y, p, x, bias, {})
+    y = mm
+    return AffineLayerInfo(LINEAR_STR, y, p, x, None, {})
 
 
 def _match_addmm_bias(p: Node, addmm: Node) -> AffineLayerInfo | None:
@@ -173,8 +173,8 @@ def _match_addmm_bias(p: Node, addmm: Node) -> AffineLayerInfo | None:
         and len(addmm.users) == 1
         and _is_last_dim_preserving_view(y_view := next(iter(addmm.users)))
     ):
-        x = x_view.args[0]
-        return AffineLayerInfo(LINEAR_STR, y_view, W, x, bias, {})
+        x, y = x_view.args[0], y_view
+        return AffineLayerInfo(LINEAR_STR, y, W, x, bias, {})
 
     # 2D case
     return AffineLayerInfo(LINEAR_STR, addmm, W, x, bias, {})
