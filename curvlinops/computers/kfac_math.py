@@ -10,21 +10,27 @@ zero or more *weight-sharing* positions (spatial locations for Conv2d, sequence
 positions for Linear with matrix or higher-dimensional features). The
 **weight sharing format** normalises inputs and gradients to::
 
-    [batch, *sharing, features]
+    [batch, shared, features]
 
-where ``*sharing`` are the weight-sharing dimensions and ``features`` is
-``d_in`` (for inputs) or ``d_out`` (for gradients). In this layout every layer
-looks like ``output[b, s] = W @ input[b, s] + bias``, so the downstream KFAC
-math (covariance computation, expand/reduce) is uniform.
+where ``shared`` collapses all weight-sharing positions into a single axis
+and ``features`` is ``d_in`` (for inputs) or ``d_out`` (for gradients).
+In this layout every layer looks like ``output[b, s] = W @ input[b, s] + bias``,
+so the downstream KFAC math (covariance computation, expand/reduce) is uniform.
 
-Examples of the conversion:
+The collapsing strategy depends on the KFAC approximation type:
 
-* **Linear** (vector input): ``[batch, d_in]`` — already in format (no sharing dims).
-* **Linear** (matrix input): ``[batch, seq, d_in]`` — already in format.
+* **expand**: flatten all sharing positions (``shared = prod(*sharing)``).
+* **reduce**: average (inputs) or sum (gradients) over sharing positions
+  (``shared = 1``).
+
+Examples of the conversion (expand):
+
+* **Linear** (vector input): ``[batch, d_in]`` → ``[batch, 1, d_in]``.
+* **Linear** (matrix input): ``[batch, seq, d_in]`` → ``[batch, seq, d_in]``.
 * **Conv2d input**: ``[batch, C_in, H, W]`` → patch extraction →
   ``[batch, O1*O2, C_in*K1*K2]``.
-* **Conv2d gradient**: ``[batch, C_out, H, W]`` → channel-last →
-  ``[batch, H, W, C_out]``.
+* **Conv2d gradient**: ``[batch, C_out, H, W]`` → channel-last + flatten →
+  ``[batch, H*W, C_out]``.
 """
 
 from typing import Any
