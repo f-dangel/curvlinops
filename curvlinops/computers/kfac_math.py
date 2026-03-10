@@ -2,6 +2,29 @@
 
 Pure functions for preparing layer inputs/outputs and computing loss corrections,
 shared between the hook-based and FX-based backends.
+
+Weight sharing format
+---------------------
+KFAC treats every supported layer as a linear map applied identically across
+zero or more *weight-sharing* positions (spatial locations for Conv2d, sequence
+positions for Linear with matrix or higher-dimensional features). The
+**weight sharing format** normalises inputs and gradients to::
+
+    [batch, *sharing, features]
+
+where ``*sharing`` are the weight-sharing dimensions and ``features`` is
+``d_in`` (for inputs) or ``d_out`` (for gradients). In this layout every layer
+looks like ``output[b, s] = W @ input[b, s] + bias``, so the downstream KFAC
+math (covariance computation, expand/reduce) is uniform.
+
+Examples of the conversion:
+
+* **Linear** (vector input): ``[batch, d_in]`` — already in format (no sharing dims).
+* **Linear** (matrix input): ``[batch, seq, d_in]`` — already in format.
+* **Conv2d input**: ``[batch, C_in, H, W]`` → patch extraction →
+  ``[batch, O1*O2, C_in*K1*K2]``.
+* **Conv2d gradient**: ``[batch, C_out, H, W]`` → channel-last →
+  ``[batch, H, W, C_out]``.
 """
 
 from einops import reduce
