@@ -24,7 +24,7 @@ from torch.nn.functional import (
 )
 
 from curvlinops.computers.io_collector import with_kfac_io
-from curvlinops.computers.kfac import FisherType
+from curvlinops.kfac_utils import FisherType
 from curvlinops.utils import allclose_report
 from test.computers.io_collector.test_param_io import CONV2D_DEFAULT_PARAMS
 

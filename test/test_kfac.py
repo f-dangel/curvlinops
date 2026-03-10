@@ -31,7 +31,8 @@ from torch.nn import (
 
 from curvlinops import EFLinearOperator, GGNLinearOperator
 from curvlinops.computers.kfac import KFACComputer
-from curvlinops.kfac import FisherType, KFACLinearOperator, KFACType
+from curvlinops.kfac import KFACLinearOperator
+from curvlinops.kfac_utils import FisherType, KFACType
 from curvlinops.utils import allclose_report
 from test.cases import DEVICES, DEVICES_IDS
 from test.utils import (

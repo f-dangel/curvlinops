@@ -20,7 +20,7 @@ from torch.nn import (
 from curvlinops import EFLinearOperator, GGNLinearOperator
 from curvlinops.computers.ekfac import EKFACComputer
 from curvlinops.ekfac import EKFACLinearOperator
-from curvlinops.kfac import FisherType, KFACType
+from curvlinops.kfac_utils import FisherType, KFACType
 from curvlinops.utils import allclose_report
 from test.cases import DEVICES, DEVICES_IDS
 from test.test_kfac import (

@@ -30,7 +30,7 @@ from curvlinops.computers.io_collector.conv import CONV_STR
 from curvlinops.computers.io_collector.linear import LINEAR_STR
 from curvlinops.computers.io_collector.patterns import match_parameter_usage
 from curvlinops.computers.io_collector.verification import verify_match_complete
-from curvlinops.computers.kfac import FisherType
+from curvlinops.kfac_utils import FisherType
 
 # Type aliases for complex return types
 LayerInfoTuple: TypeAlias = tuple[str, Node, Node, str, str | None, dict[str, Any]]
