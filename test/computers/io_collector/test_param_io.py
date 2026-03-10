@@ -2,6 +2,7 @@
 
 from typing import Any
 
+import pytest
 from pytest import raises
 from torch import Tensor, arange, manual_seed, rand, zeros, zeros_like
 from torch.func import functional_call
@@ -179,6 +180,27 @@ def test_convolution():
     _verify_io(f, x, params, io_true)
 
 
+def test_reshape_altering_last_dim_not_matched():
+    """Test that reshapes altering the feature dimension are not matched.
+
+    ``Linear(6, 4, bias=False) → reshape(batch, 2, 2) → add(bias)`` should NOT
+    be detected as a single linear layer, because the reshape changes the last
+    dimension from 4 to 2.
+    """
+    manual_seed(0)
+
+    def f(x: Tensor, params: dict) -> Tensor:
+        out = linear(x, params["weight"])
+        out = out.reshape(x.shape[0], 2, 2)
+        return out + params["bias"]
+
+    x_dummy = zeros(3, 6)
+    params_dummy = {"weight": zeros(4, 6), "bias": zeros(2)}
+
+    with raises(ValueError, match="Some parameters are used in unsupported patterns."):
+        _ = with_param_io(f, x_dummy, params_dummy)
+
+
 def test_unsupported_patterns():
     """Test that unsupported patterns raise ValueError."""
     manual_seed(0)
@@ -251,3 +273,35 @@ def test_supports_multiple_batch_sizes():
         io_true = ((LINEAR_STR, f(x, params), x, "weight", "bias", {}),)
         io = f_with_io(x, params)[1:]
         compare_io(io, io_true)
+
+
+@pytest.mark.parametrize("bias", [True, False], ids=["bias", "no_bias"])
+@pytest.mark.parametrize(
+    "x_shape",
+    [(2, 8, 5), (2, 4, 8, 5)],
+    ids=["3D", "4D"],
+)
+def test_fully_connected_higher_dim_input(x_shape, bias):
+    """Test with_param_io preserves original input shape for >2D Linear inputs.
+
+    For 3D inputs, PyTorch decomposes ``F.linear`` as ``view → addmm → view``;
+    for 4D+ inputs it uses ``view → mm → _unsafe_view → add(bias)``. The IO
+    collector must resolve these paired reshapes to capture the original
+    (unflattened) input and output tensors.
+    """
+    manual_seed(0)
+    D_in, D_out = x_shape[-1], 4
+
+    fc = Linear(D_in, D_out, bias=bias)
+
+    def f(x: Tensor, params: dict) -> Tensor:
+        return functional_call(fc, params, x)
+
+    params = {"weight": rand(D_out, D_in)}
+    if bias:
+        params["bias"] = rand(D_out)
+
+    x = rand(*x_shape)
+    bias_name = "bias" if bias else None
+    io_true = ((LINEAR_STR, f(x, params), x, "weight", bias_name, {}),)
+    _verify_io(f, x, params, io_true)
