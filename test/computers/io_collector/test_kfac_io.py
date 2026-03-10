@@ -370,7 +370,7 @@ def test_kfac_io_flatten_requires_per_batch_size_tracing():
     assert out2.shape[0] == 2
 
     # But fails for batch=5 due to hardcoded shapes from nn.Flatten
-    with raises(RuntimeError):
+    with raises(RuntimeError, match="shape .* is invalid for input of size"):
         f_kfac_io(x_batch5, params)
 
     # A separate IO function traced with batch=5 works for batch=5
