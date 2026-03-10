@@ -37,10 +37,8 @@ from torch.utils.hooks import RemovableHandle
 from curvlinops._empirical_risk import _EmpiricalRiskMixin
 from curvlinops.computers.kfac_math import (
     compute_loss_correction,
-    conv2d_grad_to_weight_sharing_format,
-    conv2d_input_to_weight_sharing_format,
-    prepare_grad_output,
-    prepare_layer_input,
+    grad_to_weight_sharing_format,
+    input_to_weight_sharing_format,
 )
 from curvlinops.ggn_utils import make_grad_output_fn
 from curvlinops.kfac_utils import FisherType, KFACType, _has_joint_weight_and_bias
@@ -454,10 +452,9 @@ class KFACComputer(_EmpiricalRiskMixin):
         g = grad_output.data.detach()
         batch_size = g.shape[0]
 
-        if isinstance(module, Conv2d):
-            g = conv2d_grad_to_weight_sharing_format(g, num_leading_dims=1)
-
-        g = prepare_grad_output(g, self._kfac_approx, num_leading_dims=1)
+        g = grad_to_weight_sharing_format(
+            g, self._kfac_approx, layer_hyperparams=self._conv_hyperparams(module)
+        )
 
         # Note: mc_samples scaling is already handled inside make_grad_output_fn.
         correction = compute_loss_correction(
@@ -499,23 +496,39 @@ class KFACComputer(_EmpiricalRiskMixin):
             self._separate_weight_and_bias, params
         )
 
-        if isinstance(module, Conv2d):
-            x = conv2d_input_to_weight_sharing_format(
-                x,
-                self._kfac_approx,
-                module.kernel_size,
-                module.stride,
-                module.padding,
-                module.dilation,
-                module.groups,
-            )
-
-        x, scale = prepare_layer_input(
-            x, self._kfac_approx, append_ones_for_bias=has_joint_wb
+        x, scale = input_to_weight_sharing_format(
+            x,
+            self._kfac_approx,
+            layer_hyperparams=self._conv_hyperparams(module),
+            append_ones_for_bias=has_joint_wb,
         )
 
         covariance = einsum(x, x, "b i,b j -> i j").div_(self._N_data * scale)
         self._set_or_add_(input_covariances, module_name, covariance)
+
+    @staticmethod
+    def _conv_hyperparams(module: Module) -> dict[str, Any]:
+        """Extract convolution hyperparameters from a module.
+
+        Returns an empty dict for non-Conv2d modules, following the IO collector
+        convention where empty hyperparams means Linear.
+
+        Args:
+            module: The layer module.
+
+        Returns:
+            Dict with ``kernel_size``, ``stride``, ``padding``, ``dilation``,
+            ``groups`` for Conv2d modules, empty dict otherwise.
+        """
+        if isinstance(module, Conv2d):
+            return dict(
+                kernel_size=module.kernel_size,
+                stride=module.stride,
+                padding=module.padding,
+                dilation=module.dilation,
+                groups=module.groups,
+            )
+        return {}
 
     @staticmethod
     def _set_or_add_(

@@ -21,10 +21,8 @@ from curvlinops.computers.io_collector import with_kfac_io
 from curvlinops.computers.kfac import KFACComputer
 from curvlinops.computers.kfac_math import (
     compute_loss_correction,
-    conv2d_grad_to_weight_sharing_format,
-    conv2d_input_to_weight_sharing_format,
-    prepare_grad_output,
-    prepare_layer_input,
+    grad_to_weight_sharing_format,
+    input_to_weight_sharing_format,
 )
 from curvlinops.kfac_utils import FisherType, _has_joint_weight_and_bias
 from curvlinops.utils import _seed_generator
@@ -100,24 +98,17 @@ class MakeFxKFACComputer(KFACComputer):
             io_layer_name, layer_hyperparams, layer_param_names, named_params
         )
 
-        if is_conv2d:
-            x = conv2d_input_to_weight_sharing_format(
-                x,
-                self._kfac_approx,
-                kernel_size,
-                hyperparams["stride"],
-                hyperparams["padding"],
-                hyperparams["dilation"],
-                hyperparams["groups"],
-            )
-
         params = self._mapping[module_name]
         has_joint_wb = _has_joint_weight_and_bias(
             self._separate_weight_and_bias, params
         )
 
-        x, scale = prepare_layer_input(
-            x, self._kfac_approx, append_ones_for_bias=has_joint_wb
+        hparams = {**hyperparams, "kernel_size": kernel_size} if is_conv2d else {}
+        x, scale = input_to_weight_sharing_format(
+            x,
+            self._kfac_approx,
+            layer_hyperparams=hparams,
+            append_ones_for_bias=has_joint_wb,
         )
 
         covariance = einsum(x, x, "b i,b j -> i j").div_(scale)
@@ -153,12 +144,12 @@ class MakeFxKFACComputer(KFACComputer):
         g = g.data.detach()
         batch_size = g.shape[1]
 
-        is_conv2d, _, _ = self._conv_info(io_layer_name, layer_hyperparams)
-
-        if is_conv2d:
-            g = conv2d_grad_to_weight_sharing_format(g, num_leading_dims=2)
-
-        g = prepare_grad_output(g, self._kfac_approx, num_leading_dims=2)
+        g = grad_to_weight_sharing_format(
+            g,
+            self._kfac_approx,
+            layer_hyperparams=layer_hyperparams[io_layer_name],
+            num_leading_dims=2,
+        )
 
         correction = compute_loss_correction(
             batch_size, self._num_per_example_loss_terms, self._loss_func.reduction

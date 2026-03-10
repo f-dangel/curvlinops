@@ -27,6 +27,8 @@ Examples of the conversion:
   ``[batch, H, W, C_out]``.
 """
 
+from typing import Any
+
 from einops import reduce
 from torch import Tensor, cat
 
@@ -37,80 +39,31 @@ from curvlinops.kfac_utils import (
 )
 
 
-def conv2d_input_to_weight_sharing_format(
+def input_to_weight_sharing_format(
     x: Tensor,
     kfac_approx: str,
-    kernel_size: tuple[int, ...],
-    stride: tuple[int, ...],
-    padding: tuple[int, ...] | str,
-    dilation: tuple[int, ...],
-    groups: int,
-) -> Tensor:
-    """Convert a Conv2d layer's input to KFAC format ``[batch, ..., d_in]``.
-
-    Extracts patches (expand) or averaged patches (reduce) from the spatial
-    input, producing a tensor with the feature dimension last.
-
-    Args:
-        x: Conv2d layer input ``[batch, C_in, H, W]``.
-        kfac_approx: KFAC approximation type (``KFACType.EXPAND`` or
-            ``KFACType.REDUCE``).
-        kernel_size: Convolution kernel size.
-        stride: Convolution stride.
-        padding: Convolution padding.
-        dilation: Convolution dilation.
-        groups: Convolution groups.
-
-    Returns:
-        Tensor with shape ``[batch, ..., d_in]`` where ``...`` are
-        weight-sharing dimensions (spatial patches for expand, empty for reduce).
-    """
-    patch_extractor_fn = {
-        KFACType.EXPAND: extract_patches,
-        KFACType.REDUCE: extract_averaged_patches,
-    }[kfac_approx]
-    return patch_extractor_fn(x, kernel_size, stride, padding, dilation, groups)
-
-
-def conv2d_grad_to_weight_sharing_format(
-    g: Tensor, num_leading_dims: int = 1
-) -> Tensor:
-    """Move Conv2d channel dimension to last position.
-
-    Converts from ``[..., batch, C_out, H, W]`` to ``[..., batch, H, W, C_out]``
-    so the feature dimension is last, matching KFAC's expected layout.
-
-    Args:
-        g: Conv2d gradient with channel dim at position ``num_leading_dims``.
-        num_leading_dims: Number of leading dims to preserve (1 for hooks,
-            2 for FX batched grads).
-
-    Returns:
-        Gradient with channel dim moved to last position.
-    """
-    # [leading..., C_out, spatial...] -> [leading..., spatial..., C_out]
-    return g.movedim(num_leading_dims, -1)
-
-
-def prepare_layer_input(
-    x: Tensor,
-    kfac_approx: str,
+    layer_hyperparams: dict[str, Any] | None = None,
     append_ones_for_bias: bool = False,
 ) -> tuple[Tensor, float]:
-    """Prepare a layer's input for KFAC input covariance computation.
+    """Convert a layer's input to weight sharing format and prepare for covariance.
 
-    Expects ``x`` in shape ``[batch, ..., d_in]`` where ``...`` are optional
-    weight-sharing dimensions. Callers must convert layer-specific formats
-    (e.g. Conv2d spatial inputs) to this shape before calling.
+    Converts the input to ``[batch, *sharing, d_in]``, then collapses the
+    sharing dimensions (flatten for expand, mean for reduce) and optionally
+    appends a ones column for joint weight+bias treatment.
 
-    Handles KFAC-expand/reduce rearrangement and optional ones-column for
-    joint weight+bias treatment.
+    For Conv2d layers, pass the convolution hyperparameters (``kernel_size``,
+    ``stride``, ``padding``, ``dilation``, ``groups``) to trigger patch
+    extraction. For Linear layers, pass ``None`` or an empty dict (the input
+    is already in weight sharing format).
 
     Args:
-        x: Layer input ``[batch, ..., d_in]``. For fully-connected layers
-            without weight sharing, shape is simply ``[batch, d_in]``.
+        x: Layer input. Linear: ``[batch, (*sharing,) d_in]``.
+            Conv2d: ``[batch, C_in, H, W]``.
         kfac_approx: KFAC approximation type (``KFACType.EXPAND`` or
             ``KFACType.REDUCE``).
+        layer_hyperparams: Convolution hyperparameters (``kernel_size``,
+            ``stride``, ``padding``, ``dilation``, ``groups``). Empty or
+            ``None`` for Linear layers. Follows the IO collector convention.
         append_ones_for_bias: Whether to append a ones column for joint
             weight+bias treatment.
 
@@ -118,51 +71,74 @@ def prepare_layer_input(
         ``(x_prepared, scale)`` where ``x_prepared`` has shape ``[B, d_in]``
         and ``scale`` is the weight-sharing normalization factor.
     """
+    # Step 1: Convert to weight sharing format [batch, *sharing, d_in]
+    if layer_hyperparams:
+        patch_extractor_fn = {
+            KFACType.EXPAND: extract_patches,
+            KFACType.REDUCE: extract_averaged_patches,
+        }[kfac_approx]
+        x = patch_extractor_fn(
+            x,
+            layer_hyperparams["kernel_size"],
+            layer_hyperparams["stride"],
+            layer_hyperparams["padding"],
+            layer_hyperparams["dilation"],
+            layer_hyperparams["groups"],
+        )
+
+    # Step 2: Collapse sharing dimensions
     if kfac_approx == KFACType.EXPAND:
         scale = x.shape[1:-1].numel()
-        x = x.flatten(end_dim=-2)  # "batch ... d_in -> (batch ...) d_in"
+        x = x.flatten(end_dim=-2)  # [batch, *sharing, d_in] -> [(batch *sharing), d_in]
     else:
         scale = 1.0
         x = reduce(x, "batch ... d_in -> batch d_in", "mean")
 
+    # Step 3: Optionally append ones column for joint weight+bias
     if append_ones_for_bias:
         x = cat([x, x.new_ones(x.shape[0], 1)], dim=1)
 
     return x, scale
 
 
-def prepare_grad_output(
+def grad_to_weight_sharing_format(
     g: Tensor,
     kfac_approx: str,
+    layer_hyperparams: dict[str, Any] | None = None,
     num_leading_dims: int = 1,
 ) -> Tensor:
-    """Prepare a layer's output gradient for KFAC gradient covariance computation.
+    """Convert a layer's output gradient to weight sharing format and prepare for covariance.
 
-    Expects ``g`` in shape ``[..., batch, ..., d_out]`` where the first ``...``
-    are leading dimensions and the second ``...`` are weight-sharing dimensions,
-    with the feature dimension last. Callers must convert layer-specific formats
-    (e.g. Conv2d channel-first layout) before calling.
+    For Conv2d layers (non-empty ``layer_hyperparams``), moves the channel
+    dimension to last position. Then collapses the sharing dimensions
+    (flatten for expand, sum for reduce).
 
     Args:
-        g: Output gradient. Hooks: ``[batch, ..., d_out]``.
-            FX: ``[v, batch, ..., d_out]``.
+        g: Output gradient. Hooks: ``[batch, ...]``.
+            FX: ``[v, batch, ...]``.
         kfac_approx: KFAC approximation type (``KFACType.EXPAND`` or
             ``KFACType.REDUCE``).
+        layer_hyperparams: Convolution hyperparameters. Empty or ``None``
+            for Linear layers. Follows the IO collector convention.
         num_leading_dims: Number of leading dims to preserve (1 for hooks,
             2 for FX batched grads).
 
     Returns:
-        Prepared gradient with spatial dims handled.
+        Prepared gradient with shape ``[(*leading,) B, d_out]``.
     """
+    # Step 1: Convert to weight sharing format [*leading, batch, *sharing, d_out]
+    if layer_hyperparams:
+        # [leading..., C_out, spatial...] -> [leading..., spatial..., C_out]
+        g = g.movedim(num_leading_dims, -1)
+
+    # Step 2: Collapse sharing dimensions
     if kfac_approx == KFACType.EXPAND:
-        # Flatten spatial dims into the last leading dim
         # hooks: [batch, s1, s2, d] -> [(batch s1 s2), d]
         # FX:    [v, batch, s1, s2, d] -> [v, (batch s1 s2), d]
         leading = g.shape[: num_leading_dims - 1]
         d_out = g.shape[-1]
         g = g.reshape(*leading, -1, d_out)
     else:
-        # Sum over spatial dims
         spatial_dims = tuple(range(num_leading_dims, g.ndim - 1))
         if spatial_dims:
             g = g.sum(dim=spatial_dims)
