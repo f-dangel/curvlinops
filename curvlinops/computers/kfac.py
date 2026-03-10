@@ -464,13 +464,15 @@ class KFACComputer(_EmpiricalRiskMixin):
             self._N_data,
         )
 
-        covariance = einsum(g, g, "b i,b j->i j").mul_(correction)
+        covariance = einsum(g, g, "batch shared i, batch shared j -> i j").mul_(
+            correction
+        )
         self._set_or_add_(gradient_covariances, module_name, covariance)
 
     def _hook_accumulate_input_covariance(
         self,
         module: Module,
-        inputs: tuple[Tensor],
+        inputs: tuple[Tensor, ...],
         module_name: str,
         input_covariances: dict[str, Tensor],
     ):

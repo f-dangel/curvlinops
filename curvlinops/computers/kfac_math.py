@@ -108,11 +108,11 @@ def grad_to_weight_sharing_format(
     layer_hyperparams: dict[str, Any] | None = None,
     num_leading_dims: int = 1,
 ) -> Tensor:
-    """Convert a layer's output gradient to weight sharing format and prepare for covariance.
+    """Convert a layer's output gradient to weight sharing format.
 
     For Conv2d layers (non-empty ``layer_hyperparams``), moves the channel
-    dimension to last position. Then collapses the sharing dimensions
-    (flatten for expand, sum for reduce).
+    dimension to last position. Then collapses the sharing dimensions into
+    a single axis (flatten for expand, sum for reduce).
 
     Args:
         g: Output gradient. Hooks: ``[batch, ...]``.
@@ -125,19 +125,21 @@ def grad_to_weight_sharing_format(
             2 for FX batched grads).
 
     Returns:
-        Prepared gradient with shape ``[(*leading,) B, d_out]``.
+        Tensor of shape ``[(*leading,) batch, shared, d_out]`` where
+        ``shared`` is the number of weight-sharing positions (expand)
+        or 1 (reduce).
     """
     # Step 1: Convert to weight sharing format [*leading, batch, *sharing, d_out]
     if layer_hyperparams:
         # [leading..., C_out, spatial...] -> [leading..., spatial..., C_out]
         g = g.movedim(num_leading_dims, -1)
 
-    # Step 2: Collapse sharing dimensions [*leading, batch, *sharing, d_out]
+    # Step 2: Collapse sharing dimensions into single axis
     leading = {1: "", 2: "v "}[num_leading_dims]
     if kfac_approx == KFACType.EXPAND:
-        g = rearrange(g, f"{leading}batch ... d_out -> {leading}(batch ...) d_out")
+        g = rearrange(g, f"{leading}batch ... d_out -> {leading}batch (...) d_out")
     else:
-        g = reduce(g, f"{leading}batch ... d_out -> {leading}batch d_out", "sum")
+        g = reduce(g, f"{leading}batch ... d_out -> {leading}batch 1 d_out", "sum")
 
     return g
 

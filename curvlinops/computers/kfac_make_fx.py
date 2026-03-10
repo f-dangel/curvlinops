@@ -155,7 +155,7 @@ class MakeFxKFACComputer(KFACComputer):
             batch_size, self._num_per_example_loss_terms, self._loss_func.reduction
         )
 
-        ggT = einsum(g, g, "v b i, v b j -> i j").mul_(correction)
+        ggT = einsum(g, g, "v batch shared i, v batch shared j -> i j").mul_(correction)
         return module_name, ggT
 
     def _setup_model(
