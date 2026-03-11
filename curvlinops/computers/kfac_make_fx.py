@@ -28,7 +28,7 @@ from curvlinops.utils import _seed_generator, identify_free_parameters
 
 
 def _trace_io(
-    f: Callable,
+    f: Callable[[Tensor | MutableMapping, dict[str, Tensor]], Tensor],
     x: Tensor | MutableMapping,
     named_params: dict[str, Tensor],
     fisher_type: FisherType,
@@ -148,10 +148,10 @@ class MakeFxKFACComputer(KFACComputer):
                 continue
 
             # Compute gradient covariances
-            batched_grads = self._compute_batched_grads(
+            layer_output_grads = self._compute_layer_output_grads(
                 output, y, layer_outputs, io_to_module
             )
-            for io_layer_name, g in batched_grads.items():
+            for io_layer_name, g in layer_output_grads.items():
                 mod_name = io_to_module[io_layer_name]
                 hparams = layer_hparams[io_layer_name]
                 g = grad_to_weight_sharing_format(
@@ -178,7 +178,7 @@ class MakeFxKFACComputer(KFACComputer):
 
         return input_covariances, gradient_covariances
 
-    def _compute_batched_grads(
+    def _compute_layer_output_grads(
         self,
         output: Tensor,
         y: Tensor,
@@ -210,10 +210,10 @@ class MakeFxKFACComputer(KFACComputer):
         scale = {"sum": 1.0, "mean": 1.0 / num_loss_terms}[self._loss_func.reduction]
         grad_outputs.mul_(scale)
 
-        batched_grads = autograd.grad(
+        layer_output_grads = autograd.grad(
             output,
             output_tensors,
             grad_outputs=grad_outputs,
             is_grads_batched=True,
         )
-        return dict(zip(io_layer_names, batched_grads))
+        return dict(zip(io_layer_names, layer_output_grads))
