@@ -189,8 +189,7 @@ def identify_free_parameters(
     """Identify free parameters by matching them against a model's named parameters.
 
     Matches each parameter in ``params`` to its name in ``model`` by data pointer.
-    Validates that there are no duplicates in ``params`` and no weight tying in the
-    model (multiple names sharing the same tensor).
+    Validates that there are no duplicates in ``params``.
 
     Args:
         model: The model whose named parameters to search.
@@ -200,8 +199,7 @@ def identify_free_parameters(
         Ordered dict mapping parameter names to parameter tensors.
 
     Raises:
-        ValueError: If ``params`` contains duplicate tensors, if the model uses
-            weight tying (multiple names for the same tensor), or if a parameter
+        ValueError: If ``params`` contains duplicate tensors or if a parameter
             is not found in the model.
     """
     # Check for duplicates in params
@@ -211,21 +209,10 @@ def identify_free_parameters(
             "params contains duplicate parameters (same tensor passed twice)."
         )
 
-    # Build ptr -> names mapping to detect weight tying
-    ptr_to_names: dict[int, list[str]] = {}
-    for name, p in model.named_parameters():
-        ptr_to_names.setdefault(p.data_ptr(), []).append(name)
-
-    tied = {ptr: names for ptr, names in ptr_to_names.items() if len(names) > 1}
-    if tied:
-        tied_groups = list(tied.values())
-        raise ValueError(
-            f"Model uses weight tying (shared parameters): {tied_groups}. "
-            f"This is not supported."
-        )
+    # Build ptr -> name mapping from model's named parameters
+    ptr_to_name = {p.data_ptr(): name for name, p in model.named_parameters()}
 
     # Match params to names
-    ptr_to_name = {ptr: names[0] for ptr, names in ptr_to_names.items()}
     named_params: dict[str, Parameter] = {}
     for p in params:
         ptr = p.data_ptr()
