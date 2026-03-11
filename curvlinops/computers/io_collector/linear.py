@@ -47,6 +47,7 @@ def _find_add_bias(node: Node) -> tuple[Node, Node] | None:
             user.op == "call_function"
             and user.target == aten.add.Tensor
             and len(user.args) == 2
+            and not user.kwargs
         ):
             lhs, rhs = user.args
             bias = rhs if lhs == node else lhs if rhs == node else None
@@ -193,7 +194,7 @@ def _match_add_bias(p: Node, add: Node) -> AffineLayerInfo | None:
     Returns:
         ``AffineLayerInfo`` if matched, else ``None``.
     """
-    if len(add.args) != 2 or p.meta["val"].ndim != 1:
+    if len(add.args) != 2 or add.kwargs or p.meta["val"].ndim != 1:
         return None
     lhs, rhs = add.args
     y_view = lhs if rhs == p else rhs if lhs == p else None
