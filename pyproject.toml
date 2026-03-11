@@ -65,7 +65,6 @@ test = [
     "pytest",
     "pytest-cov",
     "pytest-order",
-    "pytest-xdist",
 ]
 
 # Dependencies needed for linting.
