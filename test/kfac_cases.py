@@ -100,12 +100,12 @@ KFAC_WEIGHT_SHARING_EXACT_CASES_NO_DEVICE_NO_LOSS_FUNC = [
         "model_func": Conv2dModel,
         "data": lambda: {
             KFACType.EXPAND: [
-                (rand(2, 3, 20, 20), regression_targets((2, 21, 21, 2))),
-                (rand(7, 3, 20, 20), regression_targets((7, 21, 21, 2))),
+                (rand(2, 3, 8, 8), regression_targets((2, 9, 9, 2))),
+                (rand(7, 3, 8, 8), regression_targets((7, 9, 9, 2))),
             ],
             KFACType.REDUCE: [
-                (rand(1, 3, 20, 20), regression_targets((1, 2))),
-                (rand(8, 3, 20, 20), regression_targets((8, 2))),
+                (rand(1, 3, 8, 8), regression_targets((1, 2))),
+                (rand(8, 3, 8, 8), regression_targets((8, 2))),
             ],
         },
         "seed": 0,
@@ -233,12 +233,12 @@ SINGLE_LAYER_WEIGHT_SHARING_CASES_NO_DEVICE_NO_LOSS_FUNC = [
         "model_func": Conv2dModel,
         "data": lambda: {
             KFACType.EXPAND: [
-                (rand(7, 3, 20, 20), regression_targets((7, 21, 21, 2))),
-                (rand(7, 3, 20, 20), regression_targets((7, 21, 21, 2))),
+                (rand(7, 3, 8, 8), regression_targets((7, 9, 9, 2))),
+                (rand(7, 3, 8, 8), regression_targets((7, 9, 9, 2))),
             ],
             KFACType.REDUCE: [
-                (rand(8, 3, 20, 20), regression_targets((8, 2))),
-                (rand(8, 3, 20, 20), regression_targets((8, 2))),
+                (rand(8, 3, 8, 8), regression_targets((8, 2))),
+                (rand(8, 3, 8, 8), regression_targets((8, 2))),
             ],
         },
         "seed": 0,

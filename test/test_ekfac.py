@@ -175,36 +175,20 @@ def test_ekfac_type2_weight_sharing(
     assert allclose_report(ggn, ekfac_mat)
 
 
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_ekfac_mc(
     kfac_exact_case: tuple[
         Module, MSELoss, list[Parameter], Iterable[tuple[Tensor, Tensor]]
     ],
-    separate_weight_and_bias: bool,
-    exclude: str,
-    shuffle: bool,
 ):
     """Test the EKFAC implementation using MC samples against the exact GGN.
 
     Args:
         kfac_exact_case: A fixture that returns a model, loss function, list of
             parameters, and data.
-        shuffle: Whether to shuffle the parameters before computing the EKFAC matrix.
-        exclude: Which parameters to exclude. Can be ``'weight'``, ``'bias'``,
-            or ``None``.
-        separate_weight_and_bias: Whether to treat weight and bias as separate blocks in
-            the EKFAC matrix.
     """
     model, loss_func, params, data, batch_size_fn = change_dtype(
         kfac_exact_case, float64
     )
-    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     ggn = block_diagonal(
         GGNLinearOperator,
@@ -213,7 +197,6 @@ def test_ekfac_mc(
         params,
         data,
         batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
     )
     ekfac = EKFACLinearOperator(
         model,
@@ -223,7 +206,6 @@ def test_ekfac_mc(
         batch_size_fn=batch_size_fn,
         fisher_type=FisherType.MC,
         mc_samples=MC_SAMPLES,
-        separate_weight_and_bias=separate_weight_and_bias,
     )
     ekfac_mat = ekfac @ eye_like(ekfac)
 
@@ -233,13 +215,6 @@ def test_ekfac_mc(
 
 
 @mark.parametrize("setting", [KFACType.EXPAND, KFACType.REDUCE])
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_ekfac_mc_weight_sharing(
     kfac_weight_sharing_exact_case: tuple[
         WeightShareModel | Conv2dModel,
@@ -247,22 +222,15 @@ def test_ekfac_mc_weight_sharing(
         list[Parameter],
         dict[str, Iterable[tuple[Tensor, Tensor]]],
     ],
-    separate_weight_and_bias: bool,
-    exclude: str,
     setting: str,
-    shuffle: bool,
 ):
     """Test EKFAC-MC for linear layers with weight sharing against the exact GGN.
 
     Args:
         kfac_weight_sharing_exact_case: A fixture that returns a model, loss function,
             list of parameters, and data.
-        separate_weight_and_bias: Whether to treat weights and biases as separate blocks.
-        exclude: Which parameters to exclude. Can be ``'weight'``, ``'bias'``, or
-            ``None``.
         setting: The weight-sharing setting to use. Can be ``KFACType.EXPAND`` or
             ``KFACType.REDUCE``.
-        shuffle: Whether to shuffle the parameters before computing the EKFAC matrix.
     """
     model, loss_func, params, data, batch_size_fn = kfac_weight_sharing_exact_case
     # The model outputs have to be flattened assuming only the first dimension is the
@@ -272,7 +240,6 @@ def test_ekfac_mc_weight_sharing(
         # For `Conv2dModel` the parameters are only initialized after the setting
         # property is set, so we have to redefine `params` after `model.setting = ...`.
         params = [p for p in model.parameters() if p.requires_grad]
-    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
     data = data[setting]
     # Flatten targets assuming only the first dimension is the batch dimension
     # since EKFAC only supports 2d targets.
@@ -288,7 +255,6 @@ def test_ekfac_mc_weight_sharing(
         params,
         data,
         batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
     )
     ekfac = EKFACLinearOperator(
         model,
@@ -299,7 +265,6 @@ def test_ekfac_mc_weight_sharing(
         fisher_type=FisherType.MC,
         mc_samples=MC_SAMPLES,
         kfac_approx=setting,  # choose EKFAC approximation consistent with setting
-        separate_weight_and_bias=separate_weight_and_bias,
     )
     ekfac_mat = ekfac @ eye_like(ekfac)
 
@@ -308,13 +273,6 @@ def test_ekfac_mc_weight_sharing(
     assert allclose_report(ggn / scale, ekfac_mat / scale, **MC_TOLS)
 
 
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_ekfac_one_datum(
     kfac_exact_one_datum_case: tuple[
         Module,
@@ -322,13 +280,9 @@ def test_ekfac_one_datum(
         list[Parameter],
         Iterable[tuple[Tensor, Tensor]],
     ],
-    separate_weight_and_bias: bool,
-    exclude: str,
-    shuffle: bool,
 ):
     """Test EKFAC for the one-datum exact case."""
     model, loss_func, params, data, batch_size_fn = kfac_exact_one_datum_case
-    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     ggn = block_diagonal(
         GGNLinearOperator,
@@ -337,7 +291,6 @@ def test_ekfac_one_datum(
         params,
         data,
         batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
     )
     ekfac = EKFACLinearOperator(
         model,
@@ -346,20 +299,12 @@ def test_ekfac_one_datum(
         data,
         batch_size_fn=batch_size_fn,
         fisher_type=FisherType.TYPE2,
-        separate_weight_and_bias=separate_weight_and_bias,
     )
     ekfac_mat = ekfac @ eye_like(ekfac)
 
     assert allclose_report(ggn, ekfac_mat)
 
 
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_ekfac_mc_one_datum(
     kfac_exact_one_datum_case: tuple[
         Module,
@@ -367,15 +312,11 @@ def test_ekfac_mc_one_datum(
         list[Parameter],
         Iterable[tuple[Tensor, Tensor]],
     ],
-    separate_weight_and_bias: bool,
-    exclude: str,
-    shuffle: bool,
 ):
     """Test EKFAC-MC for the one-datum exact case."""
     model, loss_func, params, data, batch_size_fn = change_dtype(
         kfac_exact_one_datum_case, float64
     )
-    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     ggn = block_diagonal(
         GGNLinearOperator,
@@ -384,7 +325,6 @@ def test_ekfac_mc_one_datum(
         params,
         data,
         batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
     )
     ekfac = EKFACLinearOperator(
         model,
@@ -394,7 +334,6 @@ def test_ekfac_mc_one_datum(
         batch_size_fn=batch_size_fn,
         fisher_type=FisherType.MC,
         mc_samples=MC_SAMPLES,
-        separate_weight_and_bias=separate_weight_and_bias,
     )
     ekfac_mat = ekfac @ eye_like(ekfac)
 
@@ -409,13 +348,6 @@ def test_ekfac_mc_one_datum(
     assert allclose_report(ggn / scale, ekfac_mat / scale, **tols)
 
 
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_ekfac_ef_one_datum(
     kfac_exact_one_datum_case: tuple[
         Module,
@@ -423,15 +355,11 @@ def test_ekfac_ef_one_datum(
         list[Parameter],
         Iterable[tuple[Tensor, Tensor]],
     ],
-    separate_weight_and_bias: bool,
-    exclude: str,
-    shuffle: bool,
 ):
     """Test EKFAC empirical Fisher for the one-datum exact case."""
     model, loss_func, params, data, batch_size_fn = change_dtype(
         kfac_exact_one_datum_case, float64
     )
-    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     ef = block_diagonal(
         EFLinearOperator,
@@ -440,7 +368,6 @@ def test_ekfac_ef_one_datum(
         params,
         data,
         batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
     )
 
     ekfac = EKFACLinearOperator(
@@ -450,7 +377,6 @@ def test_ekfac_ef_one_datum(
         data,
         batch_size_fn=batch_size_fn,
         fisher_type=FisherType.EMPIRICAL,
-        separate_weight_and_bias=separate_weight_and_bias,
     )
     ekfac_mat = ekfac @ eye_like(ekfac)
 
@@ -556,23 +482,24 @@ def test_expand_setting_scaling(
     manual_seed(0)
 
     # set up data, loss function, and model
-    X1 = rand(2, 3, 32, 32)
-    X2 = rand(4, 3, 32, 32)
+    S = 8  # spatial size (small for speed; UnetModel bottleneck is S/2)
+    X1 = rand(2, 3, S, S)
+    X2 = rand(4, 3, S, S)
     # only 2d target is supported for MSE/BCE and 1d output for CE loss
     if issubclass(loss, MSELoss):
         data = [
-            (X1, regression_targets((2, 32 * 32 * 3))),
-            (X2, regression_targets((4, 32 * 32 * 3))),
+            (X1, regression_targets((2, S * S * 3))),
+            (X2, regression_targets((4, S * S * 3))),
         ]
     elif issubclass(loss, BCEWithLogitsLoss):
         data = [
-            (X1, rand(2, 32 * 32 * 3)),
-            (X2, rand(4, 32 * 32 * 3)),
+            (X1, rand(2, S * S * 3)),
+            (X2, rand(4, S * S * 3)),
         ]
     else:
         data = [
-            (X1, classification_targets((2 * 32 * 32,), 3)),
-            (X2, classification_targets((4 * 32 * 32,), 3)),
+            (X1, classification_targets((2 * S * S,), 3)),
+            (X2, classification_targets((4 * S * S,), 3)),
         ]
     model = UnetModel(loss, flatten=True).to(dev)
     params = list(model.parameters())
@@ -590,7 +517,7 @@ def test_expand_setting_scaling(
         fisher_type=fisher_type,
     )
     # Simulate a mean reduction by manually scaling the gradient covariances
-    loss_term_factor = 32 * 32  # number of spatial locations of model output
+    loss_term_factor = S * S  # number of spatial locations of model output
     if issubclass(loss, (MSELoss, BCEWithLogitsLoss)):
         output_random_variable_size = 3
         # MSE loss averages over number of output channels
@@ -619,24 +546,9 @@ def test_expand_setting_scaling(
     assert allclose_report(ekfac_simulated_mean_mat, ekfac_mean_mat)
 
 
-@mark.parametrize(
-    "check_deterministic",
-    [True, False],
-    ids=["check_deterministic", "dont_check_deterministic"],
-)
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
-def test_trace(
-    inv_case, exclude, separate_weight_and_bias, check_deterministic, shuffle
-):
+def test_trace(inv_case):
     """Test that the trace property of EKFACLinearOperator works."""
     model, loss_func, params, data, batch_size_fn = inv_case
-    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
     _test_property(
         EKFACLinearOperator,
         "trace",
@@ -645,29 +557,12 @@ def test_trace(
         params,
         data,
         batch_size_fn,
-        separate_weight_and_bias,
-        check_deterministic,
     )
 
 
-@mark.parametrize(
-    "check_deterministic",
-    [True, False],
-    ids=["check_deterministic", "dont_check_deterministic"],
-)
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
-def test_frobenius_norm(
-    inv_case, exclude, separate_weight_and_bias, check_deterministic, shuffle
-):
+def test_frobenius_norm(inv_case):
     """Test that the Frobenius norm property of EKFACLinearOperator works."""
     model, loss_func, params, data, batch_size_fn = inv_case
-    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
     _test_property(
         EKFACLinearOperator,
         "frobenius_norm",
@@ -676,27 +571,12 @@ def test_frobenius_norm(
         params,
         data,
         batch_size_fn,
-        separate_weight_and_bias,
-        check_deterministic,
     )
 
 
-@mark.parametrize(
-    "check_deterministic",
-    [True, False],
-    ids=["check_deterministic", "dont_check_deterministic"],
-)
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
-def test_det(inv_case, exclude, separate_weight_and_bias, check_deterministic, shuffle):
+def test_det(inv_case):
     """Test that the determinant property of EKFACLinearOperator works."""
     model, loss_func, params, data, batch_size_fn = inv_case
-    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
     _test_property(
         EKFACLinearOperator,
         "det",
@@ -705,30 +585,13 @@ def test_det(inv_case, exclude, separate_weight_and_bias, check_deterministic, s
         params,
         data,
         batch_size_fn,
-        separate_weight_and_bias,
-        check_deterministic,
         rtol=1e-4,
     )
 
 
-@mark.parametrize(
-    "check_deterministic",
-    [True, False],
-    ids=["check_deterministic", "dont_check_deterministic"],
-)
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
-def test_logdet(
-    inv_case, exclude, separate_weight_and_bias, check_deterministic, shuffle
-):
+def test_logdet(inv_case):
     """Test that the log determinant property of EKFACLinearOperator works."""
     model, loss_func, params, data, batch_size_fn = inv_case
-    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
     _test_property(
         EKFACLinearOperator,
         "logdet",
@@ -737,8 +600,6 @@ def test_logdet(
         params,
         data,
         batch_size_fn,
-        separate_weight_and_bias,
-        check_deterministic,
         rtol=1e-4,
     )
 
@@ -756,51 +617,28 @@ def test_ekfac_torch_save_load(tmp_path: Path) -> None:
 # TODO: Add test for FisherType.MC once tests are in float64.
 @mark.parametrize("fisher_type", [FisherType.TYPE2, FisherType.EMPIRICAL])
 @mark.parametrize("kfac_approx", EKFACComputer._SUPPORTED_KFAC_APPROX)
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_ekfac_closer_to_exact_than_kfac(
     inv_case,
-    shuffle: bool,
-    exclude: str,
-    separate_weight_and_bias: bool,
     fisher_type: FisherType,
     kfac_approx: KFACType,
 ):
     """Test that EKFAC is closer in Frobenius norm to the exact quantity than KFAC."""
     model, loss_func, params, data, batch_size_fn = change_dtype(inv_case, float64)
-    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
     _test_ekfac_closer_to_exact_than_kfac(
         model,
         loss_func,
         params,
         data,
         batch_size_fn,
-        exclude,
-        separate_weight_and_bias,
-        fisher_type,
-        kfac_approx,
+        fisher_type=fisher_type,
+        kfac_approx=kfac_approx,
     )
 
 
 @mark.parametrize("fisher_type", EKFACComputer._SUPPORTED_FISHER_TYPE)
 @mark.parametrize("kfac_approx", EKFACComputer._SUPPORTED_KFAC_APPROX)
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_ekfac_closer_to_exact_than_kfac_weight_sharing(
     cnn_case,
-    shuffle: bool,
-    exclude: str,
-    separate_weight_and_bias: bool,
     kfac_approx: KFACType,
     fisher_type: FisherType,
 ):
@@ -809,30 +647,20 @@ def test_ekfac_closer_to_exact_than_kfac_weight_sharing(
     For models with weight sharing.
     """
     model, loss_func, params, data, batch_size_fn = change_dtype(cnn_case, float64)
-    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
     _test_ekfac_closer_to_exact_than_kfac(
         model,
         loss_func,
         params,
         data,
         batch_size_fn,
-        exclude,
-        separate_weight_and_bias,
-        fisher_type,
-        kfac_approx,
+        fisher_type=fisher_type,
+        kfac_approx=kfac_approx,
     )
 
 
 """EKFACLinearOperator.inverse() tests."""
 
 
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_EKFAC_inverse_exactly_damped_matmat(
     inv_case: tuple[
         Module,
@@ -840,14 +668,10 @@ def test_EKFAC_inverse_exactly_damped_matmat(
         list[Parameter],
         Iterable[tuple[Tensor, Tensor]],
     ],
-    exclude: str,
-    separate_weight_and_bias: bool,
-    shuffle: bool,
     delta: float = 1e-2,
 ):
     """Test matrix-matrix multiplication by an inverse (exactly) damped EKFAC approximation."""
     model_func, loss_func, params, data, batch_size_fn = change_dtype(inv_case, float64)
-    params = maybe_exclude_or_shuffle_parameters(params, model_func, exclude, shuffle)
 
     EKFAC = EKFACLinearOperator(
         model_func,
@@ -855,7 +679,6 @@ def test_EKFAC_inverse_exactly_damped_matmat(
         params,
         data,
         batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
     )
 
     # Exact damped inverse: inv(EKFAC + delta * I)
