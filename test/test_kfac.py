@@ -609,25 +609,25 @@ def test_expand_setting_scaling(
     """
     manual_seed(0)
 
-    # set up data, loss function, and model
-    X1 = rand(2, 3, 32, 32)
-    X2 = rand(4, 3, 32, 32)
+    # set up data, loss function, and model (use float64 for numerical precision)
+    X1 = rand(2, 3, 32, 32, dtype=float64)
+    X2 = rand(4, 3, 32, 32, dtype=float64)
     if issubclass(loss, MSELoss):
         data = [
-            (X1, regression_targets((2, 32, 32, 3))),
-            (X2, regression_targets((4, 32, 32, 3))),
+            (X1, regression_targets((2, 32, 32, 3)).double()),
+            (X2, regression_targets((4, 32, 32, 3)).double()),
         ]
     elif issubclass(loss, BCEWithLogitsLoss):
         data = [
-            (X1, rand(2, 32, 32, 3)),
-            (X2, rand(4, 32, 32, 3)),
+            (X1, rand(2, 32, 32, 3, dtype=float64)),
+            (X2, rand(4, 32, 32, 3, dtype=float64)),
         ]
     else:
         data = [
             (X1, classification_targets((2, 32, 32), 3)),
             (X2, classification_targets((4, 32, 32), 3)),
         ]
-    model = UnetModel(loss).to(dev)
+    model = UnetModel(loss).to(dev).double()
     params = list(model.parameters())
 
     # KFAC with sum reduction
