@@ -67,7 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `make_fx` backend for `KFACLinearOperator` via `MakeFxKFACComputer`, which
   computes Kronecker factors using FX graph tracing instead of hooks. Selectable
   via `backend="make_fx"` parameter
-  ([PR](https://github.com/f-dangel/curvlinops/pull/253))
+  ([PR](https://github.com/f-dangel/curvlinops/pull/258))
 
 - Import `FisherType` and `KFACType` directly from `curvlinops.kfac_utils`
   instead of `curvlinops.kfac`, reducing coupling between the linear operator
