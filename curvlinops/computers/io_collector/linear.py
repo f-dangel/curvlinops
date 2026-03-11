@@ -49,10 +49,9 @@ def _find_add_bias(node: Node) -> tuple[Node, Node] | None:
             and len(user.args) == 2
         ):
             lhs, rhs = user.args
-            if lhs == node:
-                return user, rhs
-            if rhs == node:
-                return user, lhs
+            bias = rhs if lhs == node else lhs if rhs == node else None
+            if bias is not None and bias.meta["val"].ndim == 1:
+                return user, bias
 
 
 def _extract_weight(WT: Node) -> Node | str:
@@ -192,7 +191,7 @@ def _match_add_bias(p: Node, add: Node) -> AffineLayerInfo | None:
     Returns:
         ``AffineLayerInfo`` if matched, else ``None``.
     """
-    if len(add.args) != 2:
+    if len(add.args) != 2 or p.meta["val"].ndim != 1:
         return None
     lhs, rhs = add.args
     y_view = lhs if rhs == p else rhs if lhs == p else None
