@@ -13,7 +13,6 @@ from typing import Any
 from einops import einsum
 from torch import Tensor, autograd, eye
 from torch.func import functional_call
-from torch.fx.experimental.proxy_tensor import make_fx
 
 from curvlinops.computers.io_collector import with_kfac_io
 from curvlinops.computers.kfac import KFACComputer
@@ -31,18 +30,18 @@ class MakeFxKFACComputer(KFACComputer):
 
     Uses the IO collector (``with_kfac_io``) to detect affine layers and collect
     their inputs/outputs via ``torch.fx``, then computes Kronecker factors from
-    these collected values. Only the forward pass (IO collection + input
-    covariances) is traced with ``make_fx`` and cached; the backward pass
-    (MC sampling + gradient covariances) runs eagerly.
+    these collected values. The IO-collecting forward pass is traced with
+    ``make_fx`` (inside ``with_kfac_io``) and cached by batch size; the backward
+    pass (MC sampling + gradient covariances) runs eagerly.
     """
 
     def _compute_kronecker_factors(self) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
         """Compute KFAC's Kronecker factors using FX graph tracing.
 
-        The forward pass (IO collection + input covariances) is traced with
-        ``make_fx`` and cached by batch size. The backward pass (MC sampling +
-        gradient covariances) runs eagerly to avoid ``make_fx`` tracing issues
-        with ``torch._C.Generator``.
+        The IO-collecting forward pass (from ``with_kfac_io``) is cached by
+        batch size. Input covariances are computed from the collected layer
+        inputs. The backward pass (MC sampling + gradient covariances) runs
+        eagerly to avoid ``make_fx`` tracing issues with ``torch._C.Generator``.
 
         Returns:
             Tuple containing (input_covariances, gradient_covariances) dictionaries.
@@ -53,12 +52,6 @@ class MakeFxKFACComputer(KFACComputer):
         def f(x, params: dict[str, Tensor]) -> Tensor:
             return functional_call(self._model_func, params, (x,))
 
-        # Set up dictionaries for the covariances that will be populated
-        input_covariances: dict[str, Tensor] = {}
-        gradient_covariances: dict[str, Tensor] = {}
-
-        self._generator = _seed_generator(self._generator, self.device, self._seed)
-
         # N_data normalization is applied eagerly here, outside the traced forward
         # pass, rather than inside the per-batch computation (as the hooks backend
         # does). This keeps the traced function purely per-batch, with the global
@@ -68,44 +61,72 @@ class MakeFxKFACComputer(KFACComputer):
             "mean": 1.0 / self._N_data,
         }[self._loss_func.reduction]
 
-        traced_forward_fns: dict[int, Callable] = {}
+        traced_io_fns: dict[int, Callable] = {}
         io_to_module: dict[str, str] | None = None
         layer_hparams: dict[str, dict[str, Any]] | None = None
 
+        # Set up dictionaries for the covariances that will be populated
+        input_covariances: dict[str, Tensor] = {}
+        gradient_covariances: dict[str, Tensor] = {}
+
+        self._generator = _seed_generator(self._generator, self.device, self._seed)
+
         for X, y in self._loop_over_data(desc="KFAC matrices"):
+
+            # TODO
             batch_size = self._batch_size_fn(X)
-            if batch_size not in traced_forward_fns:
-                f_io, layer_param_names, layer_hparams_ = with_kfac_io(
+            if batch_size not in traced_io_fns:
+                f_io, layer_param_names, layer_hparams = with_kfac_io(
                     f, X, named_params, self._fisher_type
                 )
                 # Extract layer info on first trace
                 if io_to_module is None:
                     io_to_module = self._build_io_to_module(layer_param_names)
-                    layer_hparams = layer_hparams_
-                forward_fn = self._make_forward_fn(f_io, io_to_module, layer_hparams)
-                traced_forward_fns[batch_size] = make_fx(forward_fn)(
-                    named_params, X
+                traced_io_fns[batch_size] = f_io
+
+            # Phase 1: Forward pass (IO collection) + input covariances
+            output, layer_inputs, layer_outputs = traced_io_fns[batch_size](
+                X, named_params
+            )
+
+            for io_layer_name, x in layer_inputs.items():
+                mod_name = io_to_module[io_layer_name]
+                has_joint_wb = _has_joint_weight_and_bias(
+                    self._separate_weight_and_bias, self._mapping[mod_name]
                 )
-
-            # Phase 1: Traced forward + input covariances
-            traced_forward = traced_forward_fns[batch_size]
-            input_covs, output, layer_outputs = traced_forward(named_params, X)
-
-            for key, val in input_covs.items():
-                self._set_or_add_(input_covariances, key, val.div_(self._N_data))
+                x = input_to_weight_sharing_format(
+                    x.data.detach(),
+                    self._kfac_approx,
+                    layer_hyperparams=layer_hparams[io_layer_name],
+                    append_ones_for_bias=has_joint_wb,
+                )
+                scale = x.shape[1]
+                xxT = einsum(x, x, "batch shared i, batch shared j -> i j")
+                self._set_or_add_(
+                    input_covariances, mod_name, xxT.div_(scale * self._N_data)
+                )
 
             # Phase 2: Eager backward + gradient covariances
             if self._fisher_type != FisherType.FORWARD_ONLY:
                 io_layer_names, batched_grads = self._compute_batched_grads(
                     output, y, layer_outputs, io_to_module
                 )
-                for io_layer_name, batched_g in zip(io_layer_names, batched_grads):
-                    mod_name, ggT = self._gradient_covariance_from_io(
-                        io_layer_name,
-                        batched_g,
-                        io_to_module[io_layer_name],
-                        layer_hparams,
+                for io_layer_name, g in zip(io_layer_names, batched_grads):
+                    mod_name = io_to_module[io_layer_name]
+                    g = grad_to_weight_sharing_format(
+                        g.data.detach(),
+                        self._kfac_approx,
+                        layer_hyperparams=layer_hparams[io_layer_name],
+                        num_leading_dims=2,
                     )
+                    correction = compute_loss_correction(
+                        g.shape[1],
+                        self._num_per_example_loss_terms,
+                        self._loss_func.reduction,
+                    )
+                    ggT = einsum(
+                        g, g, "v batch shared i, v batch shared j -> i j"
+                    ).mul_(correction)
                     self._set_or_add_(
                         gradient_covariances, mod_name, ggT.mul_(grad_normalization)
                     )
@@ -119,87 +140,6 @@ class MakeFxKFACComputer(KFACComputer):
                 )
 
         return input_covariances, gradient_covariances
-
-    def _input_covariance_from_io(
-        self,
-        io_layer_name: str,
-        x: Tensor,
-        module_name: str,
-        layer_hyperparams: dict[str, dict[str, Any]],
-    ) -> tuple[str, Tensor]:
-        """Compute the input covariance for one layer from collected IO.
-
-        Returns the unnormalized covariance (not divided by ``_N_data``).
-
-        Args:
-            io_layer_name: IO collector layer name.
-            x: The collected layer input tensor.
-            module_name: Module name in ``self._mapping``.
-            layer_hyperparams: Hyperparameters from IO collector.
-
-        Returns:
-            Tuple of (module_name, covariance).
-        """
-        x = x.data.detach()
-
-        params = self._mapping[module_name]
-        has_joint_wb = _has_joint_weight_and_bias(
-            self._separate_weight_and_bias, params
-        )
-
-        x = input_to_weight_sharing_format(
-            x,
-            self._kfac_approx,
-            layer_hyperparams=layer_hyperparams[io_layer_name],
-            append_ones_for_bias=has_joint_wb,
-        )
-        scale = x.shape[1]
-        covariance = einsum(x, x, "batch shared i, batch shared j -> i j").div_(scale)
-        return module_name, covariance
-
-    def _gradient_covariance_from_io(
-        self,
-        io_layer_name: str,
-        g: Tensor,
-        module_name: str,
-        layer_hyperparams: dict[str, dict[str, Any]],
-    ) -> tuple[str, Tensor]:
-        """Compute the gradient covariance for one layer from batched VJPs.
-
-        Expects ``g`` to have shape ``[num_vectors, batch, ...]`` from a batched
-        backward pass (``is_grads_batched=True``). Sums the outer products over
-        both the vector and batch dimensions.
-
-        Returns the unnormalized covariance (not divided by ``_N_data``).
-        The batch-local correction for ``"mean"`` reduction uses
-        ``num_loss_terms² / num_per_example_loss_terms`` (without ``_N_data``).
-
-        Args:
-            io_layer_name: IO collector layer name.
-            g: Batched gradients at the layer's output with shape
-                ``[num_vectors, batch, ...]``.
-            module_name: Module name in ``self._mapping``.
-            layer_hyperparams: Hyperparameters from IO collector.
-
-        Returns:
-            Tuple of (module_name, gradient_covariance).
-        """
-        g = g.data.detach()
-        batch_size = g.shape[1]
-
-        g = grad_to_weight_sharing_format(
-            g,
-            self._kfac_approx,
-            layer_hyperparams=layer_hyperparams[io_layer_name],
-            num_leading_dims=2,
-        )
-
-        correction = compute_loss_correction(
-            batch_size, self._num_per_example_loss_terms, self._loss_func.reduction
-        )
-
-        ggT = einsum(g, g, "v batch shared i, v batch shared j -> i j").mul_(correction)
-        return module_name, ggT
 
     @staticmethod
     def _build_io_to_module(
@@ -265,44 +205,3 @@ class MakeFxKFACComputer(KFACComputer):
             is_grads_batched=True,
         )
         return io_layer_names, batched_grads
-
-    def _make_forward_fn(
-        self,
-        f_with_kfac_io: Callable,
-        io_to_module: dict[str, str],
-        layer_hparams: dict[str, dict[str, Any]],
-    ) -> Callable:
-        """Build a function for the traced forward pass.
-
-        The returned function runs the forward pass (IO collection) and computes
-        input covariances. It is traced with ``make_fx`` and cached by batch
-        size. It also returns the model output and layer outputs so that the
-        caller can run the backward pass eagerly.
-
-        Args:
-            f_with_kfac_io: IO-collecting function for a specific batch size.
-            io_to_module: Mapping from IO collector layer names to module names.
-            layer_hparams: Hyperparameters from IO collector.
-
-        Returns:
-            A function ``(params, X) -> (input_covs, output, layer_outputs)``.
-        """
-
-        def _forward(
-            params: dict[str, Tensor], X: Tensor
-        ) -> tuple[dict[str, Tensor], Tensor, dict[str, Tensor]]:
-            output, layer_inputs, layer_outputs = f_with_kfac_io(X, params)
-
-            input_covs: dict[str, Tensor] = {}
-            for io_layer_name, x in layer_inputs.items():
-                mod_name, cov = self._input_covariance_from_io(
-                    io_layer_name,
-                    x,
-                    io_to_module[io_layer_name],
-                    layer_hparams,
-                )
-                self._set_or_add_(input_covs, mod_name, cov)
-
-            return input_covs, output, layer_outputs
-
-        return _forward
