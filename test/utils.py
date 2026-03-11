@@ -884,7 +884,6 @@ def _test_ekfac_closer_to_exact_than_kfac(
     params: list[Parameter],
     data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
     batch_size_fn: Callable[[MutableMapping], int] | None,
-    exclude: str,
     separate_weight_and_bias: bool,
     fisher_type: FisherType,
     kfac_approx: bool,
@@ -899,7 +898,6 @@ def _test_ekfac_closer_to_exact_than_kfac(
         batch_size_fn: A function that returns the batch size given a dict-like ``X``.
         separate_weight_and_bias: Whether to treat weight and bias of a layer as
             separate blocks in the block-diagonal.
-        exclude: Parameter to exclude.
         fisher_type: The type of Fisher approximation.
         kfac_approx: THe type of KFAC approximation.
     """
@@ -953,11 +951,7 @@ def _test_ekfac_closer_to_exact_than_kfac(
     exact_norm = linalg.matrix_norm(exact)
     exact_kfac_dist = linalg.matrix_norm(exact - kfac_mat) / exact_norm
     exact_ekfac_dist = linalg.matrix_norm(exact - ekfac_mat) / exact_norm
-    assert exact_kfac_dist > exact_ekfac_dist or (
-        allclose_report(exact_kfac_dist, exact_ekfac_dist)
-        if exclude == "weight"
-        else False
-    )  # For no_weights the numerical error might dominate.
+    assert exact_kfac_dist > exact_ekfac_dist
 
 
 def change_dtype(case: tuple, dt: dtype) -> tuple:
