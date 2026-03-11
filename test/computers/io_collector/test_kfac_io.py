@@ -55,9 +55,11 @@ def _verify_kfac_io(
 
     dummy_x = zeros_like(x)
     dummy_params = {n: zeros_like(p) for n, p in params.items()}
-    f_and_kfac_io = with_kfac_io(f, dummy_x, dummy_params, fisher_type)
+    f_and_kfac_io, layers, hyperparams = with_kfac_io(
+        f, dummy_x, dummy_params, fisher_type
+    )
 
-    y, inputs, outputs, layers, hyperparams = f_and_kfac_io(x, params)
+    y, inputs, outputs = f_and_kfac_io(x, params)
 
     # Compare function value
     assert allclose_report(y, y_true)
@@ -373,7 +375,7 @@ def test_kfac_io_flatten_requires_per_batch_size_tracing():
     x_batch5 = rand(5, 2, 3)
 
     # with_kfac_io traced with batch=2 works for batch=2
-    f_kfac_io = with_kfac_io(f, x_batch2, params, FisherType.EMPIRICAL)
+    f_kfac_io, *_ = with_kfac_io(f, x_batch2, params, FisherType.EMPIRICAL)
     out2, *_ = f_kfac_io(x_batch2, params)
     assert out2.shape[0] == 2
 
@@ -382,6 +384,6 @@ def test_kfac_io_flatten_requires_per_batch_size_tracing():
         f_kfac_io(x_batch5, params)
 
     # A separate IO function traced with batch=5 works for batch=5
-    f_kfac_io_5 = with_kfac_io(f, x_batch5, params, FisherType.EMPIRICAL)
+    f_kfac_io_5, *_ = with_kfac_io(f, x_batch5, params, FisherType.EMPIRICAL)
     out5, *_ = f_kfac_io_5(x_batch5, params)
     assert out5.shape[0] == 5

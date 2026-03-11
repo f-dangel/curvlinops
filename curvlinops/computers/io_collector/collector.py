@@ -39,13 +39,13 @@ ParamIOFunction: TypeAlias = Callable[
 ]
 KFACIOFunction: TypeAlias = Callable[
     [Tensor, dict[str, Tensor]],
-    tuple[
-        Tensor,
-        dict[str, Tensor],
-        dict[str, Tensor],
-        dict[str, dict[str, str]],
-        dict[str, dict[str, Any]],
-    ],
+    tuple[Tensor, dict[str, Tensor], dict[str, Tensor]],
+]
+
+KFACIOResult: TypeAlias = tuple[
+    KFACIOFunction,
+    dict[str, dict[str, str]],
+    dict[str, dict[str, Any]],
 ]
 
 
@@ -263,13 +263,16 @@ def with_kfac_io(
     x: Tensor,
     named_params: dict[str, Tensor],
     fisher_type: FisherType,
-) -> KFACIOFunction:
+) -> KFACIOResult:
     """Return a function that collects layer inputs/outputs for KFAC computation.
 
     This function analyzes the provided function to detect affine layer operations
     (linear layers and 2D convolutions) and returns a traced version that collects
     the inputs and outputs needed for KFAC (Kronecker-Factored Approximate Curvature)
     computation alongside the original function output.
+
+    Layer metadata (parameter names and hyperparameters) is extracted statically from
+    the FX graph and returned directly, without requiring a forward pass.
 
     Args:
         f: Function to trace and augment with KFAC IO collection. Should have signature
@@ -281,10 +284,8 @@ def with_kfac_io(
             ``FisherType.EMPIRICAL``, ``FisherType.FORWARD_ONLY``).
 
     Returns:
-        A traced function with the same signature as f but returning a 5-tuple:
-            - Original function output (Tensor)
-            - Layer inputs (dict[str, Tensor]): Maps layer names to input tensors
-            - Layer outputs (dict[str, Tensor]): Maps layer names to output tensors
+        A 3-tuple containing:
+            - A traced function returning ``(output, layer_inputs, layer_outputs)``
             - Layer parameter names (dict[str, dict[str, str]]): Maps layer names to
               parameter name mappings (e.g., {"weight": "conv1.weight", "bias": "conv1.bias"})
             - Layer hyperparameters (dict[str, dict[str, Any]]): Maps layer names to
@@ -329,22 +330,11 @@ def with_kfac_io(
 
     def f_and_kfac_io(
         x: Tensor, params: dict[str, Tensor]
-    ) -> tuple[
-        Tensor,
-        dict[str, Tensor],
-        dict[str, Tensor],
-        dict[str, dict[str, str]],
-        dict[str, dict[str, Any]],
-    ]:
-        """Evaluate the function and return all relevant in/outputs for KFAC.
+    ) -> tuple[Tensor, dict[str, Tensor], dict[str, Tensor]]:
+        """Evaluate the function and return layer inputs/outputs for KFAC.
 
         Returns:
-            Tuple containing:
-                - Original function output
-                - Layer inputs (dict mapping layer names to input tensors)
-                - Layer outputs (dict mapping layer names to output tensors)
-                - Layer parameter names (dict mapping layer names to param name dicts)
-                - Layer hyperparameters (dict mapping layer names to hyperparameter dicts)
+            Tuple of ``(output, layer_inputs, layer_outputs)``.
         """
         # Evaluate the function and its param IOs
         out_with_io = f_with_param_io(x, params)
@@ -364,6 +354,6 @@ def with_kfac_io(
             if store_output:
                 layer_outputs[layer_name] = y
 
-        return (out, layer_inputs, layer_outputs, layer_names, layer_hyperparams)
+        return (out, layer_inputs, layer_outputs)
 
-    return make_fx(f_and_kfac_io)(x, named_params)
+    return make_fx(f_and_kfac_io)(x, named_params), layer_names, layer_hyperparams
