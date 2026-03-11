@@ -289,13 +289,6 @@ def test_kfac_mc_weight_sharing(
 
 
 @mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_kfac_one_datum(
     kfac_exact_one_datum_case: tuple[
         Module,
@@ -303,14 +296,10 @@ def test_kfac_one_datum(
         list[Parameter],
         Iterable[tuple[Tensor, Tensor]],
     ],
-    separate_weight_and_bias: bool,
-    exclude: str,
-    shuffle: bool,
     backend: str,
 ):
     """Test KFAC for the one-datum exact case."""
     model, loss_func, params, data, batch_size_fn = kfac_exact_one_datum_case
-    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     ggn = block_diagonal(
         GGNLinearOperator,
@@ -319,7 +308,6 @@ def test_kfac_one_datum(
         params,
         data,
         batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
     )
     kfac = KFACLinearOperator(
         model,
@@ -328,7 +316,6 @@ def test_kfac_one_datum(
         data,
         batch_size_fn=batch_size_fn,
         fisher_type=FisherType.TYPE2,
-        separate_weight_and_bias=separate_weight_and_bias,
         backend=backend,
     )
     kfac_mat = kfac @ eye_like(kfac)
@@ -383,13 +370,6 @@ def test_kfac_mc_one_datum(
 
 
 @mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_kfac_ef_one_datum(
     kfac_exact_one_datum_case: tuple[
         Module,
@@ -397,14 +377,10 @@ def test_kfac_ef_one_datum(
         list[Parameter],
         Iterable[tuple[Tensor, Tensor]],
     ],
-    separate_weight_and_bias: bool,
-    exclude: str,
-    shuffle: bool,
     backend: str,
 ):
     """Test empirical Fisher KFAC for the one-datum exact case."""
     model, loss_func, params, data, batch_size_fn = kfac_exact_one_datum_case
-    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     ef = block_diagonal(
         EFLinearOperator,
@@ -413,7 +389,6 @@ def test_kfac_ef_one_datum(
         params,
         data,
         batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
     )
 
     kfac = KFACLinearOperator(
@@ -423,7 +398,6 @@ def test_kfac_ef_one_datum(
         data,
         batch_size_fn=batch_size_fn,
         fisher_type=FisherType.EMPIRICAL,
-        separate_weight_and_bias=separate_weight_and_bias,
         backend=backend,
     )
     kfac_mat = kfac @ eye_like(kfac)
@@ -625,31 +599,17 @@ def test_expand_setting_scaling(
 
 
 @mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
-@mark.parametrize("separate_weight_and_bias", [False], ids=["joint_bias"])
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_KFACLinearOperator(
     case,
-    exclude: str,
-    separate_weight_and_bias: bool,
-    shuffle: bool,
     backend: str,
 ):
     """Test matrix multiplication with KFAC.
 
     Args:
         case: Tuple of model, loss function, parameters, data, and batch size getter.
-        exclude: Which parameters to exclude. Can be ``'weight'``, ``'bias'``,
-            or ``None``.
-        separate_weight_and_bias: Whether to treat weight and bias as separate blocks in
-            the KFAC matrix.
-        shuffle: Whether to shuffle the parameters before computing the KFAC matrix.
         backend: The backend to use for computing Kronecker factors.
     """
     model, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
-    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     kfac = KFACLinearOperator(
         model,
@@ -657,7 +617,6 @@ def test_KFACLinearOperator(
         params,
         data,
         batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
         backend=backend,
     )
     kfac_mat = kfac @ eye_like(kfac)

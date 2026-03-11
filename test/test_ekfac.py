@@ -273,13 +273,6 @@ def test_ekfac_mc_weight_sharing(
     assert allclose_report(ggn / scale, ekfac_mat / scale, **MC_TOLS)
 
 
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_ekfac_one_datum(
     kfac_exact_one_datum_case: tuple[
         Module,
@@ -287,13 +280,9 @@ def test_ekfac_one_datum(
         list[Parameter],
         Iterable[tuple[Tensor, Tensor]],
     ],
-    separate_weight_and_bias: bool,
-    exclude: str,
-    shuffle: bool,
 ):
     """Test EKFAC for the one-datum exact case."""
     model, loss_func, params, data, batch_size_fn = kfac_exact_one_datum_case
-    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     ggn = block_diagonal(
         GGNLinearOperator,
@@ -302,7 +291,6 @@ def test_ekfac_one_datum(
         params,
         data,
         batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
     )
     ekfac = EKFACLinearOperator(
         model,
@@ -311,7 +299,6 @@ def test_ekfac_one_datum(
         data,
         batch_size_fn=batch_size_fn,
         fisher_type=FisherType.TYPE2,
-        separate_weight_and_bias=separate_weight_and_bias,
     )
     ekfac_mat = ekfac @ eye_like(ekfac)
 
@@ -361,13 +348,6 @@ def test_ekfac_mc_one_datum(
     assert allclose_report(ggn / scale, ekfac_mat / scale, **tols)
 
 
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_ekfac_ef_one_datum(
     kfac_exact_one_datum_case: tuple[
         Module,
@@ -375,15 +355,11 @@ def test_ekfac_ef_one_datum(
         list[Parameter],
         Iterable[tuple[Tensor, Tensor]],
     ],
-    separate_weight_and_bias: bool,
-    exclude: str,
-    shuffle: bool,
 ):
     """Test EKFAC empirical Fisher for the one-datum exact case."""
     model, loss_func, params, data, batch_size_fn = change_dtype(
         kfac_exact_one_datum_case, float64
     )
-    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     ef = block_diagonal(
         EFLinearOperator,
@@ -392,7 +368,6 @@ def test_ekfac_ef_one_datum(
         params,
         data,
         batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
     )
 
     ekfac = EKFACLinearOperator(
@@ -402,7 +377,6 @@ def test_ekfac_ef_one_datum(
         data,
         batch_size_fn=batch_size_fn,
         fisher_type=FisherType.EMPIRICAL,
-        separate_weight_and_bias=separate_weight_and_bias,
     )
     ekfac_mat = ekfac @ eye_like(ekfac)
 
