@@ -21,6 +21,7 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         make install-test
+        python -m pip install pytest-xdist
     - name: Restore pytest cache
       uses: actions/cache@v4
       with:
@@ -28,9 +29,12 @@ jobs:
         key: pytest-cache-${{ github.ref }}-${{ matrix.python-version }}
         restore-keys: |
           pytest-cache-refs/heads/main-${{ matrix.python-version }}
-    - name: Run test
+    - name: Run doctests
       run: |
-        make test
+        pytest --doctest-modules curvlinops
+    - name: Run tests
+      run: |
+        pytest -vx --ff --cov=curvlinops -n auto test
 
     - name: Test coveralls - python ${{ matrix.python-version }}
       run: coveralls --service=github
