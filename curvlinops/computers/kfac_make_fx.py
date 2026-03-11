@@ -202,14 +202,13 @@ class MakeFxKFACComputer(KFACComputer):
         """
         output, y = self._rearrange_for_larger_than_2d_output(output, y)
 
-        io_layer_names = [n for n in io_to_module if n in layer_outputs]
-        output_tensors = [layer_outputs[n] for n in io_layer_names]
-
         grad_outputs = self._grad_outputs_computer(output.detach(), y, self._generator)
         num_loss_terms = output.shape[0]
         scale = {"sum": 1.0, "mean": 1.0 / num_loss_terms}[self._loss_func.reduction]
         grad_outputs.mul_(scale)
 
+        io_layer_names = [n for n in io_to_module if n in layer_outputs]
+        output_tensors = [layer_outputs[n] for n in io_layer_names]
         layer_output_grads = autograd.grad(
             output,
             output_tensors,
