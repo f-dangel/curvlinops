@@ -139,7 +139,8 @@ def test_convolution():
 
     x = rand(N, C_in, I1, I2)
     params = {"weight": rand(C_out, C_in, K1, K2), "bias": rand(C_out)}
-    io_true = ((CONV_STR, f(x, params), x, "weight", "bias", CONV2D_DEFAULT_PARAMS),)
+    hparams = {**CONV2D_DEFAULT_PARAMS, "kernel_size": [K1, K2]}
+    io_true = ((CONV_STR, f(x, params), x, "weight", "bias", hparams),)
     _verify_io(f, x, params, io_true)
 
     # 2) Non-standard convolution with weight and bias
@@ -153,7 +154,9 @@ def test_convolution():
     params = {"weight": rand(C_out, C_in, K1, K2), "bias": rand(C_out)}
     hyperparams_true = {
         **CONV2D_DEFAULT_PARAMS,
-        **{"stride": [2, 2], "padding": [1, 1]},
+        "kernel_size": [K1, K2],
+        "stride": [2, 2],
+        "padding": [1, 1],
     }
     io_true = ((CONV_STR, f(x, params), x, "weight", "bias", hyperparams_true),)
     _verify_io(f, x, params, io_true)
@@ -164,7 +167,8 @@ def test_convolution():
 
     x = rand(N, C_in, I1, I2)
     params = {"weight": rand(C_out, C_in, K1, K2)}
-    io_true = ((CONV_STR, f(x, params), x, "weight", None, CONV2D_DEFAULT_PARAMS),)
+    hparams = {**CONV2D_DEFAULT_PARAMS, "kernel_size": [K1, K2]}
+    io_true = ((CONV_STR, f(x, params), x, "weight", None, hparams),)
     _verify_io(f, x, params, io_true)
 
     # 4) Use torch.nn nn
@@ -173,7 +177,11 @@ def test_convolution():
     def f(x: Tensor, params: dict) -> Tensor:
         return functional_call(conv, params, x)
 
-    hyperparams_true = {**CONV2D_DEFAULT_PARAMS, **{"stride": [2, 1]}}
+    hyperparams_true = {
+        **CONV2D_DEFAULT_PARAMS,
+        "kernel_size": [K1, K2],
+        "stride": [2, 1],
+    }
     x, params = (rand(N, C_in, I1, I2), {"weight": rand(C_out, C_in, K1, K2)})
     io_true = ((CONV_STR, f(x, params), x, "weight", None, hyperparams_true),)
     _verify_io(f, x, params, io_true)
