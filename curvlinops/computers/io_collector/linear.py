@@ -70,7 +70,9 @@ def _extract_weight(WT: Node) -> Node | str:
     return NOT_A_PARAM
 
 
-def _match_addmm_weight(p: Node, pT: Node, addmm: Node) -> AffineLayerInfo | None:
+def _match_addmm_weight(
+    p: Node, pT: Node, addmm: Node
+) -> tuple[AffineLayerInfo, tuple[Node, ...]] | None:
     """Match ``addmm(bias, x, W.T)`` or ``view → addmm → view`` from weight side.
 
     Args:
@@ -79,7 +81,8 @@ def _match_addmm_weight(p: Node, pT: Node, addmm: Node) -> AffineLayerInfo | Non
         addmm: A candidate ``aten.addmm`` node.
 
     Returns:
-        ``AffineLayerInfo`` if matched, else ``None``.
+        ``(AffineLayerInfo, extra_path)`` if matched, else ``None``.
+        ``extra_path`` contains nodes after ``addmm`` for verification.
     """
     if len(addmm.args) != 3 or addmm.kwargs:
         return None
@@ -95,14 +98,16 @@ def _match_addmm_weight(p: Node, pT: Node, addmm: Node) -> AffineLayerInfo | Non
         and _is_last_dim_preserving_view(y_view := next(iter(addmm.users)))
     ):
         x, y = x_view.args[0], y_view
-        return AffineLayerInfo(LINEAR_STR, y, p, x, bias, {})
+        return AffineLayerInfo(LINEAR_STR, y, p, x, bias, {}), (y_view,)
 
     # 2D case: no reshapes
     y = addmm
-    return AffineLayerInfo(LINEAR_STR, y, p, x, bias, {})
+    return AffineLayerInfo(LINEAR_STR, y, p, x, bias, {}), ()
 
 
-def _match_mm_weight(p: Node, pT: Node, mm: Node) -> AffineLayerInfo | None:
+def _match_mm_weight(
+    p: Node, pT: Node, mm: Node
+) -> tuple[AffineLayerInfo, tuple[Node, ...]] | None:
     """Match ``mm(x, W.T)`` or ``view → mm → view [→ add]`` from weight side.
 
     Supported patterns::
@@ -118,7 +123,8 @@ def _match_mm_weight(p: Node, pT: Node, mm: Node) -> AffineLayerInfo | None:
         mm: A candidate ``aten.mm`` node.
 
     Returns:
-        ``AffineLayerInfo`` if matched, else ``None``.
+        ``(AffineLayerInfo, extra_path)`` if matched, else ``None``.
+        ``extra_path`` contains nodes after ``mm`` for verification.
     """
     if len(mm.args) != 2 or mm.kwargs:
         return None
@@ -137,20 +143,22 @@ def _match_mm_weight(p: Node, pT: Node, mm: Node) -> AffineLayerInfo | None:
         add_result = _find_add_bias(y_view)
         if add_result is not None:
             y, bias = add_result
-            return AffineLayerInfo(LINEAR_STR, y, p, x, bias, {})
+            return AffineLayerInfo(LINEAR_STR, y, p, x, bias, {}), (y_view, y)
         y = y_view
-        return AffineLayerInfo(LINEAR_STR, y, p, x, None, {})
+        return AffineLayerInfo(LINEAR_STR, y, p, x, None, {}), (y_view,)
 
     # 2D case: mm [→ add]
     add_result = _find_add_bias(mm)
     if add_result is not None:
         y, bias = add_result
-        return AffineLayerInfo(LINEAR_STR, y, p, x, bias, {})
+        return AffineLayerInfo(LINEAR_STR, y, p, x, bias, {}), (y,)
     y = mm
-    return AffineLayerInfo(LINEAR_STR, y, p, x, None, {})
+    return AffineLayerInfo(LINEAR_STR, y, p, x, None, {}), ()
 
 
-def _match_addmm_bias(p: Node, addmm: Node) -> AffineLayerInfo | None:
+def _match_addmm_bias(
+    p: Node, addmm: Node
+) -> tuple[AffineLayerInfo, tuple[Node, ...]] | None:
     """Match ``addmm(bias, x, W.T)`` or ``view → addmm → view`` from bias side.
 
     Args:
@@ -158,7 +166,8 @@ def _match_addmm_bias(p: Node, addmm: Node) -> AffineLayerInfo | None:
         addmm: A candidate ``aten.addmm`` node.
 
     Returns:
-        ``AffineLayerInfo`` if matched, else ``None``.
+        ``(AffineLayerInfo, extra_path)`` if matched, else ``None``.
+        ``extra_path`` contains nodes after ``addmm`` for verification.
     """
     if len(addmm.args) != 3 or addmm.kwargs:
         return None
@@ -175,14 +184,16 @@ def _match_addmm_bias(p: Node, addmm: Node) -> AffineLayerInfo | None:
         and _is_last_dim_preserving_view(y_view := next(iter(addmm.users)))
     ):
         x, y = x_view.args[0], y_view
-        return AffineLayerInfo(LINEAR_STR, y, W, x, bias, {})
+        return AffineLayerInfo(LINEAR_STR, y, W, x, bias, {}), (y_view,)
 
     # 2D case
     y = addmm
-    return AffineLayerInfo(LINEAR_STR, y, W, x, bias, {})
+    return AffineLayerInfo(LINEAR_STR, y, W, x, bias, {}), ()
 
 
-def _match_add_bias(p: Node, add: Node) -> AffineLayerInfo | None:
+def _match_add_bias(
+    p: Node, add: Node
+) -> tuple[AffineLayerInfo, tuple[Node, ...]] | None:
     """Match ``view → mm → view → add(_, bias)`` from the bias side.
 
     This pattern is produced by F.linear for 4D+ inputs with bias.
@@ -192,7 +203,8 @@ def _match_add_bias(p: Node, add: Node) -> AffineLayerInfo | None:
         add: A candidate ``aten.add.Tensor`` node.
 
     Returns:
-        ``AffineLayerInfo`` if matched, else ``None``.
+        ``(AffineLayerInfo, extra_path)`` if matched, else ``None``.
+        ``extra_path`` contains nodes after ``add`` for verification.
     """
     if len(add.args) != 2 or add.kwargs or p.meta["val"].ndim != 1:
         return None
@@ -213,7 +225,7 @@ def _match_add_bias(p: Node, add: Node) -> AffineLayerInfo | None:
 
     W = _extract_weight(WT)
     x, y = x_view.args[0], add
-    return AffineLayerInfo(LINEAR_STR, y, W, x, p, {})
+    return AffineLayerInfo(LINEAR_STR, y, W, x, p, {}), ()
 
 
 class LinearWeightMatcher(_PatternMatcher):
@@ -250,15 +262,18 @@ class LinearWeightMatcher(_PatternMatcher):
                     continue
 
                 if pT_user.target == aten.addmm.default:
-                    info = _match_addmm_weight(p, pT, pT_user)
+                    result = _match_addmm_weight(p, pT, pT_user)
                 elif pT_user.target == aten.mm.default:
-                    info = _match_mm_weight(p, pT, pT_user)
+                    result = _match_mm_weight(p, pT, pT_user)
                 else:
                     continue
 
-                if info is not None:
+                if result is not None:
+                    info, extra_path = result
                     matches.append(info)
-                    paths.append((p, pT, pT_user))
+                    # Extend path with extra nodes so verification covers the
+                    # full pattern (e.g. view chains in >2D F.linear)
+                    paths.append((p, pT, pT_user, *extra_path))
 
         return matches, paths
 
@@ -290,14 +305,17 @@ class LinearBiasMatcher(_PatternMatcher):
                 continue
 
             if p_user.target == aten.addmm.default:
-                info = _match_addmm_bias(p, p_user)
+                result = _match_addmm_bias(p, p_user)
             elif p_user.target == aten.add.Tensor:
-                info = _match_add_bias(p, p_user)
+                result = _match_add_bias(p, p_user)
             else:
                 continue
 
-            if info is not None:
+            if result is not None:
+                info, extra_path = result
                 matches.append(info)
-                paths.append((p, p_user))
+                # Extend path with extra nodes so verification covers the
+                # full pattern (e.g. view chains in >2D F.linear)
+                paths.append((p, p_user, *extra_path))
 
         return matches, paths
