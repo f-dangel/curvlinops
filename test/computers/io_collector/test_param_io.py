@@ -303,13 +303,17 @@ def test_supports_multiple_batch_sizes():
     [(2, 8, 5), (2, 4, 8, 5)],
     ids=["3D", "4D"],
 )
-def test_fully_connected_higher_dim_input(x_shape, bias):
+def test_fully_connected_higher_dim_input(x_shape: tuple[int, ...], bias: bool):
     """Test with_param_io preserves original input shape for >2D Linear inputs.
 
     For 3D inputs, PyTorch decomposes ``F.linear`` as ``view → addmm → view``;
     for 4D+ inputs it uses ``view → mm → _unsafe_view → add(bias)``. The IO
     collector must resolve these paired reshapes to capture the original
     (unflattened) input and output tensors.
+
+    Args:
+        x_shape: Shape of the input tensor (must be >2D).
+        bias: Whether the linear layer has a bias.
     """
     manual_seed(0)
     D_in, D_out = x_shape[-1], 4
