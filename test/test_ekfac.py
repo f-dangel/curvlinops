@@ -557,8 +557,6 @@ def test_trace(inv_case):
         params,
         data,
         batch_size_fn,
-        separate_weight_and_bias=True,
-        check_deterministic=False,
     )
 
 
@@ -573,8 +571,6 @@ def test_frobenius_norm(inv_case):
         params,
         data,
         batch_size_fn,
-        separate_weight_and_bias=True,
-        check_deterministic=False,
     )
 
 
@@ -589,8 +585,6 @@ def test_det(inv_case):
         params,
         data,
         batch_size_fn,
-        separate_weight_and_bias=True,
-        check_deterministic=False,
         rtol=1e-4,
     )
 
@@ -606,8 +600,6 @@ def test_logdet(inv_case):
         params,
         data,
         batch_size_fn,
-        separate_weight_and_bias=True,
-        check_deterministic=False,
         rtol=1e-4,
     )
 
@@ -638,7 +630,6 @@ def test_ekfac_closer_to_exact_than_kfac(
         params,
         data,
         batch_size_fn,
-        separate_weight_and_bias=True,
         fisher_type=fisher_type,
         kfac_approx=kfac_approx,
     )
@@ -662,7 +653,6 @@ def test_ekfac_closer_to_exact_than_kfac_weight_sharing(
         params,
         data,
         batch_size_fn,
-        separate_weight_and_bias=True,
         fisher_type=fisher_type,
         kfac_approx=kfac_approx,
     )

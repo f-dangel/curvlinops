@@ -816,8 +816,8 @@ def _test_property(  # noqa: C901
     params: list[Parameter],
     data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
     batch_size_fn: Callable[[MutableMapping], int] | None,
-    separate_weight_and_bias: bool,
-    check_deterministic: bool,
+    separate_weight_and_bias: bool = True,
+    check_deterministic: bool = False,
     rtol: float = 1e-5,
     atol: float = 1e-8,
     backend: str = "hooks",
@@ -884,9 +884,9 @@ def _test_ekfac_closer_to_exact_than_kfac(
     params: list[Parameter],
     data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
     batch_size_fn: Callable[[MutableMapping], int] | None,
-    separate_weight_and_bias: bool,
     fisher_type: FisherType,
     kfac_approx: bool,
+    separate_weight_and_bias: bool = True,
 ):
     """Test that EKFAC is closer in Frobenius norm to the exact quantity than KFAC.
 
@@ -896,10 +896,10 @@ def _test_ekfac_closer_to_exact_than_kfac(
         params: The parameters w.r.t. which the property will be computed.
         data: A data loader.
         batch_size_fn: A function that returns the batch size given a dict-like ``X``.
+        fisher_type: The type of Fisher approximation.
+        kfac_approx: The type of KFAC approximation.
         separate_weight_and_bias: Whether to treat weight and bias of a layer as
             separate blocks in the block-diagonal.
-        fisher_type: The type of Fisher approximation.
-        kfac_approx: THe type of KFAC approximation.
     """
     # Compute exact block-wise ground truth quantity.
     linop_cls = {

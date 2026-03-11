@@ -637,8 +637,6 @@ def test_trace(case, backend):
         params,
         data,
         batch_size_fn,
-        separate_weight_and_bias=True,
-        check_deterministic=False,
         backend=backend,
     )
 
@@ -655,8 +653,6 @@ def test_frobenius_norm(case, backend):
         params,
         data,
         batch_size_fn,
-        separate_weight_and_bias=True,
-        check_deterministic=False,
         backend=backend,
     )
 
@@ -673,8 +669,6 @@ def test_det(case, backend):
         params,
         data,
         batch_size_fn,
-        separate_weight_and_bias=True,
-        check_deterministic=False,
         backend=backend,
     )
 
@@ -691,8 +685,6 @@ def test_logdet(case, backend):
         params,
         data,
         batch_size_fn,
-        separate_weight_and_bias=True,
-        check_deterministic=False,
         backend=backend,
     )
 
