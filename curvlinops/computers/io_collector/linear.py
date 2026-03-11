@@ -97,7 +97,8 @@ def _match_addmm_weight(p: Node, pT: Node, addmm: Node) -> AffineLayerInfo | Non
         return AffineLayerInfo(LINEAR_STR, y, p, x, bias, {})
 
     # 2D case: no reshapes
-    return AffineLayerInfo(LINEAR_STR, addmm, p, x, bias, {})
+    y = addmm
+    return AffineLayerInfo(LINEAR_STR, y, p, x, bias, {})
 
 
 def _match_mm_weight(p: Node, pT: Node, mm: Node) -> AffineLayerInfo | None:
@@ -176,7 +177,8 @@ def _match_addmm_bias(p: Node, addmm: Node) -> AffineLayerInfo | None:
         return AffineLayerInfo(LINEAR_STR, y, W, x, bias, {})
 
     # 2D case
-    return AffineLayerInfo(LINEAR_STR, addmm, W, x, bias, {})
+    y = addmm
+    return AffineLayerInfo(LINEAR_STR, y, W, x, bias, {})
 
 
 def _match_add_bias(p: Node, add: Node) -> AffineLayerInfo | None:
@@ -209,8 +211,8 @@ def _match_add_bias(p: Node, add: Node) -> AffineLayerInfo | None:
         return None
 
     W = _extract_weight(WT)
-    x = x_view.args[0]
-    return AffineLayerInfo(LINEAR_STR, add, W, x, p, {})
+    x, y = x_view.args[0], add
+    return AffineLayerInfo(LINEAR_STR, y, W, x, p, {})
 
 
 class LinearWeightMatcher(_PatternMatcher):
