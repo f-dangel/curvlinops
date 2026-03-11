@@ -48,6 +48,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+- Reduce KFAC/EKFAC test suite from ~6,100 to ~1,100 tests by consolidating
+  `exclude`/`shuffle`/`separate_weight_and_bias` parametrization into the four
+  type-2 exactness tests (kfac/ekfac × standard/weight_sharing) and shrinking
+  Conv2d spatial dimensions in weight-sharing test cases
+  ([PR](https://github.com/f-dangel/curvlinops/pull/TODO))
+
 - Move shared GGN utilities (`loss_hessian_matrix_sqrt`, `make_grad_output_fn`,
   `_make_single_datum_sampler`) from
   `kfac_utils.py` to new `ggn_utils.py`; `kfac_utils.py` now only contains
