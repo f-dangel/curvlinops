@@ -54,6 +54,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   KFAC-specific code (patch extraction, canonical space converters)
   ([PR](https://github.com/f-dangel/curvlinops/pull/255))
 
+- Generalize IO collector to handle linear layers with >2D inputs
+  ([PR](https://github.com/f-dangel/curvlinops/pull/259))
+
 - Add a collector for in/outputs of linear weight sharing layers based on `make_fx`
   ([PR](https://github.com/f-dangel/curvlinops/pull/252))
 
