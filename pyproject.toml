@@ -65,6 +65,7 @@ test = [
     "pytest",
     "pytest-cov",
     "pytest-order",
+    "pytest-xdist",
 ]
 
 # Dependencies needed for linting.
@@ -87,6 +88,9 @@ docs = [
 ###############################################################################
 #                       Development tool configurations                       #
 ###############################################################################
+[tool.setuptools.packages.find]
+exclude = ["proto*"]
+
 [tool.setuptools_scm]
 
 [tool.ruff]
@@ -99,6 +103,7 @@ exclude = [
     "docs/rtd",
     "build",
     "dist",
+    "proto",
 ]
 
 [tool.ruff.lint]
