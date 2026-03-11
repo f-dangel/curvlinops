@@ -7,13 +7,15 @@ Only the forward pass is traced with ``make_fx``; the backward pass runs
 eagerly to avoid tracing issues with ``torch._C.Generator``.
 """
 
-from collections.abc import Callable
+from collections import UserDict
+from collections.abc import Callable, MutableMapping
 from typing import Any
 
 from einops import einsum
-from torch import Tensor, autograd, eye
+from torch import Tensor, autograd
 from torch.func import functional_call
 
+from curvlinops._checks import _register_userdict_as_pytree
 from curvlinops.computers.io_collector import with_kfac_io
 from curvlinops.computers.kfac import KFACComputer
 from curvlinops.computers.kfac_math import (
@@ -23,6 +25,41 @@ from curvlinops.computers.kfac_math import (
 )
 from curvlinops.kfac_utils import FisherType, _has_joint_weight_and_bias
 from curvlinops.utils import _seed_generator, identify_free_parameters
+
+
+def _trace_io(
+    f: Callable,
+    x: Tensor | MutableMapping,
+    named_params: dict[str, Tensor],
+    fisher_type: FisherType,
+) -> tuple[Callable, dict[str, str], dict[str, dict[str, Any]]]:
+    """Trace f and return an IO-collecting function with layer metadata.
+
+    Wraps ``with_kfac_io`` and derives the IO-to-module name mapping from
+    the detected parameter names (e.g. ``"0.weight"`` → ``"0"``).
+
+    Args:
+        f: Function with signature ``f(x, params) -> output``.
+        x: Example input tensor or mapping for tracing.
+        named_params: Dictionary mapping parameter names to tensors.
+        fisher_type: Type of Fisher information computation.
+
+    Returns:
+        Tuple of ``(io_fn, io_to_module, layer_hparams)``.
+    """
+    if isinstance(x, UserDict):
+        _register_userdict_as_pytree()
+
+    io_fn, layer_param_names, layer_hparams = with_kfac_io(
+        f, x, named_params, fisher_type
+    )
+    # "0.weight" -> "0", "layer.sub.weight" -> "layer.sub", "weight" -> ""
+    io_to_module = {
+        io_name: name.rsplit(".", 1)[0] if "." in name else ""
+        for io_name, pnames in layer_param_names.items()
+        for name in [next(iter(pnames.values()))]
+    }
+    return io_fn, io_to_module, layer_hparams
 
 
 class MakeFxKFACComputer(KFACComputer):
@@ -61,7 +98,11 @@ class MakeFxKFACComputer(KFACComputer):
             "mean": 1.0 / self._N_data,
         }[self._loss_func.reduction]
 
+        # Cache for IO functions: make_fx bakes in tensor shapes (e.g. from nn.Flatten),
+        # so different batch sizes need separate traces
         traced_io_fns: dict[int, Callable] = {}
+
+        # Layer metadata (identical across batch sizes), populated on first trace
         io_to_module: dict[str, str] | None = None
         layer_hparams: dict[str, dict[str, Any]] | None = None
 
@@ -73,31 +114,30 @@ class MakeFxKFACComputer(KFACComputer):
 
         for X, y in self._loop_over_data(desc="KFAC matrices"):
 
-            # TODO
-            batch_size = self._batch_size_fn(X)
-            if batch_size not in traced_io_fns:
-                f_io, layer_param_names, layer_hparams = with_kfac_io(
-                    f, X, named_params, self._fisher_type
+            # Maybe trace for current batch size and set up layer metadata
+            if (batch_size := self._batch_size_fn(X)) not in traced_io_fns:
+                traced_io_fns[batch_size], io_to_module, layer_hparams = (
+                    _trace_io(f, X, named_params, self._fisher_type)
                 )
-                # Extract layer info on first trace
-                if io_to_module is None:
-                    io_to_module = self._build_io_to_module(layer_param_names)
-                traced_io_fns[batch_size] = f_io
 
-            # Phase 1: Forward pass (IO collection) + input covariances
-            output, layer_inputs, layer_outputs = traced_io_fns[batch_size](
+            # Forward pass with IO collection
+            io_fn = traced_io_fns[batch_size]
+            output, layer_inputs, layer_outputs = io_fn(
                 X, named_params
             )
 
+            # Compute input covariances
             for io_layer_name, x in layer_inputs.items():
                 mod_name = io_to_module[io_layer_name]
+                param_pos = self._mapping[mod_name]
+                hparams = layer_hparams[io_layer_name]
                 has_joint_wb = _has_joint_weight_and_bias(
-                    self._separate_weight_and_bias, self._mapping[mod_name]
+                    self._separate_weight_and_bias, param_pos
                 )
                 x = input_to_weight_sharing_format(
                     x.data.detach(),
                     self._kfac_approx,
-                    layer_hyperparams=layer_hparams[io_layer_name],
+                    layer_hyperparams=hparams,
                     append_ones_for_bias=has_joint_wb,
                 )
                 scale = x.shape[1]
@@ -106,65 +146,40 @@ class MakeFxKFACComputer(KFACComputer):
                     input_covariances, mod_name, xxT.div_(scale * self._N_data)
                 )
 
-            # Phase 2: Eager backward + gradient covariances
-            if self._fisher_type != FisherType.FORWARD_ONLY:
-                io_layer_names, batched_grads = self._compute_batched_grads(
-                    output, y, layer_outputs, io_to_module
+            # Forward-only KFAC does not require gradient covariances
+            if self._fisher_type == FisherType.FORWARD_ONLY:
+                continue
+
+            # Compute gradient covariances
+            batched_grads = self._compute_batched_grads(
+                output, y, layer_outputs, io_to_module
+            )
+            for io_layer_name, g in batched_grads.items():
+                mod_name = io_to_module[io_layer_name]
+                hparams = layer_hparams[io_layer_name]
+                g = grad_to_weight_sharing_format(
+                    g.data.detach(),
+                    self._kfac_approx,
+                    layer_hyperparams=hparams,
+                    num_leading_dims=2,
                 )
-                for io_layer_name, g in zip(io_layer_names, batched_grads):
-                    mod_name = io_to_module[io_layer_name]
-                    g = grad_to_weight_sharing_format(
-                        g.data.detach(),
-                        self._kfac_approx,
-                        layer_hyperparams=layer_hparams[io_layer_name],
-                        num_leading_dims=2,
-                    )
-                    correction = compute_loss_correction(
-                        g.shape[1],
-                        self._num_per_example_loss_terms,
-                        self._loss_func.reduction,
-                    )
-                    ggT = einsum(
-                        g, g, "v batch shared i, v batch shared j -> i j"
-                    ).mul_(correction)
-                    self._set_or_add_(
-                        gradient_covariances, mod_name, ggT.mul_(grad_normalization)
-                    )
+                correction = compute_loss_correction(
+                    g.shape[1],
+                    self._num_per_example_loss_terms,
+                    self._loss_func.reduction,
+                )
+                ggT = einsum(
+                    g, g, "v batch shared i, v batch shared j -> i j"
+                ).mul_(correction)
+                self._set_or_add_(
+                    gradient_covariances, mod_name, ggT.mul_(grad_normalization)
+                )
 
         # Handle FORWARD_ONLY case
         if self._fisher_type == FisherType.FORWARD_ONLY:
-            for mod_name, param_pos in self._mapping.items():
-                param = self._params[next(iter(param_pos.values()))]
-                gradient_covariances[mod_name] = eye(
-                    param.shape[0], dtype=param.dtype, device=self.device
-                )
+            self._set_gradient_covariances_to_identity(gradient_covariances)
 
         return input_covariances, gradient_covariances
-
-    @staticmethod
-    def _build_io_to_module(
-        layer_param_names: dict[str, dict[str, str]],
-    ) -> dict[str, str]:
-        """Build mapping from IO collector layer names to module names.
-
-        Derives the module name from any parameter name in the layer:
-        ``"0.weight"`` → ``"0"``, ``"layer.sub.weight"`` → ``"layer.sub"``,
-        ``"weight"`` → ``""`` (bare module, no prefix).
-
-        Args:
-            layer_param_names: Maps IO layer names to parameter name dicts.
-
-        Returns:
-            Mapping from IO collector layer names to module names.
-        """
-        io_to_module: dict[str, str] = {}
-        for io_layer_name, pnames in layer_param_names.items():
-            any_param_name = next(iter(pnames.values()))
-            if "." in any_param_name:
-                io_to_module[io_layer_name] = any_param_name.rsplit(".", 1)[0]
-            else:
-                io_to_module[io_layer_name] = ""
-        return io_to_module
 
     def _compute_batched_grads(
         self,
@@ -172,7 +187,7 @@ class MakeFxKFACComputer(KFACComputer):
         y: Tensor,
         layer_outputs: dict[str, Tensor],
         io_to_module: dict[str, str],
-    ) -> tuple[list[str], tuple[Tensor, ...]]:
+    ) -> dict[str, Tensor]:
         """Compute scaled batched gradients for all tracked layers.
 
         Rearranges the output for >2d, computes Fisher-type-specific
@@ -186,7 +201,7 @@ class MakeFxKFACComputer(KFACComputer):
             io_to_module: Mapping from IO collector layer names to module names.
 
         Returns:
-            Tuple of (io_layer_names_with_outputs, batched_grads).
+            Dictionary mapping IO layer names to batched gradient tensors.
         """
         output, y = self._rearrange_for_larger_than_2d_output(output, y)
 
@@ -204,4 +219,4 @@ class MakeFxKFACComputer(KFACComputer):
             grad_outputs=grad_outputs,
             is_grads_batched=True,
         )
-        return io_layer_names, batched_grads
+        return dict(zip(io_layer_names, batched_grads))

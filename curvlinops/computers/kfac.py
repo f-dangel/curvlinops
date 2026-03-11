@@ -316,22 +316,28 @@ class KFACComputer(_EmpiricalRiskMixin):
         for handle in hook_handles:
             handle.remove()
 
-        # Handle FORWARD_ONLY case by setting gradient covariances to identity
+        # Handle FORWARD_ONLY case
         if self._fisher_type == FisherType.FORWARD_ONLY:
-            # We choose to set the gradient covariance to the identity explicitly
-            # for the sake of simplicity, but this could be done more efficiently.
-            for mod_name, param_pos in self._mapping.items():
-                # We iterate over _mapping to get the module names corresponding
-                # to the parameters. We only need the output dimension of the
-                # module, but don't know whether the parameter is a weight or
-                # bias; therefore, we just call `next(iter(param_pos.values()))`
-                # to get the first parameter.
-                param = self._params[next(iter(param_pos.values()))]
-                gradient_covariances[mod_name] = eye(
-                    param.shape[0], dtype=param.dtype, device=self.device
-                )
+            self._set_gradient_covariances_to_identity(gradient_covariances)
 
         return input_covariances, gradient_covariances
+
+    def _set_gradient_covariances_to_identity(
+        self, gradient_covariances: dict[str, Tensor]
+    ) -> None:
+        """Set gradient covariances to identity for forward-only KFAC.
+
+        For the FOOF/ISAAC method, the gradient covariance is the identity.
+        We set it explicitly for simplicity, though this could be more efficient.
+
+        Args:
+            gradient_covariances: Dictionary to populate with identity matrices.
+        """
+        for mod_name, param_pos in self._mapping.items():
+            param = self._params[next(iter(param_pos.values()))]
+            gradient_covariances[mod_name] = eye(
+                param.shape[0], dtype=param.dtype, device=self.device
+            )
 
     def _rearrange_for_larger_than_2d_output(
         self, output: Tensor, y: Tensor
