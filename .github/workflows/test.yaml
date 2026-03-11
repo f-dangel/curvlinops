@@ -28,12 +28,9 @@ jobs:
         key: pytest-cache-${{ github.ref }}-${{ matrix.python-version }}
         restore-keys: |
           pytest-cache-refs/heads/main-${{ matrix.python-version }}
-    - name: Run doctests
+    - name: Run test
       run: |
-        pytest --doctest-modules curvlinops
-    - name: Run tests
-      run: |
-        pytest -vx --ff --cov=curvlinops -n auto test
+        make test
 
     - name: Test coveralls - python ${{ matrix.python-version }}
       run: coveralls --service=github
