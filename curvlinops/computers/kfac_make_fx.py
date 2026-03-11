@@ -113,18 +113,15 @@ class MakeFxKFACComputer(KFACComputer):
         self._generator = _seed_generator(self._generator, self.device, self._seed)
 
         for X, y in self._loop_over_data(desc="KFAC matrices"):
-
             # Maybe trace for current batch size and set up layer metadata
             if (batch_size := self._batch_size_fn(X)) not in traced_io_fns:
-                traced_io_fns[batch_size], io_to_module, layer_hparams = (
-                    _trace_io(f, X, named_params, self._fisher_type)
+                traced_io_fns[batch_size], io_to_module, layer_hparams = _trace_io(
+                    f, X, named_params, self._fisher_type
                 )
 
             # Forward pass with IO collection
             io_fn = traced_io_fns[batch_size]
-            output, layer_inputs, layer_outputs = io_fn(
-                X, named_params
-            )
+            output, layer_inputs, layer_outputs = io_fn(X, named_params)
 
             # Compute input covariances
             for io_layer_name, x in layer_inputs.items():
@@ -168,9 +165,9 @@ class MakeFxKFACComputer(KFACComputer):
                     self._num_per_example_loss_terms,
                     self._loss_func.reduction,
                 )
-                ggT = einsum(
-                    g, g, "v batch shared i, v batch shared j -> i j"
-                ).mul_(correction)
+                ggT = einsum(g, g, "v batch shared i, v batch shared j -> i j").mul_(
+                    correction
+                )
                 self._set_or_add_(
                     gradient_covariances, mod_name, ggT.mul_(grad_normalization)
                 )
