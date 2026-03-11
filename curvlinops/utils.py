@@ -183,6 +183,62 @@ def assert_divisible_by(num: int, divisor: int, name: str):
         raise ValueError(f"{name} ({num}) must be divisible by {divisor}.")
 
 
+def identify_free_parameters(
+    model: Module, params: tuple[Parameter, ...]
+) -> dict[str, Parameter]:
+    """Identify free parameters by matching them against a model's named parameters.
+
+    Matches each parameter in ``params`` to its name in ``model`` by data pointer.
+    Validates that there are no duplicates in ``params`` and no weight tying in the
+    model (multiple names sharing the same tensor).
+
+    Args:
+        model: The model whose named parameters to search.
+        params: Tuple of parameters to identify.
+
+    Returns:
+        Ordered dict mapping parameter names to parameter tensors.
+
+    Raises:
+        ValueError: If ``params`` contains duplicate tensors, if the model uses
+            weight tying (multiple names for the same tensor), or if a parameter
+            is not found in the model.
+    """
+    # Check for duplicates in params
+    param_ptrs = [p.data_ptr() for p in params]
+    if len(set(param_ptrs)) != len(param_ptrs):
+        raise ValueError(
+            "params contains duplicate parameters (same tensor passed twice)."
+        )
+
+    # Build ptr -> names mapping to detect weight tying
+    ptr_to_names: dict[int, list[str]] = {}
+    for name, p in model.named_parameters():
+        ptr_to_names.setdefault(p.data_ptr(), []).append(name)
+
+    tied = {ptr: names for ptr, names in ptr_to_names.items() if len(names) > 1}
+    if tied:
+        tied_groups = list(tied.values())
+        raise ValueError(
+            f"Model uses weight tying (shared parameters): {tied_groups}. "
+            f"This is not supported."
+        )
+
+    # Match params to names
+    ptr_to_name = {ptr: names[0] for ptr, names in ptr_to_names.items()}
+    named_params: dict[str, Parameter] = {}
+    for p in params:
+        ptr = p.data_ptr()
+        if ptr not in ptr_to_name:
+            raise ValueError(
+                f"Parameter with data_ptr {ptr} not found in model. "
+                f"All free parameters must be part of model.parameters()."
+            )
+        named_params[ptr_to_name[ptr]] = p
+
+    return named_params
+
+
 def make_functional_call(
     module: Module, free_param_names: list[str]
 ) -> Callable[..., Tensor]:
@@ -243,11 +299,7 @@ def make_functional_model_and_loss(
         - f: Functional model with signature (params, X) -> prediction
         - c: Functional loss with signature (prediction, y) -> loss
     """
-    # detect the parameters w.r.t. which the functions are made functional
-    free_param_names = []
-    for p in params:
-        (name,) = [n for n, pp in model_func.named_parameters() if pp is p]
-        free_param_names.append(name)
+    free_param_names = list(identify_free_parameters(model_func, params).keys())
 
     # Create functional versions of model and loss
     f = make_functional_call(model_func, free_param_names)  # (params, X) -> prediction

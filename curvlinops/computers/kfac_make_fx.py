@@ -25,7 +25,7 @@ from curvlinops.computers.kfac_math import (
     input_to_weight_sharing_format,
 )
 from curvlinops.kfac_utils import FisherType, _has_joint_weight_and_bias
-from curvlinops.utils import _seed_generator
+from curvlinops.utils import _seed_generator, identify_free_parameters
 
 
 class MakeFxKFACComputer(KFACComputer):
@@ -140,12 +140,7 @@ class MakeFxKFACComputer(KFACComputer):
         if hasattr(self, "_setup_cache"):
             return self._setup_cache
 
-        # Build named_params dict by matching self._params against model parameters
-        param_ids = {p.data_ptr() for p in self._params}
-        named_params: dict[str, Tensor] = {}
-        for name, param in self._model_func.named_parameters():
-            if param.data_ptr() in param_ids:
-                named_params[name] = param
+        named_params = identify_free_parameters(self._model_func, self._params)
 
         # Create functional wrapper
         model = self._model_func
