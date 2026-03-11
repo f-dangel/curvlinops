@@ -29,10 +29,14 @@ from torch.nn import (
 
 from curvlinops._torch_base import _ChainPyTorchLinearOperator
 from curvlinops.blockdiagonal import BlockDiagonalLinearOperator
-from curvlinops.computers.kfac import FisherType, KFACComputer, KFACType
+from curvlinops.computers.kfac import KFACComputer
+from curvlinops.computers.kfac_make_fx import MakeFxKFACComputer
 from curvlinops.kfac_utils import (
+    FisherType,
     FromCanonicalLinearOperator,
+    KFACType,
     ToCanonicalLinearOperator,
+    _has_joint_weight_and_bias,
 )
 from curvlinops.kronecker import KroneckerProductLinearOperator
 
@@ -83,7 +87,10 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
         SELF_ADJOINT: Whether the operator is self-adjoint. ``True`` for KFAC.
     """
 
-    _COMPUTER_CLS = KFACComputer
+    _BACKENDS: dict[str, type] = {
+        "hooks": KFACComputer,
+        "make_fx": MakeFxKFACComputer,
+    }
     SELF_ADJOINT: bool = True
 
     def __init__(
@@ -102,6 +109,7 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
         separate_weight_and_bias: bool = True,
         num_data: int | None = None,
         batch_size_fn: Callable[[MutableMapping | Tensor], int] | None = None,
+        backend: str = "hooks",
     ):
         """Kronecker-factored approximate curvature (KFAC) proxy of the Fisher/GGN.
 
@@ -163,8 +171,20 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
             batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
                 needs to be specified. The intended behavior is to consume the first
                 entry of the iterates from ``data`` and return their batch size.
+            backend: The backend to use for computing Kronecker factors.
+                ``"hooks"`` uses forward/backward hooks (default).
+                ``"make_fx"`` uses FX graph tracing via the IO collector.
+                Defaults to ``"hooks"``.
+
+        Raises:
+            ValueError: If ``backend`` is not supported.
         """
-        computer = self._COMPUTER_CLS(
+        if backend not in self._BACKENDS:
+            raise ValueError(
+                f"Invalid backend: {backend!r}. Supported: {tuple(self._BACKENDS)}."
+            )
+        computer_cls = self._BACKENDS[backend]
+        computer = computer_cls(
             model_func,
             loss_func,
             params,
@@ -201,9 +221,8 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
             aaT = input_covariances.get(mod_name, None)
             ggT = gradient_covariances[mod_name]
 
-            # Handle joint weight+bias case
-            if not computer._separate_weight_and_bias and {"weight", "bias"} == set(
-                param_pos.keys()
+            if _has_joint_weight_and_bias(
+                computer._separate_weight_and_bias, param_pos
             ):
                 # Single Kronecker product block for weight+bias
                 factors.append([ggT, aaT])

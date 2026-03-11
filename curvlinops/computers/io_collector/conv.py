@@ -16,13 +16,11 @@ class ConvolutionWeightMatcher(_PatternMatcher):
     Detects pattern: conv(x, W, b, ...) where the node is W.
     """
 
-    def matches(
-        self, p_node: Node
-    ) -> tuple[list[AffineLayerInfo], list[tuple[Node, ...]]]:
+    def matches(self, p: Node) -> tuple[list[AffineLayerInfo], list[tuple[Node, ...]]]:
         """Match a parameter node used as weight in conv layers.
 
         Args:
-            p_node: A parameter node to check.
+            p: A parameter node to check.
 
         Returns:
             Tuple containing:
@@ -31,25 +29,21 @@ class ConvolutionWeightMatcher(_PatternMatcher):
         """
         matches, paths = [], []
 
-        # Check all users of the parameter node
-        for p_user in p_node.users:
+        for p_user in p.users:
             if (
                 (p_user.op, p_user.target)
                 != ("call_function", aten.convolution.default)
                 or p_user.kwargs
-                or len(p_user.args) < 3  # At least x, weight, bias
+                or len(p_user.args) < 3  # At least x, W, bias
             ):
                 continue
 
-            inputs, weight, bias = p_user.args[:3]
-            # Verify this parameter is the weight (second argument)
-            if weight == p_node:
+            x, W, bias = p_user.args[:3]
+            if W == p:
+                y = p_user
                 hyperparams = _extract_conv_hyperparams(p_user.args)
-                layer_info = AffineLayerInfo(
-                    CONV_STR, p_user, p_node, inputs, bias, hyperparams
-                )
-                matches.append(layer_info)
-                paths.append((p_node, p_user))
+                matches.append(AffineLayerInfo(CONV_STR, y, p, x, bias, hyperparams))
+                paths.append((p, p_user))
 
         return matches, paths
 
@@ -60,13 +54,11 @@ class ConvolutionBiasMatcher(_PatternMatcher):
     Detects pattern: conv(x, W, b, ...) where the node is b.
     """
 
-    def matches(
-        self, p_node: Node
-    ) -> tuple[list[AffineLayerInfo], list[tuple[Node, ...]]]:
+    def matches(self, p: Node) -> tuple[list[AffineLayerInfo], list[tuple[Node, ...]]]:
         """Match a parameter node used as bias in convolution layers.
 
         Args:
-            p_node: A parameter node to check.
+            p: A parameter node to check.
 
         Returns:
             Tuple containing:
@@ -75,30 +67,21 @@ class ConvolutionBiasMatcher(_PatternMatcher):
         """
         matches, paths = [], []
 
-        # Check all users of the parameter node
-        for p_user in p_node.users:
+        for p_user in p.users:
             if (
                 (p_user.op, p_user.target)
                 != ("call_function", aten.convolution.default)
                 or p_user.kwargs
-                or len(p_user.args) < 3  # At least x, weight, bias
+                or len(p_user.args) < 3  # At least x, W, bias
             ):
                 continue
 
-            inputs, weight, bias = p_user.args[:3]
-            # Verify this parameter is the bias (third argument)
-            if bias == p_node:
+            x, W, bias = p_user.args[:3]
+            if bias == p:
+                y = p_user
                 hyperparams = _extract_conv_hyperparams(p_user.args)
-                layer_info = AffineLayerInfo(
-                    CONV_STR,
-                    p_user,
-                    weight,
-                    inputs,
-                    p_node,
-                    hyperparams,
-                )
-                matches.append(layer_info)
-                paths.append((p_node, p_user))
+                matches.append(AffineLayerInfo(CONV_STR, y, W, x, p, hyperparams))
+                paths.append((p, p_user))
 
         return matches, paths
 
@@ -110,7 +93,7 @@ def _extract_conv_hyperparams(args: tuple[Any, ...]) -> dict[str, Any]:
         args: Arguments tuple from aten.convolution.default call.
 
     Returns:
-        Dictionary of hyperparameters.
+        Dictionary of hyperparameters including ``kernel_size``.
 
     Raises:
         ValueError: If args doesn't have exactly 9 elements.
@@ -122,9 +105,22 @@ def _extract_conv_hyperparams(args: tuple[Any, ...]) -> dict[str, Any]:
             f"dilation, transposed, output_padding, groups)"
         )
 
-    _, _, _, stride, padding, dilation, transposed, output_padding, groups = args
+    _, W, _, stride, padding, dilation, transposed, output_padding, groups = args
+
+    # Infer kernel_size from weight tensor shape metadata (shape[2:] for Conv2d)
+    # Try tensor_meta first (symbolic tracing), fall back to val (real tracing)
+    if "tensor_meta" in W.meta:
+        kernel_size = list(W.meta["tensor_meta"].shape[2:])
+    elif "val" in W.meta:
+        kernel_size = list(W.meta["val"].shape[2:])
+    else:
+        raise ValueError(
+            f"Cannot infer kernel_size: weight node {W} has no shape "
+            f"metadata. Available meta keys: {list(W.meta.keys())}"
+        )
 
     return {
+        "kernel_size": kernel_size,
         "stride": stride,
         "padding": padding,
         "dilation": dilation,

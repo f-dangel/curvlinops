@@ -64,6 +64,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with validation and structured output for KFAC computation
   ([PR](https://github.com/f-dangel/curvlinops/pull/253))
 
+- Add `make_fx` backend for `KFACLinearOperator` via `MakeFxKFACComputer`, which
+  computes Kronecker factors using FX graph tracing instead of hooks. Selectable
+  via `backend="make_fx"` parameter
+  ([PR](https://github.com/f-dangel/curvlinops/pull/258))
+
+- Import `FisherType` and `KFACType` directly from `curvlinops.kfac_utils`
+  instead of `curvlinops.kfac`, reducing coupling between the linear operator
+  and utility modules
+  ([PR](https://github.com/f-dangel/curvlinops/pull/253))
+
 - Unify KFAC's gradient output computation for all Fisher types (`TYPE2`, `MC`,
   `EMPIRICAL`, `FORWARD_ONLY`) via `make_grad_output_fn` in `kfac_utils.py`,
   removing `_maybe_adjust_loss_scale`

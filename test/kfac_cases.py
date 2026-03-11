@@ -13,7 +13,7 @@ from torch.nn import (
     Sequential,
 )
 
-from curvlinops.kfac import KFACType
+from curvlinops.kfac_utils import KFACType
 from test.cases import ModelWithDictInput
 from test.utils import (
     Conv2dModel,

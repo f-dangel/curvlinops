@@ -1,6 +1,11 @@
-"""Utility functions specific to KFAC (patch extraction, canonical space converters)."""
+"""Utility functions specific to KFAC (patch extraction, canonical space converters).
+
+Also defines ``FisherType`` and ``KFACType`` enums used across the KFAC codebase.
+"""
 
 from __future__ import annotations
+
+from enum import Enum, EnumMeta
 
 from einconv import index_pattern
 from einconv.utils import get_conv_paddings
@@ -10,6 +15,79 @@ from torch.nn.functional import unfold
 from torch.nn.modules.utils import _pair
 
 from curvlinops._torch_base import PyTorchLinearOperator
+
+
+def _has_joint_weight_and_bias(
+    separate_weight_and_bias: bool, param_pos: dict[str, int]
+) -> bool:
+    """Check whether weight and bias are treated jointly in a KFAC block.
+
+    Args:
+        separate_weight_and_bias: Whether weight and bias are treated separately.
+        param_pos: Dictionary mapping parameter names to positions.
+
+    Returns:
+        ``True`` if the block has both weight and bias and they should be joint.
+    """
+    return not separate_weight_and_bias and {"weight", "bias"} == set(param_pos.keys())
+
+
+class MetaEnum(EnumMeta):
+    """Metaclass for the Enum class for desired behavior of the ``in`` operator."""
+
+    def __contains__(cls, item):
+        """Return whether ``item`` is a valid Enum value.
+
+        Args:
+            item: Candidate value.
+
+        Returns:
+            ``True`` if ``item`` is a valid Enum value.
+        """
+        try:
+            cls(item)
+        except ValueError:
+            return False
+        return True
+
+
+class FisherType(str, Enum, metaclass=MetaEnum):
+    """Enum for the Fisher type.
+
+    Attributes:
+        TYPE2 (str): ``'type-2'`` - Type-2 Fisher, i.e. the exact Hessian of the
+            loss w.r.t. the model outputs is used. This requires as many backward
+            passes as the output dimension, i.e. the number of classes for
+            classification.
+        MC (str): ``'mc'`` - Monte-Carlo approximation of the expectation by sampling
+            ``mc_samples`` labels from the model's predictive distribution.
+        EMPIRICAL (str): ``'empirical'`` - Empirical gradients are used which
+            corresponds to the uncentered gradient covariance, or the empirical Fisher.
+        FORWARD_ONLY (str): ``'forward-only'`` - The gradient covariances will be
+            identity matrices, see the FOOF method in
+            `Benzing, 2022 <https://arxiv.org/abs/2201.12250>`_ or ISAAC in
+            `Petersen et al., 2023 <https://arxiv.org/abs/2305.00604>`_.
+    """
+
+    TYPE2 = "type-2"
+    MC = "mc"
+    EMPIRICAL = "empirical"
+    FORWARD_ONLY = "forward-only"
+
+
+class KFACType(str, Enum, metaclass=MetaEnum):
+    """Enum for the KFAC approximation type.
+
+    KFAC-expand and KFAC-reduce are defined in
+    `Eschenhagen et al., 2023 <https://arxiv.org/abs/2311.00636>`_.
+
+    Attributes:
+        EXPAND (str): ``'expand'`` - KFAC-expand approximation.
+        REDUCE (str): ``'reduce'`` - KFAC-reduce approximation.
+    """
+
+    EXPAND = "expand"
+    REDUCE = "reduce"
 
 
 def extract_patches(
@@ -164,10 +242,7 @@ class _CanonicalizationLinearOperator(PyTorchLinearOperator):
         canonical_shapes = []
 
         for param_pos in self._param_positions:
-            # Handle joint weight+bias case
-            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
-                param_pos.keys()
-            ):
+            if _has_joint_weight_and_bias(self._separate_weight_and_bias, param_pos):
                 w_pos = param_pos["weight"]
                 w_shape = self._param_shapes[w_pos]
                 # Combined weight+bias gets flattened to 1D
@@ -232,10 +307,7 @@ class ToCanonicalLinearOperator(_CanonicalizationLinearOperator):
         canonical_M = []
 
         for param_pos in self._param_positions:
-            # Handle joint weight+bias case
-            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
-                param_pos.keys()
-            ):
+            if _has_joint_weight_and_bias(self._separate_weight_and_bias, param_pos):
                 w_pos, b_pos = param_pos["weight"], param_pos["bias"]
                 # Flatten weight tensor into matrix and concatenate bias
                 w_flat = M[w_pos].flatten(start_dim=1, end_dim=-2)
@@ -300,10 +372,7 @@ class FromCanonicalLinearOperator(_CanonicalizationLinearOperator):
         processed = 0
 
         for param_pos in self._param_positions:
-            # Handle joint weight+bias case
-            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
-                param_pos.keys()
-            ):
+            if _has_joint_weight_and_bias(self._separate_weight_and_bias, param_pos):
                 w_pos, b_pos = param_pos["weight"], param_pos["bias"]
                 combined = M[processed]
 

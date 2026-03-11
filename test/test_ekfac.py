@@ -20,7 +20,7 @@ from torch.nn import (
 from curvlinops import EFLinearOperator, GGNLinearOperator
 from curvlinops.computers.ekfac import EKFACComputer
 from curvlinops.ekfac import EKFACLinearOperator
-from curvlinops.kfac import FisherType, KFACType
+from curvlinops.kfac_utils import FisherType, KFACType
 from curvlinops.utils import allclose_report
 from test.cases import DEVICES, DEVICES_IDS
 from test.test_kfac import (
@@ -467,7 +467,7 @@ def test_ekfac_inplace_activations(dev: device):
     Args:
         dev: The device to run the test on.
     """
-    _test_inplace_activations(EKFACLinearOperator, dev)
+    _test_inplace_activations(EKFACLinearOperator, dev, backend="hooks")
 
 
 @mark.parametrize("fisher_type", EKFACComputer._SUPPORTED_FISHER_TYPE)
