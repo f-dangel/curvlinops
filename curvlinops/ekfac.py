@@ -26,9 +26,10 @@ class EKFACLinearOperator(KFACLinearOperator):
       (ICPR).
     """
 
-    _COMPUTER_CLS = EKFACComputer
-    _MAKE_FX_COMPUTER_CLS = MakeFxEKFACComputer
-    _SUPPORTED_BACKENDS: tuple[str, ...] = ("hooks", "make_fx")
+    _BACKENDS: dict[str, type] = {
+        "hooks": EKFACComputer,
+        "make_fx": MakeFxEKFACComputer,
+    }
 
     @staticmethod
     def _compute_canonical_op(computer: EKFACComputer) -> BlockDiagonalLinearOperator:

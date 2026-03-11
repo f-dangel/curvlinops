@@ -48,11 +48,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+- Reduce KFAC/EKFAC test suite from ~6,100 to ~1,100 tests by consolidating
+  `exclude`/`shuffle`/`separate_weight_and_bias` parametrization into the four
+  type-2 exactness tests (kfac/ekfac × standard/weight_sharing) and shrinking
+  Conv2d spatial dimensions in weight-sharing test cases
+  ([PR](https://github.com/f-dangel/curvlinops/pull/260))
+
 - Move shared GGN utilities (`loss_hessian_matrix_sqrt`, `make_grad_output_fn`,
   `_make_single_datum_sampler`) from
   `kfac_utils.py` to new `ggn_utils.py`; `kfac_utils.py` now only contains
   KFAC-specific code (patch extraction, canonical space converters)
   ([PR](https://github.com/f-dangel/curvlinops/pull/255))
+
+- Generalize IO collector to handle linear layers with >2D inputs
+  ([PR](https://github.com/f-dangel/curvlinops/pull/259))
 
 - Add a collector for in/outputs of linear weight sharing layers based on `make_fx`
   ([PR](https://github.com/f-dangel/curvlinops/pull/252))
@@ -64,11 +73,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `make_fx` backend for `KFACLinearOperator` via `MakeFxKFACComputer`, which
   computes Kronecker factors using FX graph tracing instead of hooks. Selectable
   via `backend="make_fx"` parameter
-  ([PR](https://github.com/f-dangel/curvlinops/pull/253))
+  ([PR](https://github.com/f-dangel/curvlinops/pull/258))
 
 - Add `make_fx` backend for `EKFACLinearOperator` via `MakeFxEKFACComputer`,
   extending the FX-based approach to eigenvalue-corrected KFAC. Selectable
   via `backend="make_fx"` parameter
+  ([PR](https://github.com/f-dangel/curvlinops/pull/253))
+
+- Import `FisherType` and `KFACType` directly from `curvlinops.kfac_utils`
+  instead of `curvlinops.kfac`, reducing coupling between the linear operator
+  and utility modules
   ([PR](https://github.com/f-dangel/curvlinops/pull/253))
 
 - Unify KFAC's gradient output computation for all Fisher types (`TYPE2`, `MC`,

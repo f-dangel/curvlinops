@@ -10,8 +10,12 @@ from torch.nn import Conv2d, Module
 from torch.utils.hooks import RemovableHandle
 
 from curvlinops.computers.kfac import KFACComputer
-from curvlinops.computers.kfac_math import compute_loss_correction, prepare_io_for_ekfac
-from curvlinops.kfac_utils import FisherType, _has_joint_weight_and_bias
+from curvlinops.computers.kfac_math import (
+    compute_loss_correction,
+    grad_to_weight_sharing_format,
+    input_to_weight_sharing_format,
+)
+from curvlinops.kfac_utils import FisherType, KFACType, _has_joint_weight_and_bias
 from curvlinops.utils import _seed_generator
 
 
@@ -470,16 +474,20 @@ class EKFACComputer(KFACComputer):
         a = inputs[0].data.detach() if a_required else None
 
         is_conv2d = isinstance(module, Conv2d)
-        g, a = prepare_io_for_ekfac(
-            g,
-            a,
-            is_conv2d=is_conv2d,
-            kernel_size=module.kernel_size if is_conv2d else None,
-            stride=module.stride if is_conv2d else None,
-            padding=module.padding if is_conv2d else None,
-            dilation=module.dilation if is_conv2d else None,
-            groups=module.groups if is_conv2d else None,
+        layer_hparams = (
+            {
+                "kernel_size": module.kernel_size,
+                "stride": module.stride,
+                "padding": module.padding,
+                "dilation": module.dilation,
+                "groups": module.groups,
+            }
+            if is_conv2d
+            else None
         )
+        g = grad_to_weight_sharing_format(g, KFACType.EXPAND, layer_hparams)
+        if a is not None:
+            a = input_to_weight_sharing_format(a, KFACType.EXPAND, layer_hparams)
 
         correction = compute_loss_correction(
             batch_size,

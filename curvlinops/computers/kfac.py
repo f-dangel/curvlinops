@@ -37,8 +37,8 @@ from torch.utils.hooks import RemovableHandle
 from curvlinops._empirical_risk import _EmpiricalRiskMixin
 from curvlinops.computers.kfac_math import (
     compute_loss_correction,
-    prepare_grad_output,
-    prepare_layer_input,
+    grad_to_weight_sharing_format,
+    input_to_weight_sharing_format,
 )
 from curvlinops.ggn_utils import make_grad_output_fn
 from curvlinops.kfac_utils import FisherType, KFACType, _has_joint_weight_and_bias
@@ -316,22 +316,28 @@ class KFACComputer(_EmpiricalRiskMixin):
         for handle in hook_handles:
             handle.remove()
 
-        # Handle FORWARD_ONLY case by setting gradient covariances to identity
+        # Handle FORWARD_ONLY case
         if self._fisher_type == FisherType.FORWARD_ONLY:
-            # We choose to set the gradient covariance to the identity explicitly
-            # for the sake of simplicity, but this could be done more efficiently.
-            for mod_name, param_pos in self._mapping.items():
-                # We iterate over _mapping to get the module names corresponding
-                # to the parameters. We only need the output dimension of the
-                # module, but don't know whether the parameter is a weight or
-                # bias; therefore, we just call `next(iter(param_pos.values()))`
-                # to get the first parameter.
-                param = self._params[next(iter(param_pos.values()))]
-                gradient_covariances[mod_name] = eye(
-                    param.shape[0], dtype=param.dtype, device=self.device
-                )
+            self._set_gradient_covariances_to_identity(gradient_covariances)
 
         return input_covariances, gradient_covariances
+
+    def _set_gradient_covariances_to_identity(
+        self, gradient_covariances: dict[str, Tensor]
+    ) -> None:
+        """Set gradient covariances to identity for forward-only KFAC.
+
+        For the FOOF/ISAAC method, the gradient covariance is the identity.
+        We set it explicitly for simplicity, though this could be more efficient.
+
+        Args:
+            gradient_covariances: Dictionary to populate with identity matrices.
+        """
+        for mod_name, param_pos in self._mapping.items():
+            param = self._params[next(iter(param_pos.values()))]
+            gradient_covariances[mod_name] = eye(
+                param.shape[0], dtype=param.dtype, device=self.device
+            )
 
     def _rearrange_for_larger_than_2d_output(
         self, output: Tensor, y: Tensor
@@ -452,8 +458,8 @@ class KFACComputer(_EmpiricalRiskMixin):
         g = grad_output.data.detach()
         batch_size = g.shape[0]
 
-        g = prepare_grad_output(
-            g, self._kfac_approx, isinstance(module, Conv2d), num_leading_dims=1
+        g = grad_to_weight_sharing_format(
+            g, self._kfac_approx, layer_hyperparams=self._layer_hyperparams(module)
         )
 
         # Note: mc_samples scaling is already handled inside make_grad_output_fn.
@@ -464,13 +470,15 @@ class KFACComputer(_EmpiricalRiskMixin):
             self._N_data,
         )
 
-        covariance = einsum(g, g, "b i,b j->i j").mul_(correction)
+        covariance = einsum(g, g, "batch shared i, batch shared j -> i j").mul_(
+            correction
+        )
         self._set_or_add_(gradient_covariances, module_name, covariance)
 
     def _hook_accumulate_input_covariance(
         self,
         module: Module,
-        inputs: tuple[Tensor],
+        inputs: tuple[Tensor, ...],
         module_name: str,
         input_covariances: dict[str, Tensor],
     ):
@@ -496,19 +504,41 @@ class KFACComputer(_EmpiricalRiskMixin):
             self._separate_weight_and_bias, params
         )
 
-        x, scale = prepare_layer_input(
+        x = input_to_weight_sharing_format(
             x,
             self._kfac_approx,
-            kernel_size=module.kernel_size if isinstance(module, Conv2d) else None,
-            stride=module.stride if isinstance(module, Conv2d) else None,
-            padding=module.padding if isinstance(module, Conv2d) else None,
-            dilation=module.dilation if isinstance(module, Conv2d) else None,
-            groups=module.groups if isinstance(module, Conv2d) else None,
+            layer_hyperparams=self._layer_hyperparams(module),
             append_ones_for_bias=has_joint_wb,
         )
-
-        covariance = einsum(x, x, "b i,b j -> i j").div_(self._N_data * scale)
+        scale = x.shape[1]
+        covariance = einsum(x, x, "batch shared i, batch shared j -> i j").div_(
+            self._N_data * scale
+        )
         self._set_or_add_(input_covariances, module_name, covariance)
+
+    @staticmethod
+    def _layer_hyperparams(module: Module) -> dict[str, Any]:
+        """Extract layer hyperparameters from a module.
+
+        Returns an empty dict for Linear modules and convolution hyperparameters
+        for Conv2d modules, following the IO collector convention.
+
+        Args:
+            module: The layer module.
+
+        Returns:
+            Dict with ``kernel_size``, ``stride``, ``padding``, ``dilation``,
+            ``groups`` for Conv2d modules, empty dict otherwise.
+        """
+        if isinstance(module, Conv2d):
+            return dict(
+                kernel_size=module.kernel_size,
+                stride=module.stride,
+                padding=module.padding,
+                dilation=module.dilation,
+                groups=module.groups,
+            )
+        return {}
 
     @staticmethod
     def _set_or_add_(

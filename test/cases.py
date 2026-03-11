@@ -20,7 +20,7 @@ from torch.nn import (
 )
 from torch.utils.data import DataLoader, TensorDataset
 
-from curvlinops.kfac import KFACType
+from curvlinops.kfac_utils import KFACType
 from test.utils import (
     WeightShareModel,
     classification_targets,

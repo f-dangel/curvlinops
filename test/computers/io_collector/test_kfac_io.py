@@ -24,7 +24,7 @@ from torch.nn.functional import (
 )
 
 from curvlinops.computers.io_collector import with_kfac_io
-from curvlinops.computers.kfac import FisherType
+from curvlinops.kfac_utils import FisherType
 from curvlinops.utils import allclose_report
 from test.computers.io_collector.test_param_io import CONV2D_DEFAULT_PARAMS
 
@@ -55,9 +55,11 @@ def _verify_kfac_io(
 
     dummy_x = zeros_like(x)
     dummy_params = {n: zeros_like(p) for n, p in params.items()}
-    f_and_kfac_io = with_kfac_io(f, dummy_x, dummy_params, fisher_type)
+    f_and_kfac_io, layers, hyperparams = with_kfac_io(
+        f, dummy_x, dummy_params, fisher_type
+    )
 
-    y, inputs, outputs, layers, hyperparams = f_and_kfac_io(x, params)
+    y, inputs, outputs = f_and_kfac_io(x, params)
 
     # Compare function value
     assert allclose_report(y, y_true)
@@ -337,8 +339,16 @@ def test_kfac_io_cnn(inplace: bool):
                 "Linear1": {"weight": "9.weight", "bias": "9.bias"},
             },
             {
-                "Conv0": {**CONV2D_DEFAULT_PARAMS, **{"padding": [1, 1]}},
-                "Conv1": {**CONV2D_DEFAULT_PARAMS, **{"stride": [2, 2]}},
+                "Conv0": {
+                    **CONV2D_DEFAULT_PARAMS,
+                    "kernel_size": [3, 3],
+                    "padding": [1, 1],
+                },
+                "Conv1": {
+                    **CONV2D_DEFAULT_PARAMS,
+                    "kernel_size": [4, 4],
+                    "stride": [2, 2],
+                },
                 "Linear0": {},  # Linear layers have empty hyperparams
                 "Linear1": {},  # Linear layers have empty hyperparams
             },
@@ -355,30 +365,25 @@ def test_kfac_io_flatten_requires_per_batch_size_tracing():
     batch sizes, motivating the per-batch-size cache in ``MakeFxKFACComputer``.
     """
     manual_seed(0)
-    model = Sequential(
-        Conv2d(3, 2, kernel_size=3, padding=1),
-        AdaptiveAvgPool2d(2),
-        Flatten(),
-        Linear(2 * 2 * 2, 3),
-    )
+    model = Sequential(Flatten(), Linear(6, 3))
 
     def f(x: Tensor, params: dict[str, Tensor]) -> Tensor:
         return functional_call(model, params, (x,))
 
     params = dict(model.named_parameters())
-    x_batch2 = rand(2, 3, 4, 4)
-    x_batch5 = rand(5, 3, 4, 4)
+    x_batch2 = rand(2, 2, 3)
+    x_batch5 = rand(5, 2, 3)
 
     # with_kfac_io traced with batch=2 works for batch=2
-    f_kfac_io = with_kfac_io(f, x_batch2, params, FisherType.EMPIRICAL)
+    f_kfac_io, *_ = with_kfac_io(f, x_batch2, params, FisherType.EMPIRICAL)
     out2, *_ = f_kfac_io(x_batch2, params)
     assert out2.shape[0] == 2
 
     # But fails for batch=5 due to hardcoded shapes from nn.Flatten
-    with raises(RuntimeError):
+    with raises(RuntimeError, match="shape .* is invalid for input of size"):
         f_kfac_io(x_batch5, params)
 
     # A separate IO function traced with batch=5 works for batch=5
-    f_kfac_io_5 = with_kfac_io(f, x_batch5, params, FisherType.EMPIRICAL)
+    f_kfac_io_5, *_ = with_kfac_io(f, x_batch5, params, FisherType.EMPIRICAL)
     out5, *_ = f_kfac_io_5(x_batch5, params)
     assert out5.shape[0] == 5

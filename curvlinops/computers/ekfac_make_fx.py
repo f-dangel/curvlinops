@@ -11,17 +11,20 @@ from typing import Any
 
 from einops import rearrange
 from torch import Tensor, cat
-from torch.fx.experimental.proxy_tensor import make_fx
+from torch.func import functional_call
 
 from curvlinops.computers.ekfac import (
     EKFACComputer,
     compute_eigenvalue_correction_linear_weight_sharing,
 )
-from curvlinops.computers.io_collector import with_kfac_io
-from curvlinops.computers.kfac_make_fx import MakeFxKFACComputer
-from curvlinops.computers.kfac_math import compute_loss_correction, prepare_io_for_ekfac
-from curvlinops.kfac_utils import _has_joint_weight_and_bias
-from curvlinops.utils import _seed_generator
+from curvlinops.computers.kfac_make_fx import MakeFxKFACComputer, _trace_io
+from curvlinops.computers.kfac_math import (
+    compute_loss_correction,
+    grad_to_weight_sharing_format,
+    input_to_weight_sharing_format,
+)
+from curvlinops.kfac_utils import KFACType, _has_joint_weight_and_bias
+from curvlinops.utils import _seed_generator, identify_free_parameters
 
 
 class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
@@ -53,46 +56,40 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
         Returns:
             Dictionary containing corrected eigenvalues for each module.
         """
-        f, named_params, io_to_module, layer_param_names, layer_hyperparams = (
-            self._setup_model()
-        )
+        named_params = identify_free_parameters(self._model_func, self._params)
 
-        if not hasattr(self, "_traced_forward_io_fns"):
-            self._traced_forward_io_fns: dict[int, Callable] = {}
+        def f(x, params: dict[str, Tensor]) -> Tensor:
+            return functional_call(self._model_func, params, (x,))
+
+        traced_io_fns: dict[int, Callable] = {}
+        io_to_module: dict[str, str] | None = None
+        layer_hparams: dict[str, dict[str, Any]] | None = None
 
         corrected_eigenvalues: dict[str, Tensor | dict[int, Tensor]] = {}
 
         self._generator = _seed_generator(self._generator, self.device, self._seed)
 
         for X, y in self._loop_over_data(desc="Eigenvalue correction"):
-            batch_size = X.shape[0]
-            if batch_size not in self._traced_forward_io_fns:
-                f_io = with_kfac_io(f, X, named_params, self._fisher_type)
-                forward_io = self._make_forward_io_fn(f_io)
-                self._traced_forward_io_fns[batch_size] = make_fx(forward_io)(
-                    named_params, X
+            if (batch_size := self._batch_size_fn(X)) not in traced_io_fns:
+                traced_io_fns[batch_size], io_to_module, layer_hparams = _trace_io(
+                    f, X, named_params, self._fisher_type
                 )
 
-            # Phase 1: Traced forward (IO collection)
-            traced_forward = self._traced_forward_io_fns[batch_size]
-            output, layer_inputs, layer_outputs = traced_forward(named_params, X)
+            io_fn = traced_io_fns[batch_size]
+            output, layer_inputs, layer_outputs = io_fn(X, named_params)
 
-            # Phase 2: Eager backward + eigenvalue correction
-            io_names, batched_grads = self._compute_batched_grads(
+            layer_output_grads = self._compute_layer_output_grads(
                 output, y, layer_outputs, io_to_module
             )
 
-            for io_name, batched_g in zip(io_names, batched_grads):
-                mod_name = io_to_module[io_name]
-                x = layer_inputs.get(io_name)
+            for io_layer_name, batched_g in layer_output_grads.items():
+                mod_name = io_to_module[io_layer_name]
+                x = layer_inputs.get(io_layer_name)
                 self._eigenvalue_correction_from_io(
-                    io_name,
                     batched_g,
                     x,
                     mod_name,
-                    layer_param_names,
-                    layer_hyperparams,
-                    named_params,
+                    layer_hparams[io_layer_name],
                     input_covariances_eigenvectors,
                     gradient_covariances_eigenvectors,
                     corrected_eigenvalues,
@@ -100,36 +97,12 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
 
         return corrected_eigenvalues
 
-    @staticmethod
-    def _make_forward_io_fn(
-        f_with_kfac_io: Callable,
-    ) -> Callable:
-        """Build a function for the traced forward pass (IO collection only).
-
-        Args:
-            f_with_kfac_io: IO-collecting function for a specific batch size.
-
-        Returns:
-            A function ``(params, X) -> (output, layer_inputs, layer_outputs)``.
-        """
-
-        def _forward_io(
-            params: dict[str, Tensor], X: Tensor
-        ) -> tuple[Tensor, dict[str, Tensor], dict[str, Tensor]]:
-            output, layer_inputs, layer_outputs, _, _ = f_with_kfac_io(X, params)
-            return output, layer_inputs, layer_outputs
-
-        return _forward_io
-
     def _eigenvalue_correction_from_io(
         self,
-        io_layer_name: str,
         batched_g: Tensor,
         x: Tensor | None,
         module_name: str,
-        layer_param_names: dict[str, dict[str, str]],
-        layer_hyperparams: dict[str, dict[str, Any]],
-        named_params: dict[str, Tensor],
+        layer_hparams: dict[str, Any],
         input_cov_eigvecs: dict[str, Tensor],
         gradient_cov_eigvecs: dict[str, Tensor],
         corrected_eigenvalues: dict[str, Tensor | dict[int, Tensor]],
@@ -146,14 +119,11 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
         ``EKFACComputer._accumulate_corrected_eigenvalues``.
 
         Args:
-            io_layer_name: IO collector layer name.
             batched_g: Batched gradients at the layer's output with shape
                 ``[num_vectors, batch, ...]``.
             x: Layer input tensor with shape ``[batch, ...]`` or ``None``.
             module_name: Module name in ``self._mapping``.
-            layer_param_names: Parameter name mapping from IO collector.
-            layer_hyperparams: Hyperparameters from IO collector.
-            named_params: Named parameter tensors.
+            layer_hparams: Hyperparameters from IO collector for this layer.
             input_cov_eigvecs: Input covariance eigenvectors per module.
             gradient_cov_eigvecs: Gradient covariance eigenvectors per module.
             corrected_eigenvalues: Dictionary to accumulate corrections (mutated).
@@ -174,20 +144,9 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
             a = a.unsqueeze(0).expand(num_vectors, *(-1,) * a.ndim)
             a = rearrange(a, "v batch ... -> (v batch) ...")
 
-        is_conv2d, kernel_size, hyperparams = self._conv_info(
-            io_layer_name, layer_hyperparams, layer_param_names, named_params
-        )
-
-        g, a = prepare_io_for_ekfac(
-            g,
-            a,
-            is_conv2d=is_conv2d,
-            kernel_size=kernel_size,
-            stride=hyperparams.get("stride") if is_conv2d else None,
-            padding=hyperparams.get("padding") if is_conv2d else None,
-            dilation=hyperparams.get("dilation") if is_conv2d else None,
-            groups=hyperparams.get("groups") if is_conv2d else None,
-        )
+        g = grad_to_weight_sharing_format(g, KFACType.EXPAND, layer_hparams)
+        if a is not None:
+            a = input_to_weight_sharing_format(a, KFACType.EXPAND, layer_hparams)
 
         correction = compute_loss_correction(
             batch_size,

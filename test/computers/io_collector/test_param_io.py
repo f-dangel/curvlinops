@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from pytest import raises
+from pytest import mark, raises
 from torch import Tensor, arange, manual_seed, rand, zeros, zeros_like
 from torch.func import functional_call
 from torch.nn import Conv2d, Linear
@@ -139,7 +139,8 @@ def test_convolution():
 
     x = rand(N, C_in, I1, I2)
     params = {"weight": rand(C_out, C_in, K1, K2), "bias": rand(C_out)}
-    io_true = ((CONV_STR, f(x, params), x, "weight", "bias", CONV2D_DEFAULT_PARAMS),)
+    hparams = {**CONV2D_DEFAULT_PARAMS, "kernel_size": [K1, K2]}
+    io_true = ((CONV_STR, f(x, params), x, "weight", "bias", hparams),)
     _verify_io(f, x, params, io_true)
 
     # 2) Non-standard convolution with weight and bias
@@ -153,7 +154,9 @@ def test_convolution():
     params = {"weight": rand(C_out, C_in, K1, K2), "bias": rand(C_out)}
     hyperparams_true = {
         **CONV2D_DEFAULT_PARAMS,
-        **{"stride": [2, 2], "padding": [1, 1]},
+        "kernel_size": [K1, K2],
+        "stride": [2, 2],
+        "padding": [1, 1],
     }
     io_true = ((CONV_STR, f(x, params), x, "weight", "bias", hyperparams_true),)
     _verify_io(f, x, params, io_true)
@@ -164,7 +167,8 @@ def test_convolution():
 
     x = rand(N, C_in, I1, I2)
     params = {"weight": rand(C_out, C_in, K1, K2)}
-    io_true = ((CONV_STR, f(x, params), x, "weight", None, CONV2D_DEFAULT_PARAMS),)
+    hparams = {**CONV2D_DEFAULT_PARAMS, "kernel_size": [K1, K2]}
+    io_true = ((CONV_STR, f(x, params), x, "weight", None, hparams),)
     _verify_io(f, x, params, io_true)
 
     # 4) Use torch.nn nn
@@ -173,9 +177,57 @@ def test_convolution():
     def f(x: Tensor, params: dict) -> Tensor:
         return functional_call(conv, params, x)
 
-    hyperparams_true = {**CONV2D_DEFAULT_PARAMS, **{"stride": [2, 1]}}
+    hyperparams_true = {
+        **CONV2D_DEFAULT_PARAMS,
+        "kernel_size": [K1, K2],
+        "stride": [2, 1],
+    }
     x, params = (rand(N, C_in, I1, I2), {"weight": rand(C_out, C_in, K1, K2)})
     io_true = ((CONV_STR, f(x, params), x, "weight", None, hyperparams_true),)
+    _verify_io(f, x, params, io_true)
+
+
+def test_reshape_altering_last_dim_not_matched():
+    """Test that reshapes altering the feature dimension are not matched.
+
+    ``Linear(6, 4, bias=False) → reshape(batch, 2, 2) → add(bias)`` should NOT
+    be detected as a single linear layer, because the reshape changes the last
+    dimension from 4 to 2.
+    """
+    manual_seed(0)
+
+    def f(x: Tensor, params: dict) -> Tensor:
+        out = linear(x, params["weight"])
+        out = out.reshape(x.shape[0], 2, 2)
+        return out + params["bias"]
+
+    x_dummy = zeros(3, 6)
+    params_dummy = {"weight": zeros(4, 6), "bias": zeros(2)}
+
+    with raises(ValueError, match="Some parameters are used in unsupported patterns."):
+        _ = with_param_io(f, x_dummy, params_dummy)
+
+
+def test_model_view_after_linear_not_absorbed():
+    """Test that a model view after a 2D linear is not absorbed into the linear.
+
+    ``Linear(3, 4) → view(batch, 2, 4)`` should detect the linear with its
+    original 2D output ``[batch, 4]``, not the reshaped ``[batch, 2, 4]``.
+    The view preserves the last dimension, so without the paired-view guard
+    it could be mistaken for F.linear's output view.
+    """
+    manual_seed(0)
+    N, D_in, D_out = 2, 3, 4
+
+    def f(x: Tensor, params: dict) -> Tensor:
+        out = linear(x, params["weight"], params["bias"])
+        return out.view(x.shape[0], 1, D_out)
+
+    x = rand(N, D_in)
+    params = {"weight": rand(D_out, D_in), "bias": rand(D_out)}
+    # Output should be the addmm result (2D), not the view (3D)
+    expected_out = linear(x, params["weight"], params["bias"])
+    io_true = ((LINEAR_STR, expected_out, x, "weight", "bias", {}),)
     _verify_io(f, x, params, io_true)
 
 
@@ -251,3 +303,39 @@ def test_supports_multiple_batch_sizes():
         io_true = ((LINEAR_STR, f(x, params), x, "weight", "bias", {}),)
         io = f_with_io(x, params)[1:]
         compare_io(io, io_true)
+
+
+@mark.parametrize("bias", [True, False], ids=["bias", "no_bias"])
+@mark.parametrize(
+    "x_shape",
+    [(2, 8, 5), (2, 4, 8, 5)],
+    ids=["3D", "4D"],
+)
+def test_fully_connected_higher_dim_input(x_shape: tuple[int, ...], bias: bool):
+    """Test with_param_io preserves original input shape for >2D Linear inputs.
+
+    For 3D inputs, PyTorch decomposes ``F.linear`` as ``view → addmm → view``;
+    for 4D+ inputs it uses ``view → mm → _unsafe_view → add(bias)``. The IO
+    collector must resolve these paired reshapes to capture the original
+    (unflattened) input and output tensors.
+
+    Args:
+        x_shape: Shape of the input tensor (must be >2D).
+        bias: Whether the linear layer has a bias.
+    """
+    manual_seed(0)
+    D_in, D_out = x_shape[-1], 4
+
+    fc = Linear(D_in, D_out, bias=bias)
+
+    def f(x: Tensor, params: dict) -> Tensor:
+        return functional_call(fc, params, x)
+
+    params = {"weight": rand(D_out, D_in)}
+    if bias:
+        params["bias"] = rand(D_out)
+
+    x = rand(*x_shape)
+    bias_name = "bias" if bias else None
+    io_true = ((LINEAR_STR, f(x, params), x, "weight", bias_name, {}),)
+    _verify_io(f, x, params, io_true)
