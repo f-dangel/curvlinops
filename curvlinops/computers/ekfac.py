@@ -4,7 +4,7 @@ from functools import partial
 from typing import Any
 
 from einops import einsum
-from torch import Tensor, cat
+from torch import Tensor
 from torch.linalg import eigh
 from torch.nn import Module
 from torch.utils.hooks import RemovableHandle
@@ -478,10 +478,15 @@ class EKFACComputer(KFACComputer):
         a = inputs[0].data.detach() if a_required else None
 
         layer_hparams = self._layer_hyperparams(module)
+        has_joint_wb = _has_joint_weight_and_bias(
+            self._separate_weight_and_bias, param_pos
+        )
         g = grad_to_weight_sharing_format(g, KFACType.EXPAND, layer_hparams)
         g = g.unsqueeze(0)  # [N, S, D] -> [1, N, S, D] (V=1 for hooks backend)
         if a is not None:
-            a = input_to_weight_sharing_format(a, KFACType.EXPAND, layer_hparams)
+            a = input_to_weight_sharing_format(
+                a, KFACType.EXPAND, layer_hparams, append_ones_for_bias=has_joint_wb
+            )
 
         correction = compute_loss_correction(
             batch_size,
@@ -496,10 +501,9 @@ class EKFACComputer(KFACComputer):
         # ggT_eigenvectors always exists
         ggT_eigenvectors = gradient_covariances_eigenvectors[module_name]
 
-        if _has_joint_weight_and_bias(self._separate_weight_and_bias, param_pos):
-            a_augmented = cat([a, a.new_ones(*a.shape[:-1], 1)], dim=-1)
+        if has_joint_wb:
             eigencorrection = compute_eigenvalue_correction_linear_weight_sharing(
-                g, ggT_eigenvectors, a_augmented, aaT_eigenvectors
+                g, ggT_eigenvectors, a, aaT_eigenvectors
             )
             self._set_or_add_(
                 corrected_eigenvalues,

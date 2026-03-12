@@ -16,8 +16,8 @@ def test_compute_eigenvalue_correction_linear_weight_sharing():
     N, S, D1, D2 = 2, 3, 4, 5
     DT = float64
 
-    # Generate random layer inputs and output gradients
-    g = rand(N, S, D1, dtype=DT)
+    # Generate random layer inputs and output gradients (V=1 vector)
+    g = rand(1, N, S, D1, dtype=DT)
     a = rand(N, S, D2, dtype=DT)
 
     # Generate random bases

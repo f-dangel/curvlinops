@@ -9,7 +9,7 @@ instead of forward/backward hooks. Only the forward pass is traced with
 from collections.abc import Callable
 from typing import Any
 
-from torch import Tensor, cat
+from torch import Tensor
 from torch.func import functional_call
 
 from curvlinops.computers.ekfac import (
@@ -145,12 +145,18 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
 
         param_pos = self._mapping[module_name]
         a_required = "weight" in param_pos
+        has_joint_wb = _has_joint_weight_and_bias(
+            self._separate_weight_and_bias, param_pos
+        )
 
         # Convert a to weight sharing format: [batch, ...] -> [batch, shared, d_in]
         a = None
         if a_required and x is not None:
             a = input_to_weight_sharing_format(
-                x.data.detach(), KFACType.EXPAND, layer_hparams
+                x.data.detach(),
+                KFACType.EXPAND,
+                layer_hparams,
+                append_ones_for_bias=has_joint_wb,
             )
 
         correction = compute_loss_correction(
@@ -163,10 +169,9 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
         aaT_eigvecs = input_cov_eigvecs.get(module_name)
         ggT_eigvecs = gradient_cov_eigvecs[module_name]
 
-        if _has_joint_weight_and_bias(self._separate_weight_and_bias, param_pos):
-            a_augmented = cat([a, a.new_ones(*a.shape[:-1], 1)], dim=-1)
+        if has_joint_wb:
             eigencorrection = compute_eigenvalue_correction_linear_weight_sharing(
-                g, ggT_eigvecs, a_augmented, aaT_eigvecs
+                g, ggT_eigvecs, a, aaT_eigvecs
             )
             self._set_or_add_(
                 corrected_eigenvalues,
