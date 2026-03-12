@@ -1118,13 +1118,16 @@ def test_KFAC_inverse_exactly_damped_matmat(
 ###############################################################################
 
 
-def test_kfac_make_fx_flatten_different_batch_sizes():
-    """Test make_fx with nn.Flatten and different batch sizes.
+def _check_make_fx_flatten_different_batch_sizes(linop_cls):
+    """Check make_fx with nn.Flatten and different batch sizes.
 
     ``nn.Flatten`` produces ``aten.view`` with a baked-in batch size during
     real-mode ``make_fx`` tracing, so a single traced function cannot handle
-    multiple batch sizes. This test verifies that the per-batch-size caching
-    in ``MakeFxKFACComputer`` handles this correctly.
+    multiple batch sizes. This verifies that the per-batch-size caching
+    handles this correctly.
+
+    Args:
+        linop_cls: The linear operator class to test.
     """
     manual_seed(0)
     model = Sequential(Flatten(), Linear(6, 3))
@@ -1140,13 +1143,16 @@ def test_kfac_make_fx_flatten_different_batch_sizes():
         check_deterministic=False,
         fisher_type=FisherType.EMPIRICAL,
     )
-    KFAC_hooks = KFACLinearOperator(
-        model, loss_func, params, data, backend="hooks", **common_kwargs
-    )
-    KFAC_make_fx = KFACLinearOperator(
+    hooks = linop_cls(model, loss_func, params, data, backend="hooks", **common_kwargs)
+    make_fx = linop_cls(
         model, loss_func, params, data, backend="make_fx", **common_kwargs
     )
 
-    hooks_mat = KFAC_hooks @ eye_like(KFAC_hooks)
-    make_fx_mat = KFAC_make_fx @ eye_like(KFAC_make_fx)
+    hooks_mat = hooks @ eye_like(hooks)
+    make_fx_mat = make_fx @ eye_like(make_fx)
     assert allclose_report(hooks_mat, make_fx_mat)
+
+
+def test_kfac_make_fx_flatten_different_batch_sizes():
+    """Test make_fx KFAC with nn.Flatten and different batch sizes."""
+    _check_make_fx_flatten_different_batch_sizes(KFACLinearOperator)

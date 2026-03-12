@@ -24,9 +24,12 @@ from curvlinops.kfac_utils import FisherType, KFACType
 from curvlinops.utils import allclose_report
 from test.cases import DEVICES, DEVICES_IDS
 from test.test_kfac import (
+    BACKENDS,
+    BACKENDS_IDS,
     MC_SAMPLES,
     MC_TOLS,
     _check_does_not_affect_grad,
+    _check_make_fx_flatten_different_batch_sizes,
     _check_torch_save_load,
 )
 from test.utils import (
@@ -54,6 +57,7 @@ from test.utils import (
     "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
 )
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
+@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
 def test_ekfac_type2(
     kfac_exact_case: tuple[
         Module, MSELoss, list[Parameter], Iterable[tuple[Tensor, Tensor]]
@@ -61,6 +65,7 @@ def test_ekfac_type2(
     shuffle: bool,
     exclude: str,
     separate_weight_and_bias: bool,
+    backend: str,
 ):
     """Test the EKFAC implementation against the exact GGN.
 
@@ -72,6 +77,7 @@ def test_ekfac_type2(
             or ``None``.
         separate_weight_and_bias: Whether to treat weight and bias as separate blocks in
             the EKFAC matrix.
+        backend: The backend to use for computing Kronecker factors.
     """
     model, loss_func, params, data, batch_size_fn = change_dtype(
         kfac_exact_case, float64
@@ -95,6 +101,7 @@ def test_ekfac_type2(
         batch_size_fn=batch_size_fn,
         fisher_type=FisherType.TYPE2,
         separate_weight_and_bias=separate_weight_and_bias,
+        backend=backend,
     )
     ekfac_mat = ekfac @ eye_like(ekfac)
 
@@ -109,6 +116,7 @@ def test_ekfac_type2(
     "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
 )
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
+@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
 def test_ekfac_type2_weight_sharing(
     kfac_weight_sharing_exact_case: tuple[
         WeightShareModel | Conv2dModel,
@@ -120,6 +128,7 @@ def test_ekfac_type2_weight_sharing(
     shuffle: bool,
     exclude: str,
     separate_weight_and_bias: bool,
+    backend: str,
 ):
     """Test EKFAC for linear weight-sharing layers against the exact GGN.
 
@@ -133,6 +142,7 @@ def test_ekfac_type2_weight_sharing(
             or ``None``.
         separate_weight_and_bias: Whether to treat weight and bias as separate blocks in
             the EKFAC matrix.
+        backend: The backend to use for computing Kronecker factors.
     """
     model, loss_func, params, data, batch_size_fn = kfac_weight_sharing_exact_case
     # The model outputs have to be flattened assuming only the first dimension is the
@@ -169,6 +179,7 @@ def test_ekfac_type2_weight_sharing(
         fisher_type=FisherType.TYPE2,
         kfac_approx=setting,  # choose EKFAC approximation consistent with setting
         separate_weight_and_bias=separate_weight_and_bias,
+        backend=backend,
     )
     ekfac_mat = ekfac @ eye_like(ekfac)
 
@@ -384,7 +395,8 @@ def test_ekfac_ef_one_datum(
 
 
 @mark.parametrize("dev", DEVICES, ids=DEVICES_IDS)
-def test_ekfac_inplace_activations(dev: device):
+@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
+def test_ekfac_inplace_activations(dev: device, backend: str):
     """Test that EKFAC works if the network has in-place activations.
 
     We use a test case with a single datum as EKFAC becomes exact as the number of
@@ -392,8 +404,9 @@ def test_ekfac_inplace_activations(dev: device):
 
     Args:
         dev: The device to run the test on.
+        backend: The backend to use for computing Kronecker factors.
     """
-    _test_inplace_activations(EKFACLinearOperator, dev, backend="hooks")
+    _test_inplace_activations(EKFACLinearOperator, dev, backend=backend)
 
 
 @mark.parametrize("fisher_type", EKFACComputer._SUPPORTED_FISHER_TYPE)
@@ -402,11 +415,13 @@ def test_ekfac_inplace_activations(dev: device):
 )
 @mark.parametrize("reduction", ["mean", "sum"])
 @mark.parametrize("dev", DEVICES, ids=DEVICES_IDS)
+@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
 def test_multi_dim_output(
     fisher_type: str,
     loss: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
     reduction: str,
     dev: device,
+    backend: str,
 ):
     """Test the EKFAC implementation for >2d outputs (using a 3d and 4d output).
 
@@ -415,6 +430,7 @@ def test_multi_dim_output(
         loss: The loss function to use.
         reduction: The reduction to use for the loss function.
         dev: The device to run the test on.
+        backend: The backend to use for computing Kronecker factors.
     """
     manual_seed(0)
     # set up loss function, data, and model
@@ -457,6 +473,7 @@ def test_multi_dim_output(
             params,
             data,
             fisher_type=fisher_type,
+            backend=backend,
         )
 
 
@@ -465,10 +482,12 @@ def test_multi_dim_output(
     "loss", [MSELoss, CrossEntropyLoss, BCEWithLogitsLoss], ids=["mse", "ce", "bce"]
 )
 @mark.parametrize("dev", DEVICES, ids=DEVICES_IDS)
+@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
 def test_expand_setting_scaling(
     fisher_type: str,
     loss: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
     dev: device,
+    backend: str,
 ):
     """Test EKFAC for correct scaling for expand setting with mean reduction loss.
 
@@ -478,6 +497,7 @@ def test_expand_setting_scaling(
         fisher_type: The type of Fisher matrix to use.
         loss: The loss function to use.
         dev: The device to run the test on.
+        backend: The backend to use for computing Kronecker factors.
     """
     manual_seed(0)
 
@@ -515,6 +535,7 @@ def test_expand_setting_scaling(
         params,
         data,
         fisher_type=fisher_type,
+        backend=backend,
     )
     # Simulate a mean reduction by manually scaling the gradient covariances
     loss_term_factor = S * S  # number of spatial locations of model output
@@ -540,6 +561,7 @@ def test_expand_setting_scaling(
         params,
         data,
         fisher_type=fisher_type,
+        backend=backend,
     )
     ekfac_mean_mat = ekfac_mean @ eye_like(ekfac_mean)
 
@@ -615,12 +637,14 @@ def test_ekfac_torch_save_load(tmp_path: Path) -> None:
 
 
 # TODO: Add test for FisherType.MC once tests are in float64.
+@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
 @mark.parametrize("fisher_type", [FisherType.TYPE2, FisherType.EMPIRICAL])
 @mark.parametrize("kfac_approx", EKFACComputer._SUPPORTED_KFAC_APPROX)
 def test_ekfac_closer_to_exact_than_kfac(
     inv_case,
     fisher_type: FisherType,
     kfac_approx: KFACType,
+    backend: str,
 ):
     """Test that EKFAC is closer in Frobenius norm to the exact quantity than KFAC."""
     model, loss_func, params, data, batch_size_fn = change_dtype(inv_case, float64)
@@ -632,15 +656,18 @@ def test_ekfac_closer_to_exact_than_kfac(
         batch_size_fn,
         fisher_type=fisher_type,
         kfac_approx=kfac_approx,
+        backend=backend,
     )
 
 
+@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
 @mark.parametrize("fisher_type", EKFACComputer._SUPPORTED_FISHER_TYPE)
 @mark.parametrize("kfac_approx", EKFACComputer._SUPPORTED_KFAC_APPROX)
 def test_ekfac_closer_to_exact_than_kfac_weight_sharing(
     cnn_case,
     kfac_approx: KFACType,
     fisher_type: FisherType,
+    backend: str,
 ):
     """Test that EKFAC is closer in Frobenius norm to the exact quantity than KFAC.
 
@@ -655,6 +682,7 @@ def test_ekfac_closer_to_exact_than_kfac_weight_sharing(
         batch_size_fn,
         fisher_type=fisher_type,
         kfac_approx=kfac_approx,
+        backend=backend,
     )
 
 
@@ -687,3 +715,8 @@ def test_EKFAC_inverse_exactly_damped_matmat(
 
     compare_consecutive_matmats(inv_EKFAC)
     compare_matmat(inv_EKFAC, inv_EKFAC_naive)
+
+
+def test_ekfac_make_fx_flatten_different_batch_sizes():
+    """Test make_fx EKFAC with nn.Flatten and different batch sizes."""
+    _check_make_fx_flatten_different_batch_sizes(EKFACLinearOperator)

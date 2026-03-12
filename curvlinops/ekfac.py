@@ -3,8 +3,10 @@
 from curvlinops._torch_base import _ChainPyTorchLinearOperator
 from curvlinops.blockdiagonal import BlockDiagonalLinearOperator
 from curvlinops.computers.ekfac import EKFACComputer
+from curvlinops.computers.ekfac_make_fx import MakeFxEKFACComputer
 from curvlinops.eigh import EighDecomposedLinearOperator
 from curvlinops.kfac import KFACLinearOperator
+from curvlinops.kfac_utils import _has_joint_weight_and_bias
 from curvlinops.kronecker import KroneckerProductLinearOperator
 
 
@@ -24,7 +26,10 @@ class EKFACLinearOperator(KFACLinearOperator):
       (ICPR).
     """
 
-    _BACKENDS: dict[str, type] = {"hooks": EKFACComputer}
+    _BACKENDS: dict[str, type] = {
+        "hooks": EKFACComputer,
+        "make_fx": MakeFxEKFACComputer,
+    }
 
     @staticmethod
     def _compute_canonical_op(computer: EKFACComputer) -> BlockDiagonalLinearOperator:
@@ -47,8 +52,8 @@ class EKFACLinearOperator(KFACLinearOperator):
             lambdas = corrected_eigenvalues[mod_name]
 
             # Handle joint weight+bias case
-            if not computer._separate_weight_and_bias and {"weight", "bias"} == set(
-                param_pos.keys()
+            if _has_joint_weight_and_bias(
+                computer._separate_weight_and_bias, param_pos
             ):
                 # Single Kronecker product block for weight+bias
                 bases.append([Q_g, Q_a])

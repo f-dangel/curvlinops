@@ -96,9 +96,10 @@ def input_to_weight_sharing_format(
         )
 
     # Step 2: Collapse sharing dimensions into a single axis
-    x = rearrange(x, "batch ... d_in -> batch (...) d_in")
     if kfac_approx == KFACType.REDUCE:
-        x = reduce(x, "batch shared d_in -> batch 1 d_in", "mean")
+        x = reduce(x, "batch ... d_in -> batch 1 d_in", "mean")
+    else:
+        x = rearrange(x, "batch ... d_in -> batch (...) d_in")
 
     # Step 3: Optionally append ones column for joint weight+bias
     if append_ones_for_bias:
@@ -141,9 +142,10 @@ def grad_to_weight_sharing_format(
 
     # Step 2: Collapse sharing dimensions into single axis
     leading = {1: "", 2: "v "}[num_leading_dims]
-    g = rearrange(g, f"{leading}batch ... d_out -> {leading}batch (...) d_out")
     if kfac_approx == KFACType.REDUCE:
-        g = reduce(g, f"{leading}batch shared d_out -> {leading}batch 1 d_out", "sum")
+        g = reduce(g, f"{leading}batch ... d_out -> {leading}batch 1 d_out", "sum")
+    else:
+        g = rearrange(g, f"{leading}batch ... d_out -> {leading}batch (...) d_out")
 
     return g
 
