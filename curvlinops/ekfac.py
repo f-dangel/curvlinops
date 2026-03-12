@@ -51,9 +51,11 @@ class EKFACLinearOperator(KFACLinearOperator):
             Q_g = gradient_eigvecs[mod_name]
             lambdas = corrected_eigenvalues[mod_name]
 
+            # Handle joint weight+bias case
             if _has_joint_weight_and_bias(
                 computer._separate_weight_and_bias, param_pos
             ):
+                # Single Kronecker product block for weight+bias
                 bases.append([Q_g, Q_a])
                 corrections.append(lambdas)
             else:
