@@ -63,6 +63,7 @@ def _find_all_paths_from(
         if not current_node.users:
             return
 
+        # Continue to all users
         for user in current_node.users:
             yield from _traverse_from_node(user, path + (user,))
 

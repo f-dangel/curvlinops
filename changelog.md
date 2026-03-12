@@ -80,11 +80,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of hooks. Selectable via `backend="make_fx"` parameter
   ([PR](https://github.com/f-dangel/curvlinops/pull/261))
 
-- Add `make_fx` backend for `EKFACLinearOperator` via `MakeFxEKFACComputer`,
-  extending the FX-based approach to eigenvalue-corrected KFAC. Selectable
-  via `backend="make_fx"` parameter
-  ([PR](https://github.com/f-dangel/curvlinops/pull/253))
-
 - Import `FisherType` and `KFACType` directly from `curvlinops.kfac_utils`
   instead of `curvlinops.kfac`, reducing coupling between the linear operator
   and utility modules

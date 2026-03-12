@@ -30,7 +30,6 @@ from test.test_kfac import (
     MC_TOLS,
     _check_does_not_affect_grad,
     _check_torch_save_load,
-    _skip_if_make_fx_incompatible,
 )
 from test.utils import (
     Conv2dModel,
@@ -82,7 +81,6 @@ def test_ekfac_type2(
     model, loss_func, params, data, batch_size_fn = change_dtype(
         kfac_exact_case, float64
     )
-    _skip_if_make_fx_incompatible(backend, data=data)
     params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     ggn = block_diagonal(
@@ -433,7 +431,6 @@ def test_multi_dim_output(
         dev: The device to run the test on.
         backend: The backend to use for computing Kronecker factors.
     """
-    _skip_if_make_fx_incompatible(backend, fisher_type=fisher_type)
     manual_seed(0)
     # set up loss function, data, and model
     loss_func = loss(reduction=reduction).to(dev)
@@ -501,7 +498,6 @@ def test_expand_setting_scaling(
         dev: The device to run the test on.
         backend: The backend to use for computing Kronecker factors.
     """
-    _skip_if_make_fx_incompatible(backend, fisher_type=fisher_type)
     manual_seed(0)
 
     # set up data, loss function, and model
@@ -678,7 +674,6 @@ def test_ekfac_closer_to_exact_than_kfac_weight_sharing(
 
     For models with weight sharing.
     """
-    _skip_if_make_fx_incompatible(backend, fisher_type=fisher_type)
     model, loss_func, params, data, batch_size_fn = change_dtype(cnn_case, float64)
     _test_ekfac_closer_to_exact_than_kfac(
         model,

@@ -224,6 +224,7 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
             if _has_joint_weight_and_bias(
                 computer._separate_weight_and_bias, param_pos
             ):
+                # Single Kronecker product block for weight+bias
                 factors.append([ggT, aaT])
             else:
                 # Separate blocks for weight and bias
