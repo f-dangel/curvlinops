@@ -773,7 +773,7 @@ def check_estimator_convergence(
 def _test_inplace_activations(
     linop_cls: type[KFACLinearOperator | EKFACLinearOperator],
     dev: device,
-    backend: str = "hooks",
+    backend: str,
 ):
     """Test that (E)KFAC works if the network has in-place activations.
 

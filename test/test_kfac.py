@@ -875,12 +875,11 @@ def test_forward_only_fisher_type_exact_weight_sharing_case(
     assert allclose_report(ggn, 2 * scale * foof_mat, rtol=1e-4)
 
 
-def _check_does_not_affect_grad(linop_cls, backend="hooks"):
+def _check_does_not_affect_grad(linop_cls):
     """Make sure that computing a linear operator does not affect `.grad`.
 
     Args:
         linop_cls: The linear operator class to test.
-        backend: The backend to use for computing Kronecker factors.
     """
     manual_seed(0)
     batch_size, D_in, D_out = 4, 3, 2
@@ -896,35 +895,31 @@ def _check_does_not_affect_grad(linop_cls, backend="hooks"):
     grads_before = [p.grad.clone() for p in params]
 
     # create and compute the linear operator
-    _ = linop_cls(model, MSELoss(), params, [(X, y)], backend=backend)
+    _ = linop_cls(model, MSELoss(), params, [(X, y)])
 
     # make sure gradients are unchanged
     for grad_before, p in zip(grads_before, params):
         assert allclose(grad_before, p.grad)
 
 
-@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
-def test_kfac_does_not_affect_grad(backend: str):
+def test_kfac_does_not_affect_grad():
     """Make sure KFAC computation does not write to `.grad`."""
-    _check_does_not_affect_grad(KFACLinearOperator, backend=backend)
+    _check_does_not_affect_grad(KFACLinearOperator)
 
 
-def _check_torch_save_load(
-    linop_cls: type, tmp_path: Path, backend: str = "hooks"
-) -> None:
+def _check_torch_save_load(linop_cls: type, tmp_path: Path) -> None:
     """Test that an (E)KFAC operator can be saved and loaded with torch.save/load.
 
     Args:
         linop_cls: The linear operator class to test.
         tmp_path: Temporary directory provided by pytest.
-        backend: The backend to use for computing Kronecker factors.
     """
     manual_seed(0)
     model = Linear(3, 2)
     params = list(model.parameters())
     data = [(rand(4, 3), rand(4, 2))]
 
-    linop = linop_cls(model, MSELoss(), params, data, backend=backend)
+    linop = linop_cls(model, MSELoss(), params, data)
     mat_before = linop @ eye_like(linop)
 
     path = tmp_path / "linop.pt"
@@ -937,16 +932,14 @@ def _check_torch_save_load(
     path.unlink()
 
 
-@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
-def test_kfac_torch_save_load(tmp_path: Path, backend: str) -> None:
+def test_kfac_torch_save_load(tmp_path: Path) -> None:
     """Test that KFACLinearOperator can be saved and loaded with torch.save/load."""
-    _check_torch_save_load(KFACLinearOperator, tmp_path, backend=backend)
+    _check_torch_save_load(KFACLinearOperator, tmp_path)
 
 
-@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
 @mark.parametrize("fisher_type", ["type-2", "mc", "empirical", "forward-only"])
 @mark.parametrize("kfac_approx", ["expand", "reduce"])
-def test_string_in_enum(fisher_type: str, kfac_approx: str, backend: str):
+def test_string_in_enum(fisher_type: str, kfac_approx: str):
     """Test whether checking if a string is contained in enum works.
 
     To reproduce issue #118.
@@ -959,7 +952,6 @@ def test_string_in_enum(fisher_type: str, kfac_approx: str, backend: str):
         [(rand(2, 2), rand(2, 2))],
         fisher_type=fisher_type,
         kfac_approx=kfac_approx,
-        backend=backend,
     )
 
 
@@ -1003,7 +995,6 @@ def test_bug_132_dtype_deterministic_checks(dev: device, backend: str):
 KFAC_MIN_DAMPING = 1e-8
 
 
-@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
 @mark.parametrize("fisher_type", KFACComputer._SUPPORTED_FISHER_TYPE)
 def test_KFAC_inverse_damped_matmat(
     case: tuple[
@@ -1013,7 +1004,6 @@ def test_KFAC_inverse_damped_matmat(
         Iterable[tuple[Tensor, Tensor]],
     ],
     fisher_type: str,
-    backend: str,
     delta: float = 1e-2,
 ):
     """Test matrix-matrix multiplication by an inverse damped KFAC approximation."""
@@ -1026,7 +1016,6 @@ def test_KFAC_inverse_damped_matmat(
         data,
         batch_size_fn=batch_size_fn,
         fisher_type=fisher_type,
-        backend=backend,
     )
 
     # Invert KFAC linear operators
@@ -1045,7 +1034,6 @@ def test_KFAC_inverse_damped_matmat(
     compare_matmat(inv_KFAC, inv_KFAC_naive)
 
 
-@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
 def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901
     case: tuple[
         Module,
@@ -1053,7 +1041,6 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901
         list[Parameter],
         Iterable[tuple[Tensor, Tensor]],
     ],
-    backend: str,
     delta: float = 1e-2,
 ):
     """Test matrix-matrix multiplication by a heuristically damped KFAC inverse."""
@@ -1066,7 +1053,6 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901
         data,
         batch_size_fn=batch_size_fn,
         check_deterministic=False,
-        backend=backend,
     )
 
     inv_KFAC = KFAC.inverse(
@@ -1099,7 +1085,6 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901
     compare_matmat(inv_KFAC, inv_KFAC_naive)
 
 
-@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
 def test_KFAC_inverse_exactly_damped_matmat(
     case: tuple[
         Module,
@@ -1107,7 +1092,6 @@ def test_KFAC_inverse_exactly_damped_matmat(
         list[Parameter],
         Iterable[tuple[Tensor, Tensor]],
     ],
-    backend: str,
     delta: float = 1e-2,
 ):
     """Test matrix-matrix multiplication by an inverse (exactly) damped KFAC approximation."""
@@ -1119,7 +1103,6 @@ def test_KFAC_inverse_exactly_damped_matmat(
         params,
         data,
         batch_size_fn=batch_size_fn,
-        backend=backend,
     )
 
     # Exact damped inverse: inv(KFAC + delta * I)
