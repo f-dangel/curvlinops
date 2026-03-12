@@ -56,12 +56,17 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
         Returns:
             Dictionary containing corrected eigenvalues for each module.
         """
+        # Build functional model: identify free params by name, wrap in f(x, params)
         named_params = identify_free_parameters(self._model_func, self._params)
 
         def f(x, params: dict[str, Tensor]) -> Tensor:
             return functional_call(self._model_func, params, (x,))
 
+        # Cache for IO functions: make_fx bakes in tensor shapes (e.g. from nn.Flatten),
+        # so different batch sizes need separate traces
         traced_io_fns: dict[int, Callable] = {}
+
+        # Layer metadata (identical across batch sizes), populated on first trace
         io_to_module: dict[str, str] | None = None
         layer_hparams: dict[str, dict[str, Any]] | None = None
 
@@ -70,18 +75,22 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
         self._generator = _seed_generator(self._generator, self.device, self._seed)
 
         for X, y in self._loop_over_data(desc="Eigenvalue correction"):
+            # Maybe trace for current batch size and set up layer metadata
             if (batch_size := self._batch_size_fn(X)) not in traced_io_fns:
                 traced_io_fns[batch_size], io_to_module, layer_hparams = _trace_io(
                     f, X, named_params, self._fisher_type
                 )
 
+            # Forward pass with IO collection
             io_fn = traced_io_fns[batch_size]
             output, layer_inputs, layer_outputs = io_fn(X, named_params)
 
+            # Backward pass: compute per-layer output gradients
             layer_output_grads = self._compute_layer_output_grads(
                 output, y, layer_outputs, io_to_module
             )
 
+            # Accumulate eigenvalue corrections per layer
             for io_layer_name, batched_g in layer_output_grads.items():
                 mod_name = io_to_module[io_layer_name]
                 x = layer_inputs.get(io_layer_name)
@@ -128,25 +137,26 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
             gradient_cov_eigvecs: Gradient covariance eigenvectors per module.
             corrected_eigenvalues: Dictionary to accumulate corrections (mutated).
         """
-        g = batched_g.data.detach()  # [num_vectors, batch, ...]
-        num_vectors = g.shape[0]
+        g = batched_g.data.detach()  # [v, batch, ...]
         batch_size = g.shape[1]
 
-        # Flatten [v, batch] -> (v batch) for g, expand and flatten a to match
-        g = rearrange(g, "v batch ... -> (v batch) ...")
+        # Convert to weight sharing format, then flatten [v, batch] -> (v batch)
+        g = grad_to_weight_sharing_format(
+            g, KFACType.EXPAND, layer_hparams, num_leading_dims=2
+        )
+        g = rearrange(g, "v batch shared d_out -> (v batch) shared d_out")
 
         param_pos = self._mapping[module_name]
         a_required = "weight" in param_pos
 
         a = None
         if a_required and x is not None:
-            a = x.data.detach()  # [batch, ...]
-            a = a.unsqueeze(0).expand(num_vectors, *(-1,) * a.ndim)
-            a = rearrange(a, "v batch ... -> (v batch) ...")
-
-        g = grad_to_weight_sharing_format(g, KFACType.EXPAND, layer_hparams)
-        if a is not None:
-            a = input_to_weight_sharing_format(a, KFACType.EXPAND, layer_hparams)
+            a = input_to_weight_sharing_format(
+                x.data.detach(), KFACType.EXPAND, layer_hparams
+            )
+            # Expand [batch, shared, d_in] -> [v, batch, shared, d_in] -> flatten
+            a = a.unsqueeze(0).expand(g.shape[0] // batch_size, *(-1,) * a.ndim)
+            a = rearrange(a, "v batch shared d_in -> (v batch) shared d_in")
 
         correction = compute_loss_correction(
             batch_size,
