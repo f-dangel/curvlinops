@@ -9,7 +9,6 @@ instead of forward/backward hooks. Only the forward pass is traced with
 from collections.abc import Callable
 from typing import Any
 
-from einops import rearrange
 from torch import Tensor, cat
 from torch.func import functional_call
 
@@ -118,10 +117,9 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
     ) -> None:
         """Compute eigenvalue correction for one layer from IO data.
 
-        Processes batched gradients (from ``is_grads_batched=True``) by
-        flattening the ``[num_vectors, batch]`` dimensions into a single
-        batch dimension and expanding the layer input to match. Then calls
-        ``compute_eigenvalue_correction_linear_weight_sharing``.
+        Converts gradients and inputs to weight sharing format, then calls
+        ``compute_eigenvalue_correction_linear_weight_sharing`` which handles
+        the ``[V, N, S, D]`` gradient shape natively.
 
         Accumulates results directly into ``corrected_eigenvalues``, matching
         the structure used by the hooks backend in
@@ -140,23 +138,20 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
         g = batched_g.data.detach()  # [v, batch, ...]
         batch_size = g.shape[1]
 
-        # Convert to weight sharing format, then flatten [v, batch] -> (v batch)
+        # Convert g to weight sharing format: [v, batch, ...] -> [v, batch, shared, d_out]
         g = grad_to_weight_sharing_format(
             g, KFACType.EXPAND, layer_hparams, num_leading_dims=2
         )
-        g = rearrange(g, "v batch shared d_out -> (v batch) shared d_out")
 
         param_pos = self._mapping[module_name]
         a_required = "weight" in param_pos
 
+        # Convert a to weight sharing format: [batch, ...] -> [batch, shared, d_in]
         a = None
         if a_required and x is not None:
             a = input_to_weight_sharing_format(
                 x.data.detach(), KFACType.EXPAND, layer_hparams
             )
-            # Expand [batch, shared, d_in] -> [v, batch, shared, d_in] -> flatten
-            a = a.unsqueeze(0).expand(g.shape[0] // batch_size, *(-1,) * a.ndim)
-            a = rearrange(a, "v batch shared d_in -> (v batch) shared d_in")
 
         correction = compute_loss_correction(
             batch_size,
@@ -174,7 +169,9 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
                 g, ggT_eigvecs, a_augmented, aaT_eigvecs
             )
             self._set_or_add_(
-                corrected_eigenvalues, module_name, eigencorrection.mul_(correction)
+                corrected_eigenvalues,
+                module_name,
+                eigencorrection.mul_(correction),
             )
         else:
             if module_name not in corrected_eigenvalues:

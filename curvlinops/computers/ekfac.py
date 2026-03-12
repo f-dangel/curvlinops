@@ -32,13 +32,15 @@ def compute_eigenvalue_correction_linear_weight_sharing(
 
     Args:
         g: Output gradients of the layer with shape
-            ``[N, S, D1]``, where ``N`` is the batch size, ``S`` the weight sharing
-            dimension, and ``D1`` the output dimension.
+            ``[V, N, S, D1]``, where ``V`` is the number of gradient vectors
+            (e.g. MC samples; use ``V=1`` for type-2/empirical Fisher),
+            ``N`` is the batch size, ``S`` the weight sharing dimension,
+            and ``D1`` the output dimension.
         ggT_eigvecs: Eigenvectors of the gradient covariance with shape
             ``[D1, D1]``.
         a: Layer inputs with shape ``[N, S, D2]``, where ``D2`` is the input dimension
             or ``None`` if the layer has no weights (bias only). In that case,
-            `aaT_eigvecs` has to be `None`, too.
+            `aaT_eigvecs` has to be `None`, too. Shared across the ``V`` vectors.
         aaT_eigvecs: Eigenvectors of the input covariance with shape
             ``[D2, D2]`` or ``None`` if the layer has no weights (bias only).
         _force_strategy: If specified, forces the use of either ``'gramian'`` or
@@ -190,12 +192,12 @@ def compute_eigenvalue_correction_linear_weight_sharing(
 
     if Q2 is None and X is None:  # -> 1d (bias) case
         eigencorrection = (
-            einsum(Q1, Y, "j d1, batch shared j -> batch d1").square_().sum(0)
+            einsum(Q1, Y, "j d1, v batch shared j -> v batch d1").square_().sum((0, 1))
         )
 
     else:  # -> 2d (weight or weight+bias) case
         # Determine approach: Gramian contraction or per-example gradients
-        (_, S, D1), (_, _, D2) = g.shape, a.shape
+        (_, _, S, D1), (_, _, D2) = g.shape, a.shape
 
         # Determine approach based on _force_strategy or memory requirements
         use_gramian = (
@@ -209,13 +211,15 @@ def compute_eigenvalue_correction_linear_weight_sharing(
 
         if use_gramian:  # -> Gramian approach
             X_rot = einsum(X, Q2, "batch shared j, j d2 -> batch shared d2")
-            Y_rot = einsum(Y, Q1, "batch shared i, i d1 -> batch shared d1")
+            Y_rot = einsum(Y, Q1, "v batch shared i, i d1 -> v batch shared d1")
             # In the absence of weight sharing (S=1), this simply computes
             # (Q^T X_rot)^2 and (Q^T Y_rot)^2, then computes the correction
             X_gram = einsum(X_rot, X_rot, "batch s d2, batch t d2 -> batch s t d2")
-            Y_gram = einsum(Y_rot, Y_rot, "batch s d1, batch t d1 -> batch s t d1")
+            Y_gram = einsum(
+                Y_rot, Y_rot, "v batch s d1, v batch t d1 -> v batch s t d1"
+            )
             eigencorrection = einsum(
-                Y_gram, X_gram, "batch s t d1, batch s t d2 -> d1 d2"
+                Y_gram, X_gram, "v batch s t d1, batch s t d2 -> d1 d2"
             )
 
         else:  # -> per-example gradient approach
@@ -224,9 +228,9 @@ def compute_eigenvalue_correction_linear_weight_sharing(
                 Y,
                 X,
                 Q2,
-                "i d1, batch shared i, batch shared j, j d2 -> batch d1 d2",
+                "i d1, v batch shared i, batch shared j, j d2 -> v batch d1 d2",
             )
-            eigencorrection = rotated_per_example_gradient.square_().sum(dim=0)
+            eigencorrection = rotated_per_example_gradient.square_().sum(dim=(0, 1))
 
     return eigencorrection
 
@@ -475,6 +479,7 @@ class EKFACComputer(KFACComputer):
 
         layer_hparams = self._layer_hyperparams(module)
         g = grad_to_weight_sharing_format(g, KFACType.EXPAND, layer_hparams)
+        g = g.unsqueeze(0)  # [N, S, D] -> [1, N, S, D] (V=1 for hooks backend)
         if a is not None:
             a = input_to_weight_sharing_format(a, KFACType.EXPAND, layer_hparams)
 
