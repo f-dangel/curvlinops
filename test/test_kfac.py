@@ -1143,9 +1143,7 @@ def _check_make_fx_flatten_different_batch_sizes(linop_cls):
         check_deterministic=False,
         fisher_type=FisherType.EMPIRICAL,
     )
-    hooks = linop_cls(
-        model, loss_func, params, data, backend="hooks", **common_kwargs
-    )
+    hooks = linop_cls(model, loss_func, params, data, backend="hooks", **common_kwargs)
     make_fx = linop_cls(
         model, loss_func, params, data, backend="make_fx", **common_kwargs
     )
