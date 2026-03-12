@@ -625,16 +625,14 @@ def test_logdet(inv_case):
     )
 
 
-@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
-def test_ekfac_does_not_affect_grad(backend: str):
+def test_ekfac_does_not_affect_grad():
     """Make sure EKFAC computation does not write to `.grad`."""
-    _check_does_not_affect_grad(EKFACLinearOperator, backend=backend)
+    _check_does_not_affect_grad(EKFACLinearOperator)
 
 
-@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
-def test_ekfac_torch_save_load(tmp_path: Path, backend: str) -> None:
+def test_ekfac_torch_save_load(tmp_path: Path) -> None:
     """Test that EKFACLinearOperator can be saved and loaded with torch.save/load."""
-    _check_torch_save_load(EKFACLinearOperator, tmp_path, backend=backend)
+    _check_torch_save_load(EKFACLinearOperator, tmp_path)
 
 
 # TODO: Add test for FisherType.MC once tests are in float64.
@@ -719,43 +717,7 @@ def test_EKFAC_inverse_exactly_damped_matmat(
 
 
 def test_ekfac_make_fx_flatten_different_batch_sizes():
-    """Test make_fx EKFAC with nn.Flatten and different batch sizes.
+    """Test make_fx EKFAC with nn.Flatten and different batch sizes."""
+    from test.test_kfac import _check_make_fx_flatten_different_batch_sizes
 
-    ``nn.Flatten`` produces ``aten.view`` with a baked-in batch size during
-    real-mode ``make_fx`` tracing, so a single traced function cannot handle
-    multiple batch sizes. This test verifies that the per-batch-size caching
-    in ``MakeFxEKFACComputer`` handles this correctly for both the Kronecker
-    factor pass and the eigenvalue correction pass.
-    """
-    from torch.nn import AdaptiveAvgPool2d, Conv2d, Flatten
-
-    manual_seed(0)
-    model = Sequential(
-        Conv2d(3, 2, kernel_size=3, padding=1),
-        AdaptiveAvgPool2d(2),
-        Flatten(),
-        Linear(2 * 2 * 2, 3),
-    )
-    loss_func = MSELoss()
-    params = list(model.parameters())
-    # Two batches with different sizes to exercise per-batch-size caching
-    data = [
-        (rand(2, 3, 4, 4), regression_targets((2, 3))),
-        (rand(5, 3, 4, 4), regression_targets((5, 3))),
-    ]
-
-    common_kwargs = dict(
-        check_deterministic=False,
-        fisher_type=FisherType.EMPIRICAL,
-        kfac_approx=KFACType.REDUCE,
-    )
-    EKFAC_hooks = EKFACLinearOperator(
-        model, loss_func, params, data, backend="hooks", **common_kwargs
-    )
-    EKFAC_make_fx = EKFACLinearOperator(
-        model, loss_func, params, data, backend="make_fx", **common_kwargs
-    )
-
-    hooks_mat = EKFAC_hooks @ eye_like(EKFAC_hooks)
-    make_fx_mat = EKFAC_make_fx @ eye_like(EKFAC_make_fx)
-    assert allclose_report(hooks_mat, make_fx_mat)
+    _check_make_fx_flatten_different_batch_sizes(EKFACLinearOperator)
