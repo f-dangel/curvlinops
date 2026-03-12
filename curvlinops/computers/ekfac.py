@@ -6,7 +6,7 @@ from typing import Any
 from einops import einsum
 from torch import Tensor, cat
 from torch.linalg import eigh
-from torch.nn import Conv2d, Module
+from torch.nn import Module
 from torch.utils.hooks import RemovableHandle
 
 from curvlinops.computers.kfac import KFACComputer
@@ -473,18 +473,7 @@ class EKFACComputer(KFACComputer):
             raise ValueError("Modules with multiple inputs are not supported.")
         a = inputs[0].data.detach() if a_required else None
 
-        is_conv2d = isinstance(module, Conv2d)
-        layer_hparams = (
-            {
-                "kernel_size": module.kernel_size,
-                "stride": module.stride,
-                "padding": module.padding,
-                "dilation": module.dilation,
-                "groups": module.groups,
-            }
-            if is_conv2d
-            else None
-        )
+        layer_hparams = self._layer_hyperparams(module)
         g = grad_to_weight_sharing_format(g, KFACType.EXPAND, layer_hparams)
         if a is not None:
             a = input_to_weight_sharing_format(a, KFACType.EXPAND, layer_hparams)
