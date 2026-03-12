@@ -78,7 +78,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `make_fx` backend for `EKFACLinearOperator` via `MakeFxEKFACComputer`,
   which computes eigenvalue-corrected Kronecker factors using FX graph tracing
   instead of hooks. Selectable via `backend="make_fx"` parameter
-  ([PR](https://github.com/f-dangel/curvlinops/pull/TODO))
+  ([PR](https://github.com/f-dangel/curvlinops/pull/261))
 
 - Add `make_fx` backend for `EKFACLinearOperator` via `MakeFxEKFACComputer`,
   extending the FX-based approach to eigenvalue-corrected KFAC. Selectable
