@@ -218,14 +218,14 @@ class KFACComputer(_EmpiricalRiskMixin):
 
     def compute(
         self,
-    ) -> tuple[dict[str, Tensor], dict[str, Tensor], dict[str, dict[str, int]]]:
+    ) -> tuple[dict[str, Tensor], dict[str, Tensor], dict[str, dict[str, str]]]:
         """Compute the Kronecker factors.
 
         Returns:
             Tuple of ``(input_covariances, gradient_covariances, mapping)`` where the
             first two are dictionaries mapping module names to covariance matrices and
             ``mapping`` maps module names to dictionaries of parameter names and their
-            positions.
+            full qualified names in the model.
         """
         return (*self._compute_kronecker_factors(), self._mapping)
 
@@ -396,7 +396,7 @@ class KFACComputer(_EmpiricalRiskMixin):
         for v in range(num_vectors):
             autograd.grad(
                 output,
-                self._params,
+                list(self._params.values()),
                 grad_outputs=grad_outputs[v],
                 retain_graph=v < num_vectors - 1,
             )
@@ -572,8 +572,8 @@ class KFACComputer(_EmpiricalRiskMixin):
     @classmethod
     def compute_parameter_mapping(
         cls, params: list[Tensor | Parameter], model_func: Module
-    ) -> dict[str, dict[str, int]]:
-        """Construct the mapping between layers, their parameters, and positions.
+    ) -> dict[str, dict[str, str]]:
+        """Construct the mapping between layers, their parameters, and full names.
 
         Args:
             params: List of parameters.
@@ -582,12 +582,18 @@ class KFACComputer(_EmpiricalRiskMixin):
         Returns:
             A dictionary of dictionaries. The outer dictionary's keys are the names of
             the layers that contain parameters. The interior dictionary's keys are the
-            parameter names, and the values their respective positions.
+            parameter names (e.g. ``'weight'``, ``'bias'``), and the values their full
+            qualified names in the model (e.g. ``'0.weight'``).
 
         Raises:
             NotImplementedError: If parameters are found outside supported layers.
         """
-        param_ids = [p.data_ptr() for p in params]
+        param_ids = {p.data_ptr() for p in params}
+        ptr_to_name = {
+            p.data_ptr(): name
+            for name, p in model_func.named_parameters()
+            if p.data_ptr() in param_ids
+        }
         positions = {}
         processed = set()
 
@@ -599,8 +605,7 @@ class KFACComputer(_EmpiricalRiskMixin):
                 for p_name, p in mod.named_parameters():
                     p_id = p.data_ptr()
                     if p_id in param_ids:
-                        pos = param_ids.index(p_id)
-                        param_positions[p_name] = pos
+                        param_positions[p_name] = ptr_to_name[p_id]
                         processed.add(p_id)
                 positions[mod_name] = param_positions
 

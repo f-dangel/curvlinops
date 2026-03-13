@@ -269,8 +269,8 @@ class EKFACComputer(KFACComputer):
     ) -> tuple[
         dict[str, Tensor],
         dict[str, Tensor],
-        dict[str, Tensor | dict[int, Tensor]],
-        dict[str, dict[str, int]],
+        dict[str, Tensor | dict[str, Tensor]],
+        dict[str, dict[str, str]],
     ]:
         """Compute eigenvalue-corrected Kronecker factors.
 
@@ -337,7 +337,7 @@ class EKFACComputer(KFACComputer):
         self,
         input_covariances_eigenvectors: dict[str, Tensor],
         gradient_covariances_eigenvectors: dict[str, Tensor],
-    ) -> dict[str, Tensor | dict[int, Tensor]]:
+    ) -> dict[str, Tensor | dict[str, Tensor]]:
         """Compute the corrected eigenvalues for EKFAC.
 
         Args:
@@ -350,7 +350,7 @@ class EKFACComputer(KFACComputer):
             Dictionary containing corrected eigenvalues for each module.
         """
         # Create empty dictionary to be populated by hooks
-        corrected_eigenvalues: dict[str, Tensor | dict[int, Tensor]] = {}
+        corrected_eigenvalues: dict[str, Tensor | dict[str, Tensor]] = {}
 
         # install forward hooks
         hook_handles: list[RemovableHandle] = []
@@ -393,7 +393,7 @@ class EKFACComputer(KFACComputer):
         module_name: str,
         input_covariances_eigenvectors: dict[str, Tensor],
         gradient_covariances_eigenvectors: dict[str, Tensor],
-        corrected_eigenvalues: dict[str, Tensor | dict[int, Tensor]],
+        corrected_eigenvalues: dict[str, Tensor | dict[str, Tensor]],
     ):
         """Register tensor hook on layer's output to accumulate the corrected eigenvalues.
 
@@ -438,7 +438,7 @@ class EKFACComputer(KFACComputer):
         module_name: str,
         input_covariances_eigenvectors: dict[str, Tensor],
         gradient_covariances_eigenvectors: dict[str, Tensor],
-        corrected_eigenvalues: dict[str, Tensor | dict[int, Tensor]],
+        corrected_eigenvalues: dict[str, Tensor | dict[str, Tensor]],
         inputs: tuple[Tensor],
     ):
         r"""Accumulate the corrected eigenvalues.

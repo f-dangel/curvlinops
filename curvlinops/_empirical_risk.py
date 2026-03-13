@@ -4,10 +4,15 @@ from collections.abc import Callable, Iterable, Iterator, MutableMapping
 
 from torch import Tensor, device, dtype, tensor, zeros_like
 from torch.autograd import grad
-from torch.nn import CrossEntropyLoss, Parameter
+from torch.nn import CrossEntropyLoss, Module, Parameter
 from tqdm import tqdm
 
-from curvlinops.utils import _infer_device, _infer_dtype, allclose_report
+from curvlinops.utils import (
+    _infer_device,
+    _infer_dtype,
+    allclose_report,
+    identify_free_parameters,
+)
 
 
 class _EmpiricalRiskMixin:
@@ -29,7 +34,7 @@ class _EmpiricalRiskMixin:
 
     def __init__(
         self,
-        model_func: Callable[[Tensor | MutableMapping], Tensor],
+        model_func: Module,
         loss_func: Callable[[Tensor, Tensor], Tensor] | None,
         params: list[Parameter],
         data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
@@ -42,7 +47,8 @@ class _EmpiricalRiskMixin:
         """Set up the shared state for empirical risk computation.
 
         Args:
-            model_func: A function that maps the mini-batch input X to predictions.
+            model_func: The neural network module that maps mini-batch input X to
+                predictions.
             loss_func: Loss function criterion. Maps predictions and mini-batch labels
                 to a scalar value. ``None`` means the represented quantity is independent
                 of the loss function.
@@ -76,7 +82,7 @@ class _EmpiricalRiskMixin:
 
         self._model_func = model_func
         self._loss_func = loss_func
-        self._params = params
+        self._params = identify_free_parameters(model_func, tuple(params))
         self._data = data
         self._progressbar = progressbar
         self._batch_size_fn = (
@@ -169,8 +175,8 @@ class _EmpiricalRiskMixin:
         has_loss = self._loss_func is not None
 
         if has_loss:
-            total_grad1 = [zeros_like(p) for p in self._params]
-            total_grad2 = [zeros_like(p) for p in self._params]
+            total_grad1 = [zeros_like(p) for p in self._params.values()]
+            total_grad2 = [zeros_like(p) for p in self._params.values()]
             total_loss1 = tensor(0.0, device=self.device, dtype=self.dtype)
             total_loss2 = tensor(0.0, device=self.device, dtype=self.dtype)
 
@@ -269,7 +275,7 @@ class _EmpiricalRiskMixin:
         Returns:
             Inferred device.
         """
-        return _infer_device(self._params)
+        return _infer_device(self._params.values())
 
     @property
     def dtype(self) -> dtype:
@@ -278,7 +284,7 @@ class _EmpiricalRiskMixin:
         Returns:
             Inferred data type.
         """
-        return _infer_dtype(self._params)
+        return _infer_dtype(self._params.values())
 
     def _loop_over_data(
         self, desc: str | None = None
@@ -350,7 +356,9 @@ class _EmpiricalRiskMixin:
             else:
                 normalization_factor = self._get_normalization_factor(X, y)
                 loss = self._loss_func(prediction, y).mul_(normalization_factor)
-                grad_params = [g.detach() for g in grad(loss, self._params)]
+                grad_params = [
+                    g.detach() for g in grad(loss, list(self._params.values()))
+                ]
                 loss.detach_()
 
             yield (X, y), prediction, loss, grad_params
@@ -368,7 +376,7 @@ class _EmpiricalRiskMixin:
             raise ValueError("No loss function specified.")
 
         total_loss = tensor([0.0], device=self.device, dtype=self.dtype).squeeze()
-        total_grad = [zeros_like(p) for p in self._params]
+        total_grad = [zeros_like(p) for p in self._params.values()]
 
         for _, _, loss, grad_params in self._data_prediction_loss_gradient(
             desc="gradient_and_loss"

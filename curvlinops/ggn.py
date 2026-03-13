@@ -1,7 +1,7 @@
 """Contains LinearOperator implementation of the GGN."""
 
 from collections.abc import Callable, Iterable, MutableMapping
-from functools import cached_property, partial
+from functools import cached_property
 
 from einops import einsum
 from torch import Generator, Tensor, no_grad
@@ -14,31 +14,32 @@ from curvlinops.utils import _seed_generator, make_functional_model_and_loss
 
 
 def make_ggn_vector_product(
-    f: Callable[[tuple[Tensor, ...], Tensor | MutableMapping], Tensor],
+    f: Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
     c: Callable[[Tensor, tuple], Tensor],
 ) -> Callable[
-    [tuple[Tensor, ...], Tensor | MutableMapping, tuple, tuple[Tensor, ...]],
+    [dict[str, Tensor], Tensor | MutableMapping, tuple, tuple[Tensor, ...]],
     tuple[Tensor, ...],
 ]:
     """Create a function that computes GGN-vector products for given f and c functions.
 
     Args:
-        f: Function that takes parameters (as a tuple) and input, returns prediction.
-            Signature: ``(params, X) -> prediction``
+        f: Function that takes parameters (as a dict) and input, returns prediction.
+            Signature: ``(params_dict, X) -> prediction``
         c: Function that takes prediction and a tuple of loss arguments.
             Signature: ``(prediction, loss_args) -> loss``
 
     Returns:
         A function that computes GGN-vector products.
-        Signature: ``(params, X, loss_args, v) -> GGN @ v``
-        where ``X`` is the model input, ``loss_args`` is a tuple of arguments
+        Signature: ``(params_dict, X, loss_args, v) -> GGN @ v``
+        where ``params_dict`` is a dict mapping parameter names to tensors,
+        ``X`` is the model input, ``loss_args`` is a tuple of arguments
         passed to the loss function ``c`` (typically ``(y,)`` or
         ``(y, generator)``), and ``v`` is a tuple of tensors in list format.
     """
 
     @no_grad()
     def ggn_vector_product(
-        params: tuple[Tensor, ...],
+        params: dict[str, Tensor],
         X: Tensor | MutableMapping,
         loss_args: tuple,
         v: tuple[Tensor, ...],
@@ -46,7 +47,7 @@ def make_ggn_vector_product(
         """Multiply the GGN on a vector in list format.
 
         Args:
-            params: Parameters of the model as a tuple.
+            params: Parameters of the model as a dict.
             X: Input to the model.
             loss_args: Arguments forwarded to the loss function ``c``, e.g.
                 ``(y,)`` or ``(y, generator)``.
@@ -55,8 +56,11 @@ def make_ggn_vector_product(
         Returns:
             Result of GGN multiplication in list format. Has the same shape as ``v``.
         """
+        # Convert v to dict for jvp compatibility with dict params
+        v_dict = dict(zip(params.keys(), v))
+
         # Apply the Jacobian of f onto v: v → Jv
-        f_val, f_jvp = jvp(lambda p: f(p, X), (params,), (v,))
+        f_val, f_jvp = jvp(lambda p: f(p, X), (params,), (v_dict,))
 
         # Apply the criterion's Hessian onto Jv: Jv → HJv
         c_grad_func = jacrev(lambda pred: c(pred, loss_args))
@@ -66,46 +70,46 @@ def make_ggn_vector_product(
         # NOTE This re-evaluates the net's forward pass. [Unverified] It should be op-
         # timized away by common sub-expression elimination if you compile the function.
         _, f_vjp_func = vjp(lambda p: f(p, X), params)
-        (result,) = f_vjp_func(c_hvp)
-        return result
+        (result_dict,) = f_vjp_func(c_hvp)
+        return tuple(result_dict.values())
 
     return ggn_vector_product
 
 
 def make_batch_ggn_vector_product(
-    model_func: Module, loss_func: Module, params: tuple[Parameter, ...]
-) -> Callable[[Tensor | MutableMapping, tuple, tuple[Tensor, ...]], tuple[Tensor, ...]]:
+    model_func: Module, loss_func: Module, param_names: list[str]
+) -> Callable[
+    [dict[str, Tensor], Tensor | MutableMapping, tuple, tuple[Tensor, ...]],
+    tuple[Tensor, ...],
+]:
     r"""Set up function that multiplies the mini-batch GGN onto a vector in list format.
 
     Args:
         model_func: The neural network :math:`f_{\mathbf{\theta}}`.
         loss_func: The loss function :math:`\ell`.
-        params: A tuple of parameters w.r.t. which the GGN is computed.
-            All parameters must be part of ``model_func.parameters()``.
+        param_names: Names of parameters w.r.t. which the GGN is computed.
 
     Returns:
-        A function ``(X, loss_args, v) -> Gv`` that takes model input ``X``, loss
-        arguments ``loss_args = (y,)``, and a vector ``v`` as a tuple of tensors in
-        list format, and returns the mini-batch GGN applied to ``v`` in list format.
+        A function ``(params_dict, X, loss_args, v) -> Gv`` that takes parameters
+        as a dict, model input ``X``, loss arguments ``loss_args = (y,)``, and a
+        vector ``v`` as a tuple of tensors in list format, and returns the
+        mini-batch GGN applied to ``v`` in list format.
     """
     # Create functional versions of the model (f: (params, X) -> prediction) and
     # criterion function (c: (prediction, loss_args) -> loss)
-    f, c = make_functional_model_and_loss(model_func, loss_func, params)
+    f, c = make_functional_model_and_loss(model_func, loss_func, param_names)
 
     # Create the functional GGN-vector product: (params, X, loss_args, v) -> Gv
-    ggn_vp = make_ggn_vector_product(f, c)
-
-    # Fix the parameters: (X, loss_args, v) -> Gv
-    return partial(ggn_vp, params)
+    return make_ggn_vector_product(f, c)
 
 
 def make_batch_ggn_mc_vector_product(
     model_func: Module,
     loss_func: Module,
-    params: tuple[Parameter, ...],
+    param_names: list[str],
     mc_samples: int,
 ) -> Callable[
-    [Tensor | MutableMapping, tuple, tuple[Tensor, ...]],
+    [dict[str, Tensor], Tensor | MutableMapping, tuple, tuple[Tensor, ...]],
     tuple[Tensor, ...],
 ]:
     r"""Set up function that multiplies the mini-batch MC-approximated GGN onto a vector.
@@ -121,16 +125,16 @@ def make_batch_ggn_mc_vector_product(
     Args:
         model_func: The neural network :math:`f_{\mathbf{\theta}}`.
         loss_func: The loss function :math:`\ell`.
-        params: A tuple of parameters w.r.t. which the GGN is computed.
-            All parameters must be part of ``model_func.parameters()``.
+        param_names: Names of parameters w.r.t. which the GGN is computed.
         mc_samples: Number of Monte-Carlo samples.
 
     Returns:
-        A function ``(X, loss_args, v) -> Gv`` that takes model input ``X``,
-        loss arguments ``loss_args = (y, generator)``, and a vector ``v`` as a tuple
-        of tensors in list format, and returns the mini-batch MC-GGN applied to ``v``.
+        A function ``(params_dict, X, loss_args, v) -> Gv`` that takes parameters
+        as a dict, model input ``X``, loss arguments ``loss_args = (y, generator)``,
+        and a vector ``v`` as a tuple of tensors in list format, and returns the
+        mini-batch MC-GGN applied to ``v``.
     """
-    f, _ = make_functional_model_and_loss(model_func, loss_func, params)
+    f, _ = make_functional_model_and_loss(model_func, loss_func, param_names)
 
     _grad_output_fn = make_grad_output_fn(loss_func, "mc", mc_samples)
     # vmap over batch: per-datum grad outputs → batched
@@ -168,11 +172,8 @@ def make_batch_ggn_mc_vector_product(
 
         return 0.5 / reduction_factor * (ip**2).sum()
 
-    # Create GGN-vp of pseudo-loss: (params, X, loss_args, v) -> Gv
-    mc_ggn_vp = make_ggn_vector_product(f, c_pseudo)
-
-    # Fix the parameters: (X, loss_args, v) -> Gv
-    return partial(mc_ggn_vp, params)
+    # Create GGN-vp of pseudo-loss: (params_dict, X, loss_args, v) -> Gv
+    return make_ggn_vector_product(f, c_pseudo)
 
 
 class GGNLinearOperator(CurvatureLinearOperator):
@@ -250,7 +251,7 @@ class GGNLinearOperator(CurvatureLinearOperator):
 
     def __init__(
         self,
-        model_func: Callable[[Tensor | MutableMapping], Tensor],
+        model_func: Module,
         loss_func: Callable[[Tensor, Tensor], Tensor],
         params: list[Parameter],
         data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
@@ -346,18 +347,18 @@ class GGNLinearOperator(CurvatureLinearOperator):
 
         Returns:
             Function that computes mini-batch GGN-vector products with signature
-            ``(X, loss_args, v) -> Gv``, where ``loss_args`` is ``(y,)`` in exact
-            mode or ``(y, generator)`` in MC mode.
+            ``(params_dict, X, loss_args, v) -> Gv``, where ``loss_args`` is
+            ``(y,)`` in exact mode or ``(y, generator)`` in MC mode.
         """
         if self._mc_samples > 0:
             return make_batch_ggn_mc_vector_product(
                 self._model_func,
                 self._loss_func,
-                tuple(self._params),
+                list(self._params.keys()),
                 self._mc_samples,
             )
         return make_batch_ggn_vector_product(
-            self._model_func, self._loss_func, tuple(self._params)
+            self._model_func, self._loss_func, list(self._params.keys())
         )
 
     def _matvec_batch(
@@ -374,4 +375,4 @@ class GGNLinearOperator(CurvatureLinearOperator):
             Result of GGN-vector multiplication in tensor list format.
         """
         loss_args = (y, self._generator) if self._mc_samples > 0 else (y,)
-        return self._vp(X, loss_args, v)
+        return self._vp(self._params, X, loss_args, v)

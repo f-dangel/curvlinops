@@ -19,11 +19,11 @@ from curvlinops.utils import _seed_generator, make_functional_model_and_loss
 def make_batch_ggn_diagonal_func(
     model_func: Module,
     loss_func: Module,
-    params: tuple[Parameter, ...],
+    param_names: list[str],
     mc_samples: int,
     batch_size_fn: Callable[[Tensor | MutableMapping], int],
 ) -> Callable[
-    [Tensor | MutableMapping, Tensor, Generator | None],
+    [dict[str, Tensor], Tensor | MutableMapping, Tensor, Generator | None],
     list[Tensor],
 ]:
     """Create a function that computes the GGN diagonal for a batch.
@@ -31,7 +31,7 @@ def make_batch_ggn_diagonal_func(
     Args:
         model_func: PyTorch module representing the neural network.
         loss_func: Loss function module.
-        params: Tuple of model parameters.
+        param_names: Names of parameters w.r.t. which the GGN diagonal is computed.
         mc_samples: Number of Monte Carlo samples. ``0`` uses the exact GGN diagonal
             via the loss Hessian's square root. Positive values use MC approximation.
         batch_size_fn: Function that returns the batch size given an input ``X``.
@@ -39,11 +39,11 @@ def make_batch_ggn_diagonal_func(
             value's shape for MutableMapping inputs.
 
     Returns:
-        Function with signature ``(X, y, generator) -> List[Tensor]``
+        Function with signature ``(params_dict, X, y, generator) -> List[Tensor]``
         that computes the GGN diagonal on the batch ``(X, y)``.
     """
-    # Create functional version of the model: (params, x) -> prediction
-    f, _ = make_functional_model_and_loss(model_func, loss_func, params)
+    # Create functional version of the model: (params_dict, x) -> prediction
+    f, _ = make_functional_model_and_loss(model_func, loss_func, param_names)
 
     # Map mc_samples to internal mode string for make_grad_output_fn
     mode = "exact" if mc_samples == 0 else "mc"
@@ -52,11 +52,15 @@ def make_batch_ggn_diagonal_func(
     reduction = loss_func.reduction
 
     def ggn_diagonal_datum(
-        x: Tensor | MutableMapping, y: Tensor, generator: Generator | None = None
+        params: dict[str, Tensor],
+        x: Tensor | MutableMapping,
+        y: Tensor,
+        generator: Generator | None = None,
     ) -> list[Tensor]:
         """Compute the GGN diagonal for a single datum.
 
         Args:
+            params: Parameters of the model as a dict.
             x: Input datum.
             y: Label for the datum.
             generator: Generator for MC sampling (optional).
@@ -69,22 +73,26 @@ def make_batch_ggn_diagonal_func(
         # Detach f_x: only values are needed for the grad output vectors;
         # actual parameter gradients are computed via f_vjp.
         grad_outputs = grad_output_fn(f_x.detach(), y, generator)
-        (grad_params,) = vmap(f_vjp)(grad_outputs)
-        return [(g**2).sum(0) for g in grad_params]
+        (grad_params_dict,) = vmap(f_vjp)(grad_outputs)
+        return [(g**2).sum(0) for g in grad_params_dict.values()]
 
     randomness = {"mc": "different", "exact": "same"}[mode]
-    # Parallelize over data points
+    # Parallelize over data points (vmap over x and y, not params or generator)
     ggn_diagonal_batched = vmap(
-        ggn_diagonal_datum, in_dims=(0, 0, None), randomness=randomness
+        ggn_diagonal_datum, in_dims=(None, 0, 0, None), randomness=randomness
     )
 
     @no_grad()
     def batch_ggn_diagonal(
-        X: Tensor | MutableMapping, y: Tensor, generator: Generator | None = None
+        params: dict[str, Tensor],
+        X: Tensor | MutableMapping,
+        y: Tensor,
+        generator: Generator | None = None,
     ) -> list[Tensor]:
         """Compute the GGN diagonal on a batch.
 
         Args:
+            params: Parameters of the model as a dict.
             X: Input batch.
             y: Labels for the batch.
             generator: Random generator (optional).
@@ -100,7 +108,10 @@ def make_batch_ggn_diagonal_func(
         # For mean reduction, we have to divide by the batch size to obtain correct
         # scale
         scale = {"sum": 1.0, "mean": 1.0 / batch_size_fn(X)}[reduction]
-        return [res.sum(0).mul_(scale) for res in ggn_diagonal_batched(X, y, generator)]
+        return [
+            res.sum(0).mul_(scale)
+            for res in ggn_diagonal_batched(params, X, y, generator)
+        ]
 
     return batch_ggn_diagonal
 
@@ -119,7 +130,7 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
 
     def __init__(
         self,
-        model_func: Callable[[Tensor | MutableMapping], Tensor],
+        model_func: Module,
         loss_func: Callable[[Tensor, Tensor], Tensor],
         params: list[Parameter],
         data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
@@ -205,7 +216,7 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
         batch_ggn_diagonal_func = make_batch_ggn_diagonal_func(
             self._model_func,
             self._loss_func,
-            tuple(self._params),
+            list(self._params.keys()),
             self._mc_samples,
             self._batch_size_fn,
         )
@@ -216,11 +227,11 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
             else _seed_generator(None, self.device, self._seed)
         )
 
-        result = [zeros_like(p) for p in self._params]
+        result = [zeros_like(p) for p in self._params.values()]
 
         mode_str = "exact" if self._mc_samples == 0 else "mc"
         for X, y in self._loop_over_data(desc=f"GGN diagonal ({mode_str})"):
-            batch_result = batch_ggn_diagonal_func(X, y, generator)
+            batch_result = batch_ggn_diagonal_func(self._params, X, y, generator)
             normalization_factor = self._get_normalization_factor(X, y)
             for res_p, batch_p in zip(result, batch_result, strict=True):
                 res_p.add_(batch_p, alpha=normalization_factor)

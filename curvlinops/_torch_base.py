@@ -19,7 +19,7 @@ from torch import (
     zeros_like,
 )
 from torch.func import vmap
-from torch.nn import Parameter
+from torch.nn import Module, Parameter
 
 from curvlinops._checks import (
     _check_matmul_compatible_shape,
@@ -836,7 +836,7 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
 
     def __init__(
         self,
-        model_func: Callable[[Tensor | MutableMapping], Tensor],
+        model_func: Module,
         loss_func: Callable[[Tensor, Tensor], Tensor] | None,
         params: list[Parameter],
         data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
@@ -933,7 +933,7 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
         Returns:
             Shapes of the linear operator's input tensor product space.
         """
-        return [tuple(p.shape) for p in self._params]
+        return [tuple(p.shape) for p in self._params.values()]
 
     def _get_out_shape(self) -> list[tuple[int, ...]]:
         """Return linear operator's output space dimensions.
@@ -941,7 +941,7 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
         Returns:
             Shapes of the linear operator's output tensor product space.
         """
-        return [tuple(p.shape) for p in self._params]
+        return [tuple(p.shape) for p in self._params.values()]
 
     def _matmat(self, M: list[Tensor]) -> list[Tensor]:
         """Matrix-matrix multiplication.

@@ -48,6 +48,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+- Migrate internal parameter representation from `list[Parameter]` to
+  `dict[str, Parameter]` (keyed by fully-qualified name). Public API unchanged
+  (`list[Parameter]` still accepted). Tighten `model_func` type from `Callable`
+  to `Module`. KFAC `_mapping` values change from `int` positions to `str` names
+
 - Reduce KFAC/EKFAC test suite from ~6,100 to ~1,100 tests by consolidating
   `exclude`/`shuffle`/`separate_weight_and_bias` parametrization into the four
   type-2 exactness tests (kfac/ekfac × standard/weight_sharing) and shrinking

@@ -1,12 +1,12 @@
 """Contains linear operator implementation of gradient moment matrices."""
 
 from collections.abc import Callable, MutableMapping
-from functools import cached_property, partial
+from functools import cached_property
 
 from einops import einsum
 from torch import Tensor
 from torch.func import grad
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, Module, MSELoss, Parameter
+from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, Module, MSELoss
 
 from curvlinops._torch_base import CurvatureLinearOperator
 from curvlinops.ggn import make_ggn_vector_product
@@ -14,8 +14,11 @@ from curvlinops.utils import make_functional_flattened_model_and_loss
 
 
 def make_batch_ef_vector_product(
-    model_func: Module, loss_func: Module, params: tuple[Parameter, ...]
-) -> Callable[[Tensor | MutableMapping, tuple, tuple[Tensor, ...]], tuple[Tensor, ...]]:
+    model_func: Module, loss_func: Module, param_names: list[str]
+) -> Callable[
+    [dict[str, Tensor], Tensor | MutableMapping, tuple, tuple[Tensor, ...]],
+    tuple[Tensor, ...],
+]:
     r"""Set up function that multiplies the mini-batch empirical Fisher onto a vector.
 
     The empirical Fisher is computed as the GGN of a pseudo-loss that is quadratic
@@ -31,17 +34,17 @@ def make_batch_ef_vector_product(
     Args:
         model_func: The neural network :math:`f_{\mathbf{\theta}}`.
         loss_func: The loss function :math:`\ell`.
-        params: A tuple of parameters w.r.t. which the empirical Fisher is computed.
-            All parameters must be part of ``model_func.parameters()``.
+        param_names: Names of parameters w.r.t. which the empirical Fisher is
+            computed.
 
     Returns:
-        A function ``(X, loss_args, v) -> EFv`` that takes model input ``X``, loss
-        arguments ``loss_args = (y,)``, and a vector ``v`` as a tuple of tensors in
-        list format, and returns the mini-batch empirical Fisher applied to ``v`` in
-        list format.
+        A function ``(params_dict, X, loss_args, v) -> EFv`` that takes parameters
+        as a dict, model input ``X``, loss arguments ``loss_args = (y,)``, and a
+        vector ``v`` as a tuple of tensors in list format, and returns the
+        mini-batch empirical Fisher applied to ``v`` in list format.
     """
     f_flat, c_flat = make_functional_flattened_model_and_loss(
-        model_func, loss_func, params
+        model_func, loss_func, param_names
     )
     # function that computes gradients of the loss w.r.t. the flattened outputs
     c_flat_grad = grad(c_flat, argnums=0)
@@ -84,10 +87,8 @@ def make_batch_ef_vector_product(
         return 0.5 / reduction_factor * (inner_products**2).sum()
 
     # Create the functional EF-vector product using GGN of pseudo-loss
-    ef_vp = make_ggn_vector_product(f_flat, c_pseudo_flat)
-
-    # Fix the parameters: (X, loss_args, v) -> EFv
-    return partial(ef_vp, params)
+    # (params_dict, X, loss_args, v) -> EFv
+    return make_ggn_vector_product(f_flat, c_pseudo_flat)
 
 
 class EFLinearOperator(CurvatureLinearOperator):
@@ -129,13 +130,14 @@ class EFLinearOperator(CurvatureLinearOperator):
     def _vp(
         self,
     ) -> Callable[
-        [Tensor | MutableMapping, tuple, tuple[Tensor, ...]], tuple[Tensor, ...]
+        [dict[str, Tensor], Tensor | MutableMapping, tuple, tuple[Tensor, ...]],
+        tuple[Tensor, ...],
     ]:
         """Lazy initialization of the batch empirical Fisher vector product function.
 
         Returns:
             Function that computes mini-batch EF-vector products with signature
-            ``(X, loss_args, v) -> EFv``.
+            ``(params_dict, X, loss_args, v) -> EFv``.
 
         Raises:
             NotImplementedError: If the loss function is not supported.
@@ -145,7 +147,7 @@ class EFLinearOperator(CurvatureLinearOperator):
                 f"Loss must be one of {self.SUPPORTED_LOSSES}. Got: {self._loss_func}."
             )
         return make_batch_ef_vector_product(
-            self._model_func, self._loss_func, tuple(self._params)
+            self._model_func, self._loss_func, list(self._params.keys())
         )
 
     def _matvec_batch(
@@ -161,4 +163,4 @@ class EFLinearOperator(CurvatureLinearOperator):
         Returns:
             Result of EF-vector multiplication in tensor list format.
         """
-        return self._vp(X, (y,), v)
+        return self._vp(self._params, X, (y,), v)
