@@ -277,9 +277,9 @@ class EKFACComputer(KFACComputer):
         Returns:
             Tuple of ``(input_covariance_eigenvectors, gradient_covariance_eigenvectors,
             corrected_eigenvalues, mapping)`` where the first two are dictionaries
-            mapping module names to eigenvector matrices, the third maps module names to
-            eigenvalue corrections, and ``mapping`` maps module names to
-            ``ParameterUsage`` objects.
+            mapping layer names to eigenvector matrices, the third maps layer names to
+            eigenvalue corrections, and ``mapping`` is a list of ``ParameterUsage``
+            objects.
         """
         input_covariances, gradient_covariances, mapping = super().compute()
         input_covariances = self._eigenvectors_(input_covariances)

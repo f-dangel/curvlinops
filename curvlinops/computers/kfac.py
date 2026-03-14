@@ -661,12 +661,14 @@ class KFACComputer(_EmpiricalRiskMixin):
                 p.data_ptr() in param_ids for p in mod.parameters()
             ):
                 param_roles = {}
-                for p_name, p in mod.named_parameters():
+                for p_name, p in mod.named_parameters(recurse=False):
                     p_id = p.data_ptr()
                     if p_id in param_ids:
                         param_roles[_role[p_name]] = ptr_to_name[p_id]
                         processed.add(p_id)
-                op, prefix, hparam_fn = _module_info[type(mod)]
+                op, prefix, hparam_fn = next(
+                    v for t, v in _module_info.items() if isinstance(mod, t)
+                )
                 idx = counts.get(prefix, 0)
                 counts[prefix] = idx + 1
                 mapping.append(
