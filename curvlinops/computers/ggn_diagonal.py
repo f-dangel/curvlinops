@@ -24,7 +24,7 @@ def make_batch_ggn_diagonal_func(
     batch_size_fn: Callable[[Tensor | MutableMapping], int],
 ) -> Callable[
     [dict[str, Tensor], Tensor | MutableMapping, Tensor, Generator | None],
-    list[Tensor],
+    dict[str, Tensor],
 ]:
     """Create a function that computes the GGN diagonal for a batch.
 
@@ -39,7 +39,7 @@ def make_batch_ggn_diagonal_func(
             value's shape for MutableMapping inputs.
 
     Returns:
-        Function with signature ``(params_dict, X, y, generator) -> List[Tensor]``
+        Function with signature ``(params_dict, X, y, generator) -> dict[str, Tensor]``
         that computes the GGN diagonal on the batch ``(X, y)``.
     """
     # Create functional version of the model: (params_dict, x) -> prediction
@@ -56,7 +56,7 @@ def make_batch_ggn_diagonal_func(
         x: Tensor | MutableMapping,
         y: Tensor,
         generator: Generator | None = None,
-    ) -> list[Tensor]:
+    ) -> dict[str, Tensor]:
         """Compute the GGN diagonal for a single datum.
 
         Args:
@@ -66,15 +66,15 @@ def make_batch_ggn_diagonal_func(
             generator: Generator for MC sampling (optional).
 
         Returns:
-            List of tensors containing the diagonal elements for each parameter.
-            Items have the same shape as the neural network's parameters.
+            Dict mapping parameter names to diagonal elements. Each tensor has
+            the same shape as the corresponding parameter.
         """
         f_x, f_vjp = vjp(lambda p: f(p, x), params)
         # Detach f_x: only values are needed for the grad output vectors;
         # actual parameter gradients are computed via f_vjp.
         grad_outputs = grad_output_fn(f_x.detach(), y, generator)
         (grad_params_dict,) = vmap(f_vjp)(grad_outputs)
-        return [(grad_params_dict[k] ** 2).sum(0) for k in params]
+        return {k: (grad_params_dict[k] ** 2).sum(0) for k in params}
 
     randomness = {"mc": "different", "exact": "same"}[mode]
     # Parallelize over data points (vmap over x and y, not params or generator)
@@ -88,7 +88,7 @@ def make_batch_ggn_diagonal_func(
         X: Tensor | MutableMapping,
         y: Tensor,
         generator: Generator | None = None,
-    ) -> list[Tensor]:
+    ) -> dict[str, Tensor]:
         """Compute the GGN diagonal on a batch.
 
         Args:
@@ -98,9 +98,8 @@ def make_batch_ggn_diagonal_func(
             generator: Random generator (optional).
 
         Returns:
-            List of tensors containing the batch GGN's diagonal elements for each
-            parameter. Items have the same shape as the neural network's
-            parameters.
+            Dict mapping parameter names to the batch GGN's diagonal elements.
+            Each tensor has the same shape as the corresponding parameter.
         """
         # Register UserDict as PyTree if needed for vmap compatibility
         if isinstance(X, UserDict):
@@ -108,10 +107,8 @@ def make_batch_ggn_diagonal_func(
         # For mean reduction, we have to divide by the batch size to obtain correct
         # scale
         scale = {"sum": 1.0, "mean": 1.0 / batch_size_fn(X)}[reduction]
-        return [
-            res.sum(0).mul_(scale)
-            for res in ggn_diagonal_batched(params, X, y, generator)
-        ]
+        result_dict = ggn_diagonal_batched(params, X, y, generator)
+        return {k: v.sum(0).mul_(scale) for k, v in result_dict.items()}
 
     return batch_ggn_diagonal
 
@@ -227,13 +224,13 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
             else _seed_generator(None, self.device, self._seed)
         )
 
-        result = [zeros_like(p) for p in self._params.values()]
+        result = {k: zeros_like(p) for k, p in self._params.items()}
 
         mode_str = "exact" if self._mc_samples == 0 else "mc"
         for X, y in self._loop_over_data(desc=f"GGN diagonal ({mode_str})"):
             batch_result = batch_ggn_diagonal_func(self._params, X, y, generator)
             normalization_factor = self._get_normalization_factor(X, y)
-            for res_p, batch_p in zip(result, batch_result, strict=True):
-                res_p.add_(batch_p, alpha=normalization_factor)
+            for k in result:
+                result[k].add_(batch_result[k], alpha=normalization_factor)
 
-        return result
+        return list(result.values())
