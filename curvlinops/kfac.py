@@ -250,7 +250,7 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
             Tuple of ``(from_canonical_op, to_canonical_op)``.
         """
         PT = ToCanonicalLinearOperator(
-            [p.shape for p in computer._params],
+            {name: p.shape for name, p in computer._params.items()},
             list(computer._mapping.values()),
             computer._separate_weight_and_bias,
             computer.device,

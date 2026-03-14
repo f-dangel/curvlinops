@@ -319,7 +319,7 @@ def make_grad_output_fn(
     sample_grad_output = _make_single_datum_sampler(loss_func)
 
     if mode == "empirical":
-        functional_loss_func = partial(make_functional_call(loss_func, []), ())
+        functional_loss_func = partial(make_functional_call(loss_func, []), {})
 
         def _scaled_datum_loss(prediction: Tensor, target: Tensor) -> Tensor:
             """Compute a scaled loss for one sample, adjusting for mean reduction.

@@ -24,13 +24,13 @@ from curvlinops.computers.kfac_math import (
     input_to_weight_sharing_format,
 )
 from curvlinops.kfac_utils import FisherType, _has_joint_weight_and_bias
-from curvlinops.utils import _seed_generator, identify_free_parameters
+from curvlinops.utils import _seed_generator
 
 
 def _trace_io(
     f: Callable[[Tensor | MutableMapping, dict[str, Tensor]], Tensor],
     x: Tensor | MutableMapping,
-    named_params: dict[str, Tensor],
+    params: dict[str, Tensor],
     fisher_type: FisherType,
 ) -> tuple[Callable, dict[str, str], dict[str, dict[str, Any]]]:
     """Trace f and return an IO-collecting function with layer metadata.
@@ -41,7 +41,7 @@ def _trace_io(
     Args:
         f: Function with signature ``f(x, params) -> output``.
         x: Example input tensor or mapping for tracing.
-        named_params: Dictionary mapping parameter names to tensors.
+        params: Dictionary mapping parameter names to tensors.
         fisher_type: Type of Fisher information computation.
 
     Returns:
@@ -50,9 +50,7 @@ def _trace_io(
     if isinstance(x, UserDict):
         _register_userdict_as_pytree()
 
-    io_fn, layer_param_names, layer_hparams = with_kfac_io(
-        f, x, named_params, fisher_type
-    )
+    io_fn, layer_param_names, layer_hparams = with_kfac_io(f, x, params, fisher_type)
     # "0.weight" -> "0", "layer.sub.weight" -> "layer.sub", "weight" -> ""
     io_to_module = {
         io_name: name.rsplit(".", 1)[0] if "." in name else ""
@@ -83,8 +81,6 @@ class MakeFxKFACComputer(KFACComputer):
         Returns:
             Tuple containing (input_covariances, gradient_covariances) dictionaries.
         """
-        # Build functional model: identify free params by name, wrap in f(x, params)
-        named_params = identify_free_parameters(self._model_func, self._params)
 
         def f(x, params: dict[str, Tensor]) -> Tensor:
             return functional_call(self._model_func, params, (x,))
@@ -116,12 +112,12 @@ class MakeFxKFACComputer(KFACComputer):
             # Maybe trace for current batch size and set up layer metadata
             if (batch_size := self._batch_size_fn(X)) not in traced_io_fns:
                 traced_io_fns[batch_size], io_to_module, layer_hparams = _trace_io(
-                    f, X, named_params, self._fisher_type
+                    f, X, self._params, self._fisher_type
                 )
 
             # Forward pass with IO collection
             io_fn = traced_io_fns[batch_size]
-            output, layer_inputs, layer_outputs = io_fn(X, named_params)
+            output, layer_inputs, layer_outputs = io_fn(X, self._params)
 
             # Compute input covariances
             for io_layer_name, x in layer_inputs.items():
