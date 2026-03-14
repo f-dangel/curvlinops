@@ -25,6 +25,13 @@ def test_CanonicalLinearOperator(separate_weight_and_bias: bool):
 
     # Build named params dict preserving the unconventional order
     named_params = identify_free_parameters(net, params)
+    assert list(named_params.keys()) == [
+        "0.weight",  # w1
+        "1.bias",  # b2
+        "0.bias",  # b1
+        "2.weight",  # w3
+        "1.weight",  # w2
+    ]
 
     # Define param_groups mapping local names to full qualified names
     param_groups = [
