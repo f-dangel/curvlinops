@@ -46,22 +46,22 @@ class EKFACLinearOperator(KFACLinearOperator):
         )
         bases = []
         corrections = []
-        for mod_name, param_pos in mapping.items():
-            Q_a = input_eigvecs.get(mod_name, None)
-            Q_g = gradient_eigvecs[mod_name]
-            lambdas = corrected_eigenvalues[mod_name]
+        for usage in mapping:
+            Q_a = input_eigvecs.get(usage.name, None)
+            Q_g = gradient_eigvecs[usage.name]
+            lambdas = corrected_eigenvalues[usage.name]
 
             # Handle joint weight+bias case
             if _has_joint_weight_and_bias(
-                computer._separate_weight_and_bias, param_pos
+                computer._separate_weight_and_bias, usage.params
             ):
                 # Single Kronecker product block for weight+bias
                 bases.append([Q_g, Q_a])
                 corrections.append(lambdas)
             else:
                 # Separate blocks for weight and bias
-                for p_name, p_pos in param_pos.items():
-                    bases.append([Q_g, Q_a] if p_name == "weight" else [Q_g])
+                for p_name, p_pos in usage.params.items():
+                    bases.append([Q_g, Q_a] if p_name == "W" else [Q_g])
                     corrections.append(lambdas[p_pos])
 
         # Create Kronecker product linear operators for each block

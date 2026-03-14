@@ -251,9 +251,9 @@ def _process_layer_info_tuple(
     # Build parameter names mapping
     param_names = {}
     if weight_name != NOT_A_PARAM:
-        param_names["weight"] = weight_name
+        param_names["W"] = weight_name
     if bias_name not in {None, NOT_A_PARAM}:
-        param_names["bias"] = bias_name
+        param_names["b"] = bias_name
 
     return layer_name, store_input, store_output, param_names, hyperparams
 
@@ -287,7 +287,7 @@ def with_kfac_io(
         A 3-tuple containing:
             - A traced function returning ``(output, layer_inputs, layer_outputs)``
             - Layer parameter names (dict[str, dict[str, str]]): Maps layer names to
-              parameter name mappings (e.g., {"weight": "conv1.weight", "bias": "conv1.bias"})
+              parameter name mappings (e.g., {"W": "conv1.weight", "b": "conv1.bias"})
             - Layer hyperparameters (dict[str, dict[str, Any]]): Maps layer names to
               hyperparameter dictionaries (empty for linear layers, contains stride/padding/etc
               for convolution layers)
