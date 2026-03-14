@@ -85,4 +85,4 @@ class GGNDiagonalLinearOperator(DiagonalLinearOperator):
             seed=seed,
         )
         diagonal = computer.compute()
-        super().__init__(diagonal)
+        super().__init__(list(diagonal.values()))

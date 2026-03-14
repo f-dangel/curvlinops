@@ -204,11 +204,11 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
         X, _ = next(self._loop_over_data())
         _check_supports_batched_and_unbatched_inputs(X, self._model_func)
 
-    def compute(self) -> list[Tensor]:
+    def compute(self) -> dict[str, Tensor]:
         """Compute the GGN diagonal on the entire data set.
 
         Returns:
-            List of tensors containing the diagonal elements for each parameter.
+            Dict mapping parameter names to diagonal elements.
         """
         batch_ggn_diagonal_func = make_batch_ggn_diagonal_func(
             self._model_func,
@@ -233,4 +233,4 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
             for k in result:
                 result[k].add_(batch_result[k], alpha=normalization_factor)
 
-        return list(result.values())
+        return result

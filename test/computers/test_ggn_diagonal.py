@@ -27,9 +27,9 @@ def test_GGNDiagonalComputer(case, kwargs: dict):
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn, **kwargs
     ).compute()
     assert len(diag) == len(params)
-    for d, p in zip(diag, params):
+    for d, p in zip(diag.values(), params):
         assert d.shape == p.shape
-    diag_flat = cat([d.flatten() for d in diag])
+    diag_flat = cat([d.flatten() for d in diag.values()])
 
     diag_ref = (
         functorch_ggn(model_func, loss_func, params, data, input_key="x")
@@ -56,7 +56,7 @@ def test_GGNDiagonalComputer_sequential_consistency(case, kwargs: dict):
     )
     diag1 = computer.compute()
     diag2 = computer.compute()
-    for d1, d2 in zip(diag1, diag2):
+    for d1, d2 in zip(diag1.values(), diag2.values()):
         assert allclose(d1, d2)
 
 
@@ -75,5 +75,5 @@ def test_GGNDiagonalComputer_mc_different_seed(case):
 
     assert all(
         not allclose(d1, d2) or allclose(d1, zeros_like(d1))
-        for d1, d2 in zip(diag1, diag2)
+        for d1, d2 in zip(diag1.values(), diag2.values())
     )
