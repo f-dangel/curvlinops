@@ -52,7 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mapping across hook and make_fx backends. Rename mapping keys from
   `"weight"`/`"bias"` to `"W"`/`"b"`, and change `_mapping` from
   `dict[str, ...]` to `list[ParameterUsage]`
-  ([PR](https://github.com/f-dangel/curvlinops/pull/TBD))
+  ([PR](https://github.com/f-dangel/curvlinops/pull/263))
 
 - Migrate internal parameter representation from `list[Parameter]` to
   `dict[str, Parameter]` (keyed by fully-qualified name). Public API unchanged
