@@ -130,14 +130,14 @@ class EFLinearOperator(CurvatureLinearOperator):
     def _vp(
         self,
     ) -> Callable[
-        [dict[str, Tensor], Tensor | MutableMapping, tuple, tuple[Tensor, ...]],
-        tuple[Tensor, ...],
+        [dict[str, Tensor], Tensor | MutableMapping, tuple, dict[str, Tensor]],
+        dict[str, Tensor],
     ]:
         """Lazy initialization of the batch empirical Fisher vector product function.
 
         Returns:
             Function that computes mini-batch EF-vector products with signature
-            ``(params_dict, X, loss_args, v) -> EFv``.
+            ``(params_dict, X, loss_args, v_dict) -> EFv_dict``.
 
         Raises:
             NotImplementedError: If the loss function is not supported.
@@ -151,16 +151,16 @@ class EFLinearOperator(CurvatureLinearOperator):
         )
 
     def _matvec_batch(
-        self, X: Tensor | MutableMapping, y: Tensor, v: tuple[Tensor, ...]
-    ) -> tuple[Tensor, ...]:
+        self, X: Tensor | MutableMapping, y: Tensor, v: dict[str, Tensor]
+    ) -> dict[str, Tensor]:
         """Apply the mini-batch empirical Fisher to a vector.
 
         Args:
             X: Input to the DNN.
             y: Ground truth.
-            v: Vector in tensor list format.
+            v: Vector as a dict keyed by parameter names.
 
         Returns:
-            Result of EF-vector multiplication in tensor list format.
+            Result of EF-vector multiplication as a dict.
         """
         return self._vp(self._params, X, (y,), v)

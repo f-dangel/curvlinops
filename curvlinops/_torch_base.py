@@ -975,8 +975,16 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
             a matrix ``M`` in tensor list format by vmapping the single-vector
             :meth:`_matvec_batch` over the trailing dimension.
         """
+
+        def _matvec_batch_tuple(
+            X: MutableMapping | Tensor, y: Tensor, v: tuple[Tensor, ...]
+        ) -> tuple[Tensor, ...]:
+            v_dict = dict(zip(self._params.keys(), v))
+            result_dict = self._matvec_batch(X, y, v_dict)
+            return tuple(result_dict.values())
+
         return vmap(
-            self._matvec_batch,
+            _matvec_batch_tuple,
             in_dims=(None, None, -1),
             out_dims=-1,
             randomness="same",
@@ -1004,18 +1012,17 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
         return list(self._mp(X, y, tuple(M)))
 
     def _matvec_batch(
-        self, X: MutableMapping | Tensor, y: Tensor, v: tuple[Tensor, ...]
-    ) -> tuple[Tensor, ...]:
-        """Apply the mini-batch matrix to a vector in tensor list format.
+        self, X: MutableMapping | Tensor, y: Tensor, v: dict[str, Tensor]
+    ) -> dict[str, Tensor]:
+        """Apply the mini-batch matrix to a vector in dict format.
 
         Args:
             X: Input to the DNN.
             y: Ground truth.
-            v: Vector in tensor list format (tuple of tensors with same shapes as
-                the trainable model parameters).
+            v: Vector as a dict keyed by parameter names.
 
         Returns: # noqa: D402
-           Result of matrix-vector multiplication in tensor list format.
+           Result of matrix-vector multiplication as a dict.
 
         Raises:
             NotImplementedError: Must be implemented by descendants.
