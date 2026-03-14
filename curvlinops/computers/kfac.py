@@ -74,6 +74,18 @@ class ParameterUsage:
     hyperparams: dict[str, Any]
 
 
+def _module_name_from_param(param_name: str) -> str:
+    """Derive the module name from a fully qualified parameter name.
+
+    Args:
+        param_name: Full parameter name, e.g. ``"0.weight"`` or ``"weight"``.
+
+    Returns:
+        Module name, e.g. ``"0"`` or ``""`` (root module).
+    """
+    return param_name.rsplit(".", 1)[0] if "." in param_name else ""
+
+
 class KFACComputer(_EmpiricalRiskMixin):
     r"""Computes KFAC's Kronecker factors for the Fisher/GGN.
 
@@ -268,8 +280,7 @@ class KFACComputer(_EmpiricalRiskMixin):
         Returns:
             The module object.
         """
-        first_param = next(iter(usage.params.values()))
-        mod_name = first_param.rsplit(".", 1)[0] if "." in first_param else ""
+        mod_name = _module_name_from_param(next(iter(usage.params.values())))
         return self._model_func.get_submodule(mod_name)
 
     @cached_property
@@ -281,12 +292,10 @@ class KFACComputer(_EmpiricalRiskMixin):
         Returns:
             Dictionary mapping module names to ``ParameterUsage`` objects.
         """
-        result = {}
-        for usage in self._mapping:
-            first_param = next(iter(usage.params.values()))
-            mod_name = first_param.rsplit(".", 1)[0] if "." in first_param else ""
-            result[mod_name] = usage
-        return result
+        return {
+            _module_name_from_param(next(iter(u.params.values()))): u
+            for u in self._mapping
+        }
 
     @staticmethod
     def _set_up_grad_outputs_computer(

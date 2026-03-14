@@ -17,7 +17,11 @@ from torch.func import functional_call
 
 from curvlinops._checks import _register_userdict_as_pytree
 from curvlinops.computers.io_collector import with_kfac_io
-from curvlinops.computers.kfac import KFACComputer, ParameterUsage
+from curvlinops.computers.kfac import (
+    KFACComputer,
+    ParameterUsage,
+    _module_name_from_param,
+)
 from curvlinops.computers.kfac_math import (
     compute_loss_correction,
     grad_to_weight_sharing_format,
@@ -51,11 +55,9 @@ def _trace_io(
         _register_userdict_as_pytree()
 
     io_fn, layer_param_names, layer_hparams = with_kfac_io(f, x, params, fisher_type)
-    # "0.weight" -> "0", "layer.sub.weight" -> "layer.sub", "weight" -> ""
     io_to_module = {
-        io_name: name.rsplit(".", 1)[0] if "." in name else ""
+        io_name: _module_name_from_param(next(iter(pnames.values())))
         for io_name, pnames in layer_param_names.items()
-        for name in [next(iter(pnames.values()))]
     }
     return io_fn, io_to_module, layer_hparams
 
