@@ -6,7 +6,6 @@ Also defines ``FisherType`` and ``KFACType`` enums used across the KFAC codebase
 from __future__ import annotations
 
 from enum import Enum, EnumMeta
-from typing import Any
 
 from einconv import index_pattern
 from einconv.utils import get_conv_paddings
@@ -19,7 +18,7 @@ from curvlinops._torch_base import PyTorchLinearOperator
 
 
 def _has_joint_weight_and_bias(
-    separate_weight_and_bias: bool, param_pos: dict[str, Any]
+    separate_weight_and_bias: bool, param_pos: dict[str, str]
 ) -> bool:
     """Check whether weight and bias are treated jointly in a KFAC block.
 
@@ -308,8 +307,8 @@ class ToCanonicalLinearOperator(_CanonicalizationLinearOperator):
 
         for param_group in self._param_groups:
             if _has_joint_weight_and_bias(self._separate_weight_and_bias, param_group):
-                w_idx = self._name_to_idx[param_group["weight"]]
-                b_idx = self._name_to_idx[param_group["bias"]]
+                w_name, b_name = param_group["weight"], param_group["bias"]
+                w_idx, b_idx = self._name_to_idx[w_name], self._name_to_idx[b_name]
                 # Flatten weight tensor into matrix and concatenate bias
                 w_flat = M[w_idx].flatten(start_dim=1, end_dim=-2)
                 # Add bias as additional row
@@ -373,10 +372,8 @@ class FromCanonicalLinearOperator(_CanonicalizationLinearOperator):
 
         for param_group in self._param_groups:
             if _has_joint_weight_and_bias(self._separate_weight_and_bias, param_group):
-                w_name = param_group["weight"]
-                b_name = param_group["bias"]
-                w_idx = self._name_to_idx[w_name]
-                b_idx = self._name_to_idx[b_name]
+                w_name, b_name = param_group["weight"], param_group["bias"]
+                w_idx, b_idx = self._name_to_idx[w_name], self._name_to_idx[b_name]
                 combined = M[processed]
 
                 # Get original weight shape

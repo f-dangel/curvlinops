@@ -184,7 +184,7 @@ def assert_divisible_by(num: int, divisor: int, name: str):
 
 
 def identify_free_parameters(
-    model: Module, params: tuple[Parameter, ...]
+    model: Module, params: list[Parameter]
 ) -> dict[str, Parameter]:
     """Identify free parameters by matching them against a model's named parameters.
 
@@ -193,7 +193,7 @@ def identify_free_parameters(
 
     Args:
         model: The model whose named parameters to search.
-        params: Tuple of parameters to identify.
+        params: List of parameters to identify.
 
     Returns:
         Ordered dict mapping parameter names to parameter tensors.

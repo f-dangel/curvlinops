@@ -82,7 +82,7 @@ class _EmpiricalRiskMixin:
 
         self._model_func = model_func
         self._loss_func = loss_func
-        self._params = identify_free_parameters(model_func, tuple(params))
+        self._params = identify_free_parameters(model_func, params)
         self._data = data
         self._progressbar = progressbar
         self._batch_size_fn = (

@@ -16,8 +16,8 @@ from curvlinops.utils import make_functional_flattened_model_and_loss
 def make_batch_ef_vector_product(
     model_func: Module, loss_func: Module, param_names: list[str]
 ) -> Callable[
-    [dict[str, Tensor], Tensor | MutableMapping, tuple, tuple[Tensor, ...]],
-    tuple[Tensor, ...],
+    [dict[str, Tensor], Tensor | MutableMapping, tuple, dict[str, Tensor]],
+    dict[str, Tensor],
 ]:
     r"""Set up function that multiplies the mini-batch empirical Fisher onto a vector.
 
@@ -38,10 +38,10 @@ def make_batch_ef_vector_product(
             computed.
 
     Returns:
-        A function ``(params_dict, X, loss_args, v) -> EFv`` that takes parameters
-        as a dict, model input ``X``, loss arguments ``loss_args = (y,)``, and a
-        vector ``v`` as a tuple of tensors in list format, and returns the
-        mini-batch empirical Fisher applied to ``v`` in list format.
+        A function ``(params_dict, X, loss_args, v_dict) -> EFv`` that takes
+        parameters as a dict, model input ``X``, loss arguments
+        ``loss_args = (y,)``, and a vector ``v`` as a dict, and returns the
+        mini-batch empirical Fisher applied to ``v`` as a dict.
     """
     f_flat, c_flat = make_functional_flattened_model_and_loss(
         model_func, loss_func, param_names

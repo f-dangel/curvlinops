@@ -24,7 +24,7 @@ def test_CanonicalLinearOperator(separate_weight_and_bias: bool):
     params = [natural_params[idx] for idx in new_order]
 
     # Build named params dict preserving the unconventional order
-    named_params = identify_free_parameters(net, tuple(params))
+    named_params = identify_free_parameters(net, params)
 
     # Define param_groups mapping local names to full qualified names
     param_groups = [

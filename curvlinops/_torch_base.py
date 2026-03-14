@@ -975,11 +975,11 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
             a matrix ``M`` in tensor list format by vmapping the single-vector
             :meth:`_matvec_batch` over the trailing dimension.
         """
+        keys = list(self._params.keys())
 
         def _matvec_batch_tuple(
             X: MutableMapping | Tensor, y: Tensor, v: tuple[Tensor, ...]
         ) -> tuple[Tensor, ...]:
-            keys = list(self._params.keys())
             v_dict = dict(zip(keys, v))
             result_dict = self._matvec_batch(X, y, v_dict)
             return tuple(result_dict[k] for k in keys)
