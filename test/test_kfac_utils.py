@@ -35,9 +35,9 @@ def test_CanonicalLinearOperator(separate_weight_and_bias: bool):
 
     # Define param_groups mapping local names to full qualified names
     param_groups = [
-        {"weight": "0.weight", "bias": "0.bias"},  # layer 0 (Conv2d)
-        {"weight": "1.weight", "bias": "1.bias"},  # layer 1 (Linear)
-        {"weight": "2.weight"},  # layer 2 (Linear, no bias)
+        {"W": "0.weight", "b": "0.bias"},  # layer 0 (Conv2d)
+        {"W": "1.weight", "b": "1.bias"},  # layer 1 (Linear)
+        {"W": "2.weight"},  # layer 2 (Linear, no bias)
     ]
 
     # Extract param shapes, device, and dtype

@@ -217,19 +217,19 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
         """
         input_covariances, gradient_covariances, mapping = computer.compute()
         factors = []
-        for mod_name, param_pos in mapping.items():
-            aaT = input_covariances.get(mod_name, None)
-            ggT = gradient_covariances[mod_name]
+        for usage in mapping:
+            aaT = input_covariances.get(usage.name, None)
+            ggT = gradient_covariances[usage.name]
 
             if _has_joint_weight_and_bias(
-                computer._separate_weight_and_bias, param_pos
+                computer._separate_weight_and_bias, usage.params
             ):
                 # Single Kronecker product block for weight+bias
                 factors.append([ggT, aaT])
             else:
                 # Separate blocks for weight and bias
-                for p_name in param_pos:
-                    factors.append([ggT, aaT] if p_name == "weight" else [ggT])
+                for p_name in usage.params:
+                    factors.append([ggT, aaT] if p_name == "W" else [ggT])
 
         # Create Kronecker product linear operators for each block
         blocks = [KroneckerProductLinearOperator(*fs) for fs in factors]
@@ -251,7 +251,7 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
         """
         PT = ToCanonicalLinearOperator(
             {name: p.shape for name, p in computer._params.items()},
-            list(computer._mapping.values()),
+            [u.params for u in computer._mapping],
             computer._separate_weight_and_bias,
             computer.device,
             computer.dtype,

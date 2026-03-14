@@ -118,7 +118,7 @@ def test_with_kfac_io_fully_connected():
             {"Linear0": x},
             # Forward-only KFAC does not require storing outputs
             {} if fisher_type == FisherType.FORWARD_ONLY else {"Linear0": f(x, params)},
-            {"Linear0": {"weight": "w", "bias": "b"}},
+            {"Linear0": {"W": "w", "b": "b"}},
             {"Linear0": {}},  # Linear layers have empty hyperparams
         )
         _verify_kfac_io(f, x, params, fisher_type, kfac_io_true)
@@ -136,7 +136,7 @@ def test_with_kfac_io_fully_connected():
             {"Linear0": x},
             # Forward-only KFAC does not require storing outputs
             {} if fisher_type == FisherType.FORWARD_ONLY else {"Linear0": f(x, params)},
-            {"Linear0": {"weight": "w"}},
+            {"Linear0": {"W": "w"}},
             {"Linear0": {}},  # Linear layers have empty hyperparams
         )
         _verify_kfac_io(f, x, params, fisher_type, kfac_io_true)
@@ -154,7 +154,7 @@ def test_with_kfac_io_fully_connected():
             {},  # No need to store inputs for biases
             # Forward-only KFAC does not require storing outputs
             {} if fisher_type == FisherType.FORWARD_ONLY else {"Linear0": f(x, params)},
-            {"Linear0": {"bias": "b"}},
+            {"Linear0": {"b": "b"}},
             {"Linear0": {}},  # Linear layers have empty hyperparams
         )
         _verify_kfac_io(f, x, params, fisher_type, kfac_io_true)
@@ -171,7 +171,7 @@ def test_with_kfac_io_fully_connected():
             {"Linear0": x},
             # Forward-only KFAC does not require storing outputs
             {} if fisher_type == FisherType.FORWARD_ONLY else {"Linear0": f(x, params)},
-            {"Linear0": {"weight": "w"}},
+            {"Linear0": {"W": "w"}},
             {"Linear0": {}},  # Linear layers have empty hyperparams
         )
         _verify_kfac_io(f, x, params, fisher_type, kfac_io_true)
@@ -235,9 +235,9 @@ def test_kfac_io_mlp(inplace: bool):
             if fisher_type == FisherType.FORWARD_ONLY
             else {"Linear0": lin0_out, "Linear1": lin1_out, "Linear2": lin2_out},
             {
-                "Linear0": {"weight": "0.weight", "bias": "0.bias"},
-                "Linear1": {"weight": "2.weight"},
-                "Linear2": {"bias": "4.bias"},
+                "Linear0": {"W": "0.weight", "b": "0.bias"},
+                "Linear1": {"W": "2.weight"},
+                "Linear2": {"b": "4.bias"},
             },
             {
                 "Linear0": {},  # Linear layers have empty hyperparams
@@ -333,10 +333,10 @@ def test_kfac_io_cnn(inplace: bool):
                 "Linear1": linear1_out,
             },
             {
-                "Conv0": {"weight": "0.weight", "bias": "0.bias"},
-                "Conv1": {"weight": "3.weight"},
-                "Linear0": {"bias": "7.bias"},
-                "Linear1": {"weight": "9.weight", "bias": "9.bias"},
+                "Conv0": {"W": "0.weight", "b": "0.bias"},
+                "Conv1": {"W": "3.weight"},
+                "Linear0": {"b": "7.bias"},
+                "Linear1": {"W": "9.weight", "b": "9.bias"},
             },
             {
                 "Conv0": {

@@ -29,7 +29,7 @@ def _has_joint_weight_and_bias(
     Returns:
         ``True`` if the block has both weight and bias and they should be joint.
     """
-    return not separate_weight_and_bias and {"weight", "bias"} == set(param_pos.keys())
+    return not separate_weight_and_bias and {"W", "b"} == set(param_pos.keys())
 
 
 class MetaEnum(EnumMeta):
@@ -210,9 +210,9 @@ class _CanonicalizationLinearOperator(PyTorchLinearOperator):
 
         Args:
             param_shapes: Dictionary mapping full parameter names to their shapes.
-            param_groups: List of per-layer dictionaries mapping local parameter names
-                (e.g. ``'weight'``, ``'bias'``) to full qualified parameter names
-                (e.g. ``'0.weight'``).
+            param_groups: List of per-layer dictionaries mapping parameter roles
+                (``'W'`` for weight, ``'b'`` for bias) to full qualified parameter
+                names (e.g. ``'0.weight'``).
             separate_weight_and_bias: Whether to treat weights and biases separately.
             device: Device of the parameters.
             dtype: Data type of the parameters.
@@ -248,7 +248,7 @@ class _CanonicalizationLinearOperator(PyTorchLinearOperator):
 
         for param_group in self._param_groups:
             if _has_joint_weight_and_bias(self._separate_weight_and_bias, param_group):
-                w_name = param_group["weight"]
+                w_name = param_group["W"]
                 w_shape = self._param_shapes[w_name]
                 total_params = w_shape.numel() + w_shape[0]  # weight + bias
                 canonical_shapes.append((total_params,))
@@ -307,7 +307,7 @@ class ToCanonicalLinearOperator(_CanonicalizationLinearOperator):
 
         for param_group in self._param_groups:
             if _has_joint_weight_and_bias(self._separate_weight_and_bias, param_group):
-                w_name, b_name = param_group["weight"], param_group["bias"]
+                w_name, b_name = param_group["W"], param_group["b"]
                 w_idx, b_idx = self._name_to_idx[w_name], self._name_to_idx[b_name]
                 # Flatten weight tensor into matrix and concatenate bias
                 w_flat = M[w_idx].flatten(start_dim=1, end_dim=-2)
@@ -372,7 +372,7 @@ class FromCanonicalLinearOperator(_CanonicalizationLinearOperator):
 
         for param_group in self._param_groups:
             if _has_joint_weight_and_bias(self._separate_weight_and_bias, param_group):
-                w_name, b_name = param_group["weight"], param_group["bias"]
+                w_name, b_name = param_group["W"], param_group["b"]
                 w_idx, b_idx = self._name_to_idx[w_name], self._name_to_idx[b_name]
                 combined = M[processed]
 
