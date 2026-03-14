@@ -74,7 +74,7 @@ def make_batch_ggn_diagonal_func(
         # actual parameter gradients are computed via f_vjp.
         grad_outputs = grad_output_fn(f_x.detach(), y, generator)
         (grad_params_dict,) = vmap(f_vjp)(grad_outputs)
-        return [(g**2).sum(0) for g in grad_params_dict.values()]
+        return [(grad_params_dict[k] ** 2).sum(0) for k in params]
 
     randomness = {"mc": "different", "exact": "same"}[mode]
     # Parallelize over data points (vmap over x and y, not params or generator)

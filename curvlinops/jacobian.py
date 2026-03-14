@@ -362,7 +362,7 @@ class TransposedJacobianLinearOperator(CurvatureLinearOperator):
 
             processed += processing
 
-        return list(JTM.values())
+        return [JTM[k] for k in self._params]
 
     def _adjoint(self) -> JacobianLinearOperator:
         """Return a linear operator representing the adjoint.
