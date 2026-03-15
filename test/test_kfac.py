@@ -204,6 +204,10 @@ def test_kfac_type2_weight_tying(
     With N=1, KFAC-expand is exact because the two paths are independent
     (each grad_output vector flows through exactly one path).
 
+    The hooks backend does NOT handle weight tying correctly: hooks fire twice
+    per forward pass, each computing its own covariance with ``scale=1``,
+    yielding ``xxT_1/N + xxT_2/N`` instead of ``(xxT_1 + xxT_2) / (2N)``.
+
     Args:
         reduction: Loss reduction mode.
         bias: Whether the shared linear layer has a bias.
@@ -230,7 +234,9 @@ def test_kfac_type2_weight_tying(
         data,
         separate_weight_and_bias=separate_weight_and_bias,
     )
-    kfac = KFACLinearOperator(
+
+    # make_fx backend: exact for weight tying
+    kfac_fx = KFACLinearOperator(
         model,
         loss_func,
         params,
@@ -240,9 +246,20 @@ def test_kfac_type2_weight_tying(
         separate_weight_and_bias=separate_weight_and_bias,
         backend="make_fx",
     )
-    kfac_mat = kfac @ eye_like(kfac)
+    assert allclose_report(ggn, kfac_fx @ eye_like(kfac_fx))
 
-    assert allclose_report(ggn, kfac_mat)
+    # hooks backend: incorrect for weight tying (known limitation)
+    kfac_hooks = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        fisher_type=FisherType.TYPE2,
+        kfac_approx=KFACType.EXPAND,
+        separate_weight_and_bias=separate_weight_and_bias,
+        backend="hooks",
+    )
+    assert not allclose(ggn, kfac_hooks @ eye_like(kfac_hooks))
 
 
 @mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
