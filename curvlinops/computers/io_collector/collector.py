@@ -150,25 +150,22 @@ def _verify_weight_bias_compatibility(
     """Verify that weight-tied layers have compatible bias configurations.
 
     A weight may appear in multiple layers (weight tying), but each usage must
-    either use the same tracked bias or no bias. A tracked bias must not appear
-    with different weights.
+    either use the same tracked bias or no bias. Different tracked biases for
+    the same weight cannot be merged into a single affine layer.
 
     Args:
         layer_info_tuples: Tuples containing layer information from pattern matching.
         named_params: Dictionary mapping parameter names to parameter tensors.
 
     Raises:
-        ValueError: If conflicting biases or reused biases are detected.
+        ValueError: If conflicting biases are detected for a shared weight.
     """
     _non_tracked = {None, NOT_A_PARAM}
     weight_to_biases: dict[str, set[str | None]] = defaultdict(set)
-    bias_to_weights: dict[str, set[str]] = defaultdict(set)
     for layer_info_tuple in layer_info_tuples:
         _, _, _, weight_name, bias_name, _ = layer_info_tuple
         if weight_name in named_params:
             weight_to_biases[weight_name].add(bias_name)
-        if bias_name not in _non_tracked and bias_name in named_params:
-            bias_to_weights[bias_name].add(weight_name)
 
     for weight_name, biases in weight_to_biases.items():
         tracked_biases = biases - _non_tracked
@@ -177,13 +174,6 @@ def _verify_weight_bias_compatibility(
                 f"Weight '{weight_name}' is used with conflicting biases "
                 f"{tracked_biases}. Weight-tied layers must share the same "
                 f"bias or use no bias."
-            )
-
-    for bias_name, weights in bias_to_weights.items():
-        if len(weights) > 1:
-            raise ValueError(
-                f"Bias '{bias_name}' is used with different weights "
-                f"{weights}. A bias must belong to exactly one parameter group."
             )
 
 
