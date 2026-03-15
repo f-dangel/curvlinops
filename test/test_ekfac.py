@@ -31,10 +31,10 @@ from test.test_kfac import (
     _check_does_not_affect_grad,
     _check_make_fx_flatten_different_batch_sizes,
     _check_torch_save_load,
+    _test_weight_tying_type2,
 )
 from test.utils import (
     Conv2dModel,
-    SplitConcatModel,
     UnetModel,
     WeightShareModel,
     _test_ekfac_closer_to_exact_than_kfac,
@@ -195,52 +195,10 @@ def test_ekfac_type2_weight_sharing(
 def test_ekfac_type2_weight_tying(
     reduction: str, bias: bool, separate_weight_and_bias: bool
 ):
-    """Test EKFAC with weight tying (same weight used in independent parallel paths).
-
-    Uses a split-concat model: input is split along the feature dimension,
-    the same linear layer is applied to each half, and results are concatenated.
-    With N=1, EKFAC is exact because the two paths are independent
-    (each grad_output vector flows through exactly one path).
-
-    Args:
-        reduction: Loss reduction mode.
-        bias: Whether the shared linear layer has a bias.
-        separate_weight_and_bias: Whether to treat weight and bias separately.
-    """
-    manual_seed(0)
-    D = 4
-
-    model = SplitConcatModel(D, bias=bias)
-    loss_func = MSELoss(reduction=reduction)
-    params = [p for p in model.parameters() if p.requires_grad]
-    data = [
-        (rand(1, 2 * D), regression_targets((1, 2 * D))),
-    ]
-    model, loss_func, params, data, _ = change_dtype(
-        (model, loss_func, params, data, None), float64
+    """Test EKFAC with weight tying against exact GGN (make_fx only)."""
+    _test_weight_tying_type2(
+        EKFACLinearOperator, reduction, bias, separate_weight_and_bias
     )
-
-    ggn = block_diagonal(
-        GGNLinearOperator,
-        model,
-        loss_func,
-        params,
-        data,
-        separate_weight_and_bias=separate_weight_and_bias,
-    )
-    ekfac = EKFACLinearOperator(
-        model,
-        loss_func,
-        params,
-        data,
-        fisher_type=FisherType.TYPE2,
-        kfac_approx=KFACType.EXPAND,
-        separate_weight_and_bias=separate_weight_and_bias,
-        backend="make_fx",
-    )
-    ekfac_mat = ekfac @ eye_like(ekfac)
-
-    assert allclose_report(ggn, ekfac_mat)
 
 
 def test_ekfac_mc(

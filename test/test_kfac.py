@@ -189,26 +189,25 @@ def test_kfac_type2_weight_sharing(
     assert allclose_report(ggn, kfac_mat)
 
 
-@mark.parametrize("reduction", ["mean", "sum"])
-@mark.parametrize("bias", [False, True], ids=["no_bias", "with_bias"])
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-def test_kfac_type2_weight_tying(
-    reduction: str, bias: bool, separate_weight_and_bias: bool
+def _test_weight_tying_type2(
+    linop_cls: type[KFACLinearOperator],
+    reduction: str,
+    bias: bool,
+    separate_weight_and_bias: bool,
 ):
-    """Test KFAC with weight tying (same weight used in independent parallel paths).
+    """Test (E)KFAC with weight tying against the exact block-diagonal GGN.
 
-    Uses a split-concat model: input is split along the feature dimension,
-    the same linear layer is applied to each half, and results are concatenated.
-    With N=1, KFAC-expand is exact because the two paths are independent
-    (each grad_output vector flows through exactly one path).
+    Uses a split-concat model where the same module is applied to two halves
+    of the input. With N=1, (E)KFAC-expand is exact because the two paths are
+    independent.
 
-    The hooks backend does NOT handle weight tying correctly: hooks fire twice
-    per forward pass, each computing its own covariance with ``scale=1``,
-    yielding ``xxT_1/N + xxT_2/N`` instead of ``(xxT_1 + xxT_2) / (2N)``.
+    For ``KFACLinearOperator``, also verifies that the hooks backend gives wrong
+    results (hooks fire twice per forward, each with ``scale=1``). EKFAC hooks
+    may still be correct because the eigenvalue correction recomputes eigenvalues
+    from data, compensating for the wrong Kronecker factors.
 
     Args:
+        linop_cls: The linear operator class to test.
         reduction: Loss reduction mode.
         bias: Whether the shared linear layer has a bias.
         separate_weight_and_bias: Whether to treat weight and bias separately.
@@ -235,31 +234,42 @@ def test_kfac_type2_weight_tying(
         separate_weight_and_bias=separate_weight_and_bias,
     )
 
-    # make_fx backend: exact for weight tying
-    kfac_fx = KFACLinearOperator(
-        model,
-        loss_func,
-        params,
-        data,
-        fisher_type=FisherType.TYPE2,
-        kfac_approx=KFACType.EXPAND,
-        separate_weight_and_bias=separate_weight_and_bias,
-        backend="make_fx",
-    )
-    assert allclose_report(ggn, kfac_fx @ eye_like(kfac_fx))
+    for backend in BACKENDS:
+        linop = linop_cls(
+            model,
+            loss_func,
+            params,
+            data,
+            fisher_type=FisherType.TYPE2,
+            kfac_approx=KFACType.EXPAND,
+            separate_weight_and_bias=separate_weight_and_bias,
+            backend=backend,
+        )
+        linop_mat = linop @ eye_like(linop)
 
-    # hooks backend: incorrect for weight tying (known limitation)
-    kfac_hooks = KFACLinearOperator(
-        model,
-        loss_func,
-        params,
-        data,
-        fisher_type=FisherType.TYPE2,
-        kfac_approx=KFACType.EXPAND,
-        separate_weight_and_bias=separate_weight_and_bias,
-        backend="hooks",
+        if backend == "make_fx":
+            # make_fx backend: exact for weight tying
+            assert allclose_report(ggn, linop_mat)
+        elif backend == "hooks" and linop_cls is KFACLinearOperator:
+            # hooks backend: incorrect KFAC factors (known limitation).
+            # EKFAC hooks may still be correct because the eigenvalue
+            # correction recomputes eigenvalues, compensating for the
+            # wrong Kronecker factors.
+            assert not allclose(ggn, linop_mat)
+
+
+@mark.parametrize("reduction", ["mean", "sum"])
+@mark.parametrize("bias", [False, True], ids=["no_bias", "with_bias"])
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+def test_kfac_type2_weight_tying(
+    reduction: str, bias: bool, separate_weight_and_bias: bool
+):
+    """Test KFAC with weight tying against exact GGN (make_fx only)."""
+    _test_weight_tying_type2(
+        KFACLinearOperator, reduction, bias, separate_weight_and_bias
     )
-    assert not allclose(ggn, kfac_hooks @ eye_like(kfac_hooks))
 
 
 @mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
