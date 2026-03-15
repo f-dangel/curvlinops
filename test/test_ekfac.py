@@ -34,6 +34,7 @@ from test.test_kfac import (
 )
 from test.utils import (
     Conv2dModel,
+    SplitConcatModel,
     UnetModel,
     WeightShareModel,
     _test_ekfac_closer_to_exact_than_kfac,
@@ -184,6 +185,47 @@ def test_ekfac_type2_weight_sharing(
     ekfac_mat = ekfac @ eye_like(ekfac)
 
     assert allclose_report(ggn, ekfac_mat)
+
+
+@mark.parametrize("reduction", ["mean", "sum"])
+def test_ekfac_type2_weight_tying(reduction: str):
+    """Test EKFAC with weight tying (same weight used in independent parallel paths).
+
+    Uses a split-concat model: input is split along the feature dimension,
+    the same linear layer is applied to each half, and results are concatenated.
+    With N=1, EKFAC is exact because the two paths are independent.
+
+    Args:
+        reduction: Loss reduction mode.
+    """
+    manual_seed(0)
+    D = 4
+
+    model = SplitConcatModel(D)
+    loss_func = MSELoss(reduction=reduction)
+    params = [p for p in model.parameters() if p.requires_grad]
+    data = [
+        (rand(1, 2 * D), regression_targets((1, 2 * D))),
+    ]
+    model, loss_func, params, data, _ = change_dtype(
+        (model, loss_func, params, data, None), float64
+    )
+
+    ggn = GGNLinearOperator(model, loss_func, params, data)
+    ggn_mat = ggn @ eye_like(ggn)
+
+    ekfac = EKFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        fisher_type=FisherType.TYPE2,
+        kfac_approx=KFACType.EXPAND,
+        backend="make_fx",
+    )
+    ekfac_mat = ekfac @ eye_like(ekfac)
+
+    assert allclose_report(ggn_mat, ekfac_mat)
 
 
 def test_ekfac_mc(

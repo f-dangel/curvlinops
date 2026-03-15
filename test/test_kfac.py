@@ -9,7 +9,6 @@ from pytest import mark
 from torch import (
     Tensor,
     allclose,
-    cat,
     device,
     float64,
     load,
@@ -38,6 +37,7 @@ from curvlinops.utils import allclose_report
 from test.cases import DEVICES, DEVICES_IDS
 from test.utils import (
     Conv2dModel,
+    SplitConcatModel,
     UnetModel,
     WeightShareModel,
     _test_inplace_activations,
@@ -189,29 +189,22 @@ def test_kfac_type2_weight_sharing(
     assert allclose_report(ggn, kfac_mat)
 
 
-def test_kfac_type2_weight_tying():
+@mark.parametrize("reduction", ["mean", "sum"])
+def test_kfac_type2_weight_tying(reduction: str):
     """Test KFAC with weight tying (same weight used in independent parallel paths).
 
     Uses a split-concat model: input is split along the feature dimension,
     the same linear layer is applied to each half, and results are concatenated.
     With N=1, KFAC-expand is exact because the two paths are independent.
+
+    Args:
+        reduction: Loss reduction mode.
     """
     manual_seed(0)
     D = 4
 
-    class SplitConcatModel(Module):
-        def __init__(self):
-            super().__init__()
-            self.linear = Linear(D, D, bias=False)
-
-        def forward(self, x):
-            x1, x2 = x.split(D, dim=-1)
-            y1 = self.linear(x1)
-            y2 = self.linear(x2)
-            return cat([y1, y2], dim=-1)
-
-    model = SplitConcatModel()
-    loss_func = MSELoss(reduction="mean")
+    model = SplitConcatModel(D)
+    loss_func = MSELoss(reduction=reduction)
     params = [p for p in model.parameters() if p.requires_grad]
     data = [
         (rand(1, 2 * D), regression_targets((1, 2 * D))),
