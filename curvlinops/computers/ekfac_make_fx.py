@@ -16,6 +16,7 @@ from curvlinops.computers.ekfac import (
     EKFACComputer,
     compute_eigenvalue_correction_linear_weight_sharing,
 )
+from curvlinops.computers.kfac import ParameterUsage
 from curvlinops.computers.kfac_make_fx import MakeFxKFACComputer, _trace_io
 from curvlinops.computers.kfac_math import (
     compute_loss_correction,
@@ -65,6 +66,7 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
 
         # Layer metadata (identical across batch sizes), populated on first trace
         io_to_module: dict[str, str] | None = None
+        io_to_usage: dict[str, ParameterUsage] | None = None
         layer_hparams: dict[str, dict[str, Any]] | None = None
 
         corrected_eigenvalues: dict[str, Tensor | dict[str, Tensor]] = {}
@@ -78,6 +80,13 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
                     f, X, self._params, self._fisher_type
                 )
 
+            # Build lookup from IO collector names to ParameterUsage objects
+            if io_to_usage is None:
+                io_to_usage = {
+                    io_name: self._usage_by_module[mod_name]
+                    for io_name, mod_name in io_to_module.items()
+                }
+
             # Forward pass with IO collection
             io_fn = traced_io_fns[batch_size]
             output, layer_inputs, layer_outputs = io_fn(X, self._params)
@@ -89,12 +98,12 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
 
             # Accumulate eigenvalue corrections per layer
             for io_layer_name, batched_g in layer_output_grads.items():
-                mod_name = io_to_module[io_layer_name]
+                usage = io_to_usage[io_layer_name]
                 x = layer_inputs.get(io_layer_name)
                 self._eigenvalue_correction_from_io(
                     batched_g,
                     x,
-                    mod_name,
+                    usage,
                     layer_hparams[io_layer_name],
                     input_covariances_eigenvectors,
                     gradient_covariances_eigenvectors,
@@ -107,7 +116,7 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
         self,
         batched_g: Tensor,
         x: Tensor | None,
-        module_name: str,
+        usage: ParameterUsage,
         layer_hparams: dict[str, Any],
         input_cov_eigvecs: dict[str, Tensor],
         gradient_cov_eigvecs: dict[str, Tensor],
@@ -127,10 +136,10 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
             batched_g: Batched gradients at the layer's output with shape
                 ``[num_vectors, batch, ...]``.
             x: Layer input tensor with shape ``[batch, ...]`` or ``None``.
-            module_name: Module name in ``self._mapping``.
+            usage: Parameter usage info for this layer.
             layer_hparams: Hyperparameters from IO collector for this layer.
-            input_cov_eigvecs: Input covariance eigenvectors per module.
-            gradient_cov_eigvecs: Gradient covariance eigenvectors per module.
+            input_cov_eigvecs: Input covariance eigenvectors per layer.
+            gradient_cov_eigvecs: Gradient covariance eigenvectors per layer.
             corrected_eigenvalues: Dictionary to accumulate corrections (mutated).
         """
         g = batched_g.data.detach()  # [v, batch, ...]
@@ -140,11 +149,9 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
         g = grad_to_weight_sharing_format(
             g, KFACType.EXPAND, layer_hparams, num_leading_dims=2
         )
-
-        param_pos = self._mapping[module_name]
-        a_required = "weight" in param_pos
+        a_required = "W" in usage.params
         has_joint_wb = _has_joint_weight_and_bias(
-            self._separate_weight_and_bias, param_pos
+            self._separate_weight_and_bias, usage.params
         )
 
         # Convert a to weight sharing format: [batch, ...] -> [batch, shared, d_in]
@@ -164,8 +171,8 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
             self._N_data,
         )
 
-        aaT_eigvecs = input_cov_eigvecs.get(module_name)
-        ggT_eigvecs = gradient_cov_eigvecs[module_name]
+        aaT_eigvecs = input_cov_eigvecs.get(usage.name)
+        ggT_eigvecs = gradient_cov_eigvecs[usage.name]
 
         if has_joint_wb:
             eigencorrection = compute_eigenvalue_correction_linear_weight_sharing(
@@ -173,21 +180,21 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
             )
             self._set_or_add_(
                 corrected_eigenvalues,
-                module_name,
+                usage.name,
                 eigencorrection.mul_(correction),
             )
         else:
-            if module_name not in corrected_eigenvalues:
-                corrected_eigenvalues[module_name] = {}
-            for p_name, pos in param_pos.items():
+            if usage.name not in corrected_eigenvalues:
+                corrected_eigenvalues[usage.name] = {}
+            for p_name, pos in usage.params.items():
                 eigencorrection = compute_eigenvalue_correction_linear_weight_sharing(
                     g,
                     ggT_eigvecs,
-                    None if p_name == "bias" else a,
-                    None if p_name == "bias" else aaT_eigvecs,
+                    None if p_name == "b" else a,
+                    None if p_name == "b" else aaT_eigvecs,
                 )
                 self._set_or_add_(
-                    corrected_eigenvalues[module_name],
+                    corrected_eigenvalues[usage.name],
                     pos,
                     eigencorrection.mul_(correction),
                 )

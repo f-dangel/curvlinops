@@ -17,7 +17,11 @@ from torch.func import functional_call
 
 from curvlinops._checks import _register_userdict_as_pytree
 from curvlinops.computers.io_collector import with_kfac_io
-from curvlinops.computers.kfac import KFACComputer
+from curvlinops.computers.kfac import (
+    KFACComputer,
+    ParameterUsage,
+    _module_name_from_param,
+)
 from curvlinops.computers.kfac_math import (
     compute_loss_correction,
     grad_to_weight_sharing_format,
@@ -51,11 +55,9 @@ def _trace_io(
         _register_userdict_as_pytree()
 
     io_fn, layer_param_names, layer_hparams = with_kfac_io(f, x, params, fisher_type)
-    # "0.weight" -> "0", "layer.sub.weight" -> "layer.sub", "weight" -> ""
     io_to_module = {
-        io_name: name.rsplit(".", 1)[0] if "." in name else ""
+        io_name: _module_name_from_param(next(iter(pnames.values())))
         for io_name, pnames in layer_param_names.items()
-        for name in [next(iter(pnames.values()))]
     }
     return io_fn, io_to_module, layer_hparams
 
@@ -100,6 +102,7 @@ class MakeFxKFACComputer(KFACComputer):
 
         # Layer metadata (identical across batch sizes), populated on first trace
         io_to_module: dict[str, str] | None = None
+        io_to_usage: dict[str, ParameterUsage] | None = None
         layer_hparams: dict[str, dict[str, Any]] | None = None
 
         # Set up dictionaries for the covariances that will be populated
@@ -119,13 +122,19 @@ class MakeFxKFACComputer(KFACComputer):
             io_fn = traced_io_fns[batch_size]
             output, layer_inputs, layer_outputs = io_fn(X, self._params)
 
+            # Build lookup from IO collector names to ParameterUsage objects
+            if io_to_usage is None:
+                io_to_usage = {
+                    io_name: self._usage_by_module[mod_name]
+                    for io_name, mod_name in io_to_module.items()
+                }
+
             # Compute input covariances
             for io_layer_name, x in layer_inputs.items():
-                mod_name = io_to_module[io_layer_name]
-                param_pos = self._mapping[mod_name]
+                usage = io_to_usage[io_layer_name]
                 hparams = layer_hparams[io_layer_name]
                 has_joint_wb = _has_joint_weight_and_bias(
-                    self._separate_weight_and_bias, param_pos
+                    self._separate_weight_and_bias, usage.params
                 )
                 x = input_to_weight_sharing_format(
                     x.data.detach(),
@@ -136,7 +145,7 @@ class MakeFxKFACComputer(KFACComputer):
                 scale = x.shape[1]
                 xxT = einsum(x, x, "batch shared i, batch shared j -> i j")
                 self._set_or_add_(
-                    input_covariances, mod_name, xxT.div_(scale * self._N_data)
+                    input_covariances, usage.name, xxT.div_(scale * self._N_data)
                 )
 
             # Forward-only KFAC does not require gradient covariances
@@ -148,7 +157,7 @@ class MakeFxKFACComputer(KFACComputer):
                 output, y, layer_outputs, io_to_module
             )
             for io_layer_name, g in layer_output_grads.items():
-                mod_name = io_to_module[io_layer_name]
+                usage = io_to_usage[io_layer_name]
                 hparams = layer_hparams[io_layer_name]
                 g = grad_to_weight_sharing_format(
                     g.data.detach(),
@@ -165,7 +174,7 @@ class MakeFxKFACComputer(KFACComputer):
                     correction
                 )
                 self._set_or_add_(
-                    gradient_covariances, mod_name, ggT.mul_(grad_normalization)
+                    gradient_covariances, usage.name, ggT.mul_(grad_normalization)
                 )
 
         # Handle FORWARD_ONLY case
