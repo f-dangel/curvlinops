@@ -480,7 +480,10 @@ class EKFACComputer(KFACComputer):
         g = g.unsqueeze(0)  # [N, S, D] -> [1, N, S, D] (V=1 for hooks backend)
         if a is not None:
             a = input_to_weight_sharing_format(
-                a, KFACType.EXPAND, usage.hyperparams, bias_pad=1 if has_joint_wb else None
+                a,
+                KFACType.EXPAND,
+                usage.hyperparams,
+                bias_pad=1 if has_joint_wb else None,
             )
 
         correction = compute_loss_correction(

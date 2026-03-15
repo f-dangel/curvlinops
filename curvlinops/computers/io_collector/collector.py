@@ -144,15 +144,53 @@ def with_param_io(
     return gm
 
 
+def _verify_weight_bias_compatibility(
+    layer_info_tuples: tuple[LayerInfoTuple, ...], named_params: dict[str, Tensor]
+) -> None:
+    """Verify that weight-tied layers have compatible bias configurations.
+
+    A weight may appear in multiple layers (weight tying), but each usage must
+    either use the same tracked bias or no bias. A tracked bias must not appear
+    with different weights.
+
+    Args:
+        layer_info_tuples: Tuples containing layer information from pattern matching.
+        named_params: Dictionary mapping parameter names to parameter tensors.
+
+    Raises:
+        ValueError: If conflicting biases or reused biases are detected.
+    """
+    _non_tracked = {None, NOT_A_PARAM}
+    weight_to_biases: dict[str, set[str | None]] = defaultdict(set)
+    bias_to_weights: dict[str, set[str]] = defaultdict(set)
+    for layer_info_tuple in layer_info_tuples:
+        _, _, _, weight_name, bias_name, _ = layer_info_tuple
+        if weight_name in named_params:
+            weight_to_biases[weight_name].add(bias_name)
+        if bias_name not in _non_tracked and bias_name in named_params:
+            bias_to_weights[bias_name].add(weight_name)
+
+    for weight_name, biases in weight_to_biases.items():
+        tracked_biases = biases - _non_tracked
+        if len(tracked_biases) > 1:
+            raise ValueError(
+                f"Weight '{weight_name}' is used with conflicting biases "
+                f"{tracked_biases}. Weight-tied layers must share the same "
+                f"bias or use no bias."
+            )
+
+    for bias_name, weights in bias_to_weights.items():
+        if len(weights) > 1:
+            raise ValueError(
+                f"Bias '{bias_name}' is used with different weights "
+                f"{weights}. A bias must belong to exactly one parameter group."
+            )
+
+
 def _verify_supported_by_kfac(
     layer_info_tuples: tuple[LayerInfoTuple, ...], named_params: dict[str, Tensor]
 ) -> None:
     """Verify that the detected layer patterns are supported by KFAC.
-
-    Weights may be used multiple times (weight tying); these usages will be
-    merged into a single layer with an additional weight-sharing dimension.
-    However, if the same weight is paired with different bias parameters across
-    usages, merging is not possible and an error is raised.
 
     Args:
         layer_info_tuples: Tuples containing layer information from pattern matching.
@@ -162,26 +200,7 @@ def _verify_supported_by_kfac(
         ValueError: If unsupported patterns are detected (conflicting biases for
             a shared weight, transposed convolutions, or non-2D convolutions).
     """
-    # For multi-use weights: verify no conflicting biases.
-    # A weight may appear in multiple layers, but each usage must either use
-    # the same bias or no bias. Different biases for the same weight cannot be
-    # merged into a single affine layer.
-    weight_to_biases: dict[str, set[str | None]] = defaultdict(set)
-    for layer_info_tuple in layer_info_tuples:
-        _, _, _, weight_name, bias_name, _ = layer_info_tuple
-        if weight_name in named_params:
-            # bias_name is None (no bias) or a param name string
-            weight_to_biases[weight_name].add(bias_name)
-
-    for weight_name, biases in weight_to_biases.items():
-        # Filter to actual bias params (not None)
-        bias_params = biases - {None}
-        if len(bias_params) > 1:
-            raise ValueError(
-                f"Weight '{weight_name}' is used with conflicting biases "
-                f"{bias_params}. Weight-tied layers must share the same bias "
-                f"or use no bias."
-            )
+    _verify_weight_bias_compatibility(layer_info_tuples, named_params)
 
     # Make sure there is no transposed and no 1D or 3D convolution
     for layer_info_tuple in layer_info_tuples:
