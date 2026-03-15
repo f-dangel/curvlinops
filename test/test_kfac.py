@@ -9,6 +9,7 @@ from pytest import mark
 from torch import (
     Tensor,
     allclose,
+    cat,
     device,
     float64,
     load,
@@ -186,6 +187,54 @@ def test_kfac_type2_weight_sharing(
     kfac_mat = kfac @ eye_like(kfac)
 
     assert allclose_report(ggn, kfac_mat)
+
+
+def test_kfac_type2_weight_tying():
+    """Test KFAC with weight tying (same weight used in independent parallel paths).
+
+    Uses a split-concat model: input is split along the feature dimension,
+    the same linear layer is applied to each half, and results are concatenated.
+    With N=1, KFAC-expand is exact because the two paths are independent.
+    """
+    manual_seed(0)
+    D = 4
+
+    class SplitConcatModel(Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = Linear(D, D, bias=False)
+
+        def forward(self, x):
+            x1, x2 = x.split(D, dim=-1)
+            y1 = self.linear(x1)
+            y2 = self.linear(x2)
+            return cat([y1, y2], dim=-1)
+
+    model = SplitConcatModel()
+    loss_func = MSELoss(reduction="mean")
+    params = [p for p in model.parameters() if p.requires_grad]
+    data = [
+        (rand(1, 2 * D), regression_targets((1, 2 * D))),
+    ]
+    model, loss_func, params, data, _ = change_dtype(
+        (model, loss_func, params, data, None), float64
+    )
+
+    ggn = GGNLinearOperator(model, loss_func, params, data)
+    ggn_mat = ggn @ eye_like(ggn)
+
+    kfac = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        fisher_type=FisherType.TYPE2,
+        kfac_approx=KFACType.EXPAND,
+        backend="make_fx",
+    )
+    kfac_mat = kfac @ eye_like(kfac)
+
+    assert allclose_report(ggn_mat, kfac_mat)
 
 
 @mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)

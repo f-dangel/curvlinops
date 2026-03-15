@@ -161,7 +161,7 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
                 x.data.detach(),
                 KFACType.EXPAND,
                 layer_hparams,
-                append_ones_for_bias=has_joint_wb,
+                bias_pad=1 if has_joint_wb else None,
             )
 
         correction = compute_loss_correction(
