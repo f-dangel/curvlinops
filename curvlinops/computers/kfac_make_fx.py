@@ -190,9 +190,9 @@ class MakeFxKFACComputer(KFACComputer):
                     self._num_per_example_loss_terms,
                     self._loss_func.reduction,
                 )
-                ggT = einsum(
-                    g, g, "v batch shared i, v batch shared j -> i j"
-                ).mul_(correction)
+                ggT = einsum(g, g, "v batch shared i, v batch shared j -> i j").mul_(
+                    correction
+                )
                 self._set_or_add_(
                     gradient_covariances, usage_name, ggT.mul_(grad_normalization)
                 )

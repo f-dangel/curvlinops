@@ -99,45 +99,50 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
                 output, y, layer_outputs, io_to_module
             )
 
-            # Format per-usage, concatenate tied weights, compute corrections
-            formatted_grads: dict[str, list[Tensor]] = defaultdict(list)
-            formatted_inputs: dict[str, list[Tensor]] = defaultdict(list)
+            # Group IO layer names by parameter usage, then process one
+            # group at a time to bound memory for CNNs with patch extraction
+            io_groups: dict[str, list[str]] = defaultdict(list)
+            for io_name in io_to_usage:
+                io_groups[io_to_usage[io_name].name].append(io_name)
 
-            for io_layer_name, batched_g in layer_output_grads.items():
-                usage = io_to_usage[io_layer_name]
-                hparams = layer_hparams[io_layer_name]
-
-                g = grad_to_weight_sharing_format(
-                    batched_g.data.detach(),
-                    KFACType.EXPAND,
-                    hparams,
-                    num_leading_dims=2,
+            for usage_name, io_names in io_groups.items():
+                usage = usage_by_name[usage_name]
+                has_joint_wb = _has_joint_weight_and_bias(
+                    self._separate_weight_and_bias, usage.params
                 )
-                formatted_grads[usage.name].append(g)
-
-                x = layer_inputs.get(io_layer_name)
-                if "W" in usage.params and x is not None:
-                    has_joint_wb = _has_joint_weight_and_bias(
-                        self._separate_weight_and_bias, usage.params
-                    )
-                    a = input_to_weight_sharing_format(
-                        x.data.detach(),
+                names_with_grad = [n for n in io_names if n in layer_output_grads]
+                if not names_with_grad:
+                    continue
+                gs = [
+                    grad_to_weight_sharing_format(
+                        layer_output_grads[n].data.detach(),
                         KFACType.EXPAND,
-                        hparams,
-                        bias_pad=1 if has_joint_wb else None,
+                        layer_hparams[n],
+                        num_leading_dims=2,
                     )
-                    formatted_inputs[usage.name].append(a)
-
-            for usage_name, gs in formatted_grads.items():
+                    for n in names_with_grad
+                ]
                 g = cat(gs, dim=2) if len(gs) > 1 else gs[0]
+
                 a = None
-                if usage_name in formatted_inputs:
-                    xs = formatted_inputs[usage_name]
-                    a = cat(xs, dim=1) if len(xs) > 1 else xs[0]
+                if "W" in usage.params:
+                    names_with_input = [n for n in io_names if n in layer_inputs]
+                    if names_with_input:
+                        xs = [
+                            input_to_weight_sharing_format(
+                                layer_inputs[n].data.detach(),
+                                KFACType.EXPAND,
+                                layer_hparams[n],
+                                bias_pad=1 if has_joint_wb else None,
+                            )
+                            for n in names_with_input
+                        ]
+                        a = cat(xs, dim=1) if len(xs) > 1 else xs[0]
+
                 self._eigenvalue_correction_from_formatted(
                     g,
                     a,
-                    usage_by_name[usage_name],
+                    usage,
                     input_covariances_eigenvectors,
                     gradient_covariances_eigenvectors,
                     corrected_eigenvalues,
