@@ -359,14 +359,15 @@ class SplitConcatModel(Module):
     (the same parameter used in two independent affine operations).
     """
 
-    def __init__(self, D: int):
-        """Initialize with a shared ``Linear(D, D, bias=False)`` layer.
+    def __init__(self, D: int, bias: bool = False):
+        """Initialize with a shared ``Linear(D, D)`` layer.
 
         Args:
             D: Feature dimension of each half.
+            bias: Whether the shared linear layer has a bias.
         """
         super().__init__()
-        self.linear = Linear(D, D, bias=False)
+        self.linear = Linear(D, D, bias=bias)
         self._D = D
 
     def forward(self, x: Tensor) -> Tensor:

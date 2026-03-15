@@ -190,20 +190,29 @@ def test_kfac_type2_weight_sharing(
 
 
 @mark.parametrize("reduction", ["mean", "sum"])
-def test_kfac_type2_weight_tying(reduction: str):
+@mark.parametrize("bias", [False, True], ids=["no_bias", "with_bias"])
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+def test_kfac_type2_weight_tying(
+    reduction: str, bias: bool, separate_weight_and_bias: bool
+):
     """Test KFAC with weight tying (same weight used in independent parallel paths).
 
     Uses a split-concat model: input is split along the feature dimension,
     the same linear layer is applied to each half, and results are concatenated.
-    With N=1, KFAC-expand is exact because the two paths are independent.
+    With N=1, KFAC-expand is exact because the two paths are independent
+    (each grad_output vector flows through exactly one path).
 
     Args:
         reduction: Loss reduction mode.
+        bias: Whether the shared linear layer has a bias.
+        separate_weight_and_bias: Whether to treat weight and bias separately.
     """
     manual_seed(0)
     D = 4
 
-    model = SplitConcatModel(D)
+    model = SplitConcatModel(D, bias=bias)
     loss_func = MSELoss(reduction=reduction)
     params = [p for p in model.parameters() if p.requires_grad]
     data = [
@@ -213,9 +222,14 @@ def test_kfac_type2_weight_tying(reduction: str):
         (model, loss_func, params, data, None), float64
     )
 
-    ggn = GGNLinearOperator(model, loss_func, params, data)
-    ggn_mat = ggn @ eye_like(ggn)
-
+    ggn = block_diagonal(
+        GGNLinearOperator,
+        model,
+        loss_func,
+        params,
+        data,
+        separate_weight_and_bias=separate_weight_and_bias,
+    )
     kfac = KFACLinearOperator(
         model,
         loss_func,
@@ -223,11 +237,12 @@ def test_kfac_type2_weight_tying(reduction: str):
         data,
         fisher_type=FisherType.TYPE2,
         kfac_approx=KFACType.EXPAND,
+        separate_weight_and_bias=separate_weight_and_bias,
         backend="make_fx",
     )
     kfac_mat = kfac @ eye_like(kfac)
 
-    assert allclose_report(ggn_mat, kfac_mat)
+    assert allclose_report(ggn, kfac_mat)
 
 
 @mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
