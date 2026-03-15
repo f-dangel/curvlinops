@@ -68,6 +68,7 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
         # Layer metadata (identical across batch sizes), populated on first trace
         io_to_module: dict[str, str] | None = None
         io_to_usage: dict[str, ParameterUsage] | None = None
+        usage_by_name: dict[str, ParameterUsage] | None = None
         layer_hparams: dict[str, dict[str, Any]] | None = None
 
         corrected_eigenvalues: dict[str, Tensor | dict[str, Tensor]] = {}
@@ -81,12 +82,13 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
                     f, X, self._params, self._fisher_type
                 )
 
-            # Build lookup from IO collector names to ParameterUsage objects
+            # Build lookups from IO collector names to ParameterUsage objects
             if io_to_usage is None:
                 io_to_usage = {
                     io_name: self._usage_by_module[mod_name]
                     for io_name, mod_name in io_to_module.items()
                 }
+                usage_by_name = {u.name: u for u in io_to_usage.values()}
 
             # Forward pass with IO collection
             io_fn = traced_io_fns[batch_size]
@@ -100,12 +102,10 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
             # Format per-usage, concatenate tied weights, compute corrections
             formatted_grads: dict[str, list[Tensor]] = defaultdict(list)
             formatted_inputs: dict[str, list[Tensor]] = defaultdict(list)
-            usage_by_name: dict[str, ParameterUsage] = {}
 
             for io_layer_name, batched_g in layer_output_grads.items():
                 usage = io_to_usage[io_layer_name]
                 hparams = layer_hparams[io_layer_name]
-                usage_by_name[usage.name] = usage
 
                 g = grad_to_weight_sharing_format(
                     batched_g.data.detach(),
