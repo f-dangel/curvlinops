@@ -48,6 +48,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+- Support weight tying (same parameter in multiple affine operations) in
+  KFAC's make_fx backend. Replace `append_ones_for_bias` with `bias_pad`
+  in `input_to_weight_sharing_format`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/264))
+
 - Introduce `ParameterUsage` dataclass to unify KFAC's layer-to-parameter
   mapping across hook and make_fx backends. Rename mapping keys from
   `"weight"`/`"bias"` to `"W"`/`"b"`, and change `_mapping` from
