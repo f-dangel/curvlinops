@@ -260,8 +260,9 @@ class KFACComputer(_EmpiricalRiskMixin):
 
         Returns:
             Tuple of ``(input_covariances, gradient_covariances, mapping)`` where the
-            first two are dictionaries mapping layer names to covariance matrices and
-            ``mapping`` is a list of ``ParameterUsage`` objects.
+            first two are dictionaries mapping parameter group keys
+            (``tuple[str, ...]``) to covariance matrices and ``mapping`` is a
+            list of parameter groups.
         """
         return (*self._compute_kronecker_factors(), self._mapping)
 
@@ -613,7 +614,7 @@ class KFACComputer(_EmpiricalRiskMixin):
                 separate parameter groups.
 
         Returns:
-            List of ``ParameterUsage`` objects, one per parameter group.
+            List of parameter groups (``dict[str, str]``), one per group.
 
         Raises:
             NotImplementedError: If parameters are found outside supported layers.

@@ -19,7 +19,7 @@ from curvlinops.computers.ekfac import (
 from curvlinops.computers.kfac_make_fx import (
     MakeFxKFACComputer,
     _bias_pad,
-    _map_param_groups_to_io_layers,
+    _build_param_groups_from_io,
     _trace_io,
 )
 from curvlinops.computers.kfac_math import (
@@ -79,8 +79,8 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
                     f, X, self._params, self._fisher_type
                 )
                 if io_groups is None:
-                    io_groups = _map_param_groups_to_io_layers(
-                        self._mapping, io_param_names
+                    self._mapping, io_groups = _build_param_groups_from_io(
+                        io_param_names, self._separate_weight_and_bias
                     )
 
             # Forward pass with IO collection

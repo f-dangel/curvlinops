@@ -277,9 +277,9 @@ class EKFACComputer(KFACComputer):
         Returns:
             Tuple of ``(input_covariance_eigenvectors, gradient_covariance_eigenvectors,
             corrected_eigenvalues, mapping)`` where the first two are dictionaries
-            mapping layer names to eigenvector matrices, the third maps layer names to
-            eigenvalue corrections, and ``mapping`` is a list of ``ParameterUsage``
-            objects.
+            mapping parameter group keys (``tuple[str, ...]``) to eigenvector
+            matrices, the third maps group keys to eigenvalue corrections, and
+            ``mapping`` is a list of parameter groups.
         """
         input_covariances, gradient_covariances, mapping = super().compute()
         input_covariances = self._eigenvectors_(input_covariances)
@@ -322,11 +322,11 @@ class EKFACComputer(KFACComputer):
         """Replace all matrix values with their eigenvectors (inplace).
 
         Args:
-            dictionary: A dictionary mapping module names to square matrices.
+            dictionary: A dictionary mapping parameter group keys to square matrices.
 
         Returns:
-            The modified dictionary mapping module names to the eigenvectors of the
-            input matrices.
+            The modified dictionary mapping group keys to the eigenvectors of
+            the input matrices.
         """
         for key, value in dictionary.items():
             dictionary[key] = eigh(value).eigenvectors
@@ -341,10 +341,10 @@ class EKFACComputer(KFACComputer):
         """Compute the corrected eigenvalues for EKFAC.
 
         Args:
-            input_covariances_eigenvectors: Dictionary mapping module names to input
-                covariance eigenvectors.
-            gradient_covariances_eigenvectors: Dictionary mapping module names to
-                gradient covariance eigenvectors.
+            input_covariances_eigenvectors: Dictionary mapping parameter group keys
+                to input covariance eigenvectors.
+            gradient_covariances_eigenvectors: Dictionary mapping parameter group
+                keys to gradient covariance eigenvectors.
 
         Returns:
             Dictionary containing corrected eigenvalues for each module.

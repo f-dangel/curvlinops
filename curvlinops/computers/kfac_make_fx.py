@@ -50,63 +50,77 @@ def _trace_io(
     return with_kfac_io(f, x, params, fisher_type)
 
 
-def _check_conflicting_biases(
-    mapping: list[ParamGroup],
+def _build_param_groups_from_io(  # noqa: C901
     io_param_names: dict[str, dict[str, str]],
-) -> None:
-    """Check that joint W+b groups don't have conflicting biases across IO usages.
+    separate_weight_and_bias: bool,
+) -> tuple[list[ParamGroup], dict[tuple[str, ...], list[str]]]:
+    """Build parameter groups and IO-layer mapping from IO collector detections.
+
+    Groups IO layers by weight name to form virtual modules. Each virtual
+    module produces one group (joint) or separate W/b groups (separate).
+    Also maps each group key to its contributing IO layer names.
 
     Args:
-        mapping: Parameter groups from ``compute_parameter_groups``.
         io_param_names: Per-IO-layer parameter names from the IO collector.
-
-    Raises:
-        ValueError: If a joint group's weight is used with different biases.
-    """
-    for group in mapping:
-        if "W" not in group or "b" not in group:
-            continue
-        w_name = group["W"]
-        biases: set[str | None] = set()
-        for pnames in io_param_names.values():
-            if pnames.get("W") == w_name:
-                biases.add(pnames.get("b"))
-        tracked = {b for b in biases if b is not None}
-        if len(tracked) > 1:
-            raise ValueError(
-                f"Weight '{w_name}' is used with conflicting biases "
-                f"{tracked} under joint treatment. "
-                f"Use separate_weight_and_bias=True."
-            )
-
-
-def _map_param_groups_to_io_layers(
-    mapping: list[ParamGroup],
-    io_param_names: dict[str, dict[str, str]],
-) -> dict[tuple[str, ...], list[str]]:
-    """Map each parameter group to its contributing IO layers.
-
-    An IO layer contributes to a group if they share at least one parameter.
-
-    Args:
-        mapping: Parameter groups from ``compute_parameter_groups``.
-        io_param_names: Per-IO-layer parameter names from the IO collector.
+        separate_weight_and_bias: Whether to treat weight and bias separately.
 
     Returns:
-        Dictionary mapping group keys to lists of contributing IO layer names.
-    """
-    param_to_key: dict[str, tuple[str, ...]] = {}
-    for group in mapping:
-        for param_name in group.values():
-            param_to_key[param_name] = tuple(group.values())
+        Tuple of (parameter groups, IO-layer mapping).
 
-    # dict-as-ordered-set: preserves IO detection order, deduplicates
-    groups: dict[tuple[str, ...], dict[str, None]] = defaultdict(dict)
+    Raises:
+        ValueError: If joint treatment and a weight has conflicting biases.
+    """
+    # Collect one (W, optional b) per unique weight, plus standalone biases.
+    # Also track which IO layers contribute to each weight.
+    virtual_modules: dict[str, ParamGroup] = {}
+    weight_io_layers: dict[str, dict[str, None]] = defaultdict(dict)
+    standalone_biases: list[tuple[str, str]] = []  # (bias_name, io_name)
+
     for io_name, pnames in io_param_names.items():
-        for param_name in pnames.values():
-            if param_name in param_to_key:
-                groups[param_to_key[param_name]][io_name] = None
-    return {key: list(members) for key, members in groups.items()}
+        w, b = pnames.get("W"), pnames.get("b")
+        if w is not None:
+            if w not in virtual_modules:
+                virtual_modules[w] = {"W": w}
+            weight_io_layers[w][io_name] = None
+            if b is not None:
+                existing_b = virtual_modules[w].get("b")
+                if (
+                    not separate_weight_and_bias
+                    and existing_b is not None
+                    and existing_b != b
+                ):
+                    raise ValueError(
+                        f"Weight '{w}' is used with conflicting biases "
+                        f"'{existing_b}' and '{b}' under joint treatment. "
+                        f"Use separate_weight_and_bias=True."
+                    )
+                virtual_modules[w]["b"] = b
+        elif b is not None:
+            standalone_biases.append((b, io_name))
+
+    # Build parameter groups and IO-layer mapping
+    groups: list[ParamGroup] = []
+    io_groups: dict[tuple[str, ...], list[str]] = {}
+
+    for w, module_params in virtual_modules.items():
+        io_names = list(weight_io_layers[w])
+        if separate_weight_and_bias:
+            groups.append({"W": w})
+            io_groups[(w,)] = io_names
+            b = module_params.get("b")
+            if b is not None:
+                groups.append({"b": b})
+                # Bias IO layers: only those that actually have the bias
+                io_groups[(b,)] = [n for n in io_names if io_param_names[n].get("b")]
+        else:
+            groups.append(module_params)
+            io_groups[tuple(module_params.values())] = io_names
+
+    for b, io_name in standalone_biases:
+        groups.append({"b": b})
+        io_groups[(b,)] = [io_name]
+
+    return groups, io_groups
 
 
 def _bias_pad(has_joint_wb: bool, io_layer_params: dict[str, str]) -> int | None:
@@ -185,9 +199,10 @@ class MakeFxKFACComputer(KFACComputer):
             output, layer_inputs, layer_outputs = io_fn(X, self._params)
 
             if io_groups is None:
-                _check_conflicting_biases(self._mapping, io_param_names)
-                io_groups = _map_param_groups_to_io_layers(
-                    self._mapping, io_param_names
+                # Build parameter groups from IO detections (handles weight
+                # tying correctly by grouping by weight name)
+                self._mapping, io_groups = _build_param_groups_from_io(
+                    io_param_names, self._separate_weight_and_bias
                 )
 
             # Compute input/gradient covariances one parameter group at a time
