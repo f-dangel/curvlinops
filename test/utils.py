@@ -383,6 +383,41 @@ class SplitConcatModel(Module):
         return cat([self.linear(x1), self.linear(x2)], dim=-1)
 
 
+class WeightTiedSplitConcatModel(Module):
+    """Two linear modules with tied weights and independent bias configs.
+
+    Input of shape ``(batch, 2*D)`` is split into two ``(batch, D)`` halves.
+    Each half is processed by a separate ``Linear`` module whose weights are
+    tied. Biases are configured independently per module.
+    """
+
+    def __init__(self, D: int, bias1: bool = False, bias2: bool = False):
+        """Initialize with two weight-tied linear modules.
+
+        Args:
+            D: Feature dimension of each half.
+            bias1: Whether the first module has a bias.
+            bias2: Whether the second module has a bias.
+        """
+        super().__init__()
+        self.linear1 = Linear(D, D, bias=bias1)
+        self.linear2 = Linear(D, D, bias=bias2)
+        self.linear2.weight = self.linear1.weight
+        self._D = D
+
+    def forward(self, x: Tensor) -> Tensor:
+        """Split input, apply weight-tied linears to each half, concatenate.
+
+        Args:
+            x: Input tensor of shape ``(batch, 2*D)``.
+
+        Returns:
+            Output tensor of shape ``(batch, 2*D)``.
+        """
+        x1, x2 = x.split(self._D, dim=-1)
+        return cat([self.linear1(x1), self.linear2(x2)], dim=-1)
+
+
 class Conv2dModel(Module):
     """Sequential model with Conv2d module for expand and reduce setting."""
 

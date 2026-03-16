@@ -19,7 +19,7 @@ from curvlinops.computers.ekfac import (
 from curvlinops.computers.kfac_make_fx import (
     MakeFxKFACComputer,
     _bias_pad,
-    _build_io_groups,
+    _map_param_groups_to_io_layers,
     _trace_io,
 )
 from curvlinops.computers.kfac_math import (
@@ -60,7 +60,11 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
         def f(x, params: dict[str, Tensor]) -> Tensor:
             return functional_call(self._model_func, params, (x,))
 
+        # Cache for IO functions: make_fx bakes in tensor shapes (e.g. from
+        # nn.Flatten), so different batch sizes need separate traces
         traced_io_fns: dict[int, Callable] = {}
+
+        # Layer metadata (identical across batch sizes), populated on first trace
         io_param_names: dict[str, dict[str, str]] | None = None
         layer_hparams: dict[str, dict[str, Any]] | None = None
         io_groups: dict[tuple[str, ...], list[str]] | None = None
@@ -70,19 +74,24 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
         self._generator = _seed_generator(self._generator, self.device, self._seed)
 
         for X, y in self._loop_over_data(desc="Eigenvalue correction"):
+            # Maybe trace for current batch size and set up layer metadata
             if (batch_size := self._batch_size_fn(X)) not in traced_io_fns:
                 traced_io_fns[batch_size], io_param_names, layer_hparams = _trace_io(
                     f, X, self._params, self._fisher_type
                 )
 
             if io_groups is None:
-                io_groups = _build_io_groups(self._mapping, io_param_names)
+                io_groups = _map_param_groups_to_io_layers(
+                    self._mapping, io_param_names
+                )
 
+            # Forward pass with IO collection
             io_fn = traced_io_fns[batch_size]
             output, layer_inputs, layer_outputs = io_fn(X, self._params)
 
+            # Backward pass: compute per-layer output gradients
             layer_output_grads = self._compute_layer_output_grads(
-                output, y, layer_outputs, list(io_param_names)
+                output, y, layer_outputs
             )
 
             for group_key, io_names in io_groups.items():

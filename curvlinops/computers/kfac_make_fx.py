@@ -50,7 +50,37 @@ def _trace_io(
     return with_kfac_io(f, x, params, fisher_type)
 
 
-def _build_io_groups(
+def _check_conflicting_biases(
+    mapping: list[ParameterUsage],
+    io_param_names: dict[str, dict[str, str]],
+) -> None:
+    """Check that joint W+b groups don't have conflicting biases across IO usages.
+
+    Args:
+        mapping: Parameter groups from ``compute_parameter_groups``.
+        io_param_names: Per-IO-layer parameter names from the IO collector.
+
+    Raises:
+        ValueError: If a joint group's weight is used with different biases.
+    """
+    for usage in mapping:
+        if "W" not in usage.params or "b" not in usage.params:
+            continue
+        w_name = usage.params["W"]
+        biases: set[str | None] = set()
+        for pnames in io_param_names.values():
+            if pnames.get("W") == w_name:
+                biases.add(pnames.get("b"))
+        tracked = {b for b in biases if b is not None}
+        if len(tracked) > 1:
+            raise ValueError(
+                f"Weight '{w_name}' is used with conflicting biases "
+                f"{tracked} under joint treatment. "
+                f"Use separate_weight_and_bias=True."
+            )
+
+
+def _map_param_groups_to_io_layers(
     mapping: list[ParameterUsage],
     io_param_names: dict[str, dict[str, str]],
 ) -> dict[tuple[str, ...], list[str]]:
@@ -127,6 +157,8 @@ class MakeFxKFACComputer(KFACComputer):
             "mean": 1.0 / self._N_data,
         }[self._loss_func.reduction]
 
+        # Cache for IO functions: make_fx bakes in tensor shapes (e.g. from
+        # nn.Flatten), so different batch sizes need separate traces
         traced_io_fns: dict[int, Callable] = {}
 
         # Layer metadata (identical across batch sizes), populated on first trace
@@ -142,16 +174,21 @@ class MakeFxKFACComputer(KFACComputer):
         self._generator = _seed_generator(self._generator, self.device, self._seed)
 
         for X, y in self._loop_over_data(desc="KFAC matrices"):
+            # Maybe trace for current batch size and set up layer metadata
             if (batch_size := self._batch_size_fn(X)) not in traced_io_fns:
                 traced_io_fns[batch_size], io_param_names, layer_hparams = _trace_io(
                     f, X, self._params, self._fisher_type
                 )
 
+            # Forward pass with IO collection
             io_fn = traced_io_fns[batch_size]
             output, layer_inputs, layer_outputs = io_fn(X, self._params)
 
             if io_groups is None:
-                io_groups = _build_io_groups(self._mapping, io_param_names)
+                _check_conflicting_biases(self._mapping, io_param_names)
+                io_groups = _map_param_groups_to_io_layers(
+                    self._mapping, io_param_names
+                )
 
             # Compute input/gradient covariances one parameter group at a time
             # (bounds memory for CNNs with patch extraction)
@@ -184,9 +221,9 @@ class MakeFxKFACComputer(KFACComputer):
             if self._fisher_type == FisherType.FORWARD_ONLY:
                 continue
 
-            # Gradient covariances
+            # Backward pass: compute per-layer output gradients
             layer_output_grads = self._compute_layer_output_grads(
-                output, y, layer_outputs, list(io_param_names)
+                output, y, layer_outputs
             )
             for group_key, io_names in io_groups.items():
                 names_with_grad = [n for n in io_names if n in layer_output_grads]
@@ -224,7 +261,6 @@ class MakeFxKFACComputer(KFACComputer):
         output: Tensor,
         y: Tensor,
         layer_outputs: dict[str, Tensor],
-        io_layer_names_ordered: list[str],
     ) -> dict[str, Tensor]:
         """Compute scaled batched gradients for all tracked layers.
 
@@ -232,7 +268,6 @@ class MakeFxKFACComputer(KFACComputer):
             output: Model output tensor.
             y: Target tensor.
             layer_outputs: Collected layer outputs from the IO function.
-            io_layer_names_ordered: IO layer names in detection order.
 
         Returns:
             Dictionary mapping IO layer names to batched gradient tensors.
@@ -244,8 +279,8 @@ class MakeFxKFACComputer(KFACComputer):
         scale = {"sum": 1.0, "mean": 1.0 / num_loss_terms}[self._loss_func.reduction]
         grad_outputs.mul_(scale)
 
-        io_layer_names = [n for n in io_layer_names_ordered if n in layer_outputs]
-        output_tensors = [layer_outputs[n] for n in io_layer_names]
+        io_layer_names = list(layer_outputs)
+        output_tensors = list(layer_outputs.values())
         layer_output_grads = autograd.grad(
             output,
             output_tensors,
