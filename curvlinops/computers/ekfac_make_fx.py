@@ -16,11 +16,12 @@ from curvlinops.computers.ekfac import (
     EKFACComputer,
     compute_eigenvalue_correction_linear_weight_sharing,
 )
+from curvlinops.computers.io_collector import with_kfac_io
+from curvlinops.computers.kfac import ParamGroupKey
 from curvlinops.computers.kfac_make_fx import (
     MakeFxKFACComputer,
     _bias_pad,
     _build_param_groups_from_io,
-    _trace_io,
 )
 from curvlinops.computers.kfac_math import (
     compute_loss_correction,
@@ -42,9 +43,9 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
 
     def compute_eigenvalue_correction(
         self,
-        input_covariances_eigenvectors: dict[tuple[str, ...], Tensor],
-        gradient_covariances_eigenvectors: dict[tuple[str, ...], Tensor],
-    ) -> dict[tuple[str, ...], Tensor]:
+        input_covariances_eigenvectors: dict[ParamGroupKey, Tensor],
+        gradient_covariances_eigenvectors: dict[ParamGroupKey, Tensor],
+    ) -> dict[ParamGroupKey, Tensor]:
         """Compute eigenvalue corrections using FX graph tracing.
 
         Args:
@@ -66,16 +67,16 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
 
         # Layer metadata (identical across batch sizes), populated on first trace
         layer_hparams: dict[str, dict[str, Any]] | None = None
-        io_groups: dict[tuple[str, ...], list[str]] | None = None
+        io_groups: dict[ParamGroupKey, list[str]] | None = None
 
-        corrected_eigenvalues: dict[tuple[str, ...], Tensor] = {}
+        corrected_eigenvalues: dict[ParamGroupKey, Tensor] = {}
 
         self._generator = _seed_generator(self._generator, self.device, self._seed)
 
         for X, y in self._loop_over_data(desc="Eigenvalue correction"):
             # Maybe trace for current batch size and set up layer metadata
             if (batch_size := self._batch_size_fn(X)) not in traced_io_fns:
-                traced_io_fns[batch_size], io_param_names, layer_hparams = _trace_io(
+                traced_io_fns[batch_size], io_param_names, layer_hparams = with_kfac_io(
                     f, X, self._params, self._fisher_type
                 )
                 if io_groups is None:
@@ -97,9 +98,6 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
                 io_names = io_groups.get(group_key, [])
                 has_joint_wb = "b" in group and "W" in group
 
-                names_with_grad = [n for n in io_names if n in layer_output_grads]
-                if not names_with_grad:
-                    continue
                 gs = [
                     grad_to_weight_sharing_format(
                         layer_output_grads[n].data.detach(),
@@ -107,24 +105,22 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
                         layer_hparams[n],
                         num_leading_dims=2,
                     )
-                    for n in names_with_grad
+                    for n in io_names
                 ]
-                g = cat(gs, dim=2) if len(gs) > 1 else gs[0]
+                g = cat(gs, dim=2)
 
                 a = None
                 if "W" in group:
-                    names_with_input = [n for n in io_names if n in layer_inputs]
-                    if names_with_input:
-                        xs = [
-                            input_to_weight_sharing_format(
-                                layer_inputs[n].data.detach(),
-                                KFACType.EXPAND,
-                                layer_hparams[n],
-                                bias_pad=_bias_pad(has_joint_wb, io_param_names[n]),
-                            )
-                            for n in names_with_input
-                        ]
-                        a = cat(xs, dim=1) if len(xs) > 1 else xs[0]
+                    xs = [
+                        input_to_weight_sharing_format(
+                            layer_inputs[n].data.detach(),
+                            KFACType.EXPAND,
+                            layer_hparams[n],
+                            bias_pad=_bias_pad(has_joint_wb, io_param_names[n]),
+                        )
+                        for n in io_names
+                    ]
+                    a = cat(xs, dim=1)
 
                 batch_size = g.shape[1]
                 correction = compute_loss_correction(

@@ -46,6 +46,8 @@ from curvlinops.utils import _seed_generator
 
 # Type alias for a parameter group: maps roles ("W", "b") to full param names
 ParamGroup = dict[str, str]
+# Type alias for a parameter group key: tuple of full param names
+ParamGroupKey = tuple[str, ...]
 
 
 def _module_hyperparams(mod: Module) -> dict[str, Any]:
@@ -255,7 +257,9 @@ class KFACComputer(_EmpiricalRiskMixin):
 
     def compute(
         self,
-    ) -> tuple[dict[str, Tensor], dict[str, Tensor], list[ParamGroup]]:
+    ) -> tuple[
+        dict[ParamGroupKey, Tensor], dict[ParamGroupKey, Tensor], list[ParamGroup]
+    ]:
         """Compute the Kronecker factors.
 
         Returns:
@@ -331,29 +335,24 @@ class KFACComputer(_EmpiricalRiskMixin):
 
         for group in self._mapping:
             module = self._get_module(group)
+            hparams = _module_hyperparams(module)
 
-            # input covariance only required for weights
-            if "W" in group:
-                hook_handles.append(
-                    module.register_forward_pre_hook(
-                        partial(
-                            self._hook_accumulate_input_covariance,
-                            group=group,
-                            input_covariances=input_covariances,
-                        )
-                    )
-                )
-
-            # gradient covariance required for weights and biases
-            hook_handles.append(
-                module.register_forward_hook(
-                    partial(
-                        self._register_tensor_hook_on_output_to_accumulate_gradient_covariance,
-                        group=group,
-                        gradient_covariances=gradient_covariances,
-                    )
-                )
+            fwd_hook = partial(
+                self._hook_accumulate_input_covariance,
+                group=group,
+                layer_hyperparams=hparams,
+                input_covariances=input_covariances,
             )
+            bwd_hook = partial(
+                self._register_tensor_hook_on_output_to_accumulate_gradient_covariance,
+                group=group,
+                layer_hyperparams=hparams,
+                gradient_covariances=gradient_covariances,
+            )
+
+            if "W" in group:
+                hook_handles.append(module.register_forward_pre_hook(fwd_hook))
+            hook_handles.append(module.register_forward_hook(bwd_hook))
 
         # loop over data set, computing the Kronecker factors
         self._generator = _seed_generator(self._generator, self.device, self._seed)
@@ -458,7 +457,8 @@ class KFACComputer(_EmpiricalRiskMixin):
         inputs: tuple[Tensor],
         output: Tensor,
         group: ParamGroup,
-        gradient_covariances: dict[str, Tensor],
+        layer_hyperparams: dict[str, Any],
+        gradient_covariances: dict[ParamGroupKey, Tensor],
     ):
         """Register tensor hook on layer's output to accumulate the grad. covariance.
 
@@ -479,12 +479,13 @@ class KFACComputer(_EmpiricalRiskMixin):
             inputs: The layer's input tensors.
             output: The layer's output tensor.
             group: Parameter group for this layer.
+            layer_hyperparams: Pre-computed hyperparameters for this layer.
             gradient_covariances: Dictionary to store gradient covariances.
         """
         tensor_hook = partial(
             self._accumulate_gradient_covariance,
-            module=module,
             group=group,
+            layer_hyperparams=layer_hyperparams,
             gradient_covariances=gradient_covariances,
         )
         output.register_hook(tensor_hook)
@@ -492,9 +493,9 @@ class KFACComputer(_EmpiricalRiskMixin):
     def _accumulate_gradient_covariance(
         self,
         grad_output: Tensor,
-        module: Module,
         group: ParamGroup,
-        gradient_covariances: dict[str, Tensor],
+        layer_hyperparams: dict[str, Any],
+        gradient_covariances: dict[ParamGroupKey, Tensor],
     ):
         """Accumulate the gradient covariance for a layer's output.
 
@@ -502,15 +503,15 @@ class KFACComputer(_EmpiricalRiskMixin):
 
         Args:
             grad_output: The gradient w.r.t. the output.
-            module: The module this gradient belongs to.
             group: Parameter group for this layer.
+            layer_hyperparams: Pre-computed hyperparameters for this layer.
             gradient_covariances: Dictionary to store gradient covariances.
         """
         g = grad_output.data.detach()
         batch_size = g.shape[0]
 
         g = grad_to_weight_sharing_format(
-            g, self._kfac_approx, layer_hyperparams=_module_hyperparams(module)
+            g, self._kfac_approx, layer_hyperparams=layer_hyperparams
         )
 
         # Note: mc_samples scaling is already handled inside make_grad_output_fn.
@@ -531,7 +532,8 @@ class KFACComputer(_EmpiricalRiskMixin):
         module: Module,
         inputs: tuple[Tensor, ...],
         group: ParamGroup,
-        input_covariances: dict[tuple[str, ...], Tensor],
+        layer_hyperparams: dict[str, Any],
+        input_covariances: dict[ParamGroupKey, Tensor],
     ):
         """Pre-forward hook that accumulates the input covariance of a layer.
 
@@ -541,6 +543,7 @@ class KFACComputer(_EmpiricalRiskMixin):
             module: Module on which the hook is called.
             inputs: Inputs to the module.
             group: Parameter group for this layer.
+            layer_hyperparams: Pre-computed hyperparameters for this layer.
             input_covariances: Dictionary to store input covariances.
 
         Raises:
@@ -555,7 +558,7 @@ class KFACComputer(_EmpiricalRiskMixin):
         x = input_to_weight_sharing_format(
             x,
             self._kfac_approx,
-            layer_hyperparams=_module_hyperparams(module),
+            layer_hyperparams=layer_hyperparams,
             bias_pad=1 if has_joint_wb else None,
         )
         scale = x.shape[1]
@@ -567,7 +570,7 @@ class KFACComputer(_EmpiricalRiskMixin):
     @staticmethod
     def _set_or_add_(
         dictionary: dict[Any, Tensor], key: Any, value: Tensor
-    ) -> dict[str, Tensor]:
+    ) -> dict[Any, Tensor]:
         """Set or add a value to a dictionary entry.
 
         Args:
@@ -647,6 +650,7 @@ class KFACComputer(_EmpiricalRiskMixin):
                 )
                 groups.extend(param_dicts)
 
+        # check that all parameters are in known modules
         if len(processed) != len(param_ids):
             raise NotImplementedError("Found parameters in un-supported layers.")
 
