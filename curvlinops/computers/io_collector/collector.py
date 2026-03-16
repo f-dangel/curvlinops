@@ -144,6 +144,39 @@ def with_param_io(
     return gm
 
 
+def _verify_weight_bias_compatibility(
+    layer_info_tuples: tuple[LayerInfoTuple, ...], named_params: dict[str, Tensor]
+) -> None:
+    """Verify that weight-tied layers have compatible bias configurations.
+
+    A weight may appear in multiple layers (weight tying), but each usage must
+    either use the same tracked bias or no bias. Different tracked biases for
+    the same weight cannot be merged into a single affine layer.
+
+    Args:
+        layer_info_tuples: Tuples containing layer information from pattern matching.
+        named_params: Dictionary mapping parameter names to parameter tensors.
+
+    Raises:
+        ValueError: If conflicting biases are detected for a shared weight.
+    """
+    _non_tracked = {None, NOT_A_PARAM}
+    weight_to_biases: dict[str, set[str | None]] = defaultdict(set)
+    for layer_info_tuple in layer_info_tuples:
+        _, _, _, weight_name, bias_name, _ = layer_info_tuple
+        if weight_name in named_params:
+            weight_to_biases[weight_name].add(bias_name)
+
+    for weight_name, biases in weight_to_biases.items():
+        tracked_biases = biases - _non_tracked
+        if len(tracked_biases) > 1:
+            raise ValueError(
+                f"Weight '{weight_name}' is used with conflicting biases "
+                f"{tracked_biases}. Weight-tied layers must share the same "
+                f"bias or use no bias."
+            )
+
+
 def _verify_supported_by_kfac(
     layer_info_tuples: tuple[LayerInfoTuple, ...], named_params: dict[str, Tensor]
 ) -> None:
@@ -154,26 +187,10 @@ def _verify_supported_by_kfac(
         named_params: Dictionary mapping parameter names to parameter tensors.
 
     Raises:
-        ValueError: If unsupported patterns are detected (multiple parameter usage,
-            transposed convolutions, or non-2D convolutions).
+        ValueError: If unsupported patterns are detected (conflicting biases for
+            a shared weight, transposed convolutions, or non-2D convolutions).
     """
-    # Check parameter usage once during setup
-    # Make sure that each parameter is only used in a single layer info
-    # (multiple usages are currently unsupported)
-    param_usages = dict.fromkeys(named_params, 0)
-    for layer_info_tuple in layer_info_tuples:
-        # Each layer_info_tuple is:
-        # ("Linear", y_node, x_node, weight_name, bias_name, hyperparams)
-        _, _, _, weight_name, bias_name, _ = layer_info_tuple
-        if weight_name in param_usages:
-            param_usages[weight_name] += 1
-        if bias_name in param_usages:
-            param_usages[bias_name] += 1
-
-    if any(usage > 1 for usage in param_usages.values()):
-        raise ValueError(
-            f"Parameters used multiple times (currently unsupported): {param_usages}"
-        )
+    _verify_weight_bias_compatibility(layer_info_tuples, named_params)
 
     # Make sure there is no transposed and no 1D or 3D convolution
     for layer_info_tuple in layer_info_tuples:

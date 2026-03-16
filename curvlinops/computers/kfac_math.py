@@ -49,13 +49,13 @@ def input_to_weight_sharing_format(
     x: Tensor,
     kfac_approx: str,
     layer_hyperparams: dict[str, Any] | None = None,
-    append_ones_for_bias: bool = False,
+    bias_pad: int | None = None,
 ) -> Tensor:
     """Convert a layer's input to weight sharing format ``[batch, shared, d_in]``.
 
     Converts the input to ``[batch, *sharing, d_in]``, then collapses the
     sharing dimensions into a single axis (flatten for expand, mean for reduce)
-    and optionally appends a ones column for joint weight+bias treatment.
+    and optionally appends a constant column for joint weight+bias treatment.
 
     The weight-sharing normalization factor is encoded in the returned shape
     as ``x.shape[1]`` (the ``shared`` dimension).
@@ -73,8 +73,10 @@ def input_to_weight_sharing_format(
         layer_hyperparams: Convolution hyperparameters (``kernel_size``,
             ``stride``, ``padding``, ``dilation``, ``groups``). Empty or
             ``None`` for Linear layers. Follows the IO collector convention.
-        append_ones_for_bias: Whether to append a ones column for joint
-            weight+bias treatment.
+        bias_pad: Value to append as a constant column for joint weight+bias
+            treatment. ``1`` appends ones (usage has bias), ``0`` appends zeros
+            (usage lacks bias but joint treatment is active), ``None`` means
+            no padding.
 
     Returns:
         Tensor of shape ``[batch, shared, d_in]`` where ``shared`` is the
@@ -101,9 +103,9 @@ def input_to_weight_sharing_format(
     else:
         x = rearrange(x, "batch ... d_in -> batch (...) d_in")
 
-    # Step 3: Optionally append ones column for joint weight+bias
-    if append_ones_for_bias:
-        x = cat([x, x.new_ones(*x.shape[:-1], 1)], dim=-1)
+    # Step 3: Optionally append constant column for joint weight+bias
+    if bias_pad is not None:
+        x = cat([x, x.new_full((*x.shape[:-1], 1), bias_pad)], dim=-1)
 
     return x
 

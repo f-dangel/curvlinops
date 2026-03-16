@@ -31,6 +31,7 @@ from test.test_kfac import (
     _check_does_not_affect_grad,
     _check_make_fx_flatten_different_batch_sizes,
     _check_torch_save_load,
+    _test_weight_tying_type2,
 )
 from test.utils import (
     Conv2dModel,
@@ -184,6 +185,20 @@ def test_ekfac_type2_weight_sharing(
     ekfac_mat = ekfac @ eye_like(ekfac)
 
     assert allclose_report(ggn, ekfac_mat)
+
+
+@mark.parametrize("reduction", ["mean", "sum"])
+@mark.parametrize("bias", [False, True], ids=["no_bias", "with_bias"])
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+def test_ekfac_type2_weight_tying(
+    reduction: str, bias: bool, separate_weight_and_bias: bool
+):
+    """Test EKFAC with weight tying against exact GGN (make_fx only)."""
+    _test_weight_tying_type2(
+        EKFACLinearOperator, reduction, bias, separate_weight_and_bias
+    )
 
 
 def test_ekfac_mc(

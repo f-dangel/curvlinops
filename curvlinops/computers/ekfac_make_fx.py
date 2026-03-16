@@ -6,10 +6,11 @@ instead of forward/backward hooks. Only the forward pass is traced with
 ``make_fx``; the backward pass runs eagerly.
 """
 
+from collections import defaultdict
 from collections.abc import Callable
 from typing import Any
 
-from torch import Tensor
+from torch import Tensor, cat
 from torch.func import functional_call
 
 from curvlinops.computers.ekfac import (
@@ -67,6 +68,7 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
         # Layer metadata (identical across batch sizes), populated on first trace
         io_to_module: dict[str, str] | None = None
         io_to_usage: dict[str, ParameterUsage] | None = None
+        usage_by_name: dict[str, ParameterUsage] | None = None
         layer_hparams: dict[str, dict[str, Any]] | None = None
 
         corrected_eigenvalues: dict[str, Tensor | dict[str, Tensor]] = {}
@@ -80,12 +82,13 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
                     f, X, self._params, self._fisher_type
                 )
 
-            # Build lookup from IO collector names to ParameterUsage objects
+            # Build lookups from IO collector names to ParameterUsage objects
             if io_to_usage is None:
                 io_to_usage = {
                     io_name: self._usage_by_module[mod_name]
                     for io_name, mod_name in io_to_module.items()
                 }
+                usage_by_name = {u.name: u for u in io_to_usage.values()}
 
             # Forward pass with IO collection
             io_fn = traced_io_fns[batch_size]
@@ -96,15 +99,50 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
                 output, y, layer_outputs, io_to_module
             )
 
-            # Accumulate eigenvalue corrections per layer
-            for io_layer_name, batched_g in layer_output_grads.items():
-                usage = io_to_usage[io_layer_name]
-                x = layer_inputs.get(io_layer_name)
-                self._eigenvalue_correction_from_io(
-                    batched_g,
-                    x,
+            # Group IO layer names by parameter usage, then process one
+            # group at a time to bound memory for CNNs with patch extraction
+            io_groups: dict[str, list[str]] = defaultdict(list)
+            for io_name in io_to_usage:
+                io_groups[io_to_usage[io_name].name].append(io_name)
+
+            for usage_name, io_names in io_groups.items():
+                usage = usage_by_name[usage_name]
+                has_joint_wb = _has_joint_weight_and_bias(
+                    self._separate_weight_and_bias, usage.params
+                )
+                names_with_grad = [n for n in io_names if n in layer_output_grads]
+                if not names_with_grad:
+                    continue
+                gs = [
+                    grad_to_weight_sharing_format(
+                        layer_output_grads[n].data.detach(),
+                        KFACType.EXPAND,
+                        layer_hparams[n],
+                        num_leading_dims=2,
+                    )
+                    for n in names_with_grad
+                ]
+                g = cat(gs, dim=2) if len(gs) > 1 else gs[0]
+
+                a = None
+                if "W" in usage.params:
+                    names_with_input = [n for n in io_names if n in layer_inputs]
+                    if names_with_input:
+                        xs = [
+                            input_to_weight_sharing_format(
+                                layer_inputs[n].data.detach(),
+                                KFACType.EXPAND,
+                                layer_hparams[n],
+                                bias_pad=1 if has_joint_wb else None,
+                            )
+                            for n in names_with_input
+                        ]
+                        a = cat(xs, dim=1) if len(xs) > 1 else xs[0]
+
+                self._eigenvalue_correction_from_formatted(
+                    g,
+                    a,
                     usage,
-                    layer_hparams[io_layer_name],
                     input_covariances_eigenvectors,
                     gradient_covariances_eigenvectors,
                     corrected_eigenvalues,
@@ -112,57 +150,29 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
 
         return corrected_eigenvalues
 
-    def _eigenvalue_correction_from_io(
+    def _eigenvalue_correction_from_formatted(
         self,
-        batched_g: Tensor,
-        x: Tensor | None,
+        g: Tensor,
+        a: Tensor | None,
         usage: ParameterUsage,
-        layer_hparams: dict[str, Any],
         input_cov_eigvecs: dict[str, Tensor],
         gradient_cov_eigvecs: dict[str, Tensor],
         corrected_eigenvalues: dict[str, Tensor | dict[str, Tensor]],
     ) -> None:
-        """Compute eigenvalue correction for one layer from IO data.
-
-        Converts gradients and inputs to weight sharing format, then calls
-        ``compute_eigenvalue_correction_linear_weight_sharing`` which handles
-        the ``[V, N, S, D]`` gradient shape natively.
-
-        Accumulates results directly into ``corrected_eigenvalues``, matching
-        the structure used by the hooks backend in
-        ``EKFACComputer._accumulate_corrected_eigenvalues``.
+        """Compute eigenvalue correction from pre-formatted IO tensors.
 
         Args:
-            batched_g: Batched gradients at the layer's output with shape
-                ``[num_vectors, batch, ...]``.
-            x: Layer input tensor with shape ``[batch, ...]`` or ``None``.
+            g: Gradient in weight sharing format ``[v, batch, shared, d_out]``.
+            a: Input in weight sharing format ``[batch, shared, d_in]`` or ``None``.
             usage: Parameter usage info for this layer.
-            layer_hparams: Hyperparameters from IO collector for this layer.
             input_cov_eigvecs: Input covariance eigenvectors per layer.
             gradient_cov_eigvecs: Gradient covariance eigenvectors per layer.
             corrected_eigenvalues: Dictionary to accumulate corrections (mutated).
         """
-        g = batched_g.data.detach()  # [v, batch, ...]
         batch_size = g.shape[1]
-
-        # Convert g to weight sharing format: [v, batch, ...] -> [v, batch, shared, d_out]
-        g = grad_to_weight_sharing_format(
-            g, KFACType.EXPAND, layer_hparams, num_leading_dims=2
-        )
-        a_required = "W" in usage.params
         has_joint_wb = _has_joint_weight_and_bias(
             self._separate_weight_and_bias, usage.params
         )
-
-        # Convert a to weight sharing format: [batch, ...] -> [batch, shared, d_in]
-        a = None
-        if a_required and x is not None:
-            a = input_to_weight_sharing_format(
-                x.data.detach(),
-                KFACType.EXPAND,
-                layer_hparams,
-                append_ones_for_bias=has_joint_wb,
-            )
 
         correction = compute_loss_correction(
             batch_size,

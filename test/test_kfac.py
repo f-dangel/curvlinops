@@ -37,6 +37,7 @@ from curvlinops.utils import allclose_report
 from test.cases import DEVICES, DEVICES_IDS
 from test.utils import (
     Conv2dModel,
+    SplitConcatModel,
     UnetModel,
     WeightShareModel,
     _test_inplace_activations,
@@ -186,6 +187,89 @@ def test_kfac_type2_weight_sharing(
     kfac_mat = kfac @ eye_like(kfac)
 
     assert allclose_report(ggn, kfac_mat)
+
+
+def _test_weight_tying_type2(
+    linop_cls: type[KFACLinearOperator],
+    reduction: str,
+    bias: bool,
+    separate_weight_and_bias: bool,
+):
+    """Test (E)KFAC with weight tying against the exact block-diagonal GGN.
+
+    Uses a split-concat model where the same module is applied to two halves
+    of the input. With N=1, (E)KFAC-expand is exact because the two paths are
+    independent.
+
+    For ``KFACLinearOperator``, also verifies that the hooks backend gives wrong
+    results (hooks fire twice per forward, each with ``scale=1``). EKFAC hooks
+    may still be correct because the eigenvalue correction recomputes eigenvalues
+    from data, compensating for the wrong Kronecker factors.
+
+    Args:
+        linop_cls: The linear operator class to test.
+        reduction: Loss reduction mode.
+        bias: Whether the shared linear layer has a bias.
+        separate_weight_and_bias: Whether to treat weight and bias separately.
+    """
+    manual_seed(0)
+    D = 4
+
+    model = SplitConcatModel(D, bias=bias)
+    loss_func = MSELoss(reduction=reduction)
+    params = [p for p in model.parameters() if p.requires_grad]
+    data = [
+        (rand(1, 2 * D), regression_targets((1, 2 * D))),
+    ]
+    model, loss_func, params, data, _ = change_dtype(
+        (model, loss_func, params, data, None), float64
+    )
+
+    ggn = block_diagonal(
+        GGNLinearOperator,
+        model,
+        loss_func,
+        params,
+        data,
+        separate_weight_and_bias=separate_weight_and_bias,
+    )
+
+    for backend in BACKENDS:
+        linop = linop_cls(
+            model,
+            loss_func,
+            params,
+            data,
+            fisher_type=FisherType.TYPE2,
+            kfac_approx=KFACType.EXPAND,
+            separate_weight_and_bias=separate_weight_and_bias,
+            backend=backend,
+        )
+        linop_mat = linop @ eye_like(linop)
+
+        if backend == "make_fx":
+            # make_fx backend: exact for weight tying
+            assert allclose_report(ggn, linop_mat)
+        elif backend == "hooks" and linop_cls is KFACLinearOperator:
+            # hooks backend: incorrect KFAC factors (known limitation).
+            # EKFAC hooks may still be correct because the eigenvalue
+            # correction recomputes eigenvalues, compensating for the
+            # wrong Kronecker factors.
+            assert not allclose(ggn, linop_mat)
+
+
+@mark.parametrize("reduction", ["mean", "sum"])
+@mark.parametrize("bias", [False, True], ids=["no_bias", "with_bias"])
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+def test_kfac_type2_weight_tying(
+    reduction: str, bias: bool, separate_weight_and_bias: bool
+):
+    """Test KFAC with weight tying against exact GGN (make_fx only)."""
+    _test_weight_tying_type2(
+        KFACLinearOperator, reduction, bias, separate_weight_and_bias
+    )
 
 
 @mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)

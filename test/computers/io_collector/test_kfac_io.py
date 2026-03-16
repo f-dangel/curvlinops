@@ -81,8 +81,8 @@ def _verify_kfac_io(
     assert hyperparams == hyperparams_true
 
 
-def test_with_kfac_io_multiple_parameter_usages():
-    """Test that KFAC rejects multiple usages of the same parameter."""
+def test_with_kfac_io_weight_tying():
+    """Test that KFAC supports weight tying (same weight used multiple times)."""
     manual_seed(0)
     N, D = 2, 3
 
@@ -92,8 +92,38 @@ def test_with_kfac_io_multiple_parameter_usages():
 
     x, params = rand(N, D), {"weight": rand(D, D), "bias": rand(D)}
 
-    with raises(ValueError, match="Parameters used multiple times"):
-        with_kfac_io(f, x, params, "empirical")
+    f_and_kfac_io, layer_names, layer_hparams = with_kfac_io(
+        f, x, params, FisherType.MC
+    )
+
+    # Two detected layers: both use the same weight
+    assert len(layer_names) == 2
+    assert layer_names["Linear0"]["W"] == "weight"
+    assert layer_names["Linear0"]["b"] == "bias"
+    assert layer_names["Linear1"]["W"] == "weight"
+    assert "b" not in layer_names["Linear1"]
+
+    # IO function works
+    out, inputs, outputs = f_and_kfac_io(x, params)
+    assert allclose_report(out, f(x, params))
+    assert "Linear0" in inputs and "Linear1" in inputs
+    assert "Linear0" in outputs and "Linear1" in outputs
+
+
+def test_with_kfac_io_conflicting_biases():
+    """Test that KFAC rejects weight tying with conflicting biases."""
+    manual_seed(0)
+    N, D = 2, 3
+
+    def f(x: Tensor, params: dict) -> Tensor:
+        xW = linear(x, params["weight"], bias=params["bias1"])
+        return linear(xW, params["weight"], bias=params["bias2"])
+
+    x = rand(N, D)
+    params = {"weight": rand(D, D), "bias1": rand(D), "bias2": rand(D)}
+
+    with raises(ValueError, match="conflicting biases"):
+        with_kfac_io(f, x, params, FisherType.MC)
 
 
 def test_with_kfac_io_fully_connected():

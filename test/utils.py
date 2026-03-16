@@ -350,6 +350,39 @@ class WeightShareModel(Sequential):
         return postprocess_fn(sequential_output)
 
 
+class SplitConcatModel(Module):
+    """Model where the same linear layer is applied to split input halves.
+
+    Input of shape ``(batch, 2*D)`` is split into two ``(batch, D)`` halves,
+    the same ``Linear(D, D, bias=False)`` is applied to each, and results
+    are concatenated back to ``(batch, 2*D)``. This creates weight tying
+    (the same parameter used in two independent affine operations).
+    """
+
+    def __init__(self, D: int, bias: bool = False):
+        """Initialize with a shared ``Linear(D, D)`` layer.
+
+        Args:
+            D: Feature dimension of each half.
+            bias: Whether the shared linear layer has a bias.
+        """
+        super().__init__()
+        self.linear = Linear(D, D, bias=bias)
+        self._D = D
+
+    def forward(self, x: Tensor) -> Tensor:
+        """Split input, apply shared linear to each half, concatenate.
+
+        Args:
+            x: Input tensor of shape ``(batch, 2*D)``.
+
+        Returns:
+            Output tensor of shape ``(batch, 2*D)``.
+        """
+        x1, x2 = x.split(self._D, dim=-1)
+        return cat([self.linear(x1), self.linear(x2)], dim=-1)
+
+
 class Conv2dModel(Module):
     """Sequential model with Conv2d module for expand and reduce setting."""
 

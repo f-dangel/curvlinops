@@ -7,12 +7,12 @@ Only the forward pass is traced with ``make_fx``; the backward pass runs
 eagerly to avoid tracing issues with ``torch._C.Generator``.
 """
 
-from collections import UserDict
+from collections import UserDict, defaultdict
 from collections.abc import Callable, MutableMapping
 from typing import Any
 
 from einops import einsum
-from torch import Tensor, autograd
+from torch import Tensor, autograd, cat
 from torch.func import functional_call
 
 from curvlinops._checks import _register_userdict_as_pytree
@@ -72,7 +72,9 @@ class MakeFxKFACComputer(KFACComputer):
     pass (MC sampling + gradient covariances) runs eagerly.
     """
 
-    def _compute_kronecker_factors(self) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
+    def _compute_kronecker_factors(  # noqa: C901
+        self,
+    ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
         """Compute KFAC's Kronecker factors using FX graph tracing.
 
         The IO-collecting forward pass (from ``with_kfac_io``) is cached by
@@ -129,42 +131,60 @@ class MakeFxKFACComputer(KFACComputer):
                     for io_name, mod_name in io_to_module.items()
                 }
 
-            # Compute input covariances
-            for io_layer_name, x in layer_inputs.items():
-                usage = io_to_usage[io_layer_name]
-                hparams = layer_hparams[io_layer_name]
+            # Group IO layer names by parameter usage (for weight tying,
+            # multiple IO layers map to the same usage and get concatenated)
+            io_groups: dict[str, list[str]] = defaultdict(list)
+            for io_name in io_to_usage:
+                io_groups[io_to_usage[io_name].name].append(io_name)
+
+            # Compute input covariances (one parameter group at a time to
+            # bound memory for CNNs with patch extraction)
+            for usage_name, io_names in io_groups.items():
+                names_with_input = [n for n in io_names if n in layer_inputs]
+                if not names_with_input:
+                    continue
+                usage = io_to_usage[names_with_input[0]]
                 has_joint_wb = _has_joint_weight_and_bias(
                     self._separate_weight_and_bias, usage.params
                 )
-                x = input_to_weight_sharing_format(
-                    x.data.detach(),
-                    self._kfac_approx,
-                    layer_hyperparams=hparams,
-                    append_ones_for_bias=has_joint_wb,
-                )
+                xs = [
+                    input_to_weight_sharing_format(
+                        layer_inputs[n].data.detach(),
+                        self._kfac_approx,
+                        layer_hyperparams=layer_hparams[n],
+                        bias_pad=1 if has_joint_wb else None,
+                    )
+                    for n in names_with_input
+                ]
+                x = cat(xs, dim=1) if len(xs) > 1 else xs[0]
                 scale = x.shape[1]
                 xxT = einsum(x, x, "batch shared i, batch shared j -> i j")
                 self._set_or_add_(
-                    input_covariances, usage.name, xxT.div_(scale * self._N_data)
+                    input_covariances, usage_name, xxT.div_(scale * self._N_data)
                 )
 
             # Forward-only KFAC does not require gradient covariances
             if self._fisher_type == FisherType.FORWARD_ONLY:
                 continue
 
-            # Compute gradient covariances
+            # Compute gradient covariances (one parameter group at a time)
             layer_output_grads = self._compute_layer_output_grads(
                 output, y, layer_outputs, io_to_module
             )
-            for io_layer_name, g in layer_output_grads.items():
-                usage = io_to_usage[io_layer_name]
-                hparams = layer_hparams[io_layer_name]
-                g = grad_to_weight_sharing_format(
-                    g.data.detach(),
-                    self._kfac_approx,
-                    layer_hyperparams=hparams,
-                    num_leading_dims=2,
-                )
+            for usage_name, io_names in io_groups.items():
+                names_with_grad = [n for n in io_names if n in layer_output_grads]
+                if not names_with_grad:
+                    continue
+                gs = [
+                    grad_to_weight_sharing_format(
+                        layer_output_grads[n].data.detach(),
+                        self._kfac_approx,
+                        layer_hyperparams=layer_hparams[n],
+                        num_leading_dims=2,
+                    )
+                    for n in names_with_grad
+                ]
+                g = cat(gs, dim=2) if len(gs) > 1 else gs[0]
                 correction = compute_loss_correction(
                     g.shape[1],
                     self._num_per_example_loss_terms,
@@ -174,7 +194,7 @@ class MakeFxKFACComputer(KFACComputer):
                     correction
                 )
                 self._set_or_add_(
-                    gradient_covariances, usage.name, ggT.mul_(grad_normalization)
+                    gradient_covariances, usage_name, ggT.mul_(grad_normalization)
                 )
 
         # Handle FORWARD_ONLY case

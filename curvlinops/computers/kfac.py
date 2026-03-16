@@ -572,7 +572,7 @@ class KFACComputer(_EmpiricalRiskMixin):
             x,
             self._kfac_approx,
             layer_hyperparams=usage.hyperparams,
-            append_ones_for_bias=has_joint_wb,
+            bias_pad=1 if has_joint_wb else None,
         )
         scale = x.shape[1]
         covariance = einsum(x, x, "batch shared i, batch shared j -> i j").div_(
