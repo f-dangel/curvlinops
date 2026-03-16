@@ -5,7 +5,7 @@ from math import sqrt
 from pathlib import Path
 
 from einops.layers.torch import Rearrange
-from pytest import mark
+from pytest import mark, raises
 from torch import (
     Tensor,
     allclose,
@@ -40,6 +40,7 @@ from test.utils import (
     SplitConcatModel,
     UnetModel,
     WeightShareModel,
+    WeightTiedSplitConcatModel,
     _test_inplace_activations,
     _test_property,
     block_diagonal,
@@ -270,6 +271,85 @@ def test_kfac_type2_weight_tying(
     _test_weight_tying_type2(
         KFACLinearOperator, reduction, bias, separate_weight_and_bias
     )
+
+
+@mark.parametrize("reduction", ["mean", "sum"])
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+def test_kfac_type2_mixed_bias_weight_tying(
+    reduction: str, separate_weight_and_bias: bool
+):
+    """Test KFAC with mixed-bias weight tying (same W with and without bias).
+
+    Two modules share a weight. The first has bias, the second doesn't. With
+    N=1, KFAC-expand is exact because the two paths are independent. Joint
+    treatment uses bias padding (1/0) to handle the mixed case.
+
+    Args:
+        reduction: Loss reduction mode.
+        separate_weight_and_bias: Whether to treat weight and bias separately.
+    """
+    manual_seed(0)
+    D = 4
+
+    model = WeightTiedSplitConcatModel(D, bias1=True, bias2=False)
+    loss_func = MSELoss(reduction=reduction)
+    params = [p for p in model.parameters() if p.requires_grad]
+    data = [(rand(1, 2 * D), regression_targets((1, 2 * D)))]
+    model, loss_func, params, data, _ = change_dtype(
+        (model, loss_func, params, data, None), float64
+    )
+
+    kfac = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        fisher_type=FisherType.TYPE2,
+        kfac_approx=KFACType.EXPAND,
+        separate_weight_and_bias=separate_weight_and_bias,
+        backend="make_fx",
+    )
+    ggn = block_diagonal(
+        GGNLinearOperator,
+        model,
+        loss_func,
+        params,
+        data,
+        separate_weight_and_bias=separate_weight_and_bias,
+    )
+    assert allclose_report(ggn, kfac @ eye_like(kfac))
+
+
+@mark.parametrize("reduction", ["mean", "sum"])
+def test_kfac_type2_multi_module_conflicting_biases(reduction: str):
+    """Test that joint treatment errors when weight-tied modules have different biases.
+
+    Two modules share a weight but have different (non-tied) biases. Joint
+    treatment cannot form a single (W, b) group because the biases conflict.
+
+    Args:
+        reduction: Loss reduction mode.
+    """
+    manual_seed(0)
+    D = 4
+
+    model = WeightTiedSplitConcatModel(D, bias1=True, bias2=True)
+    loss_func = MSELoss(reduction=reduction)
+    params = list(model.parameters())
+    data = [(rand(1, 2 * D), regression_targets((1, 2 * D)))]
+
+    with raises(ValueError, match="conflicting biases"):
+        KFACLinearOperator(
+            model,
+            loss_func,
+            params,
+            data,
+            fisher_type=FisherType.TYPE2,
+            separate_weight_and_bias=False,
+            backend="make_fx",
+        )
 
 
 @mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)

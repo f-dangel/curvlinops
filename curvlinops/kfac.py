@@ -36,7 +36,6 @@ from curvlinops.kfac_utils import (
     FromCanonicalLinearOperator,
     KFACType,
     ToCanonicalLinearOperator,
-    _has_joint_weight_and_bias,
 )
 from curvlinops.kronecker import KroneckerProductLinearOperator
 
@@ -116,6 +115,10 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
         Warning:
             This is an early proto-type with limitations:
                 - Only Linear and Conv2d modules are supported.
+                - The ``hooks`` backend assumes each module is called exactly
+                  once per forward pass. Weight tying (same module called
+                  multiple times) will silently produce incorrect results.
+                  Use ``backend="make_fx"`` for weight-tied architectures.
 
         Args:
             model_func: The neural network. Must consist of modules.
@@ -217,19 +220,11 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
         """
         input_covariances, gradient_covariances, mapping = computer.compute()
         factors = []
-        for usage in mapping:
-            aaT = input_covariances.get(usage.name, None)
-            ggT = gradient_covariances[usage.name]
-
-            if _has_joint_weight_and_bias(
-                computer._separate_weight_and_bias, usage.params
-            ):
-                # Single Kronecker product block for weight+bias
-                factors.append([ggT, aaT])
-            else:
-                # Separate blocks for weight and bias
-                for p_name in usage.params:
-                    factors.append([ggT, aaT] if p_name == "W" else [ggT])
+        for group in mapping:
+            group_key = tuple(group.values())
+            aaT = input_covariances.get(group_key)
+            ggT = gradient_covariances[group_key]
+            factors.append([ggT, aaT] if aaT is not None else [ggT])
 
         # Create Kronecker product linear operators for each block
         blocks = [KroneckerProductLinearOperator(*fs) for fs in factors]
@@ -251,8 +246,7 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
         """
         PT = ToCanonicalLinearOperator(
             {name: p.shape for name, p in computer._params.items()},
-            [u.params for u in computer._mapping],
-            computer._separate_weight_and_bias,
+            computer._mapping,
             computer.device,
             computer.dtype,
         )

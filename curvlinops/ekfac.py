@@ -6,7 +6,6 @@ from curvlinops.computers.ekfac import EKFACComputer
 from curvlinops.computers.ekfac_make_fx import MakeFxEKFACComputer
 from curvlinops.eigh import EighDecomposedLinearOperator
 from curvlinops.kfac import KFACLinearOperator
-from curvlinops.kfac_utils import _has_joint_weight_and_bias
 from curvlinops.kronecker import KroneckerProductLinearOperator
 
 
@@ -46,23 +45,13 @@ class EKFACLinearOperator(KFACLinearOperator):
         )
         bases = []
         corrections = []
-        for usage in mapping:
-            Q_a = input_eigvecs.get(usage.name, None)
-            Q_g = gradient_eigvecs[usage.name]
-            lambdas = corrected_eigenvalues[usage.name]
-
-            # Handle joint weight+bias case
-            if _has_joint_weight_and_bias(
-                computer._separate_weight_and_bias, usage.params
-            ):
-                # Single Kronecker product block for weight+bias
-                bases.append([Q_g, Q_a])
-                corrections.append(lambdas)
-            else:
-                # Separate blocks for weight and bias
-                for p_name, p_pos in usage.params.items():
-                    bases.append([Q_g, Q_a] if p_name == "W" else [Q_g])
-                    corrections.append(lambdas[p_pos])
+        for group in mapping:
+            group_key = tuple(group.values())
+            Q_a = input_eigvecs.get(group_key)
+            Q_g = gradient_eigvecs[group_key]
+            lambdas = corrected_eigenvalues[group_key]
+            bases.append([Q_g, Q_a] if Q_a is not None else [Q_g])
+            corrections.append(lambdas)
 
         # Create Kronecker product linear operators for each block
         blocks = [

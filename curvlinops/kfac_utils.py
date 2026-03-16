@@ -17,21 +17,6 @@ from torch.nn.modules.utils import _pair
 from curvlinops._torch_base import PyTorchLinearOperator
 
 
-def _has_joint_weight_and_bias(
-    separate_weight_and_bias: bool, param_pos: dict[str, str]
-) -> bool:
-    """Check whether weight and bias are treated jointly in a KFAC block.
-
-    Args:
-        separate_weight_and_bias: Whether weight and bias are treated separately.
-        param_pos: Dictionary mapping parameter names to their identifiers.
-
-    Returns:
-        ``True`` if the block has both weight and bias and they should be joint.
-    """
-    return not separate_weight_and_bias and {"W", "b"} == set(param_pos.keys())
-
-
 class MetaEnum(EnumMeta):
     """Metaclass for the Enum class for desired behavior of the ``in`` operator."""
 
@@ -202,7 +187,6 @@ class _CanonicalizationLinearOperator(PyTorchLinearOperator):
         self,
         param_shapes: dict[str, Size],
         param_groups: list[dict[str, str]],
-        separate_weight_and_bias: bool,
         device: device,
         dtype: dtype,
     ):
@@ -210,19 +194,18 @@ class _CanonicalizationLinearOperator(PyTorchLinearOperator):
 
         Args:
             param_shapes: Dictionary mapping full parameter names to their shapes.
-            param_groups: List of per-layer dictionaries mapping parameter roles
+            param_groups: List of parameter group dictionaries mapping roles
                 (``'W'`` for weight, ``'b'`` for bias) to full qualified parameter
-                names (e.g. ``'0.weight'``).
-            separate_weight_and_bias: Whether to treat weights and biases separately.
+                names. Each group is one KFAC block: ``{"W": ..., "b": ...}``
+                for joint treatment, or ``{"W": ...}`` / ``{"b": ...}`` for
+                separate treatment.
             device: Device of the parameters.
             dtype: Data type of the parameters.
         """
         self._param_shapes = param_shapes
         self._device = device
         self._dtype = dtype
-
         self._param_groups = param_groups
-        self._separate_weight_and_bias = separate_weight_and_bias
 
         # Precompute name → list-position mapping for _matmat
         self._name_to_idx = {name: i for i, name in enumerate(param_shapes)}
@@ -247,7 +230,7 @@ class _CanonicalizationLinearOperator(PyTorchLinearOperator):
         canonical_shapes = []
 
         for param_group in self._param_groups:
-            if _has_joint_weight_and_bias(self._separate_weight_and_bias, param_group):
+            if "W" in param_group and "b" in param_group:
                 w_name = param_group["W"]
                 w_shape = self._param_shapes[w_name]
                 total_params = w_shape.numel() + w_shape[0]  # weight + bias
@@ -306,7 +289,7 @@ class ToCanonicalLinearOperator(_CanonicalizationLinearOperator):
         canonical_M = []
 
         for param_group in self._param_groups:
-            if _has_joint_weight_and_bias(self._separate_weight_and_bias, param_group):
+            if "W" in param_group and "b" in param_group:
                 w_name, b_name = param_group["W"], param_group["b"]
                 w_idx, b_idx = self._name_to_idx[w_name], self._name_to_idx[b_name]
                 # Flatten weight tensor into matrix and concatenate bias
@@ -331,7 +314,6 @@ class ToCanonicalLinearOperator(_CanonicalizationLinearOperator):
         return FromCanonicalLinearOperator(
             self._param_shapes,
             self._param_groups,
-            self._separate_weight_and_bias,
             self._device,
             self._dtype,
         )
@@ -371,7 +353,7 @@ class FromCanonicalLinearOperator(_CanonicalizationLinearOperator):
         processed = 0
 
         for param_group in self._param_groups:
-            if _has_joint_weight_and_bias(self._separate_weight_and_bias, param_group):
+            if "W" in param_group and "b" in param_group:
                 w_name, b_name = param_group["W"], param_group["b"]
                 w_idx, b_idx = self._name_to_idx[w_name], self._name_to_idx[b_name]
                 combined = M[processed]
@@ -411,7 +393,6 @@ class FromCanonicalLinearOperator(_CanonicalizationLinearOperator):
         return ToCanonicalLinearOperator(
             self._param_shapes,
             self._param_groups,
-            self._separate_weight_and_bias,
             self._device,
             self._dtype,
         )

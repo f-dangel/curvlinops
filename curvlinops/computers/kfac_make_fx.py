@@ -8,7 +8,7 @@ eagerly to avoid tracing issues with ``torch._C.Generator``.
 """
 
 from collections import UserDict, defaultdict
-from collections.abc import Callable, MutableMapping
+from collections.abc import Callable
 from typing import Any
 
 from einops import einsum
@@ -17,49 +17,92 @@ from torch.func import functional_call
 
 from curvlinops._checks import _register_userdict_as_pytree
 from curvlinops.computers.io_collector import with_kfac_io
-from curvlinops.computers.kfac import (
-    KFACComputer,
-    ParameterUsage,
-    _module_name_from_param,
-)
+from curvlinops.computers.kfac import KFACComputer, ParamGroup, ParamGroupKey
 from curvlinops.computers.kfac_math import (
     compute_loss_correction,
     grad_to_weight_sharing_format,
     input_to_weight_sharing_format,
 )
-from curvlinops.kfac_utils import FisherType, _has_joint_weight_and_bias
+from curvlinops.kfac_utils import FisherType
 from curvlinops.utils import _seed_generator
 
 
-def _trace_io(
-    f: Callable[[Tensor | MutableMapping, dict[str, Tensor]], Tensor],
-    x: Tensor | MutableMapping,
-    params: dict[str, Tensor],
-    fisher_type: FisherType,
-) -> tuple[Callable, dict[str, str], dict[str, dict[str, Any]]]:
-    """Trace f and return an IO-collecting function with layer metadata.
+def _build_param_groups_from_io(
+    io_param_names: dict[str, dict[str, str]],
+    separate_weight_and_bias: bool,
+) -> tuple[list[ParamGroup], dict[ParamGroupKey, list[str]]]:
+    """Build parameter groups and IO-layer mapping from IO collector detections.
 
-    Wraps ``with_kfac_io`` and derives the IO-to-module name mapping from
-    the detected parameter names (e.g. ``"0.weight"`` → ``"0"``).
+    Groups IO layers by weight name to form virtual modules. Each virtual
+    module produces one group (joint) or separate W/b groups (separate).
+    Also maps each group key to its contributing IO layer names.
 
     Args:
-        f: Function with signature ``f(x, params) -> output``.
-        x: Example input tensor or mapping for tracing.
-        params: Dictionary mapping parameter names to tensors.
-        fisher_type: Type of Fisher information computation.
+        io_param_names: Per-IO-layer parameter names from the IO collector.
+        separate_weight_and_bias: Whether to treat weight and bias separately.
 
     Returns:
-        Tuple of ``(io_fn, io_to_module, layer_hparams)``.
-    """
-    if isinstance(x, UserDict):
-        _register_userdict_as_pytree()
+        Tuple of (parameter groups, IO-layer mapping).
 
-    io_fn, layer_param_names, layer_hparams = with_kfac_io(f, x, params, fisher_type)
-    io_to_module = {
-        io_name: _module_name_from_param(next(iter(pnames.values())))
-        for io_name, pnames in layer_param_names.items()
-    }
-    return io_fn, io_to_module, layer_hparams
+    Raises:
+        ValueError: If joint treatment and a weight has conflicting biases.
+    """
+    # Build virtual modules: one per unique weight (or standalone bias).
+    # Each has a ParamGroup and a list of contributing IO layer names.
+    modules: dict[str, ParamGroup] = {}
+    module_io: dict[str, list[str]] = defaultdict(list)
+
+    for io_name, pnames in io_param_names.items():
+        w, b = pnames.get("W"), pnames.get("b")
+        if w is not None:
+            modules.setdefault(w, {"W": w})
+            module_io[w].append(io_name)
+            if b is not None:
+                existing = modules[w].get("b")
+                if not separate_weight_and_bias and existing and existing != b:
+                    raise ValueError(
+                        f"Weight '{w}' is used with conflicting biases "
+                        f"'{existing}' and '{b}' under joint treatment. "
+                        f"Use separate_weight_and_bias=True."
+                    )
+                modules[w]["b"] = b
+        elif b is not None:
+            modules[b] = {"b": b}
+            module_io[b].append(io_name)
+
+    # Convert virtual modules to parameter groups and IO-layer mapping
+    groups: list[ParamGroup] = []
+    io_groups: dict[ParamGroupKey, list[str]] = {}
+
+    for mod_key, mod in modules.items():
+        io = module_io[mod_key]
+        param_dicts = (
+            [{r: n} for r, n in mod.items()] if separate_weight_and_bias else [mod]
+        )
+        for pd in param_dicts:
+            groups.append(pd)
+            key = tuple(pd.values())
+            # Bias-only groups: only IO layers that actually use the bias
+            io_groups[key] = (
+                [n for n in io if "b" in io_param_names[n]] if "W" not in pd else io
+            )
+
+    return groups, io_groups
+
+
+def _bias_pad(has_joint_wb: bool, io_layer_params: dict[str, str]) -> int | None:
+    """Determine bias padding for a specific IO layer usage.
+
+    Args:
+        has_joint_wb: Whether the parameter group has joint weight+bias.
+        io_layer_params: Parameter roles for this IO layer.
+
+    Returns:
+        ``1`` if bias active, ``0`` if joint but bias inactive, ``None`` otherwise.
+    """
+    if not has_joint_wb:
+        return None
+    return 1 if "b" in io_layer_params else 0
 
 
 class MakeFxKFACComputer(KFACComputer):
@@ -74,7 +117,7 @@ class MakeFxKFACComputer(KFACComputer):
 
     def _compute_kronecker_factors(  # noqa: C901
         self,
-    ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
+    ) -> tuple[dict[ParamGroupKey, Tensor], dict[ParamGroupKey, Tensor]]:
         """Compute KFAC's Kronecker factors using FX graph tracing.
 
         The IO-collecting forward pass (from ``with_kfac_io``) is cached by
@@ -83,7 +126,8 @@ class MakeFxKFACComputer(KFACComputer):
         eagerly to avoid ``make_fx`` tracing issues with ``torch._C.Generator``.
 
         Returns:
-            Tuple containing (input_covariances, gradient_covariances) dictionaries.
+            Tuple containing (input_covariances, gradient_covariances) dictionaries
+            keyed by parameter group tuples.
         """
 
         def f(x, params: dict[str, Tensor]) -> Tensor:
@@ -98,25 +142,28 @@ class MakeFxKFACComputer(KFACComputer):
             "mean": 1.0 / self._N_data,
         }[self._loss_func.reduction]
 
-        # Cache for IO functions: make_fx bakes in tensor shapes (e.g. from nn.Flatten),
-        # so different batch sizes need separate traces
+        # Cache for IO functions: make_fx bakes in tensor shapes (e.g. from
+        # nn.Flatten), so different batch sizes need separate traces
         traced_io_fns: dict[int, Callable] = {}
 
         # Layer metadata (identical across batch sizes), populated on first trace
-        io_to_module: dict[str, str] | None = None
-        io_to_usage: dict[str, ParameterUsage] | None = None
+        io_param_names: dict[str, dict[str, str]] | None = None
         layer_hparams: dict[str, dict[str, Any]] | None = None
+        # IO groups: maps parameter group key → list of IO layer names.
+        # Built once from io_param_names and self._mapping.
+        io_groups: dict[ParamGroupKey, list[str]] | None = None
 
-        # Set up dictionaries for the covariances that will be populated
-        input_covariances: dict[str, Tensor] = {}
-        gradient_covariances: dict[str, Tensor] = {}
+        input_covariances: dict[ParamGroupKey, Tensor] = {}
+        gradient_covariances: dict[ParamGroupKey, Tensor] = {}
 
         self._generator = _seed_generator(self._generator, self.device, self._seed)
 
         for X, y in self._loop_over_data(desc="KFAC matrices"):
             # Maybe trace for current batch size and set up layer metadata
             if (batch_size := self._batch_size_fn(X)) not in traced_io_fns:
-                traced_io_fns[batch_size], io_to_module, layer_hparams = _trace_io(
+                if isinstance(X, UserDict):
+                    _register_userdict_as_pytree()
+                traced_io_fns[batch_size], io_param_names, layer_hparams = with_kfac_io(
                     f, X, self._params, self._fisher_type
                 )
 
@@ -124,57 +171,49 @@ class MakeFxKFACComputer(KFACComputer):
             io_fn = traced_io_fns[batch_size]
             output, layer_inputs, layer_outputs = io_fn(X, self._params)
 
-            # Build lookup from IO collector names to ParameterUsage objects
-            if io_to_usage is None:
-                io_to_usage = {
-                    io_name: self._usage_by_module[mod_name]
-                    for io_name, mod_name in io_to_module.items()
-                }
-
-            # Group IO layer names by parameter usage (for weight tying,
-            # multiple IO layers map to the same usage and get concatenated)
-            io_groups: dict[str, list[str]] = defaultdict(list)
-            for io_name in io_to_usage:
-                io_groups[io_to_usage[io_name].name].append(io_name)
-
-            # Compute input covariances (one parameter group at a time to
-            # bound memory for CNNs with patch extraction)
-            for usage_name, io_names in io_groups.items():
-                names_with_input = [n for n in io_names if n in layer_inputs]
-                if not names_with_input:
-                    continue
-                usage = io_to_usage[names_with_input[0]]
-                has_joint_wb = _has_joint_weight_and_bias(
-                    self._separate_weight_and_bias, usage.params
+            if io_groups is None:
+                # Build parameter groups from IO detections (handles weight
+                # tying correctly by grouping by weight name)
+                self._mapping, io_groups = _build_param_groups_from_io(
+                    io_param_names, self._separate_weight_and_bias
                 )
-                xs = [
-                    input_to_weight_sharing_format(
-                        layer_inputs[n].data.detach(),
-                        self._kfac_approx,
-                        layer_hyperparams=layer_hparams[n],
-                        bias_pad=1 if has_joint_wb else None,
+
+            # Compute input/gradient covariances one parameter group at a time
+            # (bounds memory for CNNs with patch extraction)
+            for group in self._mapping:
+                group_key = tuple(group.values())
+                io_names = io_groups.get(group_key, [])
+
+                # Input covariance (only for groups with a weight)
+                if "W" in group:
+                    has_joint_wb = "b" in group
+                    xs = [
+                        input_to_weight_sharing_format(
+                            layer_inputs[n].data.detach(),
+                            self._kfac_approx,
+                            layer_hyperparams=layer_hparams[n],
+                            bias_pad=_bias_pad(has_joint_wb, io_param_names[n]),
+                        )
+                        for n in io_names
+                    ]
+                    x = cat(xs, dim=1)
+                    scale = x.shape[1]
+                    xxT = einsum(x, x, "batch shared i, batch shared j -> i j")
+                    self._set_or_add_(
+                        input_covariances, group_key, xxT.div_(scale * self._N_data)
                     )
-                    for n in names_with_input
-                ]
-                x = cat(xs, dim=1) if len(xs) > 1 else xs[0]
-                scale = x.shape[1]
-                xxT = einsum(x, x, "batch shared i, batch shared j -> i j")
-                self._set_or_add_(
-                    input_covariances, usage_name, xxT.div_(scale * self._N_data)
-                )
 
             # Forward-only KFAC does not require gradient covariances
             if self._fisher_type == FisherType.FORWARD_ONLY:
                 continue
 
-            # Compute gradient covariances (one parameter group at a time)
+            # Backward pass: compute per-layer output gradients
             layer_output_grads = self._compute_layer_output_grads(
-                output, y, layer_outputs, io_to_module
+                output, y, layer_outputs
             )
-            for usage_name, io_names in io_groups.items():
-                names_with_grad = [n for n in io_names if n in layer_output_grads]
-                if not names_with_grad:
-                    continue
+            for group in self._mapping:
+                group_key = tuple(group.values())
+                io_names = io_groups.get(group_key, [])
                 gs = [
                     grad_to_weight_sharing_format(
                         layer_output_grads[n].data.detach(),
@@ -182,9 +221,9 @@ class MakeFxKFACComputer(KFACComputer):
                         layer_hyperparams=layer_hparams[n],
                         num_leading_dims=2,
                     )
-                    for n in names_with_grad
+                    for n in io_names
                 ]
-                g = cat(gs, dim=2) if len(gs) > 1 else gs[0]
+                g = cat(gs, dim=2)
                 correction = compute_loss_correction(
                     g.shape[1],
                     self._num_per_example_loss_terms,
@@ -194,7 +233,7 @@ class MakeFxKFACComputer(KFACComputer):
                     correction
                 )
                 self._set_or_add_(
-                    gradient_covariances, usage_name, ggT.mul_(grad_normalization)
+                    gradient_covariances, group_key, ggT.mul_(grad_normalization)
                 )
 
         # Handle FORWARD_ONLY case
@@ -208,7 +247,6 @@ class MakeFxKFACComputer(KFACComputer):
         output: Tensor,
         y: Tensor,
         layer_outputs: dict[str, Tensor],
-        io_to_module: dict[str, str],
     ) -> dict[str, Tensor]:
         """Compute scaled batched gradients for all tracked layers.
 
@@ -220,7 +258,6 @@ class MakeFxKFACComputer(KFACComputer):
             output: Model output tensor.
             y: Target tensor.
             layer_outputs: Collected layer outputs from the IO function.
-            io_to_module: Mapping from IO collector layer names to module names.
 
         Returns:
             Dictionary mapping IO layer names to batched gradient tensors.
@@ -232,8 +269,8 @@ class MakeFxKFACComputer(KFACComputer):
         scale = {"sum": 1.0, "mean": 1.0 / num_loss_terms}[self._loss_func.reduction]
         grad_outputs.mul_(scale)
 
-        io_layer_names = [n for n in io_to_module if n in layer_outputs]
-        output_tensors = [layer_outputs[n] for n in io_layer_names]
+        io_layer_names = list(layer_outputs)
+        output_tensors = list(layer_outputs.values())
         layer_output_grads = autograd.grad(
             output,
             output_tensors,

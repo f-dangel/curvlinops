@@ -48,16 +48,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
-- Support weight tying (same parameter in multiple affine operations) in
-  KFAC's make_fx backend. Replace `append_ones_for_bias` with `bias_pad`
-  in `input_to_weight_sharing_format`
-  ([PR](https://github.com/f-dangel/curvlinops/pull/264))
-
-- Introduce `ParameterUsage` dataclass to unify KFAC's layer-to-parameter
-  mapping across hook and make_fx backends. Rename mapping keys from
-  `"weight"`/`"bias"` to `"W"`/`"b"`, and change `_mapping` from
-  `dict[str, ...]` to `list[ParameterUsage]`
-  ([PR](https://github.com/f-dangel/curvlinops/pull/263))
+- Introduce parameter groups for KFAC/EKFAC. Covariance dicts keyed by
+  tuples of parameter names instead of synthetic layer names. Support
+  weight tying and mixed-bias configurations in the make_fx backend.
+  Remove `ParameterUsage` dataclass in favor of plain `dict[str, str]`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/265),
+  [PR](https://github.com/f-dangel/curvlinops/pull/264),
+  [PR](https://github.com/f-dangel/curvlinops/pull/263))
 
 - Migrate internal parameter representation from `list[Parameter]` to
   `dict[str, Parameter]` (keyed by fully-qualified name). Public API unchanged

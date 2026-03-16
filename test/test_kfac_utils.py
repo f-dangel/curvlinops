@@ -33,12 +33,22 @@ def test_CanonicalLinearOperator(separate_weight_and_bias: bool):
         "1.weight",  # w2
     ]
 
-    # Define param_groups mapping local names to full qualified names
-    param_groups = [
-        {"W": "0.weight", "b": "0.bias"},  # layer 0 (Conv2d)
-        {"W": "1.weight", "b": "1.bias"},  # layer 1 (Linear)
-        {"W": "2.weight"},  # layer 2 (Linear, no bias)
-    ]
+    # Define param_groups: with separate treatment each role is its own group,
+    # with joint treatment weight and bias form one group
+    if separate_weight_and_bias:
+        param_groups = [
+            {"W": "0.weight"},
+            {"b": "0.bias"},
+            {"W": "1.weight"},
+            {"b": "1.bias"},
+            {"W": "2.weight"},
+        ]
+    else:
+        param_groups = [
+            {"W": "0.weight", "b": "0.bias"},
+            {"W": "1.weight", "b": "1.bias"},
+            {"W": "2.weight"},
+        ]
 
     # Extract param shapes, device, and dtype
     param_shapes = {name: p.shape for name, p in named_params.items()}
@@ -62,16 +72,14 @@ def test_CanonicalLinearOperator(separate_weight_and_bias: bool):
     )
 
     # Multiplication with canonicalization operator should produce x_canonical
-    to_canonical = ToCanonicalLinearOperator(
-        param_shapes, param_groups, separate_weight_and_bias, device, dtype
-    )
+    to_canonical = ToCanonicalLinearOperator(param_shapes, param_groups, device, dtype)
     to_canonical_x = to_canonical @ x
     assert len(to_canonical_x) == len(x_canonical)
     assert all(allclose_report(x1, x2) for x1, x2 in zip(to_canonical_x, x_canonical))
 
     # Multiplication of x_canonical with from_canonical operator should produce x
     from_canonical = FromCanonicalLinearOperator(
-        param_shapes, param_groups, separate_weight_and_bias, device, dtype
+        param_shapes, param_groups, device, dtype
     )
     from_canonical_x = from_canonical @ x_canonical
     assert len(from_canonical_x) == len(x)

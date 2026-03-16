@@ -9,13 +9,13 @@ from torch.linalg import eigh
 from torch.nn import Module
 from torch.utils.hooks import RemovableHandle
 
-from curvlinops.computers.kfac import KFACComputer, ParameterUsage
+from curvlinops.computers.kfac import KFACComputer, ParamGroup, _module_hyperparams
 from curvlinops.computers.kfac_math import (
     compute_loss_correction,
     grad_to_weight_sharing_format,
     input_to_weight_sharing_format,
 )
-from curvlinops.kfac_utils import FisherType, KFACType, _has_joint_weight_and_bias
+from curvlinops.kfac_utils import FisherType, KFACType
 from curvlinops.utils import _seed_generator
 
 
@@ -270,16 +270,16 @@ class EKFACComputer(KFACComputer):
         dict[str, Tensor],
         dict[str, Tensor],
         dict[str, Tensor | dict[str, Tensor]],
-        list[ParameterUsage],
+        list[ParamGroup],
     ]:
         """Compute eigenvalue-corrected Kronecker factors.
 
         Returns:
             Tuple of ``(input_covariance_eigenvectors, gradient_covariance_eigenvectors,
             corrected_eigenvalues, mapping)`` where the first two are dictionaries
-            mapping layer names to eigenvector matrices, the third maps layer names to
-            eigenvalue corrections, and ``mapping`` is a list of ``ParameterUsage``
-            objects.
+            mapping parameter group keys (``tuple[str, ...]``) to eigenvector
+            matrices, the third maps group keys to eigenvalue corrections, and
+            ``mapping`` is a list of parameter groups.
         """
         input_covariances, gradient_covariances, mapping = super().compute()
         input_covariances = self._eigenvectors_(input_covariances)
@@ -322,11 +322,11 @@ class EKFACComputer(KFACComputer):
         """Replace all matrix values with their eigenvectors (inplace).
 
         Args:
-            dictionary: A dictionary mapping module names to square matrices.
+            dictionary: A dictionary mapping parameter group keys to square matrices.
 
         Returns:
-            The modified dictionary mapping module names to the eigenvectors of the
-            input matrices.
+            The modified dictionary mapping group keys to the eigenvectors of
+            the input matrices.
         """
         for key, value in dictionary.items():
             dictionary[key] = eigh(value).eigenvectors
@@ -341,10 +341,10 @@ class EKFACComputer(KFACComputer):
         """Compute the corrected eigenvalues for EKFAC.
 
         Args:
-            input_covariances_eigenvectors: Dictionary mapping module names to input
-                covariance eigenvectors.
-            gradient_covariances_eigenvectors: Dictionary mapping module names to
-                gradient covariance eigenvectors.
+            input_covariances_eigenvectors: Dictionary mapping parameter group keys
+                to input covariance eigenvectors.
+            gradient_covariances_eigenvectors: Dictionary mapping parameter group
+                keys to gradient covariance eigenvectors.
 
         Returns:
             Dictionary containing corrected eigenvalues for each module.
@@ -355,15 +355,15 @@ class EKFACComputer(KFACComputer):
         # install forward hooks
         hook_handles: list[RemovableHandle] = []
 
-        for usage in self._mapping:
-            module = self._get_module(usage)
+        for group in self._mapping:
+            module = self._get_module(group)
 
             # compute the corrected eigenvalues using the per-example gradients
             hook_handles.append(
                 module.register_forward_hook(
                     partial(
                         self._register_tensor_hook_on_output_to_accumulate_corrected_eigenvalues,
-                        usage=usage,
+                        group=group,
                         input_covariances_eigenvectors=input_covariances_eigenvectors,
                         gradient_covariances_eigenvectors=gradient_covariances_eigenvectors,
                         corrected_eigenvalues=corrected_eigenvalues,
@@ -390,7 +390,7 @@ class EKFACComputer(KFACComputer):
         module: Module,
         inputs: tuple[Tensor],
         output: Tensor,
-        usage: ParameterUsage,
+        group: ParamGroup,
         input_covariances_eigenvectors: dict[str, Tensor],
         gradient_covariances_eigenvectors: dict[str, Tensor],
         corrected_eigenvalues: dict[str, Tensor | dict[str, Tensor]],
@@ -413,7 +413,7 @@ class EKFACComputer(KFACComputer):
                 eigenvalues will be installed.
             inputs: The layer's input tensors.
             output: The layer's output tensor.
-            usage: Parameter usage info for this layer.
+            group: Parameter group for this layer.
             input_covariances_eigenvectors: Dictionary containing input covariance
                 eigenvectors.
             gradient_covariances_eigenvectors: Dictionary containing gradient
@@ -422,7 +422,8 @@ class EKFACComputer(KFACComputer):
         """
         tensor_hook = partial(
             self._accumulate_corrected_eigenvalues,
-            usage=usage,
+            module=module,
+            group=group,
             input_covariances_eigenvectors=input_covariances_eigenvectors,
             gradient_covariances_eigenvectors=gradient_covariances_eigenvectors,
             corrected_eigenvalues=corrected_eigenvalues,
@@ -433,7 +434,8 @@ class EKFACComputer(KFACComputer):
     def _accumulate_corrected_eigenvalues(
         self,
         grad_output: Tensor,
-        usage: ParameterUsage,
+        module: Module,
+        group: ParamGroup,
         input_covariances_eigenvectors: dict[str, Tensor],
         gradient_covariances_eigenvectors: dict[str, Tensor],
         corrected_eigenvalues: dict[str, Tensor | dict[str, Tensor]],
@@ -452,7 +454,8 @@ class EKFACComputer(KFACComputer):
 
         Args:
             grad_output: The gradient w.r.t. the output.
-            usage: Parameter usage info for this layer.
+            module: The module this gradient belongs to.
+            group: Parameter group for this layer.
             input_covariances_eigenvectors: Dictionary containing input covariance
                 eigenvectors.
             gradient_covariances_eigenvectors: Dictionary containing gradient
@@ -467,23 +470,19 @@ class EKFACComputer(KFACComputer):
         batch_size = g.shape[0]
 
         # We only need layer inputs to extract information w.r.t. the weights
-        a_required = "W" in usage.params
+        a_required = "W" in group
 
         if len(inputs) != 1:
             raise ValueError("Modules with multiple inputs are not supported.")
         a = inputs[0].data.detach() if a_required else None
 
-        has_joint_wb = _has_joint_weight_and_bias(
-            self._separate_weight_and_bias, usage.params
-        )
-        g = grad_to_weight_sharing_format(g, KFACType.EXPAND, usage.hyperparams)
+        has_joint_wb = "W" in group and "b" in group
+        hparams = _module_hyperparams(module)
+        g = grad_to_weight_sharing_format(g, KFACType.EXPAND, hparams)
         g = g.unsqueeze(0)  # [N, S, D] -> [1, N, S, D] (V=1 for hooks backend)
         if a is not None:
             a = input_to_weight_sharing_format(
-                a,
-                KFACType.EXPAND,
-                usage.hyperparams,
-                bias_pad=1 if has_joint_wb else None,
+                a, KFACType.EXPAND, hparams, bias_pad=1 if has_joint_wb else None
             )
 
         correction = compute_loss_correction(
@@ -493,34 +492,13 @@ class EKFACComputer(KFACComputer):
             self._N_data,
         )
 
-        # Compute the corrected eigenvalues for the EKFAC approximation
-        # aaT_eigenvectors does not exist if the weight matrix of the module is excluded
-        aaT_eigenvectors = input_covariances_eigenvectors.get(usage.name)
-        # ggT_eigenvectors always exists
-        ggT_eigenvectors = gradient_covariances_eigenvectors[usage.name]
+        group_key = tuple(group.values())
+        aaT_eigenvectors = input_covariances_eigenvectors.get(group_key)
+        ggT_eigenvectors = gradient_covariances_eigenvectors[group_key]
 
-        if has_joint_wb:
-            eigencorrection = compute_eigenvalue_correction_linear_weight_sharing(
-                g, ggT_eigenvectors, a, aaT_eigenvectors
-            )
-            self._set_or_add_(
-                corrected_eigenvalues,
-                usage.name,
-                eigencorrection.mul_(correction),
-            )
-
-        else:
-            if usage.name not in corrected_eigenvalues:
-                corrected_eigenvalues[usage.name] = {}
-            for p_name, pos in usage.params.items():
-                eigencorrection = compute_eigenvalue_correction_linear_weight_sharing(
-                    g,
-                    ggT_eigenvectors,
-                    None if p_name == "b" else a,
-                    aaT_eigvecs=None if p_name == "b" else aaT_eigenvectors,
-                )
-                self._set_or_add_(
-                    corrected_eigenvalues[usage.name],
-                    pos,
-                    eigencorrection.mul_(correction),
-                )
+        eigencorrection = compute_eigenvalue_correction_linear_weight_sharing(
+            g, ggT_eigenvectors, a, aaT_eigenvectors
+        )
+        self._set_or_add_(
+            corrected_eigenvalues, group_key, eigencorrection.mul_(correction)
+        )
