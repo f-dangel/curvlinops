@@ -115,6 +115,10 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
         Warning:
             This is an early proto-type with limitations:
                 - Only Linear and Conv2d modules are supported.
+                - The ``hooks`` backend assumes each module is called exactly
+                  once per forward pass. Weight tying (same module called
+                  multiple times) will silently produce incorrect results.
+                  Use ``backend="make_fx"`` for weight-tied architectures.
 
         Args:
             model_func: The neural network. Must consist of modules.
@@ -243,7 +247,6 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
         PT = ToCanonicalLinearOperator(
             {name: p.shape for name, p in computer._params.items()},
             [u.params for u in computer._mapping],
-            computer._separate_weight_and_bias,
             computer.device,
             computer.dtype,
         )

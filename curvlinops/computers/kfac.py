@@ -298,7 +298,7 @@ class KFACComputer(_EmpiricalRiskMixin):
         }
 
     @cached_property
-    def _mapping_by_key(self) -> dict[tuple[str, ...], ParameterUsage]:
+    def _usage_by_param_names(self) -> dict[tuple[str, ...], ParameterUsage]:
         """Lookup from parameter group key to ``ParameterUsage``.
 
         Returns:
@@ -344,13 +344,6 @@ class KFACComputer(_EmpiricalRiskMixin):
 
     def _compute_kronecker_factors(self) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
         """Compute KFAC's Kronecker factors.
-
-        Warning:
-            This hooks-based implementation assumes each module is called exactly
-            once per forward pass. Weight tying (same module called multiple
-            times) will silently produce incorrect results because the hook fires
-            multiple times with wrong normalization. The backend cannot detect
-            this. Use the ``make_fx`` backend for weight-tied architectures.
 
         Returns:
             Tuple containing (input_covariances, gradient_covariances) dictionaries.

@@ -193,7 +193,7 @@ class MakeFxKFACComputer(KFACComputer):
             # Compute input/gradient covariances one parameter group at a time
             # (bounds memory for CNNs with patch extraction)
             for group_key, io_names in io_groups.items():
-                usage = self._mapping_by_key[group_key]
+                usage = self._usage_by_param_names[group_key]
 
                 # Input covariance (only for groups with a weight)
                 if "W" not in usage.params:

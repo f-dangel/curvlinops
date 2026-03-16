@@ -95,7 +95,7 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
             )
 
             for group_key, io_names in io_groups.items():
-                usage = self._mapping_by_key[group_key]
+                usage = self._usage_by_param_names[group_key]
                 has_joint_wb = "b" in usage.params and "W" in usage.params
 
                 names_with_grad = [n for n in io_names if n in layer_output_grads]

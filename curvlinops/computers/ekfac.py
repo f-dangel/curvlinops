@@ -15,7 +15,7 @@ from curvlinops.computers.kfac_math import (
     grad_to_weight_sharing_format,
     input_to_weight_sharing_format,
 )
-from curvlinops.kfac_utils import FisherType, KFACType, _has_joint_weight_and_bias
+from curvlinops.kfac_utils import FisherType, KFACType
 from curvlinops.utils import _seed_generator
 
 
@@ -473,9 +473,7 @@ class EKFACComputer(KFACComputer):
             raise ValueError("Modules with multiple inputs are not supported.")
         a = inputs[0].data.detach() if a_required else None
 
-        has_joint_wb = _has_joint_weight_and_bias(
-            self._separate_weight_and_bias, usage.params
-        )
+        has_joint_wb = "W" in usage.params and "b" in usage.params
         g = grad_to_weight_sharing_format(g, KFACType.EXPAND, usage.hyperparams)
         g = g.unsqueeze(0)  # [N, S, D] -> [1, N, S, D] (V=1 for hooks backend)
         if a is not None:
