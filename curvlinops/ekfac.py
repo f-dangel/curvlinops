@@ -45,8 +45,8 @@ class EKFACLinearOperator(KFACLinearOperator):
         )
         bases = []
         corrections = []
-        for usage in mapping:
-            group_key = tuple(usage.params.values())
+        for group in mapping:
+            group_key = tuple(group.values())
             Q_a = input_eigvecs.get(group_key)
             Q_g = gradient_eigvecs[group_key]
             lambdas = corrected_eigenvalues[group_key]

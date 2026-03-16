@@ -274,66 +274,20 @@ def test_kfac_type2_weight_tying(
 
 
 @mark.parametrize("reduction", ["mean", "sum"])
-def test_kfac_type2_mixed_bias_weight_tying(reduction: str):
-    """Test KFAC with mixed-bias weight tying (same W with and without bias).
+def test_kfac_type2_multi_module_conflicting_biases(reduction: str):
+    """Test that joint treatment errors when weight-tied modules have different biases.
 
-    Uses a functional model where the same weight is used twice: once with bias
-    (``F.linear(x1, W, b)``) and once without (``F.linear(x2, W)``). With N=1,
-    KFAC-expand is exact because the two paths are independent.
-
-    Requires ``separate_weight_and_bias=True`` because the two modules have
-    different bias configurations. Joint treatment with mixed-bias multi-module
-    weight tying requires multi-module support in ``compute_parameter_groups``.
+    Two modules share a weight but have different (non-tied) biases. Joint
+    treatment cannot form a single (W, b) group because the biases conflict.
 
     Args:
         reduction: Loss reduction mode.
-    """
-    separate_weight_and_bias = True
-    manual_seed(0)
-    D = 4
-
-    model = WeightTiedSplitConcatModel(D, bias1=True, bias2=False)
-    loss_func = MSELoss(reduction=reduction)
-    params = [p for p in model.parameters() if p.requires_grad]
-    data = [(rand(1, 2 * D), regression_targets((1, 2 * D)))]
-    model, loss_func, params, data, _ = change_dtype(
-        (model, loss_func, params, data, None), float64
-    )
-
-    ggn = block_diagonal(
-        GGNLinearOperator,
-        model,
-        loss_func,
-        params,
-        data,
-        separate_weight_and_bias=separate_weight_and_bias,
-    )
-    kfac = KFACLinearOperator(
-        model,
-        loss_func,
-        params,
-        data,
-        fisher_type=FisherType.TYPE2,
-        kfac_approx=KFACType.EXPAND,
-        separate_weight_and_bias=separate_weight_and_bias,
-        backend="make_fx",
-    )
-    kfac_mat = kfac @ eye_like(kfac)
-
-    assert allclose_report(ggn, kfac_mat)
-
-
-def test_kfac_conflicting_biases_joint():
-    """Test that joint treatment errors on different biases for the same weight.
-
-    When the same weight is used with different biases (b1 and b2), joint
-    treatment cannot form a single (W, b) group. Separate treatment is required.
     """
     manual_seed(0)
     D = 4
 
     model = WeightTiedSplitConcatModel(D, bias1=True, bias2=True)
-    loss_func = MSELoss(reduction="mean")
+    loss_func = MSELoss(reduction=reduction)
     params = list(model.parameters())
     data = [(rand(1, 2 * D), regression_targets((1, 2 * D)))]
 

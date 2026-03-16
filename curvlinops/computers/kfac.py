@@ -17,8 +17,7 @@ and generalized to all linear layers with weight sharing in
 """
 
 from collections.abc import Callable, Iterable, MutableMapping
-from dataclasses import dataclass
-from functools import cached_property, partial
+from functools import partial
 from typing import Any
 
 from einops import einsum, rearrange
@@ -36,8 +35,6 @@ from torch.nn import (
 from torch.utils.hooks import RemovableHandle
 
 from curvlinops._empirical_risk import _EmpiricalRiskMixin
-from curvlinops.computers.io_collector.conv import CONV_STR
-from curvlinops.computers.io_collector.linear import LINEAR_STR
 from curvlinops.computers.kfac_math import (
     compute_loss_correction,
     grad_to_weight_sharing_format,
@@ -47,29 +44,28 @@ from curvlinops.ggn_utils import make_grad_output_fn
 from curvlinops.kfac_utils import FisherType, KFACType
 from curvlinops.utils import _seed_generator
 
+# Type alias for a parameter group: maps roles ("W", "b") to full param names
+ParamGroup = dict[str, str]
 
-@dataclass(frozen=True)
-class ParameterUsage:
-    """Describes how a group of parameters is used in an affine layer.
 
-    Bundles the operation type, parameter name mapping, and layer hyperparameters
-    into a single object. Both the hook-based and make_fx-based KFAC backends
-    produce ``list[ParameterUsage]``.
+def _module_hyperparams(mod: Module) -> dict[str, Any]:
+    """Extract KFAC-relevant hyperparameters from a module.
 
-    Attributes:
-        op: The operation string, matching ``AffineLayerInfo.operation``.
-            Either ``"Linear(y=W@x+b)"`` or ``"Conv(y=W*x+b)"``.
-        params: Maps local parameter roles to full qualified parameter names.
-            Keys are ``"W"`` (weight) and optionally ``"b"`` (bias).
-            Values are full parameter names, e.g. ``{"W": "0.weight", "b": "0.bias"}``.
-        hyperparams: Layer hyperparameters. Empty dict for linear layers.
-            For convolutions, contains ``kernel_size``, ``stride``, ``padding``,
-            ``dilation``, ``groups``.
+    Args:
+        mod: A supported module (``Linear`` or ``Conv2d``).
+
+    Returns:
+        Empty dict for ``Linear``, convolution parameters for ``Conv2d``.
     """
-
-    op: str
-    params: dict[str, str]
-    hyperparams: dict[str, Any]
+    if isinstance(mod, Conv2d):
+        return dict(
+            kernel_size=mod.kernel_size,
+            stride=mod.stride,
+            padding=mod.padding,
+            dilation=mod.dilation,
+            groups=mod.groups,
+        )
+    return {}
 
 
 def _module_name_from_param(param_name: str) -> str:
@@ -259,7 +255,7 @@ class KFACComputer(_EmpiricalRiskMixin):
 
     def compute(
         self,
-    ) -> tuple[dict[str, Tensor], dict[str, Tensor], list[ParameterUsage]]:
+    ) -> tuple[dict[str, Tensor], dict[str, Tensor], list[ParamGroup]]:
         """Compute the Kronecker factors.
 
         Returns:
@@ -269,42 +265,19 @@ class KFACComputer(_EmpiricalRiskMixin):
         """
         return (*self._compute_kronecker_factors(), self._mapping)
 
-    def _get_module(self, usage: ParameterUsage) -> Module:
-        """Get the module corresponding to a parameter usage.
+    def _get_module(self, group: ParamGroup) -> Module:
+        """Get the module corresponding to a parameter group.
 
         Derives the module name from the first parameter's full qualified name.
 
         Args:
-            usage: Parameter usage info for the layer.
+            group: Parameter group (role → param name mapping).
 
         Returns:
             The module object.
         """
-        mod_name = _module_name_from_param(next(iter(usage.params.values())))
+        mod_name = _module_name_from_param(next(iter(group.values())))
         return self._model_func.get_submodule(mod_name)
-
-    @cached_property
-    def _usage_by_module(self) -> dict[str, ParameterUsage]:
-        """Lookup from module name to ``ParameterUsage``.
-
-        Derives the module name from the first parameter's full qualified name.
-
-        Returns:
-            Dictionary mapping module names to ``ParameterUsage`` objects.
-        """
-        return {
-            _module_name_from_param(next(iter(u.params.values()))): u
-            for u in self._mapping
-        }
-
-    @cached_property
-    def _usage_by_param_names(self) -> dict[tuple[str, ...], ParameterUsage]:
-        """Lookup from parameter group key to ``ParameterUsage``.
-
-        Returns:
-            Dictionary mapping group keys to ``ParameterUsage`` objects.
-        """
-        return {tuple(u.params.values()): u for u in self._mapping}
 
     @staticmethod
     def _set_up_grad_outputs_computer(
@@ -355,16 +328,16 @@ class KFACComputer(_EmpiricalRiskMixin):
         # install forward and backward hooks
         hook_handles: list[RemovableHandle] = []
 
-        for usage in self._mapping:
-            module = self._get_module(usage)
+        for group in self._mapping:
+            module = self._get_module(group)
 
             # input covariance only required for weights
-            if "W" in usage.params:
+            if "W" in group:
                 hook_handles.append(
                     module.register_forward_pre_hook(
                         partial(
                             self._hook_accumulate_input_covariance,
-                            usage=usage,
+                            group=group,
                             input_covariances=input_covariances,
                         )
                     )
@@ -375,7 +348,7 @@ class KFACComputer(_EmpiricalRiskMixin):
                 module.register_forward_hook(
                     partial(
                         self._register_tensor_hook_on_output_to_accumulate_gradient_covariance,
-                        usage=usage,
+                        group=group,
                         gradient_covariances=gradient_covariances,
                     )
                 )
@@ -410,9 +383,9 @@ class KFACComputer(_EmpiricalRiskMixin):
         Args:
             gradient_covariances: Dictionary to populate with identity matrices.
         """
-        for usage in self._mapping:
-            param = self._params[next(iter(usage.params.values()))]
-            gradient_covariances[tuple(usage.params.values())] = eye(
+        for group in self._mapping:
+            param = self._params[next(iter(group.values()))]
+            gradient_covariances[tuple(group.values())] = eye(
                 param.shape[0], dtype=param.dtype, device=self.device
             )
 
@@ -483,7 +456,7 @@ class KFACComputer(_EmpiricalRiskMixin):
         module: Module,
         inputs: tuple[Tensor],
         output: Tensor,
-        usage: ParameterUsage,
+        group: ParamGroup,
         gradient_covariances: dict[str, Tensor],
     ):
         """Register tensor hook on layer's output to accumulate the grad. covariance.
@@ -504,12 +477,13 @@ class KFACComputer(_EmpiricalRiskMixin):
                 covariance will be installed.
             inputs: The layer's input tensors.
             output: The layer's output tensor.
-            usage: Parameter usage info for this layer.
+            group: Parameter group for this layer.
             gradient_covariances: Dictionary to store gradient covariances.
         """
         tensor_hook = partial(
             self._accumulate_gradient_covariance,
-            usage=usage,
+            module=module,
+            group=group,
             gradient_covariances=gradient_covariances,
         )
         output.register_hook(tensor_hook)
@@ -517,7 +491,8 @@ class KFACComputer(_EmpiricalRiskMixin):
     def _accumulate_gradient_covariance(
         self,
         grad_output: Tensor,
-        usage: ParameterUsage,
+        module: Module,
+        group: ParamGroup,
         gradient_covariances: dict[str, Tensor],
     ):
         """Accumulate the gradient covariance for a layer's output.
@@ -526,14 +501,15 @@ class KFACComputer(_EmpiricalRiskMixin):
 
         Args:
             grad_output: The gradient w.r.t. the output.
-            usage: Parameter usage info for this layer.
+            module: The module this gradient belongs to.
+            group: Parameter group for this layer.
             gradient_covariances: Dictionary to store gradient covariances.
         """
         g = grad_output.data.detach()
         batch_size = g.shape[0]
 
         g = grad_to_weight_sharing_format(
-            g, self._kfac_approx, layer_hyperparams=usage.hyperparams
+            g, self._kfac_approx, layer_hyperparams=_module_hyperparams(module)
         )
 
         # Note: mc_samples scaling is already handled inside make_grad_output_fn.
@@ -547,15 +523,13 @@ class KFACComputer(_EmpiricalRiskMixin):
         covariance = einsum(g, g, "batch shared i, batch shared j -> i j").mul_(
             correction
         )
-        self._set_or_add_(
-            gradient_covariances, tuple(usage.params.values()), covariance
-        )
+        self._set_or_add_(gradient_covariances, tuple(group.values()), covariance)
 
     def _hook_accumulate_input_covariance(
         self,
         module: Module,
         inputs: tuple[Tensor, ...],
-        usage: ParameterUsage,
+        group: ParamGroup,
         input_covariances: dict[tuple[str, ...], Tensor],
     ):
         """Pre-forward hook that accumulates the input covariance of a layer.
@@ -565,7 +539,7 @@ class KFACComputer(_EmpiricalRiskMixin):
         Args:
             module: Module on which the hook is called.
             inputs: Inputs to the module.
-            usage: Parameter usage info for this layer.
+            group: Parameter group for this layer.
             input_covariances: Dictionary to store input covariances.
 
         Raises:
@@ -575,19 +549,19 @@ class KFACComputer(_EmpiricalRiskMixin):
             raise ValueError("Modules with multiple inputs are not supported.")
         x = inputs[0].data.detach()
 
-        has_joint_wb = "b" in usage.params and "W" in usage.params
+        has_joint_wb = "b" in group and "W" in group
 
         x = input_to_weight_sharing_format(
             x,
             self._kfac_approx,
-            layer_hyperparams=usage.hyperparams,
+            layer_hyperparams=_module_hyperparams(module),
             bias_pad=1 if has_joint_wb else None,
         )
         scale = x.shape[1]
         covariance = einsum(x, x, "batch shared i, batch shared j -> i j").div_(
             self._N_data * scale
         )
-        self._set_or_add_(input_covariances, tuple(usage.params.values()), covariance)
+        self._set_or_add_(input_covariances, tuple(group.values()), covariance)
 
     @staticmethod
     def _set_or_add_(
@@ -624,7 +598,7 @@ class KFACComputer(_EmpiricalRiskMixin):
         params: list[Tensor | Parameter],
         model_func: Module,
         separate_weight_and_bias: bool = True,
-    ) -> list[ParameterUsage]:
+    ) -> list[ParamGroup]:
         """Construct parameter groups for the model's layers.
 
         Each supported module produces one group (joint treatment) or two
@@ -644,22 +618,7 @@ class KFACComputer(_EmpiricalRiskMixin):
         Raises:
             NotImplementedError: If parameters are found outside supported layers.
         """
-        # Map PyTorch's parameter names to short role keys
         _role = {"weight": "W", "bias": "b"}
-        # Map module types to operation strings and hparam extractors
-        _module_info: dict[type, tuple[str, Callable[[Module], dict[str, Any]]]] = {
-            Linear: (LINEAR_STR, lambda _: {}),
-            Conv2d: (
-                CONV_STR,
-                lambda m: dict(
-                    kernel_size=m.kernel_size,
-                    stride=m.stride,
-                    padding=m.padding,
-                    dilation=m.dilation,
-                    groups=m.groups,
-                ),
-            ),
-        }
 
         param_ids = {p.data_ptr() for p in params}
         ptr_to_name = {
@@ -667,33 +626,25 @@ class KFACComputer(_EmpiricalRiskMixin):
             for name, p in model_func.named_parameters()
             if p.data_ptr() in param_ids
         }
-        groups: list[ParameterUsage] = []
+        groups: list[ParamGroup] = []
         processed = set()
 
         for _, mod in model_func.named_modules():
             if isinstance(mod, cls._SUPPORTED_MODULES) and any(
                 p.data_ptr() in param_ids for p in mod.parameters()
             ):
-                param_roles = {}
+                param_roles: ParamGroup = {}
                 for p_name, p in mod.named_parameters(recurse=False):
                     p_id = p.data_ptr()
                     if p_id in param_ids:
                         param_roles[_role[p_name]] = ptr_to_name[p_id]
                         processed.add(p_id)
-                op, hparam_fn = next(
-                    v for t, v in _module_info.items() if isinstance(mod, t)
-                )
                 param_dicts = (
                     [{r: n} for r, n in param_roles.items()]
                     if separate_weight_and_bias
                     else [param_roles]
                 )
-                for params_dict in param_dicts:
-                    groups.append(
-                        ParameterUsage(
-                            op=op, params=params_dict, hyperparams=hparam_fn(mod)
-                        )
-                    )
+                groups.extend(param_dicts)
 
         if len(processed) != len(param_ids):
             raise NotImplementedError("Found parameters in un-supported layers.")

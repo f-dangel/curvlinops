@@ -220,8 +220,8 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
         """
         input_covariances, gradient_covariances, mapping = computer.compute()
         factors = []
-        for usage in mapping:
-            group_key = tuple(usage.params.values())
+        for group in mapping:
+            group_key = tuple(group.values())
             aaT = input_covariances.get(group_key)
             ggT = gradient_covariances[group_key]
             factors.append([ggT, aaT] if aaT is not None else [ggT])
@@ -246,7 +246,7 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
         """
         PT = ToCanonicalLinearOperator(
             {name: p.shape for name, p in computer._params.items()},
-            [u.params for u in computer._mapping],
+            computer._mapping,
             computer.device,
             computer.dtype,
         )

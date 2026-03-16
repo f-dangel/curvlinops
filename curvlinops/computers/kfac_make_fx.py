@@ -17,7 +17,7 @@ from torch.func import functional_call
 
 from curvlinops._checks import _register_userdict_as_pytree
 from curvlinops.computers.io_collector import with_kfac_io
-from curvlinops.computers.kfac import KFACComputer, ParameterUsage
+from curvlinops.computers.kfac import KFACComputer, ParamGroup
 from curvlinops.computers.kfac_math import (
     compute_loss_correction,
     grad_to_weight_sharing_format,
@@ -51,7 +51,7 @@ def _trace_io(
 
 
 def _check_conflicting_biases(
-    mapping: list[ParameterUsage],
+    mapping: list[ParamGroup],
     io_param_names: dict[str, dict[str, str]],
 ) -> None:
     """Check that joint W+b groups don't have conflicting biases across IO usages.
@@ -63,10 +63,10 @@ def _check_conflicting_biases(
     Raises:
         ValueError: If a joint group's weight is used with different biases.
     """
-    for usage in mapping:
-        if "W" not in usage.params or "b" not in usage.params:
+    for group in mapping:
+        if "W" not in group or "b" not in group:
             continue
-        w_name = usage.params["W"]
+        w_name = group["W"]
         biases: set[str | None] = set()
         for pnames in io_param_names.values():
             if pnames.get("W") == w_name:
@@ -81,7 +81,7 @@ def _check_conflicting_biases(
 
 
 def _map_param_groups_to_io_layers(
-    mapping: list[ParameterUsage],
+    mapping: list[ParamGroup],
     io_param_names: dict[str, dict[str, str]],
 ) -> dict[tuple[str, ...], list[str]]:
     """Map each parameter group to its contributing IO layers.
@@ -96,9 +96,9 @@ def _map_param_groups_to_io_layers(
         Dictionary mapping group keys to lists of contributing IO layer names.
     """
     param_to_key: dict[str, tuple[str, ...]] = {}
-    for usage in mapping:
-        for param_name in usage.params.values():
-            param_to_key[param_name] = tuple(usage.params.values())
+    for group in mapping:
+        for param_name in group.values():
+            param_to_key[param_name] = tuple(group.values())
 
     # dict-as-ordered-set: preserves IO detection order, deduplicates
     groups: dict[tuple[str, ...], dict[str, None]] = defaultdict(dict)
@@ -192,16 +192,17 @@ class MakeFxKFACComputer(KFACComputer):
 
             # Compute input/gradient covariances one parameter group at a time
             # (bounds memory for CNNs with patch extraction)
-            for group_key, io_names in io_groups.items():
-                usage = self._usage_by_param_names[group_key]
+            for group in self._mapping:
+                group_key = tuple(group.values())
+                io_names = io_groups.get(group_key, [])
 
                 # Input covariance (only for groups with a weight)
-                if "W" not in usage.params:
+                if "W" not in group:
                     names_with_input = []
                 else:
                     names_with_input = [n for n in io_names if n in layer_inputs]
                 if names_with_input:
-                    has_joint_wb = "b" in usage.params and "W" in usage.params
+                    has_joint_wb = "b" in group and "W" in group
                     xs = [
                         input_to_weight_sharing_format(
                             layer_inputs[n].data.detach(),
@@ -225,7 +226,9 @@ class MakeFxKFACComputer(KFACComputer):
             layer_output_grads = self._compute_layer_output_grads(
                 output, y, layer_outputs
             )
-            for group_key, io_names in io_groups.items():
+            for group in self._mapping:
+                group_key = tuple(group.values())
+                io_names = io_groups.get(group_key, [])
                 names_with_grad = [n for n in io_names if n in layer_output_grads]
                 if not names_with_grad:
                     continue

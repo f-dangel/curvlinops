@@ -65,7 +65,6 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
         traced_io_fns: dict[int, Callable] = {}
 
         # Layer metadata (identical across batch sizes), populated on first trace
-        io_param_names: dict[str, dict[str, str]] | None = None
         layer_hparams: dict[str, dict[str, Any]] | None = None
         io_groups: dict[tuple[str, ...], list[str]] | None = None
 
@@ -79,11 +78,10 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
                 traced_io_fns[batch_size], io_param_names, layer_hparams = _trace_io(
                     f, X, self._params, self._fisher_type
                 )
-
-            if io_groups is None:
-                io_groups = _map_param_groups_to_io_layers(
-                    self._mapping, io_param_names
-                )
+                if io_groups is None:
+                    io_groups = _map_param_groups_to_io_layers(
+                        self._mapping, io_param_names
+                    )
 
             # Forward pass with IO collection
             io_fn = traced_io_fns[batch_size]
@@ -94,9 +92,10 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
                 output, y, layer_outputs
             )
 
-            for group_key, io_names in io_groups.items():
-                usage = self._usage_by_param_names[group_key]
-                has_joint_wb = "b" in usage.params and "W" in usage.params
+            for group in self._mapping:
+                group_key = tuple(group.values())
+                io_names = io_groups.get(group_key, [])
+                has_joint_wb = "b" in group and "W" in group
 
                 names_with_grad = [n for n in io_names if n in layer_output_grads]
                 if not names_with_grad:
@@ -113,7 +112,7 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
                 g = cat(gs, dim=2) if len(gs) > 1 else gs[0]
 
                 a = None
-                if "W" in usage.params:
+                if "W" in group:
                     names_with_input = [n for n in io_names if n in layer_inputs]
                     if names_with_input:
                         xs = [
