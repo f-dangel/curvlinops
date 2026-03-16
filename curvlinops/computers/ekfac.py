@@ -493,34 +493,13 @@ class EKFACComputer(KFACComputer):
             self._N_data,
         )
 
-        # Compute the corrected eigenvalues for the EKFAC approximation
-        # aaT_eigenvectors does not exist if the weight matrix of the module is excluded
-        aaT_eigenvectors = input_covariances_eigenvectors.get(usage.name)
-        # ggT_eigenvectors always exists
-        ggT_eigenvectors = gradient_covariances_eigenvectors[usage.name]
+        group_key = tuple(usage.params.values())
+        aaT_eigenvectors = input_covariances_eigenvectors.get(group_key)
+        ggT_eigenvectors = gradient_covariances_eigenvectors[group_key]
 
-        if has_joint_wb:
-            eigencorrection = compute_eigenvalue_correction_linear_weight_sharing(
-                g, ggT_eigenvectors, a, aaT_eigenvectors
-            )
-            self._set_or_add_(
-                corrected_eigenvalues,
-                usage.name,
-                eigencorrection.mul_(correction),
-            )
-
-        else:
-            if usage.name not in corrected_eigenvalues:
-                corrected_eigenvalues[usage.name] = {}
-            for p_name, pos in usage.params.items():
-                eigencorrection = compute_eigenvalue_correction_linear_weight_sharing(
-                    g,
-                    ggT_eigenvectors,
-                    None if p_name == "b" else a,
-                    aaT_eigvecs=None if p_name == "b" else aaT_eigenvectors,
-                )
-                self._set_or_add_(
-                    corrected_eigenvalues[usage.name],
-                    pos,
-                    eigencorrection.mul_(correction),
-                )
+        eigencorrection = compute_eigenvalue_correction_linear_weight_sharing(
+            g, ggT_eigenvectors, a, aaT_eigenvectors
+        )
+        self._set_or_add_(
+            corrected_eigenvalues, group_key, eigencorrection.mul_(correction)
+        )
