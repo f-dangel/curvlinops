@@ -287,7 +287,8 @@ def make_functional_loss(loss_func: Module) -> Callable[[Tensor, tuple], Tensor]
 
 
 def make_functional_flattened_model_and_loss(
-    model_func: Module, loss_func: Module
+    f: Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
+    loss_func: Module,
 ) -> tuple[
     Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
     Callable[[Tensor, tuple], Tensor],
@@ -298,7 +299,7 @@ def make_functional_flattened_model_and_loss(
     additional axes. Therefore, they are flattened into the batch axis.
 
     Args:
-        model_func: The neural network module.
+        f: Functional model with signature ``(params_dict, X) -> prediction``.
         loss_func: The loss function module.
 
     Returns:
@@ -308,8 +309,6 @@ def make_functional_flattened_model_and_loss(
         - c_flat: Function that executes loss with flattened labels:
           (output_flat, loss_args) -> loss
     """
-    # Create functional versions of model and loss
-    f = make_functional_call(model_func)
     c = make_functional_loss(loss_func)
 
     # Determine how to flatten

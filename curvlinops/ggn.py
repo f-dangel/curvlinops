@@ -10,7 +10,7 @@ from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, Module, MSELoss, Param
 
 from curvlinops._torch_base import CurvatureLinearOperator
 from curvlinops.ggn_utils import make_grad_output_fn
-from curvlinops.utils import _seed_generator, make_functional_call, make_functional_loss
+from curvlinops.utils import _seed_generator, make_functional_loss
 
 
 def make_ggn_vector_product(
@@ -74,7 +74,8 @@ def make_ggn_vector_product(
 
 
 def make_batch_ggn_vector_product(
-    model_func: Module, loss_func: Module
+    f: Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
+    loss_func: Module,
 ) -> Callable[
     [dict[str, Tensor], Tensor | MutableMapping, tuple, dict[str, Tensor]],
     dict[str, Tensor],
@@ -82,7 +83,7 @@ def make_batch_ggn_vector_product(
     r"""Set up function that multiplies the mini-batch GGN onto a vector in dict format.
 
     Args:
-        model_func: The neural network :math:`f_{\mathbf{\theta}}`.
+        f: Functional model with signature ``(params_dict, X) -> prediction``.
         loss_func: The loss function :math:`\ell`.
 
     Returns:
@@ -91,15 +92,14 @@ def make_batch_ggn_vector_product(
         ``loss_args = (y,)``, and a vector ``v`` as a dict, and returns the
         mini-batch GGN applied to ``v`` as a dict.
     """
-    f = make_functional_call(model_func)
     c = make_functional_loss(loss_func)
-
-    # Create the functional GGN-vector product: (params, X, loss_args, v) -> Gv
     return make_ggn_vector_product(f, c)
 
 
 def make_batch_ggn_mc_vector_product(
-    model_func: Module, loss_func: Module, mc_samples: int
+    f: Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
+    loss_func: Module,
+    mc_samples: int,
 ) -> Callable[
     [dict[str, Tensor], Tensor | MutableMapping, tuple, dict[str, Tensor]],
     dict[str, Tensor],
@@ -115,7 +115,7 @@ def make_batch_ggn_mc_vector_product(
     :func:`curvlinops.ggn_utils.make_grad_output_fn`.
 
     Args:
-        model_func: The neural network :math:`f_{\mathbf{\theta}}`.
+        f: Functional model with signature ``(params_dict, X) -> prediction``.
         loss_func: The loss function :math:`\ell`.
         mc_samples: Number of Monte-Carlo samples.
 
@@ -125,8 +125,6 @@ def make_batch_ggn_mc_vector_product(
         ``loss_args = (y, generator)``, and a vector ``v`` as a dict, and returns
         the mini-batch MC-GGN applied to ``v`` as a dict.
     """
-    f = make_functional_call(model_func)
-
     _grad_output_fn = make_grad_output_fn(loss_func, "mc", mc_samples)
     # vmap over batch: per-datum grad outputs → batched
     batched_grad_output_fn = vmap(
@@ -344,9 +342,9 @@ class GGNLinearOperator(CurvatureLinearOperator):
         """
         if self._mc_samples > 0:
             return make_batch_ggn_mc_vector_product(
-                self._model_module, self._loss_func, self._mc_samples
+                self._model_func, self._loss_func, self._mc_samples
             )
-        return make_batch_ggn_vector_product(self._model_module, self._loss_func)
+        return make_batch_ggn_vector_product(self._model_func, self._loss_func)
 
     def _matvec_batch(
         self, X: Tensor | MutableMapping, y: Tensor, v: dict[str, Tensor]
