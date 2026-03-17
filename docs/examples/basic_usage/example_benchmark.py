@@ -201,9 +201,6 @@ def setup_problem(
 
 LINOP_STRS = [
     "Hessian",
-    # NOTE Hessian block-diagonal takes much longer because we have to loop
-    # the HVPs over blocks; therefore we exclude it from the benchmark
-    # "Block-diagonal Hessian",
     "Generalized Gauss-Newton",
     "Empirical Fisher",
     "Monte-Carlo Fisher",
@@ -250,36 +247,11 @@ def setup_linop(
     args = (model, loss_function, params, data)
     kwargs = {"check_deterministic": check_deterministic, "num_data": num_data}
 
-    if linop_str == "Block-diagonal Hessian":
-        # Figure out parameters that are in a layer (defined by an nn.Module) that
-        # forms a block, and get the parameter ids for each block
-        ids = [p.data_ptr() for p in params]
-        blocks = []
-
-        for mod in model.modules():
-            total = [p.data_ptr() for p in mod.parameters() if p.data_ptr() in ids]
-            children = [
-                p.data_ptr()
-                for child in mod.children()
-                for p in child.parameters()
-                if p.data_ptr() in total
-            ]
-            if block := [ptr for ptr in total if ptr not in children]:
-                blocks.append(block)
-
-        # re-order parameters so that parameters of blocks are consecutive
-        blocks_flat = sum(blocks, [])
-        new_order = [ids.index(ptr) for ptr in blocks_flat]
-        params = [params[i] for i in new_order]
-
-        kwargs["block_sizes"] = [len(block) for block in blocks]
-
     if linop_str == "Monte-Carlo Fisher":
         kwargs["mc_samples"] = 1
 
     linop_cls = {
         "Hessian": HessianLinearOperator,
-        "Block-diagonal Hessian": HessianLinearOperator,
         "Generalized Gauss-Newton": GGNLinearOperator,
         "Empirical Fisher": EFLinearOperator,
         "Monte-Carlo Fisher": GGNLinearOperator,
