@@ -13,13 +13,12 @@ from curvlinops._checks import (
 )
 from curvlinops._empirical_risk import _EmpiricalRiskMixin
 from curvlinops.ggn_utils import make_grad_output_fn
-from curvlinops.utils import _seed_generator, make_functional_model_and_loss
+from curvlinops.utils import _seed_generator, make_functional_call
 
 
 def make_batch_ggn_diagonal_func(
     model_func: Module,
     loss_func: Module,
-    param_names: list[str],
     mc_samples: int,
     batch_size_fn: Callable[[Tensor | MutableMapping], int],
 ) -> Callable[
@@ -31,7 +30,6 @@ def make_batch_ggn_diagonal_func(
     Args:
         model_func: PyTorch module representing the neural network.
         loss_func: Loss function module.
-        param_names: Names of parameters w.r.t. which the GGN diagonal is computed.
         mc_samples: Number of Monte Carlo samples. ``0`` uses the exact GGN diagonal
             via the loss Hessian's square root. Positive values use MC approximation.
         batch_size_fn: Function that returns the batch size given an input ``X``.
@@ -42,8 +40,7 @@ def make_batch_ggn_diagonal_func(
         Function with signature ``(params_dict, X, y, generator) -> dict[str, Tensor]``
         that computes the GGN diagonal on the batch ``(X, y)``.
     """
-    # Create functional version of the model: (params_dict, x) -> prediction
-    f, _ = make_functional_model_and_loss(model_func, loss_func, param_names)
+    f = make_functional_call(model_func)
 
     # Map mc_samples to internal mode string for make_grad_output_fn
     mode = "exact" if mc_samples == 0 else "mc"
@@ -211,11 +208,7 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
             Dict mapping parameter names to diagonal elements.
         """
         batch_ggn_diagonal_func = make_batch_ggn_diagonal_func(
-            self._model_func,
-            self._loss_func,
-            list(self._params.keys()),
-            self._mc_samples,
-            self._batch_size_fn,
+            self._model_func, self._loss_func, self._mc_samples, self._batch_size_fn
         )
 
         generator = (

@@ -14,7 +14,7 @@ from curvlinops.utils import make_functional_flattened_model_and_loss
 
 
 def make_batch_ef_vector_product(
-    model_func: Module, loss_func: Module, param_names: list[str]
+    model_func: Module, loss_func: Module
 ) -> Callable[
     [dict[str, Tensor], Tensor | MutableMapping, tuple, dict[str, Tensor]],
     dict[str, Tensor],
@@ -34,8 +34,6 @@ def make_batch_ef_vector_product(
     Args:
         model_func: The neural network :math:`f_{\mathbf{\theta}}`.
         loss_func: The loss function :math:`\ell`.
-        param_names: Names of parameters w.r.t. which the empirical Fisher is
-            computed.
 
     Returns:
         A function ``(params_dict, X, loss_args, v_dict) -> EFv`` that takes
@@ -43,9 +41,7 @@ def make_batch_ef_vector_product(
         ``loss_args = (y,)``, and a vector ``v`` as a dict, and returns the
         mini-batch empirical Fisher applied to ``v`` as a dict.
     """
-    f_flat, c_flat = make_functional_flattened_model_and_loss(
-        model_func, loss_func, param_names
-    )
+    f_flat, c_flat = make_functional_flattened_model_and_loss(model_func, loss_func)
     # function that computes gradients of the loss w.r.t. the flattened outputs
     c_flat_grad = grad(c_flat, argnums=0)
 
@@ -146,9 +142,7 @@ class EFLinearOperator(CurvatureLinearOperator):
             raise NotImplementedError(
                 f"Loss must be one of {self.SUPPORTED_LOSSES}. Got: {self._loss_func}."
             )
-        return make_batch_ef_vector_product(
-            self._model_func, self._loss_func, list(self._params.keys())
-        )
+        return make_batch_ef_vector_product(self._model_func, self._loss_func)
 
     def _matvec_batch(
         self, X: Tensor | MutableMapping, y: Tensor, v: dict[str, Tensor]

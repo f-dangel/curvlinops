@@ -7,20 +7,19 @@ from functools import cached_property
 
 from torch import Tensor, cat, no_grad, zeros_like
 from torch.func import jvp, vjp, vmap
-from torch.nn import Module, MSELoss, Parameter
+from torch.nn import Module, Parameter
 
 from curvlinops._torch_base import CurvatureLinearOperator
-from curvlinops.utils import make_functional_model_and_loss
+from curvlinops.utils import make_functional_call
 
 
 def make_batch_jacobian_matrix_product(
-    model_func: Module, param_names: list[str]
+    model_func: Module,
 ) -> Callable[[dict[str, Tensor], Tensor | MutableMapping, dict[str, Tensor]], Tensor]:
     """Set up function to multiply with the mini-batch Jacobian.
 
     Args:
         model_func: The neural network model.
-        param_names: Names of parameters w.r.t. which the Jacobian is computed.
 
     Returns:
         A function ``(params_dict, X, M_dict) -> JM`` that takes parameters as a
@@ -28,8 +27,7 @@ def make_batch_jacobian_matrix_product(
         trailing dimension for columns), and returns the mini-batch Jacobian
         applied to ``M`` as a Tensor.
     """
-    dummy_loss_func = MSELoss()
-    f, _ = make_functional_model_and_loss(model_func, dummy_loss_func, param_names)
+    f = make_functional_call(model_func)
 
     @no_grad()
     def jacobian_vector_product(
@@ -65,22 +63,19 @@ def make_batch_jacobian_matrix_product(
 
 
 def make_batch_transposed_jacobian_matrix_product(
-    model_func: Module, param_names: list[str]
+    model_func: Module,
 ) -> Callable[[dict[str, Tensor], Tensor, Tensor], dict[str, Tensor]]:
     r"""Set up function to multiply with the mini-batch transposed Jacobian.
 
     Args:
         model_func: The neural network model.
-        param_names: Names of parameters w.r.t. which the transposed Jacobian is
-            computed.
 
     Returns:
         A function ``(params_dict, X, v) -> JTv_dict`` that takes parameters as a
         dict, input ``X``, and a matrix ``v`` as a single tensor, and returns the
         mini-batch transposed Jacobian applied to ``v`` as a dict.
     """
-    dummy_loss_func = MSELoss()
-    f, _ = make_functional_model_and_loss(model_func, dummy_loss_func, param_names)
+    f = make_functional_call(model_func)
 
     @no_grad()
     def transposed_jacobian_vector_product(
@@ -135,9 +130,7 @@ class JacobianLinearOperator(CurvatureLinearOperator):
             Function that computes mini-batch Jacobian-matrix products, given
             parameters as a dict, input ``X``, and a matrix ``M`` as a dict.
         """
-        return make_batch_jacobian_matrix_product(
-            self._model_func, list(self._params.keys())
-        )
+        return make_batch_jacobian_matrix_product(self._model_func)
 
     def __init__(
         self,
@@ -259,9 +252,7 @@ class TransposedJacobianLinearOperator(CurvatureLinearOperator):
             Function that computes mini-batch transposed Jacobian-matrix products,
             given parameters as a dict, input ``X``, and a matrix ``M``.
         """
-        return make_batch_transposed_jacobian_matrix_product(
-            self._model_func, list(self._params.keys())
-        )
+        return make_batch_transposed_jacobian_matrix_product(self._model_func)
 
     def __init__(
         self,
