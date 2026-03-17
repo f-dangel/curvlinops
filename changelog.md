@@ -56,6 +56,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+- Pass `_model_func` callable to `make_batch_*` functions instead of
+  `Module`, removing redundant `make_functional_call` wrapping. Align
+  IO collector to `(params, x)` convention
+  ([PR](https://github.com/f-dangel/curvlinops/pull/270))
+
 - Rename internal `_model_func` to `_model_module`. Add functional
   `_model_func` with signature `(params_dict, X) -> prediction` via
   `make_functional_call`, used for predictions and shape inference
