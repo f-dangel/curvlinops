@@ -17,6 +17,7 @@ from torch import (
     rand_like,
     save,
 )
+from torch.func import functional_call
 from torch.linalg import inv
 from torch.nn import (
     BCEWithLogitsLoss,
@@ -1320,3 +1321,53 @@ def _check_make_fx_flatten_different_batch_sizes(linop_cls):
 def test_kfac_make_fx_flatten_different_batch_sizes():
     """Test make_fx KFAC with nn.Flatten and different batch sizes."""
     _check_make_fx_flatten_different_batch_sizes(KFACLinearOperator)
+
+
+def _check_callable_model_func(linop_cls):
+    """Check that (E)KFAC make_fx works with a plain Callable instead of Module.
+
+    Creates a Module-based KFAC and a Callable-based KFAC and verifies they
+    produce identical matrices.
+
+    Args:
+        linop_cls: The linear operator class to test.
+    """
+    manual_seed(0)
+    model = Sequential(Linear(4, 3), Linear(3, 2))
+    loss_func = MSELoss()
+    params = list(model.parameters())
+    data = [(rand(5, 4), regression_targets((5, 2)))]
+
+    # Module-based hooks backend (reference)
+    module_kfac = linop_cls(model, loss_func, params, data)
+
+    # Callable-based: wrap the Module into a plain function
+    params_dict = dict(model.named_parameters())
+
+    def model_fn(params_dict, X):
+        return functional_call(model, params_dict, (X,))
+
+    callable_kfac = linop_cls(model_fn, loss_func, params_dict, data, backend="make_fx")
+
+    module_mat = module_kfac @ eye_like(module_kfac)
+    callable_mat = callable_kfac @ eye_like(callable_kfac)
+    assert allclose_report(module_mat, callable_mat)
+
+    # Callable with different parameter values produces a different matrix
+    different_params = {
+        n: rand_like(p, requires_grad=True) for n, p in params_dict.items()
+    }
+    different_kfac = linop_cls(
+        model_fn, loss_func, different_params, data, backend="make_fx"
+    )
+    different_mat = different_kfac @ eye_like(different_kfac)
+    assert not allclose_report(module_mat, different_mat)
+
+    # Module + different params as list raises (not the model's actual parameters)
+    with raises(NotImplementedError, match="un-supported layers"):
+        linop_cls(model, loss_func, list(different_params.values()), data)
+
+
+def test_kfac_callable_model_func():
+    """Test KFAC make_fx with a plain Callable model_func."""
+    _check_callable_model_func(KFACLinearOperator)

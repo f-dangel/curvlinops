@@ -94,9 +94,10 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
 
     def __init__(
         self,
-        model_func: Module,
+        model_func: Module
+        | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
         loss_func: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
-        params: list[Parameter],
+        params: list[Parameter] | dict[str, Tensor],
         data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
@@ -121,10 +122,13 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
                   Use ``backend="make_fx"`` for weight-tied architectures.
 
         Args:
-            model_func: The neural network. Must consist of modules.
+            model_func: Either an ``nn.Module`` or a callable with signature
+                ``(params_dict, X) -> prediction``. Callables require
+                ``backend="make_fx"`` and ``params`` as ``dict[str, Tensor]``.
             loss_func: The loss function.
             params: The parameters defining the Fisher/GGN that will be approximated
-                through KFAC.
+                through KFAC. Either a ``list[Parameter]`` (for ``Module``) or a
+                ``dict[str, Tensor]`` (for callable ``model_func``).
             data: A data loader containing the data of the Fisher/GGN.
             progressbar: Whether to show a progress bar when computing the Kronecker
                 factors. Defaults to ``False``.

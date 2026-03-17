@@ -28,6 +28,7 @@ from test.test_kfac import (
     BACKENDS_IDS,
     MC_SAMPLES,
     MC_TOLS,
+    _check_callable_model_func,
     _check_does_not_affect_grad,
     _check_make_fx_flatten_different_batch_sizes,
     _check_torch_save_load,
@@ -735,3 +736,8 @@ def test_EKFAC_inverse_exactly_damped_matmat(
 def test_ekfac_make_fx_flatten_different_batch_sizes():
     """Test make_fx EKFAC with nn.Flatten and different batch sizes."""
     _check_make_fx_flatten_different_batch_sizes(EKFACLinearOperator)
+
+
+def test_ekfac_callable_model_func():
+    """Test EKFAC make_fx with a plain Callable model_func."""
+    _check_callable_model_func(EKFACLinearOperator)

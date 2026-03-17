@@ -112,7 +112,11 @@ class MakeFxKFACComputer(KFACComputer):
     these collected values. The IO-collecting forward pass is traced with
     ``make_fx`` (inside ``with_kfac_io``) and cached by batch size; the backward
     pass (MC sampling + gradient covariances) runs eagerly.
+
+    Supports both ``nn.Module`` and plain callable ``model_func``.
     """
+
+    SUPPORTS_FUNCTIONAL: bool = True
 
     def _compute_kronecker_factors(  # noqa: C901
         self,
