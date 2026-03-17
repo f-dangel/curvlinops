@@ -100,9 +100,7 @@ def make_batch_ggn_vector_product(
 
 
 def make_batch_ggn_mc_vector_product(
-    model_func: Module,
-    loss_func: Module,
-    mc_samples: int,
+    model_func: Module, loss_func: Module, mc_samples: int
 ) -> Callable[
     [dict[str, Tensor], Tensor | MutableMapping, tuple, dict[str, Tensor]],
     dict[str, Tensor],
@@ -347,9 +345,7 @@ class GGNLinearOperator(CurvatureLinearOperator):
         """
         if self._mc_samples > 0:
             return make_batch_ggn_mc_vector_product(
-                self._model_func,
-                self._loss_func,
-                self._mc_samples,
+                self._model_func, self._loss_func, self._mc_samples
             )
         return make_batch_ggn_vector_product(self._model_func, self._loss_func)
 

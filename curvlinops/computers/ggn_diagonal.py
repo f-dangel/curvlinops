@@ -209,10 +209,7 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
             Dict mapping parameter names to diagonal elements.
         """
         batch_ggn_diagonal_func = make_batch_ggn_diagonal_func(
-            self._model_func,
-            self._loss_func,
-            self._mc_samples,
-            self._batch_size_fn,
+            self._model_func, self._loss_func, self._mc_samples, self._batch_size_fn
         )
 
         generator = (
