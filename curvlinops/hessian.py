@@ -138,7 +138,7 @@ class HessianLinearOperator(CurvatureLinearOperator):
             Function that computes mini-batch Hessian-vector products with signature
             ``(params_dict, X, loss_args, v_dict) -> Hv_dict``.
         """
-        return make_batch_hessian_vector_product(self._model_func, self._loss_func)
+        return make_batch_hessian_vector_product(self._model_module, self._loss_func)
 
     def _matvec_batch(
         self, X: Tensor | MutableMapping, y: Tensor, v: dict[str, Tensor]

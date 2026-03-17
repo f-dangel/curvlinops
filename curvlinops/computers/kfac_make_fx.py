@@ -13,7 +13,6 @@ from typing import Any
 
 from einops import einsum
 from torch import Tensor, autograd, cat
-from torch.func import functional_call
 
 from curvlinops._checks import _register_userdict_as_pytree
 from curvlinops.computers.io_collector import with_kfac_io
@@ -131,7 +130,7 @@ class MakeFxKFACComputer(KFACComputer):
         """
 
         def f(x, params: dict[str, Tensor]) -> Tensor:
-            return functional_call(self._model_func, params, (x,))
+            return self._model_func(params, x)
 
         # N_data normalization is applied eagerly here, outside the traced forward
         # pass, rather than inside the per-batch computation (as the hooks backend

@@ -130,7 +130,7 @@ class JacobianLinearOperator(CurvatureLinearOperator):
             Function that computes mini-batch Jacobian-matrix products, given
             parameters as a dict, input ``X``, and a matrix ``M`` as a dict.
         """
-        return make_batch_jacobian_matrix_product(self._model_func)
+        return make_batch_jacobian_matrix_product(self._model_module)
 
     def __init__(
         self,
@@ -196,7 +196,7 @@ class JacobianLinearOperator(CurvatureLinearOperator):
         if isinstance(x, Tensor):
             x = x.to(self.device)
 
-        return [(self._N_data,) + self._model_func(x).shape[1:]]
+        return [(self._N_data,) + self._model_func(self._params, x).shape[1:]]
 
     def _matmat(self, M: list[Tensor]) -> list[Tensor]:
         """Apply the Jacobian to a matrix in tensor list format.
@@ -223,7 +223,7 @@ class JacobianLinearOperator(CurvatureLinearOperator):
             Linear operator representing the transposed Jacobian.
         """
         return TransposedJacobianLinearOperator(
-            self._model_func,
+            self._model_module,
             list(self._params.values()),
             self._data,
             progressbar=self._progressbar,
@@ -252,7 +252,7 @@ class TransposedJacobianLinearOperator(CurvatureLinearOperator):
             Function that computes mini-batch transposed Jacobian-matrix products,
             given parameters as a dict, input ``X``, and a matrix ``M``.
         """
-        return make_batch_transposed_jacobian_matrix_product(self._model_func)
+        return make_batch_transposed_jacobian_matrix_product(self._model_module)
 
     def __init__(
         self,
@@ -318,7 +318,7 @@ class TransposedJacobianLinearOperator(CurvatureLinearOperator):
         if isinstance(x, Tensor):
             x = x.to(self.device)
 
-        return [(self._N_data,) + self._model_func(x).shape[1:]]
+        return [(self._N_data,) + self._model_func(self._params, x).shape[1:]]
 
     def _matmat(self, M: list[Tensor]) -> list[Tensor]:
         """Apply the transpose Jacobian to a matrix in tensor list format.
@@ -362,7 +362,7 @@ class TransposedJacobianLinearOperator(CurvatureLinearOperator):
             Linear operator representing the Jacobian.
         """
         return JacobianLinearOperator(
-            self._model_func,
+            self._model_module,
             list(self._params.values()),
             self._data,
             progressbar=self._progressbar,

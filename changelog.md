@@ -56,6 +56,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+- Rename internal `_model_func` to `_model_module`. Add functional
+  `_model_func` with signature `(params_dict, X) -> prediction` via
+  `make_functional_call`, used for predictions and shape inference
+  ([PR](https://github.com/f-dangel/curvlinops/pull/269))
+
 - Simplify `make_functional_call`: drop redundant frozen parameter capture
   (`functional_call` already falls back to module state). Split
   `make_functional_model_and_loss` into `make_functional_call` and

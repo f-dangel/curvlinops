@@ -344,9 +344,9 @@ class GGNLinearOperator(CurvatureLinearOperator):
         """
         if self._mc_samples > 0:
             return make_batch_ggn_mc_vector_product(
-                self._model_func, self._loss_func, self._mc_samples
+                self._model_module, self._loss_func, self._mc_samples
             )
-        return make_batch_ggn_vector_product(self._model_func, self._loss_func)
+        return make_batch_ggn_vector_product(self._model_module, self._loss_func)
 
     def _matvec_batch(
         self, X: Tensor | MutableMapping, y: Tensor, v: dict[str, Tensor]

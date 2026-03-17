@@ -199,7 +199,7 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
         """
         super()._check_deterministic()
         X, _ = next(self._loop_over_data())
-        _check_supports_batched_and_unbatched_inputs(X, self._model_func)
+        _check_supports_batched_and_unbatched_inputs(X, self._model_module)
 
     def compute(self) -> dict[str, Tensor]:
         """Compute the GGN diagonal on the entire data set.
@@ -208,7 +208,7 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
             Dict mapping parameter names to diagonal elements.
         """
         batch_ggn_diagonal_func = make_batch_ggn_diagonal_func(
-            self._model_func, self._loss_func, self._mc_samples, self._batch_size_fn
+            self._model_module, self._loss_func, self._mc_samples, self._batch_size_fn
         )
 
         generator = (

@@ -375,7 +375,7 @@ class EKFACComputer(KFACComputer):
 
         # loop over data set, computing the corrected eigenvalues
         for X, y in self._loop_over_data(desc="Eigenvalue correction"):
-            output = self._model_func(X)
+            output = self._model_module(X)
             output, y = self._rearrange_for_larger_than_2d_output(output, y)
             self._compute_loss_and_backward(output, y)
 
