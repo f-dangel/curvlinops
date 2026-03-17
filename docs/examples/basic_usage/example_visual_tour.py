@@ -28,6 +28,7 @@ from tueplots import bundles
 
 from curvlinops import (
     EFLinearOperator,
+    EKFACLinearOperator,
     GGNLinearOperator,
     HessianLinearOperator,
     KFACLinearOperator,
@@ -94,12 +95,8 @@ print(f"Layer parameters: {num_params_layer}")
 Hessian_linop = HessianLinearOperator(model, loss_function, params, dataloader)
 GGN_linop = GGNLinearOperator(model, loss_function, params, dataloader)
 EF_linop = EFLinearOperator(model, loss_function, params, dataloader)
-Hessian_blocked_linop = HessianLinearOperator(
-    model,
-    loss_function,
-    params,
-    dataloader,
-    block_sizes=[s for s in num_tensors_layer if s != 0],
+EKFAC_linop = EKFACLinearOperator(
+    model, loss_function, params, dataloader, separate_weight_and_bias=False
 )
 F_linop = GGNLinearOperator(model, loss_function, params, dataloader, mc_samples=1)
 KFAC_linop = KFACLinearOperator(
@@ -115,7 +112,7 @@ identity = eye(num_params, device=DEVICE)
 Hessian_mat = Hessian_linop @ identity
 GGN_mat = GGN_linop @ identity
 EF_mat = EF_linop @ identity
-Hessian_blocked_mat = Hessian_blocked_linop @ identity
+EKFAC_mat = EKFAC_linop @ identity
 F_mat = F_linop @ identity
 KFAC_mat = KFAC_linop @ identity
 
@@ -125,15 +122,12 @@ KFAC_mat = KFAC_linop @ identity
 #
 # We will show the matrix entries on a shared domain for better comparability.
 
-matrices = [
-    m.cpu()
-    for m in (Hessian_mat, GGN_mat, EF_mat, Hessian_blocked_mat, F_mat, KFAC_mat)
-]
+matrices = [m.cpu() for m in (Hessian_mat, GGN_mat, EF_mat, EKFAC_mat, F_mat, KFAC_mat)]
 titles = [
     "Hessian",
     "Generalized Gauss-Newton",
     "Empirical Fisher",
-    "Block-diagonal Hessian",
+    "EKFAC",
     "Monte-Carlo Fisher",
     "KFAC",
 ]

@@ -39,6 +39,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed/Removed
 
+- **Backward-incompatible:** Remove block-diagonal Hessian support (`block_sizes`
+  parameter from `HessianLinearOperator` and `CurvatureLinearOperator`)
+  ([PR](https://github.com/f-dangel/curvlinops/pull/267))
+
 - **Backward-incompatible:** Remove `(E)KFACLinearOperator`'s `state_dict` and `from_state_dict` methods, use `torch.save(K, path)` and `torch.load(path)` instead
   ([PR](https://github.com/f-dangel/curvlinops/pull/249))
 

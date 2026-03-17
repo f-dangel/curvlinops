@@ -5,11 +5,10 @@ from collections.abc import Callable, Iterable, MutableMapping
 from numpy import random
 from pytest import fixture
 from torch import Tensor, manual_seed
-from torch.nn import Module, MSELoss, Parameter
+from torch.nn import Module, MSELoss
 
 import test.utils
 from test.cases import (
-    BLOCK_SIZES_FNS,
     CASES,
     CNN_CASES,
     INV_CASES,
@@ -136,20 +135,6 @@ def non_deterministic_case(
     """
     case = request.param
     yield initialize_case(case)
-
-
-@fixture(params=BLOCK_SIZES_FNS.values(), ids=BLOCK_SIZES_FNS.keys())
-def block_sizes_fn(request) -> Callable[[list[Parameter]], list[int] | None]:
-    """Generate the ``block_sizes`` argument for a linear operator.
-
-    Args:
-        request: Pytest request object.
-
-    Returns:
-        A function that generates the block sizes for a linear operator from the
-        parameters.
-    """
-    return request.param
 
 
 @fixture(params=KFAC_EXACT_CASES)

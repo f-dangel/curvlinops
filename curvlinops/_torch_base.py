@@ -824,14 +824,10 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
     implement ``_get_in_shape`` and ``_get_out_shape``.
 
     Attributes:
-        SUPPORTS_BLOCKS: Whether the linear operator supports multiplication with
-            a block-diagonal approximation rather than the full matrix.
-            Default: ``False``.
         FIXED_DATA_ORDER: Whether the data loader must return the same data
             for every iteration. Default: ``False``.
     """
 
-    SUPPORTS_BLOCKS: bool = False
     FIXED_DATA_ORDER: bool = False
 
     def __init__(
@@ -844,7 +840,6 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
         check_deterministic: bool = True,
         num_data: int | None = None,
         num_per_example_loss_terms: int | None = None,
-        block_sizes: list[int] | None = None,
         batch_size_fn: Callable[[MutableMapping | Tensor], int] | None = None,
     ):
         """Linear operator for curvature matrices of empirical risks.
@@ -880,34 +875,11 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
                 number of tokens in a sequence. Only used by subclasses with
                 ``NEEDS_NUM_PER_EXAMPLE_LOSS_TERMS = True``. If ``None``, it is
                 inferred from the data when needed. Default: ``None``.
-            block_sizes: This argument will be ignored if the linear operator does not
-                support blocks. List of integers indicating the number of
-                ``nn.Parameter``s forming a block. Entries must sum to ``len(params)``.
-                For instance ``[len(params)]`` considers the full matrix, while
-                ``[1, 1, ...]`` corresponds to a block diagonal approximation where
-                each parameter forms its own block.
             batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
                 needs to be specified. The intended behavior is to consume the first
                 entry of the iterates from ``data`` and return their batch size.
 
-        Raises:
-            ValueError: If ``block_sizes`` is specified but the linear operator does not
-                support blocks.
-            ValueError: If the sum of blocks does not equal the number of parameters.
-            ValueError: If any block size is not positive.
-            ValueError: If ``X`` is not a tensor and ``batch_size_fn`` is not specified.
         """
-        if block_sizes is not None:
-            if not self.SUPPORTS_BLOCKS:
-                raise ValueError(
-                    "Block sizes were specified but operator does not support blocking."
-                )
-            if sum(block_sizes) != len(params):
-                raise ValueError("Sum of blocks must equal the number of parameters.")
-            if any(s <= 0 for s in block_sizes):
-                raise ValueError("Block sizes must be positive.")
-        self._block_sizes = [len(params)] if block_sizes is None else block_sizes
-
         _EmpiricalRiskMixin.__init__(
             self,
             model_func,
