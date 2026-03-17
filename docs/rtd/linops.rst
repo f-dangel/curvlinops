@@ -97,10 +97,4 @@ Frobenius norm approximation
 
 .. autoclass:: curvlinops.hutchinson_squared_fro
 
-Experimental
-============
 
-Experimental features may be subject to changes or become deprecated.
-
-.. autoclass:: curvlinops.experimental.ActivationHessianLinearOperator
-   :members: __init__
