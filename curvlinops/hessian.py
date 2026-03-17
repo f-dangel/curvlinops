@@ -8,11 +8,12 @@ from torch.func import jacrev, jvp
 from torch.nn import Module
 
 from curvlinops._torch_base import CurvatureLinearOperator
-from curvlinops.utils import make_functional_call, make_functional_loss
+from curvlinops.utils import make_functional_loss
 
 
 def make_batch_hessian_vector_product(
-    model_func: Module, loss_func: Module
+    f: Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
+    loss_func: Module,
 ) -> Callable[
     [dict[str, Tensor], Tensor | MutableMapping, tuple, dict[str, Tensor]],
     dict[str, Tensor],
@@ -20,7 +21,7 @@ def make_batch_hessian_vector_product(
     r"""Set up function that multiplies the mini-batch Hessian onto a vector in dict format.
 
     Args:
-        model_func: The neural network :math:`f_{\mathbf{\theta}}`.
+        f: Functional model with signature ``(params_dict, X) -> prediction``.
         loss_func: The loss function :math:`\ell`.
 
     Returns:
@@ -29,7 +30,6 @@ def make_batch_hessian_vector_product(
         ``loss_args = (y,)``, and a vector ``v`` as a dict, and returns the
         mini-batch Hessian applied to ``v`` as a dict.
     """
-    f = make_functional_call(model_func)
     c = make_functional_loss(loss_func)
 
     @no_grad()
@@ -138,7 +138,7 @@ class HessianLinearOperator(CurvatureLinearOperator):
             Function that computes mini-batch Hessian-vector products with signature
             ``(params_dict, X, loss_args, v_dict) -> Hv_dict``.
         """
-        return make_batch_hessian_vector_product(self._model_module, self._loss_func)
+        return make_batch_hessian_vector_product(self._model_func, self._loss_func)
 
     def _matvec_batch(
         self, X: Tensor | MutableMapping, y: Tensor, v: dict[str, Tensor]

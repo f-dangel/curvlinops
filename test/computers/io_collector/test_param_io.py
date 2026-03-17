@@ -50,18 +50,18 @@ def _verify_io(
     """Verify that with_param_io produces correct outputs and IO information.
 
     Args:
-        f: Function to test, with signature f(x, params) -> output.
+        f: Function to test, with signature f(params, x) -> output.
         x: Input tensor to the function.
         params: Dictionary mapping parameter names to parameter tensors.
         io_true: Expected tuple of layer information tuples.
     """
-    y_true = f(x, params)
+    y_true = f(params, x)
 
     dummy_x = zeros_like(x)
     dummy_params = {n: zeros_like(p) for n, p in params.items()}
     f_with_io = with_param_io(f, dummy_x, dummy_params)
 
-    out = f_with_io(x, params)
+    out = f_with_io(params, x)
     y, io = out[0], out[1:]
 
     assert allclose_report(y, y_true)
@@ -74,47 +74,47 @@ def test_fully_connected():
     N, D_in, D_out = 2, 3, 4
 
     # 1) Both weight and bias as free parameters
-    def f(x: Tensor, params: dict) -> Tensor:
+    def f(params: dict, x: Tensor) -> Tensor:
         return linear(x, params["weight"], bias=params["bias"])
 
     x, params = rand(N, D_in), {"weight": rand(D_out, D_in), "bias": rand(D_out)}
-    io_true = ((LINEAR_STR, f(x, params), x, "weight", "bias", {}),)
+    io_true = ((LINEAR_STR, f(params, x), x, "weight", "bias", {}),)
     _verify_io(f, x, params, io_true)
 
     # 2) Only weight as free parameter (frozen bias)
-    def f(x: Tensor, params: dict) -> Tensor:
+    def f(params: dict, x: Tensor) -> Tensor:
         bias = arange(D_out, dtype=x.dtype)
         return linear(x, params["weight"], bias=bias)
 
     x, params = rand(N, D_in), {"weight": rand(D_out, D_in)}
-    io_true = ((LINEAR_STR, f(x, params), x, "weight", NOT_A_PARAM, {}),)
+    io_true = ((LINEAR_STR, f(params, x), x, "weight", NOT_A_PARAM, {}),)
     _verify_io(f, x, params, io_true)
 
     # 3) Only bias as free parameter (frozen weight)
-    def f(x: Tensor, params: dict) -> Tensor:
+    def f(params: dict, x: Tensor) -> Tensor:
         weight = arange(D_out * D_in, dtype=x.dtype).reshape(D_out, D_in)
         return linear(x, weight, params["bias"])
 
     x, params = rand(N, D_in), {"bias": rand(D_out)}
-    io_true = ((LINEAR_STR, f(x, params), x, NOT_A_PARAM, "bias", {}),)
+    io_true = ((LINEAR_STR, f(params, x), x, NOT_A_PARAM, "bias", {}),)
     _verify_io(f, x, params, io_true)
 
     # 4) Without bias
-    def f(x: Tensor, params: dict) -> Tensor:
+    def f(params: dict, x: Tensor) -> Tensor:
         return linear(x, params["weight"])
 
     x, params = rand(N, D_in), {"weight": rand(D_out, D_in)}
-    io_true = ((LINEAR_STR, f(x, params), x, "weight", None, {}),)
+    io_true = ((LINEAR_STR, f(params, x), x, "weight", None, {}),)
     _verify_io(f, x, params, io_true)
 
     # 5) Use torch.nn
     fc = Linear(D_in, D_out, bias=True)
 
-    def f(x: Tensor, params: dict) -> Tensor:
+    def f(params: dict, x: Tensor) -> Tensor:
         return functional_call(fc, params, x)
 
     x, params = rand(N, D_in), {"weight": rand(D_out, D_in), "bias": rand(D_out)}
-    io_true = ((LINEAR_STR, f(x, params), x, "weight", "bias", {}),)
+    io_true = ((LINEAR_STR, f(params, x), x, "weight", "bias", {}),)
     _verify_io(f, x, params, io_true)
 
 
@@ -134,17 +134,17 @@ def test_convolution():
     N, C_out, C_in, K1, K2, I1, I2 = 2, 3, 4, 5, 6, 10, 11
 
     # 1) Standard convolution with weight and bias
-    def f(x: Tensor, params: dict) -> Tensor:
+    def f(params: dict, x: Tensor) -> Tensor:
         return conv2d(x, params["weight"], bias=params["bias"])
 
     x = rand(N, C_in, I1, I2)
     params = {"weight": rand(C_out, C_in, K1, K2), "bias": rand(C_out)}
     hparams = {**CONV2D_DEFAULT_PARAMS, "kernel_size": [K1, K2]}
-    io_true = ((CONV_STR, f(x, params), x, "weight", "bias", hparams),)
+    io_true = ((CONV_STR, f(params, x), x, "weight", "bias", hparams),)
     _verify_io(f, x, params, io_true)
 
     # 2) Non-standard convolution with weight and bias
-    def f(x: Tensor, params: dict) -> Tensor:
+    def f(params: dict, x: Tensor) -> Tensor:
         stride = 2
         # NOTE Supply padding as keyword arg and bias and strides
         # as positional to attempt to confuse fx
@@ -158,23 +158,23 @@ def test_convolution():
         "stride": [2, 2],
         "padding": [1, 1],
     }
-    io_true = ((CONV_STR, f(x, params), x, "weight", "bias", hyperparams_true),)
+    io_true = ((CONV_STR, f(params, x), x, "weight", "bias", hyperparams_true),)
     _verify_io(f, x, params, io_true)
 
     # 3) Standard convolution with weight only
-    def f(x: Tensor, params: dict) -> Tensor:
+    def f(params: dict, x: Tensor) -> Tensor:
         return conv2d(x, params["weight"])
 
     x = rand(N, C_in, I1, I2)
     params = {"weight": rand(C_out, C_in, K1, K2)}
     hparams = {**CONV2D_DEFAULT_PARAMS, "kernel_size": [K1, K2]}
-    io_true = ((CONV_STR, f(x, params), x, "weight", None, hparams),)
+    io_true = ((CONV_STR, f(params, x), x, "weight", None, hparams),)
     _verify_io(f, x, params, io_true)
 
     # 4) Use torch.nn nn
     conv = Conv2d(C_in, C_out, (K1, K2), stride=(2, 1), bias=False)
 
-    def f(x: Tensor, params: dict) -> Tensor:
+    def f(params: dict, x: Tensor) -> Tensor:
         return functional_call(conv, params, x)
 
     hyperparams_true = {
@@ -183,7 +183,7 @@ def test_convolution():
         "stride": [2, 1],
     }
     x, params = (rand(N, C_in, I1, I2), {"weight": rand(C_out, C_in, K1, K2)})
-    io_true = ((CONV_STR, f(x, params), x, "weight", None, hyperparams_true),)
+    io_true = ((CONV_STR, f(params, x), x, "weight", None, hyperparams_true),)
     _verify_io(f, x, params, io_true)
 
 
@@ -196,7 +196,7 @@ def test_reshape_altering_last_dim_not_matched():
     """
     manual_seed(0)
 
-    def f(x: Tensor, params: dict) -> Tensor:
+    def f(params: dict, x: Tensor) -> Tensor:
         out = linear(x, params["weight"])
         out = out.reshape(x.shape[0], 2, 2)
         return out + params["bias"]
@@ -219,7 +219,7 @@ def test_model_view_after_linear_not_absorbed():
     manual_seed(0)
     N, D_in, D_out = 2, 3, 4
 
-    def f(x: Tensor, params: dict) -> Tensor:
+    def f(params: dict, x: Tensor) -> Tensor:
         out = linear(x, params["weight"], params["bias"])
         return out.view(x.shape[0], 1, D_out)
 
@@ -240,7 +240,7 @@ def test_unsupported_patterns():
     # and can therefore not be detected.
     # Unsupported: Using .T (calls aten.permute.default)
     # Unsupported: Using + (calls aten.add.Tensor)
-    def f(x: Tensor, params: dict) -> Tensor:
+    def f(params: dict, x: Tensor) -> Tensor:
         return x @ params["weight"].T + params["bias"]
 
     x_dummy = zeros(N, D_in)
@@ -255,7 +255,7 @@ def test_multiple_parameter_usages():
     manual_seed(0)
     N, D = 2, 3
 
-    def f(x: Tensor, params: dict) -> Tensor:
+    def f(params: dict, x: Tensor) -> Tensor:
         xW = linear(x, params["weight"], bias=params["bias"])
         return linear(xW, params["weight"])
 
@@ -263,7 +263,7 @@ def test_multiple_parameter_usages():
     xW = linear(x, params["weight"], bias=params["bias"])
     io_true = (
         (LINEAR_STR, xW, x, "weight", "bias", {}),
-        (LINEAR_STR, f(x, params), xW, "weight", None, {}),
+        (LINEAR_STR, f(params, x), xW, "weight", None, {}),
     )
     _verify_io(f, x, params, io_true)
 
@@ -273,7 +273,7 @@ def test_undetected_parameter_paths():
     manual_seed(0)
     N, D_in, D_out = 2, 3, 4
 
-    def f(x: Tensor, params: dict) -> Tensor:
+    def f(params: dict, x: Tensor) -> Tensor:
         W = params["weight"]
         return linear(x, W, bias=W.sum(1))
 
@@ -289,7 +289,7 @@ def test_supports_multiple_batch_sizes():
     manual_seed(0)
     N1, N2, D_in, D_out = 2, 3, 4, 5
 
-    def f(x: Tensor, params: dict) -> Tensor:
+    def f(params: dict, x: Tensor) -> Tensor:
         return linear(x, params["weight"], bias=params["bias"])
 
     x1, x2 = rand(N1, D_in), rand(N2, D_in)
@@ -300,8 +300,8 @@ def test_supports_multiple_batch_sizes():
 
     # Check IO for batch sizes N1 and N2
     for x in [x1, x2]:
-        io_true = ((LINEAR_STR, f(x, params), x, "weight", "bias", {}),)
-        io = f_with_io(x, params)[1:]
+        io_true = ((LINEAR_STR, f(params, x), x, "weight", "bias", {}),)
+        io = f_with_io(params, x)[1:]
         compare_io(io, io_true)
 
 
@@ -328,7 +328,7 @@ def test_fully_connected_higher_dim_input(x_shape: tuple[int, ...], bias: bool):
 
     fc = Linear(D_in, D_out, bias=bias)
 
-    def f(x: Tensor, params: dict) -> Tensor:
+    def f(params: dict, x: Tensor) -> Tensor:
         return functional_call(fc, params, x)
 
     params = {"weight": rand(D_out, D_in)}
@@ -337,5 +337,5 @@ def test_fully_connected_higher_dim_input(x_shape: tuple[int, ...], bias: bool):
 
     x = rand(*x_shape)
     bias_name = "bias" if bias else None
-    io_true = ((LINEAR_STR, f(x, params), x, "weight", bias_name, {}),)
+    io_true = ((LINEAR_STR, f(params, x), x, "weight", bias_name, {}),)
     _verify_io(f, x, params, io_true)

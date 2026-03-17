@@ -2,6 +2,7 @@
 
 from collections import UserDict
 from collections.abc import Callable, Iterable, MutableMapping
+from functools import partial
 
 from torch import Generator, Tensor, no_grad, zeros_like
 from torch.func import vjp, vmap
@@ -13,11 +14,11 @@ from curvlinops._checks import (
 )
 from curvlinops._empirical_risk import _EmpiricalRiskMixin
 from curvlinops.ggn_utils import make_grad_output_fn
-from curvlinops.utils import _seed_generator, make_functional_call
+from curvlinops.utils import _seed_generator
 
 
 def make_batch_ggn_diagonal_func(
-    model_func: Module,
+    f: Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
     loss_func: Module,
     mc_samples: int,
     batch_size_fn: Callable[[Tensor | MutableMapping], int],
@@ -28,7 +29,7 @@ def make_batch_ggn_diagonal_func(
     """Create a function that computes the GGN diagonal for a batch.
 
     Args:
-        model_func: PyTorch module representing the neural network.
+        f: Functional model with signature ``(params_dict, X) -> prediction``.
         loss_func: Loss function module.
         mc_samples: Number of Monte Carlo samples. ``0`` uses the exact GGN diagonal
             via the loss Hessian's square root. Positive values use MC approximation.
@@ -40,8 +41,6 @@ def make_batch_ggn_diagonal_func(
         Function with signature ``(params_dict, X, y, generator) -> dict[str, Tensor]``
         that computes the GGN diagonal on the batch ``(X, y)``.
     """
-    f = make_functional_call(model_func)
-
     # Map mc_samples to internal mode string for make_grad_output_fn
     mode = "exact" if mc_samples == 0 else "mc"
 
@@ -199,7 +198,9 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
         """
         super()._check_deterministic()
         X, _ = next(self._loop_over_data())
-        _check_supports_batched_and_unbatched_inputs(X, self._model_module)
+        _check_supports_batched_and_unbatched_inputs(
+            X, partial(self._model_func, self._params)
+        )
 
     def compute(self) -> dict[str, Tensor]:
         """Compute the GGN diagonal on the entire data set.
@@ -208,7 +209,7 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
             Dict mapping parameter names to diagonal elements.
         """
         batch_ggn_diagonal_func = make_batch_ggn_diagonal_func(
-            self._model_module, self._loss_func, self._mc_samples, self._batch_size_fn
+            self._model_func, self._loss_func, self._mc_samples, self._batch_size_fn
         )
 
         generator = (

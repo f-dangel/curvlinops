@@ -35,10 +35,10 @@ from curvlinops.kfac_utils import FisherType
 # Type aliases for complex return types
 LayerInfoTuple: TypeAlias = tuple[str, Node, Node, str, str | None, dict[str, Any]]
 ParamIOFunction: TypeAlias = Callable[
-    [Tensor, dict[str, Tensor]], tuple[Tensor | tuple[Any, ...], ...]
+    [dict[str, Tensor], Tensor], tuple[Tensor | tuple[Any, ...], ...]
 ]
 KFACIOFunction: TypeAlias = Callable[
-    [Tensor, dict[str, Tensor]],
+    [dict[str, Tensor], Tensor],
     tuple[Tensor, dict[str, Tensor], dict[str, Tensor]],
 ]
 
@@ -69,20 +69,20 @@ def _modify_graph_to_include_layer_info(
 
 
 def with_param_io(
-    f: Callable[[Tensor, dict[str, Tensor]], Tensor],
+    f: Callable[[dict[str, Tensor], Tensor], Tensor],
     x: Tensor,
     named_params: dict[str, Tensor],
 ) -> ParamIOFunction:
     """Get a traced module that returns layer inputs and outputs alongside the result.
 
-    This function traces f(x, params) using torch.fx, functionalizes any
+    This function traces f(params, x) using torch.fx, functionalizes any
     inplace operations, and analyzes the graph to detect affine layer usage
     patterns (linear layers and convolutions). The returned GraphModule computes
     the original function output along with the inputs and outputs of each detected layer.
 
     Args:
-        f: A function with signature f(x, params) where x is the input tensor
-            and params is a dictionary mapping parameter names to tensors.
+        f: A function with signature f(params, x) where params is a dictionary
+            mapping parameter names to tensors and x is the input tensor.
         x: Example input tensor for tracing. Must be representative of the actual
             inputs that will be used during execution.
         named_params: Dictionary mapping parameter names to parameter tensors.
@@ -104,14 +104,14 @@ def with_param_io(
             if not all parameter usage paths are detected by the pattern matchers.
     """
     # Use functionalize to remove inplace operations, then trace the function.
-    gm = make_fx(functionalize(f))(x, named_params)
+    gm = make_fx(functionalize(f))(named_params, x)
 
     # Find placeholder nodes (inputs to the graph)
-    # The first placeholder is the input x, the rest are parameters
+    # The first len(named_params) placeholders are parameters, the rest are x
     placeholders: list[Node] = [
         node for node in gm.graph.nodes if node.op == "placeholder"
     ]
-    param_nodes: list[Node] = placeholders[1:]
+    param_nodes: list[Node] = placeholders[: len(named_params)]
 
     # Establish mapping between param names and node names
     if len(named_params) != len(param_nodes):
@@ -276,7 +276,7 @@ def _process_layer_info_tuple(
 
 
 def with_kfac_io(
-    f: Callable[[Tensor, dict[str, Tensor]], Tensor],
+    f: Callable[[dict[str, Tensor], Tensor], Tensor],
     x: Tensor,
     named_params: dict[str, Tensor],
     fisher_type: FisherType,
@@ -293,7 +293,7 @@ def with_kfac_io(
 
     Args:
         f: Function to trace and augment with KFAC IO collection. Should have signature
-            f(x, params) -> output where x is the input tensor and params is a parameter dict.
+            f(params, x) -> output where params is a parameter dict and x is the input tensor.
         x: Example input tensor for tracing. Must be representative of actual inputs.
         named_params: Dictionary mapping parameter names to parameter tensors. Keys should
             match parameter names used in function f.
@@ -346,7 +346,7 @@ def with_kfac_io(
         layer_hyperparams[layer_name] = hyperparams
 
     def f_and_kfac_io(
-        x: Tensor, params: dict[str, Tensor]
+        params: dict[str, Tensor], x: Tensor
     ) -> tuple[Tensor, dict[str, Tensor], dict[str, Tensor]]:
         """Evaluate the function and return layer inputs/outputs for KFAC.
 
@@ -354,7 +354,7 @@ def with_kfac_io(
             Tuple of ``(output, layer_inputs, layer_outputs)``.
         """
         # Evaluate the function and its param IOs
-        out_with_io = f_with_param_io(x, params)
+        out_with_io = f_with_param_io(params, x)
         out, layer_infos = out_with_io[0], out_with_io[1:]
 
         # Use pre-computed layer configuration to collect inputs and outputs
@@ -373,4 +373,4 @@ def with_kfac_io(
 
         return (out, layer_inputs, layer_outputs)
 
-    return make_fx(f_and_kfac_io)(x, named_params), layer_names, layer_hyperparams
+    return make_fx(f_and_kfac_io)(named_params, x), layer_names, layer_hyperparams

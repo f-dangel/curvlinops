@@ -56,10 +56,6 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
         Returns:
             Dictionary mapping parameter group keys to corrected eigenvalues.
         """
-
-        def f(x, params: dict[str, Tensor]) -> Tensor:
-            return self._model_func(params, x)
-
         # Cache for IO functions: make_fx bakes in tensor shapes (e.g. from
         # nn.Flatten), so different batch sizes need separate traces
         traced_io_fns: dict[int, Callable] = {}
@@ -76,7 +72,7 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
             # Maybe trace for current batch size and set up layer metadata
             if (batch_size := self._batch_size_fn(X)) not in traced_io_fns:
                 traced_io_fns[batch_size], io_param_names, layer_hparams = with_kfac_io(
-                    f, X, self._params, self._fisher_type
+                    self._model_func, X, self._params, self._fisher_type
                 )
                 if io_groups is None:
                     self._mapping, io_groups = _build_param_groups_from_io(
@@ -85,7 +81,7 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
 
             # Forward pass with IO collection
             io_fn = traced_io_fns[batch_size]
-            output, layer_inputs, layer_outputs = io_fn(X, self._params)
+            output, layer_inputs, layer_outputs = io_fn(self._params, X)
 
             # Backward pass: compute per-layer output gradients
             layer_output_grads = self._compute_layer_output_grads(
