@@ -1,7 +1,7 @@
 """Contains a linear operator implementation of the Hessian."""
 
 from collections.abc import Callable, MutableMapping
-from functools import cached_property
+from functools import cached_property, partial
 
 from torch import Tensor, no_grad
 from torch.func import jacrev, jvp
@@ -67,25 +67,28 @@ def make_batch_hessian_vector_product(
         # Split input vectors by blocks
         v_blocks = [[v[n] for n in names] for names in block_param_names]
 
-        def loss_fn(block_params: dict[str, Tensor]) -> Tensor:
-            """Compute the mini-batch loss given block parameters.
+        def loss_fn(
+            block_params: dict[str, Tensor], frozen: dict[str, Tensor]
+        ) -> Tensor:
+            """Compute the mini-batch loss with only block params free.
 
             Args:
-                block_params: Parameters for the functional model as a dict.
+                block_params: Free parameters for this block.
+                frozen: Detached non-block parameters.
 
             Returns:
                 Mini-batch loss.
             """
-            return c(f(block_params, X), (y,))
-
-        grad_fn = jacrev(loss_fn)
+            return c(f({**frozen, **block_params}, X), (y,))
 
         # Compute the HVPs per block and concatenate the results
         hvps = {}
         for names, vs in zip(block_param_names, v_blocks):
+            frozen = {n: params[n].detach() for n in params if n not in set(names)}
+            block_loss_fn = partial(loss_fn, frozen=frozen)
             block_params = {n: params[n] for n in names}
             v_block_dict = dict(zip(names, vs))
-            _, hvp_block = jvp(grad_fn, (block_params,), (v_block_dict,))
+            _, hvp_block = jvp(jacrev(block_loss_fn), (block_params,), (v_block_dict,))
             hvps.update(hvp_block)
 
         return hvps
