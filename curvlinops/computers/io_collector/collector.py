@@ -35,10 +35,10 @@ from curvlinops.kfac_utils import FisherType
 # Type aliases for complex return types
 LayerInfoTuple: TypeAlias = tuple[str, Node, Node, str, str | None, dict[str, Any]]
 ParamIOFunction: TypeAlias = Callable[
-    [Tensor, dict[str, Tensor]], tuple[Tensor | tuple[Any, ...], ...]
+    [dict[str, Tensor], Tensor], tuple[Tensor | tuple[Any, ...], ...]
 ]
 KFACIOFunction: TypeAlias = Callable[
-    [Tensor, dict[str, Tensor]],
+    [dict[str, Tensor], Tensor],
     tuple[Tensor, dict[str, Tensor], dict[str, Tensor]],
 ]
 
@@ -107,11 +107,11 @@ def with_param_io(
     gm = make_fx(functionalize(f))(named_params, x)
 
     # Find placeholder nodes (inputs to the graph)
-    # The last placeholder is the input x, the rest are parameters
+    # The first len(named_params) placeholders are parameters, the rest are x
     placeholders: list[Node] = [
         node for node in gm.graph.nodes if node.op == "placeholder"
     ]
-    param_nodes: list[Node] = placeholders[:-1]
+    param_nodes: list[Node] = placeholders[: len(named_params)]
 
     # Establish mapping between param names and node names
     if len(named_params) != len(param_nodes):

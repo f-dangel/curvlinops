@@ -62,7 +62,7 @@ def make_batch_jacobian_matrix_product(
 
 def make_batch_transposed_jacobian_matrix_product(
     f: Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
-) -> Callable[[dict[str, Tensor], Tensor, Tensor], dict[str, Tensor]]:
+) -> Callable[[dict[str, Tensor], Tensor | MutableMapping, Tensor], dict[str, Tensor]]:
     r"""Set up function to multiply with the mini-batch transposed Jacobian.
 
     Args:
