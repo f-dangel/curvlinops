@@ -259,26 +259,17 @@ def make_functional_call(module: Module) -> Callable[..., Tensor]:
     return functional_module
 
 
-def make_functional_model_and_loss(
-    model_func: Module, loss_func: Module
-) -> tuple[
-    Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
-    Callable[[Tensor, tuple], Tensor],
-]:
-    """Create functional versions of model and loss functions.
+def make_functional_loss(loss_func: Module) -> Callable[[Tensor, tuple], Tensor]:
+    """Create a functional version of a loss function.
 
     Args:
-        model_func: The neural network model.
-        loss_func: The loss function.
+        loss_func: The loss function module.
 
     Returns:
-        A tuple containing:
-        - f: Functional model with signature ``(params_dict, X) -> prediction``
-        - c: Functional loss with signature ``(prediction, loss_args) -> loss``
+        A function ``(prediction, loss_args) -> loss`` where ``loss_args`` is a
+        tuple of additional arguments, e.g. ``(y,)`` for targets.
     """
-    # Create functional versions of model and loss
-    f = make_functional_call(model_func)  # (params_dict, X) -> prediction
-    c_raw = partial(make_functional_call(loss_func), {})  # (prediction, y) -> loss
+    c_raw = partial(make_functional_call(loss_func), {})
 
     def c(prediction: Tensor, loss_args: tuple) -> Tensor:
         """Evaluate the loss function on a prediction and loss arguments.
@@ -292,7 +283,7 @@ def make_functional_model_and_loss(
         """
         return c_raw(prediction, *loss_args)
 
-    return f, c
+    return c
 
 
 def make_functional_flattened_model_and_loss(
@@ -318,7 +309,8 @@ def make_functional_flattened_model_and_loss(
           (output_flat, loss_args) -> loss
     """
     # Create functional versions of model and loss
-    f, c = make_functional_model_and_loss(model_func, loss_func)
+    f = make_functional_call(model_func)
+    c = make_functional_loss(loss_func)
 
     # Determine how to flatten
     output_flattening = (

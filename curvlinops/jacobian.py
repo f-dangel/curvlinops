@@ -7,10 +7,10 @@ from functools import cached_property
 
 from torch import Tensor, cat, no_grad, zeros_like
 from torch.func import jvp, vjp, vmap
-from torch.nn import Module, MSELoss, Parameter
+from torch.nn import Module, Parameter
 
 from curvlinops._torch_base import CurvatureLinearOperator
-from curvlinops.utils import make_functional_model_and_loss
+from curvlinops.utils import make_functional_call
 
 
 def make_batch_jacobian_matrix_product(
@@ -27,8 +27,7 @@ def make_batch_jacobian_matrix_product(
         trailing dimension for columns), and returns the mini-batch Jacobian
         applied to ``M`` as a Tensor.
     """
-    dummy_loss_func = MSELoss()
-    f, _ = make_functional_model_and_loss(model_func, dummy_loss_func)
+    f = make_functional_call(model_func)
 
     @no_grad()
     def jacobian_vector_product(
@@ -76,8 +75,7 @@ def make_batch_transposed_jacobian_matrix_product(
         dict, input ``X``, and a matrix ``v`` as a single tensor, and returns the
         mini-batch transposed Jacobian applied to ``v`` as a dict.
     """
-    dummy_loss_func = MSELoss()
-    f, _ = make_functional_model_and_loss(model_func, dummy_loss_func)
+    f = make_functional_call(model_func)
 
     @no_grad()
     def transposed_jacobian_vector_product(

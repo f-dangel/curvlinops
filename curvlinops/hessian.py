@@ -8,7 +8,7 @@ from torch.func import jacrev, jvp
 from torch.nn import Module
 
 from curvlinops._torch_base import CurvatureLinearOperator
-from curvlinops.utils import make_functional_model_and_loss, split_list
+from curvlinops.utils import make_functional_call, make_functional_loss, split_list
 
 
 def make_batch_hessian_vector_product(
@@ -40,7 +40,8 @@ def make_batch_hessian_vector_product(
 
     # Split param names into blocks
     block_param_names = split_list(param_names, block_sizes)
-    f, c = make_functional_model_and_loss(model_func, loss_func)
+    f = make_functional_call(model_func)
+    c = make_functional_loss(loss_func)
 
     @no_grad()
     def hessian_vector_product(

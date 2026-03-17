@@ -13,7 +13,7 @@ from curvlinops._checks import (
 )
 from curvlinops._empirical_risk import _EmpiricalRiskMixin
 from curvlinops.ggn_utils import make_grad_output_fn
-from curvlinops.utils import _seed_generator, make_functional_model_and_loss
+from curvlinops.utils import _seed_generator, make_functional_call
 
 
 def make_batch_ggn_diagonal_func(
@@ -40,8 +40,7 @@ def make_batch_ggn_diagonal_func(
         Function with signature ``(params_dict, X, y, generator) -> dict[str, Tensor]``
         that computes the GGN diagonal on the batch ``(X, y)``.
     """
-    # Create functional version of the model: (params_dict, x) -> prediction
-    f, _ = make_functional_model_and_loss(model_func, loss_func)
+    f = make_functional_call(model_func)
 
     # Map mc_samples to internal mode string for make_grad_output_fn
     mode = "exact" if mc_samples == 0 else "mc"
