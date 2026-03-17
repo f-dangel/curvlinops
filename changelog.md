@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added/New
 
+- Support plain callable `(params_dict, X) -> prediction` as `model_func` in
+  `KFACLinearOperator` and `EKFACLinearOperator` with `backend="make_fx"`.
+  Pass `params` as `dict[str, Tensor]` instead of `list[Parameter]`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/271))
+
 - **Backward-incompatible:** Add MC-sampling option (`mc_samples`) to
   `GGNLinearOperator` as replacement for the Fisher, remove `FisherMCLinearOperator`
   and the `mode` parameter from `GGNDiagonalLinearOperator`/`GGNDiagonalComputer`.

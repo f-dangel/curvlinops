@@ -127,9 +127,10 @@ class KFACComputer(_EmpiricalRiskMixin):
 
     def __init__(
         self,
-        model_func: Module,
+        model_func: Module
+        | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
         loss_func: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
-        params: list[Parameter],
+        params: list[Parameter] | dict[str, Tensor],
         data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
@@ -149,10 +150,13 @@ class KFACComputer(_EmpiricalRiskMixin):
                 - Only Linear and Conv2d modules are supported.
 
         Args:
-            model_func: The neural network. Must consist of modules.
+            model_func: Either an ``nn.Module`` or a callable with signature
+                ``(params_dict, X) -> prediction``. Callables are only supported
+                by subclasses with ``SUPPORTS_FUNCTIONAL = True``.
             loss_func: The loss function.
             params: The parameters defining the Fisher/GGN that will be approximated
-                through KFAC.
+                through KFAC. Either a ``list[Parameter]`` (for ``Module``) or a
+                ``dict[str, Tensor]`` (for callable ``model_func``).
             data: A data loader containing the data of the Fisher/GGN.
             progressbar: Whether to show a progress bar when computing the Kronecker
                 factors. Defaults to ``False``.
@@ -234,9 +238,10 @@ class KFACComputer(_EmpiricalRiskMixin):
         self._fisher_type = fisher_type
         self._mc_samples = mc_samples
         self._kfac_approx = kfac_approx
-        self._mapping = self.compute_parameter_groups(
-            params, model_func, separate_weight_and_bias
-        )
+        if isinstance(model_func, Module):
+            self._mapping = self.compute_parameter_groups(
+                params, model_func, separate_weight_and_bias
+            )
 
         # Function (prediction_batch, label_batch) -> grad_outputs for backpropagation
         self._grad_outputs_computer = self._set_up_grad_outputs_computer(
