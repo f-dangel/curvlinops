@@ -10,7 +10,6 @@ from collections.abc import Callable
 from typing import Any
 
 from torch import Tensor, cat
-from torch.func import functional_call
 
 from curvlinops.computers.ekfac import (
     EKFACComputer,
@@ -59,7 +58,7 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
         """
 
         def f(x, params: dict[str, Tensor]) -> Tensor:
-            return functional_call(self._model_func, params, (x,))
+            return self._model_func(params, x)
 
         # Cache for IO functions: make_fx bakes in tensor shapes (e.g. from
         # nn.Flatten), so different batch sizes need separate traces

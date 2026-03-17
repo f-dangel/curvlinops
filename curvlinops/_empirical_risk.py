@@ -12,6 +12,7 @@ from curvlinops.utils import (
     _infer_dtype,
     allclose_report,
     identify_free_parameters,
+    make_functional_call,
 )
 
 
@@ -80,7 +81,8 @@ class _EmpiricalRiskMixin:
                 "When using dict-like custom data, `batch_size_fn` is required."
             )
 
-        self._model_func = model_func
+        self._model_module = model_func
+        self._model_func = make_functional_call(model_func)
         self._loss_func = loss_func
         self._params = identify_free_parameters(model_func, params)
         self._data = data
@@ -350,7 +352,7 @@ class _EmpiricalRiskMixin:
             the data.
         """
         for X, y in self._loop_over_data(desc=desc):
-            prediction = self._model_func(X)
+            prediction = self._model_func(self._params, X)
             if self._loss_func is None:
                 loss, grad_params = None, None
             else:

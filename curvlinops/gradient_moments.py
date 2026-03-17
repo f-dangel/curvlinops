@@ -142,7 +142,7 @@ class EFLinearOperator(CurvatureLinearOperator):
             raise NotImplementedError(
                 f"Loss must be one of {self.SUPPORTED_LOSSES}. Got: {self._loss_func}."
             )
-        return make_batch_ef_vector_product(self._model_func, self._loss_func)
+        return make_batch_ef_vector_product(self._model_module, self._loss_func)
 
     def _matvec_batch(
         self, X: Tensor | MutableMapping, y: Tensor, v: dict[str, Tensor]

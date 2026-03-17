@@ -282,7 +282,7 @@ class KFACComputer(_EmpiricalRiskMixin):
             The module object.
         """
         mod_name = _module_name_from_param(next(iter(group.values())))
-        return self._model_func.get_submodule(mod_name)
+        return self._model_module.get_submodule(mod_name)
 
     @staticmethod
     def _set_up_grad_outputs_computer(
@@ -358,7 +358,7 @@ class KFACComputer(_EmpiricalRiskMixin):
         self._generator = _seed_generator(self._generator, self.device, self._seed)
 
         for X, y in self._loop_over_data(desc="KFAC matrices"):
-            output = self._model_func(X)
+            output = self._model_module(X)
             output, y = self._rearrange_for_larger_than_2d_output(output, y)
             self._compute_loss_and_backward(output, y)
 
