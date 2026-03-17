@@ -1,7 +1,7 @@
 """Contains a linear operator implementation of the Hessian."""
 
 from collections.abc import Callable, MutableMapping
-from functools import cached_property, partial
+from functools import cached_property
 
 from torch import Tensor, no_grad
 from torch.func import jacrev, jvp
@@ -40,12 +40,7 @@ def make_batch_hessian_vector_product(
 
     # Split param names into blocks
     block_param_names = split_list(param_names, block_sizes)
-    block_functionals = []
-
-    for block_names in block_param_names:
-        # criterion functional c is the same for all blocks
-        f_block, c = make_functional_model_and_loss(model_func, loss_func, block_names)
-        block_functionals.append(f_block)
+    f, c = make_functional_model_and_loss(model_func, loss_func)
 
     @no_grad()
     def hessian_vector_product(
@@ -71,17 +66,10 @@ def make_batch_hessian_vector_product(
         # Split input vectors by blocks
         v_blocks = [[v[n] for n in names] for names in block_param_names]
 
-        # Set up loss functions for each block
-        block_grad_fns = []
-
-        def loss_fn(
-            f: Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
-            block_params: dict[str, Tensor],
-        ) -> Tensor:
-            """Compute the mini-batch loss given the neural net and its parameters.
+        def loss_fn(block_params: dict[str, Tensor]) -> Tensor:
+            """Compute the mini-batch loss given block parameters.
 
             Args:
-                f: Functional model with signature (params_dict, X) -> prediction
                 block_params: Parameters for the functional model as a dict.
 
             Returns:
@@ -89,15 +77,11 @@ def make_batch_hessian_vector_product(
             """
             return c(f(block_params, X), (y,))
 
-        for f_block in block_functionals:
-            # Define the loss function composition for this block
-            block_loss_fn = partial(loss_fn, f_block)
-            block_grad_fn = jacrev(block_loss_fn)
-            block_grad_fns.append(block_grad_fn)
+        grad_fn = jacrev(loss_fn)
 
         # Compute the HVPs per block and concatenate the results
         hvps = {}
-        for grad_fn, names, vs in zip(block_grad_fns, block_param_names, v_blocks):
+        for names, vs in zip(block_param_names, v_blocks):
             block_params = {n: params[n] for n in names}
             v_block_dict = dict(zip(names, vs))
             _, hvp_block = jvp(grad_fn, (block_params,), (v_block_dict,))

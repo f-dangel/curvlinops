@@ -226,27 +226,22 @@ def identify_free_parameters(
     return named_params
 
 
-def make_functional_call(
-    module: Module, free_param_names: list[str]
-) -> Callable[..., Tensor]:
-    """Create a function that calls a module with given free parameters.
+def make_functional_call(module: Module) -> Callable[..., Tensor]:
+    """Create a function that calls a module with overridden parameters.
+
+    ``functional_call`` treats the supplied ``params`` as overrides and falls
+    back to the module's own parameters and buffers for everything else, so
+    there is no need to explicitly capture frozen parameters or buffers.
 
     Args:
         module: The PyTorch module to make functional.
-        free_param_names: Names of parameters that will be passed as arguments.
 
     Returns:
         A function ``(params, *module_inputs) -> output`` where ``params`` is a
-        ``dict[str, Tensor]`` of the free parameters. For model functions, inputs
-        are typically ``(X,)``. For loss functions, inputs are typically
+        ``dict[str, Tensor]`` of the parameters to override. For model functions,
+        inputs are typically ``(X,)``. For loss functions, inputs are typically
         ``(predictions, targets)``.
     """
-    # Detect frozen parameters and buffers not in free_param_names
-    free_param_name_set = set(free_param_names)
-    frozen = {
-        n: p for n, p in module.named_parameters() if n not in free_param_name_set
-    }
-    frozen.update(module.named_buffers())
 
     def functional_module(params: dict[str, Tensor], *module_inputs) -> Tensor:
         """Call the module functionally with free parameters and module inputs.
@@ -259,13 +254,13 @@ def make_functional_call(
         Returns:
             Module output.
         """
-        return functional_call(module, {**frozen, **params}, module_inputs)
+        return functional_call(module, params, module_inputs)
 
     return functional_module
 
 
 def make_functional_model_and_loss(
-    model_func: Module, loss_func: Module, param_names: list[str]
+    model_func: Module, loss_func: Module
 ) -> tuple[
     Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
     Callable[[Tensor, tuple], Tensor],
@@ -275,8 +270,6 @@ def make_functional_model_and_loss(
     Args:
         model_func: The neural network model.
         loss_func: The loss function.
-        param_names: Names of parameters w.r.t. which the functions are made
-            functional. Must correspond to names in ``model_func.named_parameters()``.
 
     Returns:
         A tuple containing:
@@ -284,8 +277,8 @@ def make_functional_model_and_loss(
         - c: Functional loss with signature ``(prediction, loss_args) -> loss``
     """
     # Create functional versions of model and loss
-    f = make_functional_call(model_func, param_names)  # (params_dict, X) -> prediction
-    c_raw = partial(make_functional_call(loss_func, []), {})  # (prediction, y) -> loss
+    f = make_functional_call(model_func)  # (params_dict, X) -> prediction
+    c_raw = partial(make_functional_call(loss_func), {})  # (prediction, y) -> loss
 
     def c(prediction: Tensor, loss_args: tuple) -> Tensor:
         """Evaluate the loss function on a prediction and loss arguments.
@@ -303,7 +296,7 @@ def make_functional_model_and_loss(
 
 
 def make_functional_flattened_model_and_loss(
-    model_func: Module, loss_func: Module, param_names: list[str]
+    model_func: Module, loss_func: Module
 ) -> tuple[
     Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
     Callable[[Tensor, tuple], Tensor],
@@ -316,8 +309,6 @@ def make_functional_flattened_model_and_loss(
     Args:
         model_func: The neural network module.
         loss_func: The loss function module.
-        param_names: Names of parameters w.r.t. which the functions are made
-            functional. Must correspond to names in ``model_func.named_parameters()``.
 
     Returns:
         Tuple of (f_flat, c_flat) where:
@@ -327,7 +318,7 @@ def make_functional_flattened_model_and_loss(
           (output_flat, loss_args) -> loss
     """
     # Create functional versions of model and loss
-    f, c = make_functional_model_and_loss(model_func, loss_func, param_names)
+    f, c = make_functional_model_and_loss(model_func, loss_func)
 
     # Determine how to flatten
     output_flattening = (
