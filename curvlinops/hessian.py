@@ -84,7 +84,8 @@ def make_batch_hessian_vector_product(
         # Compute the HVPs per block and concatenate the results
         hvps = {}
         for names, vs in zip(block_param_names, v_blocks):
-            frozen = {n: params[n].detach() for n in params if n not in set(names)}
+            names_set = set(names)
+            frozen = {n: params[n].detach() for n in params if n not in names_set}
             block_loss_fn = partial(loss_fn, frozen=frozen)
             block_params = {n: params[n] for n in names}
             v_block_dict = dict(zip(names, vs))

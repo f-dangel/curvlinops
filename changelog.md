@@ -48,6 +48,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+- Simplify `make_functional_call`: drop redundant frozen parameter capture
+  (`functional_call` already falls back to module state). Split
+  `make_functional_model_and_loss` into `make_functional_call` and
+  `make_functional_loss`. Remove unused `param_names` arguments from
+  `make_batch_*` functions
+  ([PR](https://github.com/f-dangel/curvlinops/pull/266))
+
 - Introduce parameter groups for KFAC/EKFAC. Covariance dicts keyed by
   tuples of parameter names instead of synthetic layer names. Support
   weight tying and mixed-bias configurations in the make_fx backend.
