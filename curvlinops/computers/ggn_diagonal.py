@@ -14,6 +14,7 @@ from curvlinops._checks import (
 )
 from curvlinops._empirical_risk import _EmpiricalRiskMixin
 from curvlinops.ggn_utils import make_grad_output_fn
+from curvlinops.kfac_utils import FisherType
 from curvlinops.utils import _seed_generator
 
 
@@ -41,10 +42,8 @@ def make_batch_ggn_diagonal_func(
         Function with signature ``(params_dict, X, y, generator) -> dict[str, Tensor]``
         that computes the GGN diagonal on the batch ``(X, y)``.
     """
-    # Map mc_samples to internal mode string for make_grad_output_fn
-    mode = "exact" if mc_samples == 0 else "mc"
-
-    grad_output_fn = make_grad_output_fn(loss_func, mode, mc_samples)
+    fisher_type = FisherType.TYPE2 if mc_samples == 0 else FisherType.MC
+    grad_output_fn = make_grad_output_fn(loss_func, fisher_type, mc_samples)
     reduction = loss_func.reduction
 
     def ggn_diagonal_datum(
@@ -72,7 +71,7 @@ def make_batch_ggn_diagonal_func(
         (grad_params_dict,) = vmap(f_vjp)(grad_outputs)
         return {k: (grad_params_dict[k] ** 2).sum(0) for k in params}
 
-    randomness = {"mc": "different", "exact": "same"}[mode]
+    randomness = "different" if fisher_type == FisherType.MC else "same"
     # Parallelize over data points (vmap over x and y, not params or generator)
     ggn_diagonal_batched = vmap(
         ggn_diagonal_datum, in_dims=(None, 0, 0, None), randomness=randomness

@@ -22,6 +22,7 @@ from torch.func import grad, vmap
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from torch.nn.functional import one_hot
 
+from curvlinops.kfac_utils import FisherType
 from curvlinops.utils import make_functional_call
 
 
@@ -276,15 +277,15 @@ def _make_single_datum_sampler(
 
 def make_grad_output_fn(
     loss_func: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
-    mode: str,
+    fisher_type: FisherType,
     mc_samples: int = 1,
 ) -> Callable[[Tensor, Tensor, Generator | None], Tensor]:
     """Create a function computing gradient output vectors for a single datum.
 
-    For exact mode, returns the columns of the loss Hessian's matrix square root.
-    For MC mode, returns Monte-Carlo sampled gradient vectors.
-    For empirical mode, returns the gradient of the loss w.r.t. the output.
-    For forward-only mode, returns an empty tensor (no backward passes needed).
+    For ``TYPE2``, returns the columns of the loss Hessian's matrix square root.
+    For ``MC``, returns Monte-Carlo sampled gradient vectors.
+    For ``EMPIRICAL``, returns the gradient of the loss w.r.t. the output.
+    For ``FORWARD_ONLY``, returns an empty tensor (no backward passes needed).
 
     Note:
         For MC mode, the returned vectors are scaled by ``1 / sqrt(mc_samples)``
@@ -293,32 +294,28 @@ def make_grad_output_fn(
 
     Args:
         loss_func: The loss function.
-        mode: ``'exact'`` for Hessian square root, ``'mc'`` for Monte-Carlo sampling,
-            ``'empirical'`` for empirical gradients, ``'forward-only'`` for no
-            backward passes.
-        mc_samples: Number of Monte-Carlo samples (only used when ``mode='mc'``).
-            Default: ``1``.
+        fisher_type: The type of Fisher/GGN approximation.
+        mc_samples: Number of Monte-Carlo samples (only used when
+            ``fisher_type=FisherType.MC``). Default: ``1``.
 
     Returns:
         A function with signature
         ``(output, target, generator=None) -> [num_vectors, *output.shape]``
         operating on a single datum (no batch axis). ``num_vectors`` is
-        ``output.numel()`` for exact mode, ``mc_samples`` for MC mode, ``1``
-        for empirical mode, or ``0`` for forward-only mode.
+        ``output.numel()`` for ``TYPE2``, ``mc_samples`` for ``MC``, ``1``
+        for ``EMPIRICAL``, or ``0`` for ``FORWARD_ONLY``.
 
     Raises:
-        ValueError: If ``mode`` is not ``'exact'``, ``'mc'``, ``'empirical'``,
-            or ``'forward-only'``.
+        ValueError: If ``fisher_type`` is not a valid ``FisherType``.
     """
-    if mode not in ("exact", "mc", "empirical", "forward-only"):
+    if fisher_type not in FisherType:
         raise ValueError(
-            f"Invalid mode {mode!r}. "
-            "Must be 'exact', 'mc', 'empirical', or 'forward-only'."
+            f"Invalid fisher_type {fisher_type!r}. Must be one of {list(FisherType)}."
         )
 
     sample_grad_output = _make_single_datum_sampler(loss_func)
 
-    if mode == "empirical":
+    if fisher_type == FisherType.EMPIRICAL:
         functional_loss_func = partial(make_functional_call(loss_func), {})
 
         def _scaled_datum_loss(prediction: Tensor, target: Tensor) -> Tensor:
@@ -366,16 +363,16 @@ def make_grad_output_fn(
         Returns:
             Gradient vectors of shape ``[num_vectors, *output.shape]``.
         """
-        if mode == "forward-only":
+        if fisher_type == FisherType.FORWARD_ONLY:
             return output.new_empty(0, *output.shape)
-        elif mode == "exact":
+        elif fisher_type == FisherType.TYPE2:
             hessian_sqrt = loss_hessian_matrix_sqrt(output, target, loss_func)
             return hessian_sqrt.reshape(*output.shape, output.numel()).movedim(-1, 0)
-        elif mode == "mc":
+        elif fisher_type == FisherType.MC:
             return sample_grad_output(output, mc_samples, target, generator).div_(
                 sqrt(mc_samples)
             )
-        else:  # mode == "empirical"
+        else:  # fisher_type == FisherType.EMPIRICAL
             return _empirical_grad(output, target).unsqueeze(0)
 
     return grad_output_fn
