@@ -76,7 +76,7 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
                     self._model_func, X, self._params, self._fisher_type
                 )
                 if io_groups is None:
-                    mapping, io_groups = _build_param_groups_from_io(
+                    _, io_groups = _build_param_groups_from_io(
                         io_param_names, self._separate_weight_and_bias
                     )
 

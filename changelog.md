@@ -61,6 +61,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+- Extract `_BaseKFACComputer` and `_EKFACMixin` to eliminate diamond
+  inheritance. Rename `KFACComputer` → `HooksKFACComputer`,
+  `EKFACComputer` → `HooksEKFACComputer`. Move base class to
+  `computers/_base.py`, hooks to `kfac_hooks.py`/`ekfac_hooks.py`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/272))
+
 - Pass `_model_func` callable to `make_batch_*` functions instead of
   `Module`, removing redundant `make_functional_call` wrapping. Align
   IO collector to `(params, x)` convention
