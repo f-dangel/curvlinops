@@ -25,7 +25,7 @@ from torch import (
     trace,
     zeros_like,
 )
-from torch.func import vmap
+from torch.func import functional_call, vmap
 from torch.nn import (
     AdaptiveAvgPool2d,
     BCEWithLogitsLoss,
@@ -1048,3 +1048,33 @@ def change_dtype(case: tuple, dt: dtype) -> tuple:
     ]
 
     return model_func, loss_func, params, data, batch_size_fn
+
+
+def check_callable_model_func(linop_cls: type) -> None:
+    """Check that an operator works with a callable model_func and dict params.
+
+    Creates a callable-based operator with random parameter values and verifies
+    it produces a different matrix than the Module-based operator with the
+    module's own parameters.
+
+    Args:
+        linop_cls: The linear operator class to test.
+    """
+    manual_seed(0)
+    model = Sequential(Linear(4, 3), Linear(3, 2))
+    loss_func = MSELoss()
+    data = [(rand(5, 4), rand(5, 2))]
+
+    params_dict = {
+        n: rand(p.shape, requires_grad=True) for n, p in model.named_parameters()
+    }
+
+    def model_fn(params_dict, X):
+        return functional_call(model, params_dict, (X,))
+
+    with_callable = linop_cls(model_fn, loss_func, params_dict, data)
+    with_original = linop_cls(model, loss_func, list(model.parameters()), data)
+    assert not allclose_report(
+        with_callable @ eye_like(with_callable),
+        with_original @ eye_like(with_original),
+    )

@@ -8,6 +8,7 @@ from curvlinops.examples.functorch import functorch_ggn
 from test.test_kfac import MC_TOLS
 from test.utils import (
     change_dtype,
+    check_callable_model_func,
     compare_consecutive_matmats,
     compare_matmat,
     compare_matmat_expectation,
@@ -62,3 +63,8 @@ def test_GGNLinearOperator_mc_expectation(case, max_repeats: int, mc_samples: in
 
     compare_consecutive_matmats(G)
     compare_matmat_expectation(G, G_mat, max_repeats, CHECK_EVERY, **MC_TOLS)
+
+
+def test_GGNLinearOperator_callable_model_func():
+    """Test GGN with a callable model_func and different parameter values."""
+    check_callable_model_func(GGNLinearOperator)

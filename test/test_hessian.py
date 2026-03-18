@@ -4,7 +4,12 @@ from torch import float64
 
 from curvlinops import HessianLinearOperator
 from curvlinops.examples.functorch import functorch_hessian
-from test.utils import change_dtype, compare_consecutive_matmats, compare_matmat
+from test.utils import (
+    change_dtype,
+    check_callable_model_func,
+    compare_consecutive_matmats,
+    compare_matmat,
+)
 
 
 def test_HessianLinearOperator(case):
@@ -25,3 +30,8 @@ def test_HessianLinearOperator(case):
 
     compare_consecutive_matmats(H)
     compare_matmat(H, H_mat)
+
+
+def test_HessianLinearOperator_callable_model_func():
+    """Test Hessian with a callable model_func and different parameter values."""
+    check_callable_model_func(HessianLinearOperator)

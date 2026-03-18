@@ -4,7 +4,12 @@ from torch import float64
 
 from curvlinops import EFLinearOperator
 from curvlinops.examples.functorch import functorch_empirical_fisher
-from test.utils import change_dtype, compare_consecutive_matmats, compare_matmat
+from test.utils import (
+    change_dtype,
+    check_callable_model_func,
+    compare_consecutive_matmats,
+    compare_matmat,
+)
 
 
 def test_EFLinearOperator(case):
@@ -24,3 +29,8 @@ def test_EFLinearOperator(case):
 
     compare_consecutive_matmats(E)
     compare_matmat(E, E_mat)
+
+
+def test_EFLinearOperator_callable_model_func():
+    """Test empirical Fisher with a callable model_func and different parameter values."""
+    check_callable_model_func(EFLinearOperator)
