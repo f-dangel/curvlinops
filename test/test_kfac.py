@@ -31,7 +31,7 @@ from torch.nn import (
 )
 
 from curvlinops import EFLinearOperator, GGNLinearOperator
-from curvlinops.computers.kfac import KFACComputer
+from curvlinops.computers.kfac_hooks import HooksKFACComputer
 from curvlinops.kfac import KFACLinearOperator
 from curvlinops.kfac_utils import FisherType, KFACType
 from curvlinops.utils import allclose_report
@@ -586,7 +586,7 @@ def test_kfac_inplace_activations(dev: device, backend: str):
 
 
 @mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
-@mark.parametrize("fisher_type", KFACComputer._SUPPORTED_FISHER_TYPE)
+@mark.parametrize("fisher_type", HooksKFACComputer._SUPPORTED_FISHER_TYPE)
 @mark.parametrize(
     "loss", [MSELoss, CrossEntropyLoss, BCEWithLogitsLoss], ids=["mse", "ce", "bce"]
 )
@@ -677,7 +677,7 @@ def test_multi_dim_output(
 
 
 @mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
-@mark.parametrize("fisher_type", KFACComputer._SUPPORTED_FISHER_TYPE)
+@mark.parametrize("fisher_type", HooksKFACComputer._SUPPORTED_FISHER_TYPE)
 @mark.parametrize(
     "loss", [MSELoss, CrossEntropyLoss, BCEWithLogitsLoss], ids=["mse", "ce", "bce"]
 )
@@ -1160,7 +1160,7 @@ def test_bug_132_dtype_deterministic_checks(dev: device, backend: str):
 KFAC_MIN_DAMPING = 1e-8
 
 
-@mark.parametrize("fisher_type", KFACComputer._SUPPORTED_FISHER_TYPE)
+@mark.parametrize("fisher_type", HooksKFACComputer._SUPPORTED_FISHER_TYPE)
 def test_KFAC_inverse_damped_matmat(
     case: tuple[
         Module,
@@ -1364,7 +1364,7 @@ def _check_callable_model_func(linop_cls):
     assert not allclose_report(module_mat, different_mat)
 
     # Module + different params as list raises (not the model's actual parameters)
-    with raises(NotImplementedError, match="un-supported layers"):
+    with raises(ValueError, match="not found in model"):
         linop_cls(model, loss_func, list(different_params.values()), data)
 
 

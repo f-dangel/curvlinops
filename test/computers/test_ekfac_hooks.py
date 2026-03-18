@@ -4,7 +4,7 @@ from pytest import raises
 from torch import float64, manual_seed, rand
 from torch.linalg import qr
 
-from curvlinops.computers.ekfac import (
+from curvlinops.computers.ekfac_hooks import (
     compute_eigenvalue_correction_linear_weight_sharing,
 )
 from curvlinops.utils import allclose_report

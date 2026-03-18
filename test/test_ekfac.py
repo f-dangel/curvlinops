@@ -18,7 +18,7 @@ from torch.nn import (
 )
 
 from curvlinops import EFLinearOperator, GGNLinearOperator
-from curvlinops.computers.ekfac import EKFACComputer
+from curvlinops.computers.ekfac_hooks import HooksEKFACComputer
 from curvlinops.ekfac import EKFACLinearOperator
 from curvlinops.kfac_utils import FisherType, KFACType
 from curvlinops.utils import allclose_report
@@ -425,7 +425,7 @@ def test_ekfac_inplace_activations(dev: device, backend: str):
     _test_inplace_activations(EKFACLinearOperator, dev, backend=backend)
 
 
-@mark.parametrize("fisher_type", EKFACComputer._SUPPORTED_FISHER_TYPE)
+@mark.parametrize("fisher_type", HooksEKFACComputer._SUPPORTED_FISHER_TYPE)
 @mark.parametrize(
     "loss", [MSELoss, CrossEntropyLoss, BCEWithLogitsLoss], ids=["mse", "ce", "bce"]
 )
@@ -493,7 +493,7 @@ def test_multi_dim_output(
         )
 
 
-@mark.parametrize("fisher_type", EKFACComputer._SUPPORTED_FISHER_TYPE)
+@mark.parametrize("fisher_type", HooksEKFACComputer._SUPPORTED_FISHER_TYPE)
 @mark.parametrize(
     "loss", [MSELoss, CrossEntropyLoss, BCEWithLogitsLoss], ids=["mse", "ce", "bce"]
 )
@@ -655,7 +655,7 @@ def test_ekfac_torch_save_load(tmp_path: Path) -> None:
 # TODO: Add test for FisherType.MC once tests are in float64.
 @mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
 @mark.parametrize("fisher_type", [FisherType.TYPE2, FisherType.EMPIRICAL])
-@mark.parametrize("kfac_approx", EKFACComputer._SUPPORTED_KFAC_APPROX)
+@mark.parametrize("kfac_approx", HooksEKFACComputer._SUPPORTED_KFAC_APPROX)
 def test_ekfac_closer_to_exact_than_kfac(
     inv_case,
     fisher_type: FisherType,
@@ -677,8 +677,8 @@ def test_ekfac_closer_to_exact_than_kfac(
 
 
 @mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
-@mark.parametrize("fisher_type", EKFACComputer._SUPPORTED_FISHER_TYPE)
-@mark.parametrize("kfac_approx", EKFACComputer._SUPPORTED_KFAC_APPROX)
+@mark.parametrize("fisher_type", HooksEKFACComputer._SUPPORTED_FISHER_TYPE)
+@mark.parametrize("kfac_approx", HooksEKFACComputer._SUPPORTED_KFAC_APPROX)
 def test_ekfac_closer_to_exact_than_kfac_weight_sharing(
     cnn_case,
     kfac_approx: KFACType,

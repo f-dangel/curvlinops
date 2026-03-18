@@ -29,7 +29,8 @@ from torch.nn import (
 
 from curvlinops._torch_base import _ChainPyTorchLinearOperator
 from curvlinops.blockdiagonal import BlockDiagonalLinearOperator
-from curvlinops.computers.kfac import KFACComputer
+from curvlinops.computers._base import ParamGroup, _BaseKFACComputer
+from curvlinops.computers.kfac_hooks import HooksKFACComputer
 from curvlinops.computers.kfac_make_fx import MakeFxKFACComputer
 from curvlinops.kfac_utils import (
     FisherType,
@@ -87,7 +88,7 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
     """
 
     _BACKENDS: dict[str, type] = {
-        "hooks": KFACComputer,
+        "hooks": HooksKFACComputer,
         "make_fx": MakeFxKFACComputer,
     }
     SELF_ADJOINT: bool = True
@@ -208,19 +209,21 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
             batch_size_fn=batch_size_fn,
         )
         # KFAC = P @ K @ PT
-        K = self._compute_canonical_op(computer)
-        P, PT = self._build_converters(computer)
+        K, mapping = self._compute_canonical_op(computer)
+        P, PT = self._build_converters(computer, mapping)
         super().__init__(P, K, PT)
 
     @staticmethod
-    def _compute_canonical_op(computer: KFACComputer) -> BlockDiagonalLinearOperator:
+    def _compute_canonical_op(
+        computer: _BaseKFACComputer,
+    ) -> tuple[BlockDiagonalLinearOperator, list[ParamGroup]]:
         """Compute Kronecker factors and assemble the canonical block-diagonal operator.
 
         Args:
-            computer: A ``KFACComputer`` instance.
+            computer: A KFAC computer instance.
 
         Returns:
-            Block diagonal linear operator representing KFAC in canonical basis.
+            Tuple of (block diagonal operator in canonical basis, mapping).
         """
         input_covariances, gradient_covariances, mapping = computer.compute()
         factors = []
@@ -234,23 +237,25 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
         blocks = [KroneckerProductLinearOperator(*fs) for fs in factors]
 
         # KFAC in the canonical basis
-        return BlockDiagonalLinearOperator(blocks)
+        return BlockDiagonalLinearOperator(blocks), mapping
 
     @staticmethod
     def _build_converters(
-        computer: KFACComputer,
+        computer: _BaseKFACComputer,
+        mapping: list[ParamGroup],
     ) -> tuple[FromCanonicalLinearOperator, ToCanonicalLinearOperator]:
         """Build the canonical space converters.
 
         Args:
-            computer: A ``KFACComputer`` instance.
+            computer: A KFAC computer instance.
+            mapping: List of parameter groups.
 
         Returns:
             Tuple of ``(from_canonical_op, to_canonical_op)``.
         """
         PT = ToCanonicalLinearOperator(
             {name: p.shape for name, p in computer._params.items()},
-            computer._mapping,
+            mapping,
             computer.device,
             computer.dtype,
         )

@@ -1,9 +1,9 @@
 """EKFAC computer using FX graph tracing instead of hooks.
 
-This module provides ``MakeFxEKFACComputer``, which extends ``EKFACComputer``
-with FX-based eigenvalue correction, using the IO collector (``with_kfac_io``)
-instead of forward/backward hooks. Only the forward pass is traced with
-``make_fx``; the backward pass runs eagerly.
+This module provides ``MakeFxEKFACComputer``, which extends
+``MakeFxKFACComputer`` with FX-based eigenvalue correction, using the IO
+collector (``with_kfac_io``) instead of forward/backward hooks. Only the
+forward pass is traced with ``make_fx``; the backward pass runs eagerly.
 """
 
 from collections.abc import Callable
@@ -11,12 +11,11 @@ from typing import Any
 
 from torch import Tensor, cat
 
-from curvlinops.computers.ekfac import (
-    EKFACComputer,
+from curvlinops.computers._base import ParamGroup, ParamGroupKey, _EKFACMixin
+from curvlinops.computers.ekfac_hooks import (
     compute_eigenvalue_correction_linear_weight_sharing,
 )
 from curvlinops.computers.io_collector import with_kfac_io
-from curvlinops.computers.kfac import ParamGroupKey
 from curvlinops.computers.kfac_make_fx import (
     MakeFxKFACComputer,
     _bias_pad,
@@ -31,10 +30,10 @@ from curvlinops.kfac_utils import KFACType
 from curvlinops.utils import _seed_generator
 
 
-class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
+class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
     """EKFAC computer that uses FX graph tracing for eigenvalue correction.
 
-    Extends ``EKFACComputer`` with FX-based eigenvalue correction computation.
+    Extends ``MakeFxKFACComputer`` with eigenvalue correction computation.
     Kronecker factor computation is inherited from ``MakeFxKFACComputer``.
     Only the forward pass (IO collection) is traced with ``make_fx``; the
     backward pass and eigenvalue correction computation run eagerly.
@@ -44,6 +43,7 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
         self,
         input_covariances_eigenvectors: dict[ParamGroupKey, Tensor],
         gradient_covariances_eigenvectors: dict[ParamGroupKey, Tensor],
+        mapping: list[ParamGroup],
     ) -> dict[ParamGroupKey, Tensor]:
         """Compute eigenvalue corrections using FX graph tracing.
 
@@ -52,6 +52,7 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
                 per parameter group.
             gradient_covariances_eigenvectors: Gradient covariance eigenvectors
                 per parameter group.
+            mapping: List of parameter groups.
 
         Returns:
             Dictionary mapping parameter group keys to corrected eigenvalues.
@@ -75,7 +76,7 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
                     self._model_func, X, self._params, self._fisher_type
                 )
                 if io_groups is None:
-                    self._mapping, io_groups = _build_param_groups_from_io(
+                    mapping, io_groups = _build_param_groups_from_io(
                         io_param_names, self._separate_weight_and_bias
                     )
 
@@ -88,7 +89,7 @@ class MakeFxEKFACComputer(EKFACComputer, MakeFxKFACComputer):
                 output, y, layer_outputs
             )
 
-            for group in self._mapping:
+            for group in mapping:
                 group_key = tuple(group.values())
                 io_names = io_groups.get(group_key, [])
                 has_joint_wb = "b" in group and "W" in group

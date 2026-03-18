@@ -2,7 +2,8 @@
 
 from curvlinops._torch_base import _ChainPyTorchLinearOperator
 from curvlinops.blockdiagonal import BlockDiagonalLinearOperator
-from curvlinops.computers.ekfac import EKFACComputer
+from curvlinops.computers._base import ParamGroup
+from curvlinops.computers.ekfac_hooks import HooksEKFACComputer
 from curvlinops.computers.ekfac_make_fx import MakeFxEKFACComputer
 from curvlinops.eigh import EighDecomposedLinearOperator
 from curvlinops.kfac import KFACLinearOperator
@@ -26,19 +27,21 @@ class EKFACLinearOperator(KFACLinearOperator):
     """
 
     _BACKENDS: dict[str, type] = {
-        "hooks": EKFACComputer,
+        "hooks": HooksEKFACComputer,
         "make_fx": MakeFxEKFACComputer,
     }
 
     @staticmethod
-    def _compute_canonical_op(computer: EKFACComputer) -> BlockDiagonalLinearOperator:
+    def _compute_canonical_op(
+        computer: HooksEKFACComputer | MakeFxEKFACComputer,
+    ) -> tuple[BlockDiagonalLinearOperator, list[ParamGroup]]:
         """Compute EKFAC factors and assemble the canonical block-diagonal operator.
 
         Args:
-            computer: An ``EKFACComputer`` instance.
+            computer: An EKFAC computer instance (hooks or FX backend).
 
         Returns:
-            Block diagonal linear operator representing EKFAC in canonical basis.
+            Tuple of (block diagonal operator in canonical basis, mapping).
         """
         input_eigvecs, gradient_eigvecs, corrected_eigenvalues, mapping = (
             computer.compute()
@@ -61,7 +64,7 @@ class EKFACLinearOperator(KFACLinearOperator):
             for basis, correction in zip(bases, corrections)
         ]
         # EKFAC in the canonical basis
-        return BlockDiagonalLinearOperator(blocks)
+        return BlockDiagonalLinearOperator(blocks), mapping
 
     def inverse(self, damping: float = 0.0) -> _ChainPyTorchLinearOperator:
         """Return the inverse of the EKFAC approximation.
