@@ -1,21 +1,20 @@
 """Computer for the Fisher/GGN's eigenvalue-corrected KFAC (EKFAC) approximation."""
 
 from functools import partial
-from typing import Any
 
 from einops import einsum
 from torch import Tensor
-from torch.linalg import eigh
 from torch.nn import Module
 from torch.utils.hooks import RemovableHandle
 
-from curvlinops.computers.kfac import KFACComputer, ParamGroup, _module_hyperparams
+from curvlinops.computers._base import ParamGroup, ParamGroupKey, _EKFACMixin
+from curvlinops.computers.kfac_hooks import HooksKFACComputer, _module_hyperparams
 from curvlinops.computers.kfac_math import (
     compute_loss_correction,
     grad_to_weight_sharing_format,
     input_to_weight_sharing_format,
 )
-from curvlinops.kfac_utils import FisherType, KFACType
+from curvlinops.kfac_utils import KFACType
 from curvlinops.utils import _seed_generator
 
 
@@ -235,10 +234,10 @@ def compute_eigenvalue_correction_linear_weight_sharing(
     return eigencorrection
 
 
-class EKFACComputer(KFACComputer):
+class HooksEKFACComputer(_EKFACMixin, HooksKFACComputer):
     """Computes EKFAC's eigenvalue-corrected Kronecker factors for the Fisher/GGN.
 
-    Extends :class:`KFACComputer` with eigenvalue decomposition of the Kronecker
+    Extends :class:`HooksKFACComputer` with eigenvalue decomposition of the Kronecker
     factors and eigenvalue correction computation.
 
     Eigenvalue-corrected Kronecker-Factored Approximate Curvature (EKFAC) was originally
@@ -254,90 +253,14 @@ class EKFACComputer(KFACComputer):
       (2018). Rotate your networks: Better weight consolidation and less catastrophic
       forgetting (ICPR).
 
-    Attributes:
-        _SUPPORTED_FISHER_TYPE: Tuple of supported Fisher types.
     """
-
-    _SUPPORTED_FISHER_TYPE: tuple[FisherType, ...] = (
-        FisherType.TYPE2,
-        FisherType.MC,
-        FisherType.EMPIRICAL,
-    )
-
-    def compute(
-        self,
-    ) -> tuple[
-        dict[str, Tensor],
-        dict[str, Tensor],
-        dict[str, Tensor | dict[str, Tensor]],
-        list[ParamGroup],
-    ]:
-        """Compute eigenvalue-corrected Kronecker factors.
-
-        Returns:
-            Tuple of ``(input_covariance_eigenvectors, gradient_covariance_eigenvectors,
-            corrected_eigenvalues, mapping)`` where the first two are dictionaries
-            mapping parameter group keys (``tuple[str, ...]``) to eigenvector
-            matrices, the third maps group keys to eigenvalue corrections, and
-            ``mapping`` is a list of parameter groups.
-        """
-        input_covariances, gradient_covariances, mapping = super().compute()
-        input_covariances = self._eigenvectors_(input_covariances)
-        gradient_covariances = self._eigenvectors_(gradient_covariances)
-        corrected_eigenvalues = self.compute_eigenvalue_correction(
-            input_covariances, gradient_covariances
-        )
-        return input_covariances, gradient_covariances, corrected_eigenvalues, mapping
-
-    def _rearrange_for_larger_than_2d_output(
-        self, output: Tensor, y: Tensor
-    ) -> tuple[Tensor, Tensor]:
-        r"""Rearrange the output and target if output is >2d.
-
-        This will determine what kind of Fisher/GGN is approximated.
-
-        Args:
-            output: The model's prediction
-                :math:`\{f_\mathbf{\theta}(\mathbf{x}_n)\}_{n=1}^N`.
-            y: The labels :math:`\{\mathbf{y}_n\}_{n=1}^N`.
-
-        Returns:
-            The rearranged outputs and targets.
-
-        Raises:
-            ValueError: If the output is not 2d and y is not 1d/2d.
-        """
-        # Our individual gradient implementation for EKFAC does not support computing
-        # the individual gradients for any loss terms that might dependent on each other,
-        # i.e., loss terms other than the per-data point loss terms.
-        if output.ndim != 2 or y.ndim not in {1, 2}:
-            raise ValueError(
-                "Only 2d output and 1d/2d target are supported for EKFAC. "
-                f"Got {output.ndim=} and {y.ndim=}."
-            )
-        return output, y
-
-    @staticmethod
-    def _eigenvectors_(dictionary: dict[Any, Tensor]) -> dict[Any, Tensor]:
-        """Replace all matrix values with their eigenvectors (inplace).
-
-        Args:
-            dictionary: A dictionary mapping parameter group keys to square matrices.
-
-        Returns:
-            The modified dictionary mapping group keys to the eigenvectors of
-            the input matrices.
-        """
-        for key, value in dictionary.items():
-            dictionary[key] = eigh(value).eigenvectors
-
-        return dictionary
 
     def compute_eigenvalue_correction(
         self,
-        input_covariances_eigenvectors: dict[str, Tensor],
-        gradient_covariances_eigenvectors: dict[str, Tensor],
-    ) -> dict[str, Tensor | dict[str, Tensor]]:
+        input_covariances_eigenvectors: dict[ParamGroupKey, Tensor],
+        gradient_covariances_eigenvectors: dict[ParamGroupKey, Tensor],
+        mapping: list[ParamGroup],
+    ) -> dict[ParamGroupKey, Tensor]:
         """Compute the corrected eigenvalues for EKFAC.
 
         Args:
@@ -345,17 +268,18 @@ class EKFACComputer(KFACComputer):
                 to input covariance eigenvectors.
             gradient_covariances_eigenvectors: Dictionary mapping parameter group
                 keys to gradient covariance eigenvectors.
+            mapping: List of parameter groups.
 
         Returns:
             Dictionary containing corrected eigenvalues for each module.
         """
         # Create empty dictionary to be populated by hooks
-        corrected_eigenvalues: dict[str, Tensor | dict[str, Tensor]] = {}
+        corrected_eigenvalues: dict[ParamGroupKey, Tensor] = {}
 
         # install forward hooks
         hook_handles: list[RemovableHandle] = []
 
-        for group in self._mapping:
+        for group in mapping:
             module = self._get_module(group)
 
             # compute the corrected eigenvalues using the per-example gradients
@@ -391,9 +315,9 @@ class EKFACComputer(KFACComputer):
         inputs: tuple[Tensor],
         output: Tensor,
         group: ParamGroup,
-        input_covariances_eigenvectors: dict[str, Tensor],
-        gradient_covariances_eigenvectors: dict[str, Tensor],
-        corrected_eigenvalues: dict[str, Tensor | dict[str, Tensor]],
+        input_covariances_eigenvectors: dict[ParamGroupKey, Tensor],
+        gradient_covariances_eigenvectors: dict[ParamGroupKey, Tensor],
+        corrected_eigenvalues: dict[ParamGroupKey, Tensor],
     ):
         """Register tensor hook on layer's output to accumulate the corrected eigenvalues.
 
@@ -436,9 +360,9 @@ class EKFACComputer(KFACComputer):
         grad_output: Tensor,
         module: Module,
         group: ParamGroup,
-        input_covariances_eigenvectors: dict[str, Tensor],
-        gradient_covariances_eigenvectors: dict[str, Tensor],
-        corrected_eigenvalues: dict[str, Tensor | dict[str, Tensor]],
+        input_covariances_eigenvectors: dict[ParamGroupKey, Tensor],
+        gradient_covariances_eigenvectors: dict[ParamGroupKey, Tensor],
+        corrected_eigenvalues: dict[ParamGroupKey, Tensor],
         inputs: tuple[Tensor],
     ):
         r"""Accumulate the corrected eigenvalues.

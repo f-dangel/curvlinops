@@ -15,8 +15,8 @@ from einops import einsum
 from torch import Tensor, autograd, cat
 
 from curvlinops._checks import _register_userdict_as_pytree
+from curvlinops.computers._base import ParamGroup, ParamGroupKey, _BaseKFACComputer
 from curvlinops.computers.io_collector import with_kfac_io
-from curvlinops.computers.kfac import KFACComputer, ParamGroup, ParamGroupKey
 from curvlinops.computers.kfac_math import (
     compute_loss_correction,
     grad_to_weight_sharing_format,
@@ -104,7 +104,7 @@ def _bias_pad(has_joint_wb: bool, io_layer_params: dict[str, str]) -> int | None
     return 1 if "b" in io_layer_params else 0
 
 
-class MakeFxKFACComputer(KFACComputer):
+class MakeFxKFACComputer(_BaseKFACComputer):
     """KFAC computer that uses FX graph tracing instead of hooks.
 
     Uses the IO collector (``with_kfac_io``) to detect affine layers and collect
@@ -120,7 +120,9 @@ class MakeFxKFACComputer(KFACComputer):
 
     def _compute_kronecker_factors(  # noqa: C901
         self,
-    ) -> tuple[dict[ParamGroupKey, Tensor], dict[ParamGroupKey, Tensor]]:
+    ) -> tuple[
+        dict[ParamGroupKey, Tensor], dict[ParamGroupKey, Tensor], list[ParamGroup]
+    ]:
         """Compute KFAC's Kronecker factors using FX graph tracing.
 
         The IO-collecting forward pass (from ``with_kfac_io``) is cached by
@@ -129,8 +131,7 @@ class MakeFxKFACComputer(KFACComputer):
         eagerly to avoid ``make_fx`` tracing issues with ``torch._C.Generator``.
 
         Returns:
-            Tuple containing (input_covariances, gradient_covariances) dictionaries
-            keyed by parameter group tuples.
+            Tuple of (input_covariances, gradient_covariances, mapping).
         """
         # N_data normalization is applied eagerly here, outside the traced forward
         # pass, rather than inside the per-batch computation (as the hooks backend
@@ -148,9 +149,9 @@ class MakeFxKFACComputer(KFACComputer):
         # Layer metadata (identical across batch sizes), populated on first trace
         io_param_names: dict[str, dict[str, str]] | None = None
         layer_hparams: dict[str, dict[str, Any]] | None = None
-        # IO groups: maps parameter group key → list of IO layer names.
-        # Built once from io_param_names and self._mapping.
+        # IO groups and mapping: built once from io_param_names.
         io_groups: dict[ParamGroupKey, list[str]] | None = None
+        mapping: list[ParamGroup] | None = None
 
         input_covariances: dict[ParamGroupKey, Tensor] = {}
         gradient_covariances: dict[ParamGroupKey, Tensor] = {}
@@ -173,13 +174,13 @@ class MakeFxKFACComputer(KFACComputer):
             if io_groups is None:
                 # Build parameter groups from IO detections (handles weight
                 # tying correctly by grouping by weight name)
-                self._mapping, io_groups = _build_param_groups_from_io(
+                mapping, io_groups = _build_param_groups_from_io(
                     io_param_names, self._separate_weight_and_bias
                 )
 
             # Compute input/gradient covariances one parameter group at a time
             # (bounds memory for CNNs with patch extraction)
-            for group in self._mapping:
+            for group in mapping:
                 group_key = tuple(group.values())
                 io_names = io_groups.get(group_key, [])
 
@@ -210,7 +211,7 @@ class MakeFxKFACComputer(KFACComputer):
             layer_output_grads = self._compute_layer_output_grads(
                 output, y, layer_outputs
             )
-            for group in self._mapping:
+            for group in mapping:
                 group_key = tuple(group.values())
                 io_names = io_groups.get(group_key, [])
                 gs = [
@@ -237,9 +238,9 @@ class MakeFxKFACComputer(KFACComputer):
 
         # Handle FORWARD_ONLY case
         if self._fisher_type == FisherType.FORWARD_ONLY:
-            self._set_gradient_covariances_to_identity(gradient_covariances)
+            self._set_gradient_covariances_to_identity(gradient_covariances, mapping)
 
-        return input_covariances, gradient_covariances
+        return input_covariances, gradient_covariances, mapping
 
     def _compute_layer_output_grads(
         self,
