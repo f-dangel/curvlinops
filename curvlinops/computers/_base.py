@@ -229,14 +229,7 @@ class _BaseKFACComputer(_EmpiricalRiskMixin):
             that computes the gradients to be backpropagated from the network's
             output, with shape ``[num_vectors, batch, *output_shape]``.
         """
-        mode = {
-            FisherType.MC: "mc",
-            FisherType.TYPE2: "exact",
-            FisherType.EMPIRICAL: "empirical",
-            FisherType.FORWARD_ONLY: "forward-only",
-        }[fisher_type]
-
-        grad_output_fn = make_grad_output_fn(loss_func, mode, mc_samples)
+        grad_output_fn = make_grad_output_fn(loss_func, fisher_type, mc_samples)
         randomness = "different" if fisher_type == FisherType.MC else "same"
         return vmap(
             grad_output_fn, in_dims=(0, 0, None), out_dims=1, randomness=randomness

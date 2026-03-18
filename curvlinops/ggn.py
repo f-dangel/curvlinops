@@ -10,6 +10,7 @@ from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, Module, MSELoss, Param
 
 from curvlinops._torch_base import CurvatureLinearOperator
 from curvlinops.ggn_utils import make_grad_output_fn
+from curvlinops.kfac_utils import FisherType
 from curvlinops.utils import _seed_generator, make_functional_loss
 
 
@@ -125,7 +126,7 @@ def make_batch_ggn_mc_vector_product(
         ``loss_args = (y, generator)``, and a vector ``v`` as a dict, and returns
         the mini-batch MC-GGN applied to ``v`` as a dict.
     """
-    _grad_output_fn = make_grad_output_fn(loss_func, "mc", mc_samples)
+    _grad_output_fn = make_grad_output_fn(loss_func, FisherType.MC, mc_samples)
     # vmap over batch: per-datum grad outputs → batched
     batched_grad_output_fn = vmap(
         _grad_output_fn,

@@ -61,6 +61,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+- Simplify `make_grad_output_fn` to accept `FisherType` directly instead
+  of mode strings. Remove mode-mapping dicts from callers
+  ([PR](https://github.com/f-dangel/curvlinops/pull/273))
+
 - Extract `_BaseKFACComputer` and `_EKFACMixin` to eliminate diamond
   inheritance. Rename `KFACComputer` → `HooksKFACComputer`,
   `EKFACComputer` → `HooksEKFACComputer`. Move base class to
