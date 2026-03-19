@@ -3,7 +3,7 @@
 from collections.abc import Callable, Iterable, Iterator, MutableMapping
 
 from torch import Tensor, device, dtype, tensor, zeros_like
-from torch.autograd import grad
+from torch.func import grad_and_value
 from torch.nn import CrossEntropyLoss, Module, Parameter
 from tqdm import tqdm
 
@@ -382,19 +382,40 @@ class _EmpiricalRiskMixin:
             Tuple of ((input, label), prediction, loss, gradient) for each batch of
             the data.
         """
+
+        def loss_fn(
+            params: dict[str, Tensor],
+            X: Tensor | MutableMapping,
+            y: Tensor,
+            normalization_factor: float,
+        ) -> tuple[Tensor, Tensor]:
+            """Compute normalized loss and prediction.
+
+            Args:
+                params: Model parameters.
+                X: Input to the model.
+                y: Ground truth.
+                normalization_factor: Normalization factor for the loss.
+
+            Returns:
+                Tuple of (loss, prediction).
+            """
+            pred = self._model_func(params, X)
+            return self._loss_func(pred, y).mul_(normalization_factor), pred
+
+        loss_and_grad_fn = grad_and_value(loss_fn, has_aux=True)
+
         for X, y in self._loop_over_data(desc=desc):
-            prediction = self._model_func(self._params, X)
             if self._loss_func is None:
-                loss, grad_params = None, None
+                prediction = self._model_func(self._params, X).detach()
+                yield (X, y), prediction, None, None
             else:
                 normalization_factor = self._get_normalization_factor(X, y)
-                loss = self._loss_func(prediction, y).mul_(normalization_factor)
-                grad_params = [
-                    g.detach() for g in grad(loss, list(self._params.values()))
-                ]
-                loss.detach_()
-
-            yield (X, y), prediction, loss, grad_params
+                grad_dict, (loss, prediction) = loss_and_grad_fn(
+                    self._params, X, y, normalization_factor
+                )
+                grad_params = [grad_dict[k].detach() for k in self._params]
+                yield (X, y), prediction.detach(), loss.detach(), grad_params
 
     def _gradient_and_loss(self) -> tuple[list[Tensor], Tensor]:
         """Evaluate the gradient and loss on the data.

@@ -61,6 +61,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+- Refactor `_data_prediction_loss_gradient` to use `torch.func.grad_and_value`
+  instead of `torch.autograd.grad`, removing the `requires_grad` requirement
+  on params for callable model functions
+  ([PR](https://github.com/f-dangel/curvlinops/pull/276))
+
 - Simplify `make_grad_output_fn` to accept `FisherType` directly instead
   of mode strings. Remove mode-mapping dicts from callers
   ([PR](https://github.com/f-dangel/curvlinops/pull/273))
