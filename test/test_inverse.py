@@ -1,21 +1,25 @@
 """Contains tests for ``curvlinops/inverse``."""
 
-from pytest import raises
-from torch import Tensor, float64, manual_seed, cat
+from pytest import mark, raises
+from torch import Tensor, float64, manual_seed, randn
 from torch.linalg import inv, eigvalsh
 
 from curvlinops import (
     CGInverseLinearOperator,
+    EKFACLinearOperator,
+    FisherType,
     GGNLinearOperator,
+    KFACLinearOperator,
     LSMRInverseLinearOperator,
     NeumannInverseLinearOperator,
 )
-from curvlinops.examples import IdentityLinearOperator
-from curvlinops.examples.functorch import functorch_ggn
-from test.test__torch_base import (
+from curvlinops.examples import (
+    IdentityLinearOperator,
     TensorLinearOperator,
-    PyTorchLinearOperator,
 )
+from curvlinops.examples.functorch import functorch_ggn
+from curvlinops.diag import DiagonalLinearOperator
+from torch.nn import Linear, MSELoss
 from test.utils import (
     change_dtype,
     compare_consecutive_matmats,
@@ -24,7 +28,10 @@ from test.utils import (
 )
 
 
-def test_CGInverseLinearOperator_damped_GGN(inv_case, delta_rel: float = 2e-2):
+@mark.parametrize("precondition", [False, True], ids=["", "preconditioned"])
+def test_CGInverseLinearOperator_damped_GGN(
+    inv_case, precondition: bool, delta_rel: float = 2e-2
+):
     """Test matrix multiplication with the inverse damped GGN with CG.
 
     Args:
@@ -50,20 +57,17 @@ def test_CGInverseLinearOperator_damped_GGN(inv_case, delta_rel: float = 2e-2):
     inv_GGN_naive = inv(damped_GGN_naive)
 
     # specify tolerance and turn off internal damping to get solution with accuracy
-    jacobi_preconditioner = TensorLinearOperator(damped_GGN_naive.diag().reciprocal().diag())
-    cg_kwargs = {"eps": 0, "tolerance": 1e-10, "max_iter": 500, "max_tridiag_iter": 500}
-    inv_GGN = CGInverseLinearOperator(GGN + damping)
-    compare_consecutive_matmats(inv_GGN)
-    inv_GGN_precond = CGInverseLinearOperator(
-        GGN + damping,
-        **cg_kwargs,
-        preconditioner=jacobi_preconditioner.__matmul__,
+    jacobi_preconditioner = DiagonalLinearOperator(damped_GGN_naive.diag().reciprocal())
+    cg_kwargs = {"eps": 0, "tolerance": 1e-8}
+    preconditioner = None if not precondition else jacobi_preconditioner.__matmul__
+    inv_GGN = CGInverseLinearOperator(
+        GGN + damping, **cg_kwargs, preconditioner=preconditioner
     )
-    compare_consecutive_matmats(inv_GGN_precond)
+    compare_consecutive_matmats(inv_GGN)
     # Need to use larger tolerances on GPU, despite float64
     atol, rtol = (5e-8, 5e-5) if "cpu" in str(dev) else (5e-7, 5e-4)
     compare_matmat(inv_GGN, inv_GGN_naive, atol=atol, rtol=rtol)
-    compare_matmat(inv_GGN_precond, inv_GGN_naive, atol=atol, rtol=rtol)
+
 
 def test_LSMRInverseLinearOperator_damped_GGN(inv_case, delta: float = 2e-2):
     """Test matrix multiplication with the inverse damped GGN with LSMR."""
@@ -89,6 +93,90 @@ def test_LSMRInverseLinearOperator_damped_GGN(inv_case, delta: float = 2e-2):
     compare_consecutive_matmats(inv_GGN)
     compare_matmat(inv_GGN, inv_GGN_naive)
 
+
+def test_KFAC_EKFAC_preconditioners_for_CG_and_Neumann(delta: float = 0.0):
+    """Test KFAC and EKFAC inverses as exact preconditioners on linear regression.
+
+    For a single linear layer with MSE loss, the GGN coincides with the Hessian, and
+    both KFAC and EKFAC are exact. Their damped inverses can therefore be used as
+    exact preconditioners for CG and Neumann.
+    """
+    manual_seed(1234)
+    model = Linear(3, 2, bias=False).double()
+    loss_func = MSELoss(reduction="mean")
+    X = randn(6, 3).double()
+    y = randn(6, 2).double()
+    data = [(X, y)]
+    params = [p for p in model.parameters() if p.requires_grad]
+
+    GGN_naive = functorch_ggn(model, loss_func, params, data).detach()
+    damped_GGN_naive = GGN_naive + delta * eye_like(GGN_naive)
+    inv_GGN_naive = inv(damped_GGN_naive)
+    inv_GGN_naive_linop = TensorLinearOperator(inv_GGN_naive)
+
+    GGN = GGNLinearOperator(model, loss_func, params, data)
+    damping = delta * IdentityLinearOperator([p.shape for p in params], X.device, X.dtype)
+
+    KFAC = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        fisher_type=FisherType.TYPE2
+    )
+    EKFAC = EKFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        fisher_type=FisherType.TYPE2
+    )
+    inv_KFAC = KFAC.inverse(damping=delta, use_exact_damping=True)
+    inv_EKFAC = EKFAC.inverse(damping=delta)
+
+    # check that for linear regression, KFAC and EKFAC are exact.
+    for inv_preconditioner in [inv_GGN_naive_linop, inv_KFAC, inv_EKFAC]:
+        compare_consecutive_matmats(inv_preconditioner)
+        compare_matmat(inv_preconditioner, inv_GGN_naive)
+
+    eigvals = eigvalsh(damped_GGN_naive)
+    neumann_scale = 2 / (eigvals.min().item() + eigvals.max().item())
+    preconditioners = [
+        (None, {"num_terms": 200, "scale": neumann_scale}),
+        (inv_GGN_naive_linop, {"num_terms": 1}),
+        (inv_KFAC, {"num_terms": 1}),
+        (inv_EKFAC, {"num_terms": 1}),
+    ]
+    inverse_constructors = [
+        (
+            CGInverseLinearOperator,
+            lambda preconditioner, _: {
+                "eps": 0,
+                "tolerance": 1e-8,
+                "preconditioner": preconditioner,
+            },
+        ),
+        (
+            NeumannInverseLinearOperator,
+            lambda preconditioner, neumann_kwargs: {
+                **neumann_kwargs,
+                "preconditioner": preconditioner,
+            },
+        ),
+    ]
+
+    for inv_preconditioner, neumann_kwargs in preconditioners:
+        preconditioner = (
+            None if inv_preconditioner is None else inv_preconditioner.__matmul__
+        )
+        for inverse_cls, kwargs_fn in inverse_constructors:
+            inv_GGN = inverse_cls(
+                GGN + damping, **kwargs_fn(preconditioner, neumann_kwargs)
+            )
+            compare_consecutive_matmats(inv_GGN)
+            compare_matmat(inv_GGN, inv_GGN_naive)
+
+
 def test_NeumannInverseLinearOperator_preconditioner():
     """Test NeumannInverseLinearOperator with a preconditioner on a toy example.
 
@@ -106,17 +194,16 @@ def test_NeumannInverseLinearOperator_preconditioner():
         [1.0, 4.0, 1.0],
         [1.0, 1.0, 3.0],
     ]).double()
-
+    A_linop = TensorLinearOperator(A)
 
     inv_A = inv(A)
-    inv_A_neumann = NeumannInverseLinearOperator(
-        TensorLinearOperator(A), num_terms=1_000
-    )
+    inv_A_neumann = NeumannInverseLinearOperator(A_linop, num_terms=1_000)
+    inv_A_neumann_20terms = NeumannInverseLinearOperator(A_linop, num_terms=20)
     inv_A_neumann_scaled_20terms = NeumannInverseLinearOperator(
-        TensorLinearOperator(A), num_terms=20, scale=0.3
+        A_linop, num_terms=20, scale=0.3
     )
     inv_A_neumann_scaled_100terms = NeumannInverseLinearOperator(
-        TensorLinearOperator(A), num_terms=100, scale=0.3
+        A_linop, num_terms=100, scale=0.3
     )
 
     # Directly applying the Neumann sereis will diverge.
@@ -124,7 +211,10 @@ def test_NeumannInverseLinearOperator_preconditioner():
         compare_consecutive_matmats(inv_A_neumann)
 
     tols = {"rtol": 1e-3, "atol": 1e-5}
-    # Only 20 terms with scaling is not enough to get a good approximation.
+    # Without preconditioning, 20 terms are not enough to get a good approximation.
+    with raises(AssertionError):
+        compare_matmat(inv_A_neumann_20terms, inv_A, **tols)
+    # No mater scaled or not, only 20 terms with scaling is not enough to get a good approximation.
     with raises(AssertionError):
         compare_matmat(inv_A_neumann_scaled_20terms, inv_A, **tols)
     # But 100 terms with scaling is enough to get a good approximation.
@@ -132,32 +222,28 @@ def test_NeumannInverseLinearOperator_preconditioner():
 
     # We can use Richardson preconditioner, then we don't need scale
     theta = 0.3
-    A_linop = TensorLinearOperator(A)
-    preconditioner_richardson = IdentityLinearOperator(A_linop._in_shape, A.device, A.dtype) * theta
-    inv_A_neumann_richardson = NeumannInverseLinearOperator(
-        TensorLinearOperator(A), num_terms=100, preconditioner=preconditioner_richardson.__matmul__
+    preconditioner_richardson = (
+        IdentityLinearOperator(A_linop._in_shape, A.device, A.dtype) * theta
     )
-    compare_consecutive_matmats(inv_A_neumann_richardson)
-    compare_matmat(inv_A_neumann_richardson, inv_A, **tols)
 
     # Jacobi preconditioner, then can converge with only 20 terms
-    diag_A = A.diag()
-    preconditioner_jacobi = TensorLinearOperator(diag_A.reciprocal().diag())
-    inv_A_neumann_jacobi = NeumannInverseLinearOperator(
-        TensorLinearOperator(A), num_terms=20, preconditioner=preconditioner_jacobi.__matmul__
-    )
-    compare_consecutive_matmats(inv_A_neumann_jacobi)
-    compare_matmat(inv_A_neumann_jacobi, inv_A, **tols)
+    preconditioner_jacobi = DiagonalLinearOperator(A.diag().reciprocal())
 
     # Gauss-Seidel preconditioner, then can converge with only 20 terms
     L = A.tril(-1)
     D = A.diag().diag()
     preconditioner_gauss_seidel = TensorLinearOperator((L + D).inverse())
-    inv_A_neumann_gauss_seidel = NeumannInverseLinearOperator(
-        TensorLinearOperator(A), num_terms=20, preconditioner=preconditioner_gauss_seidel.__matmul__
-    )
-    compare_consecutive_matmats(inv_A_neumann_gauss_seidel) 
-    compare_matmat(inv_A_neumann_gauss_seidel, inv_A, **tols)
+
+    for num_terms, preconditioner in [
+        (100, preconditioner_richardson),
+        (20, preconditioner_jacobi),
+        (20, preconditioner_gauss_seidel),
+    ]:
+        inv_A_neumann_preconditioned = NeumannInverseLinearOperator(
+            A_linop, num_terms=num_terms, preconditioner=preconditioner.__matmul__
+        )
+        compare_consecutive_matmats(inv_A_neumann_preconditioned)
+        compare_matmat(inv_A_neumann_preconditioned, inv_A, **tols)
 
 
 def test_NeumannInverseLinearOperator_toy():
