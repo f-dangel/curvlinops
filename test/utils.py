@@ -1052,6 +1052,29 @@ def change_dtype(case: tuple, dt: dtype) -> tuple:
     return model_func, loss_func, params, data, batch_size_fn
 
 
+def make_callable_model_func_test_case() -> tuple[
+    Callable[[dict[str, Tensor], Tensor], Tensor],
+    dict[str, Tensor],
+    list[tuple[Tensor, Tensor]],
+]:
+    """Create a callable model function with random params for testing.
+
+    Returns:
+        Tuple of (model_fn, params_dict, data) where ``model_fn`` has signature
+        ``(params_dict, X) -> prediction`` and ``params_dict`` contains random
+        values different from the underlying module's parameters.
+    """
+    manual_seed(0)
+    model = Sequential(Linear(4, 3), Linear(3, 2)).to(dtype=float64)
+    data = [(rand(5, 4, dtype=float64), rand(5, 2, dtype=float64))]
+    params_dict = {n: rand_like(p) for n, p in model.named_parameters()}
+
+    def model_fn(params_dict, X):
+        return functional_call(model, params_dict, (X,))
+
+    return model_fn, params_dict, data
+
+
 def check_linop_callable_model_func(
     linop_cls: type,
     ground_truth_fn: Callable,
@@ -1068,15 +1091,8 @@ def check_linop_callable_model_func(
             ``functorch_hessian``, ``functorch_ggn``). Must have signature
             ``(model_func, loss_func, params_dict, data) -> Tensor``.
     """
-    manual_seed(0)
-    model = Sequential(Linear(4, 3), Linear(3, 2)).to(dtype=float64)
+    model_fn, params_dict, data = make_callable_model_func_test_case()
     loss_func = MSELoss()
-    data = [(rand(5, 4, dtype=float64), rand(5, 2, dtype=float64))]
-
-    params_dict = {n: rand_like(p) for n, p in model.named_parameters()}
-
-    def model_fn(params_dict, X):
-        return functional_call(model, params_dict, (X,))
 
     op = linop_cls(model_fn, loss_func, params_dict, data)
     mat = ground_truth_fn(model_fn, loss_func, params_dict, data).detach()

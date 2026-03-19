@@ -114,6 +114,7 @@ class JacobianLinearOperator(CurvatureLinearOperator):
     """
 
     FIXED_DATA_ORDER: bool = True
+    SUPPORTS_FUNCTIONAL: bool = True
 
     @cached_property
     def _mp(
@@ -131,8 +132,9 @@ class JacobianLinearOperator(CurvatureLinearOperator):
 
     def __init__(
         self,
-        model_func: Module,
-        params: list[Parameter],
+        model_func: Module
+        | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
+        params: list[Parameter] | dict[str, Tensor],
         data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
@@ -220,8 +222,8 @@ class JacobianLinearOperator(CurvatureLinearOperator):
             Linear operator representing the transposed Jacobian.
         """
         return TransposedJacobianLinearOperator(
-            self._model_module,
-            list(self._params.values()),
+            self._model_func,
+            self._params,
             self._data,
             progressbar=self._progressbar,
             check_deterministic=False,
@@ -238,6 +240,7 @@ class TransposedJacobianLinearOperator(CurvatureLinearOperator):
     """
 
     FIXED_DATA_ORDER: bool = True
+    SUPPORTS_FUNCTIONAL: bool = True
 
     @cached_property
     def _mp(
@@ -253,8 +256,9 @@ class TransposedJacobianLinearOperator(CurvatureLinearOperator):
 
     def __init__(
         self,
-        model_func: Module,
-        params: list[Parameter],
+        model_func: Module
+        | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
+        params: list[Parameter] | dict[str, Tensor],
         data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
@@ -359,8 +363,8 @@ class TransposedJacobianLinearOperator(CurvatureLinearOperator):
             Linear operator representing the Jacobian.
         """
         return JacobianLinearOperator(
-            self._model_module,
-            list(self._params.values()),
+            self._model_func,
+            self._params,
             self._data,
             progressbar=self._progressbar,
             check_deterministic=False,
