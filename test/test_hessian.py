@@ -1,16 +1,12 @@
 """Contains tests for ``curvlinops/hessian``."""
 
-from torch import float64, manual_seed, rand
+from torch import float64, manual_seed, rand, rand_like
 from torch.func import functional_call
 from torch.nn import Linear, MSELoss, Sequential
 
 from curvlinops import HessianLinearOperator
 from curvlinops.examples.functorch import functorch_hessian
-from test.utils import (
-    change_dtype,
-    compare_consecutive_matmats,
-    compare_matmat,
-)
+from test.utils import change_dtype, compare_consecutive_matmats, compare_matmat
 
 
 def test_HessianLinearOperator(case):
@@ -40,10 +36,7 @@ def test_HessianLinearOperator_callable_model_func():
     loss_func = MSELoss()
     data = [(rand(5, 4, dtype=float64), rand(5, 2, dtype=float64))]
 
-    params_dict = {
-        n: rand(p.shape, dtype=float64, requires_grad=True)
-        for n, p in model.named_parameters()
-    }
+    params_dict = {n: rand_like(p) for n, p in model.named_parameters()}
 
     def model_fn(params_dict, X):
         return functional_call(model, params_dict, (X,))

@@ -832,9 +832,10 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
 
     def __init__(
         self,
-        model_func: Module,
+        model_func: Module
+        | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
         loss_func: Callable[[Tensor, Tensor], Tensor] | None,
-        params: list[Parameter],
+        params: list[Parameter] | dict[str, Tensor],
         data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
@@ -850,12 +851,16 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
             mini-batch labels y.
 
         Args:
-            model_func: A function that maps the mini-batch input X to predictions.
-                Could be a PyTorch module representing a neural network.
+            model_func: Either an ``nn.Module`` or a callable with signature
+                ``(params_dict, X) -> prediction``. Callable support requires
+                the subclass to set ``SUPPORTS_FUNCTIONAL = True``.
             loss_func: Loss function criterion. Maps predictions and mini-batch labels
                 to a scalar value. If ``None``, there is no loss function and the
                 represented matrix is independent of the loss function.
-            params: List of differentiable parameters used by the prediction function.
+            params: Parameters for the model. Either a ``list[Parameter]`` (requires
+                ``model_func`` to be a ``Module``) or a ``dict[str, Tensor]`` (requires
+                ``model_func`` to be a callable). When passing a dict, the
+                parameter ordering follows dict insertion order.
             data: Source from which mini-batches can be drawn, for instance a list of
                 mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``. Note that ``X``
                 could be a ``dict`` or ``UserDict``; this is useful for custom models.

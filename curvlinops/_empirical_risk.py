@@ -102,7 +102,7 @@ class _EmpiricalRiskMixin:
             if not callable(model_func):
                 raise ValueError(
                     "model_func must be an nn.Module or a callable, "
-                    f"got {type(model_func)}."
+                    f"got {type(model_func).__name__}."
                 )
             if not self.SUPPORTS_FUNCTIONAL:
                 raise ValueError(
