@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `HessianLinearOperator` ([PR](https://github.com/f-dangel/curvlinops/pull/275))
   - `GGNLinearOperator` ([PR](https://github.com/f-dangel/curvlinops/pull/277))
   - `EFLinearOperator` ([PR](https://github.com/f-dangel/curvlinops/pull/278))
+  - `GGNDiagonalLinearOperator` ([PR](https://github.com/f-dangel/curvlinops/pull/279))
   - `KFACLinearOperator` and `EKFACLinearOperator` with `backend="make_fx"`
     ([PR](https://github.com/f-dangel/curvlinops/pull/271))
 
