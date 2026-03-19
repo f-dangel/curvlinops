@@ -1,6 +1,6 @@
 """Contains functorch functionality for the examples."""
 
-from collections.abc import Iterable, MutableMapping
+from collections.abc import Callable, Iterable, MutableMapping
 from math import sqrt
 
 import torch
@@ -34,20 +34,21 @@ def blocks_to_matrix(blocks: dict[str, dict[str, Tensor]]) -> Tensor:
 
 
 def functorch_hessian(
-    model_func: Module,
+    model_func: Module | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
     loss_func: Module,
-    params: list[Tensor],
+    params: list[Tensor] | dict[str, Tensor],
     data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
     input_key: str | None = None,
 ) -> Tensor:
     """Compute the Hessian with functorch.
 
     Args:
-        model_func: A function that maps the mini-batch input X to predictions.
-            Could be a PyTorch module representing a neural network.
+        model_func: Either an ``nn.Module`` or a callable with signature
+            ``(params_dict, X) -> prediction``.
         loss_func: Loss function criterion. Maps predictions and mini-batch labels
             to a scalar value.
-        params: List of differentiable parameters used by the prediction function.
+        params: Either a ``list[Tensor]`` (for Module) or ``dict[str, Tensor]``
+            (for callable).
         data: Source from which mini-batches can be drawn, for instance a list of
             mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
         input_key: Key to obtain the input tensor when ``X`` is a dict-like object.
@@ -55,9 +56,9 @@ def functorch_hessian(
     Returns:
         Square matrix containing the Hessian.
     """
-    (dev,) = {p.device for p in params}
+    params_dict, f = _prepare_params_and_model(model_func, params)
+    (dev,) = {p.device for p in params_dict.values()}
     X, y = _concatenate_batches(data, input_key, device=dev)
-    params_dict = _make_params_dict(model_func, params)
 
     def loss(
         X: Tensor | MutableMapping, y: Tensor, params_dict: dict[str, Tensor]
@@ -67,7 +68,7 @@ def functorch_hessian(
         Returns:
             Scalar loss value.
         """
-        output = functional_call(model_func, params_dict, X)
+        output = f(params_dict, X)
         return functional_call(loss_func, {}, (output, y))
 
     params_argnum = 2
@@ -362,3 +363,52 @@ def _make_params_dict(model_func: Module, params: list[Tensor]) -> dict[str, Ten
     """
     name_dict = {p.data_ptr(): name for name, p in model_func.named_parameters()}
     return {name_dict[p.data_ptr()]: p for p in params}
+
+
+def _prepare_params_and_model(
+    model_func: Module | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
+    params: list[Tensor] | dict[str, Tensor],
+) -> tuple[
+    dict[str, Tensor],
+    Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
+]:
+    """Prepare parameters and model function for functorch computation.
+
+    Args:
+        model_func: Either an ``nn.Module`` or a callable with signature
+            ``(params_dict, X) -> prediction``.
+        params: Either a ``list[Tensor]`` (for Module) or ``dict[str, Tensor]``
+            (for callable).
+
+    Returns:
+        Tuple of (params_dict, model_callable) where ``model_callable`` has
+        signature ``(params_dict, X) -> prediction``.
+
+    Raises:
+        ValueError: If ``model_func`` and ``params`` types are incompatible.
+    """
+    if isinstance(model_func, Module):
+        if not isinstance(params, list):
+            raise ValueError(
+                "Module model_func requires params as list[Tensor], "
+                f"got {type(params).__name__}."
+            )
+        params_dict = _make_params_dict(model_func, params)
+
+        def f(params_dict: dict[str, Tensor], X: Tensor | MutableMapping) -> Tensor:
+            return functional_call(model_func, params_dict, X)
+
+    else:
+        if not callable(model_func):
+            raise ValueError(
+                "model_func must be an nn.Module or a callable, "
+                f"got {type(model_func).__name__}."
+            )
+        if not isinstance(params, dict):
+            raise ValueError(
+                "Callable model_func requires params as dict[str, Tensor], "
+                f"got {type(params).__name__}."
+            )
+        params_dict = params
+        f = model_func
+    return params_dict, f

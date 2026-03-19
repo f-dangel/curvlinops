@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added/New
 
+- Support callable `model_func` in `HessianLinearOperator`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/275))
+
 - Support plain callable `(params_dict, X) -> prediction` as `model_func` in
   `KFACLinearOperator` and `EKFACLinearOperator` with `backend="make_fx"`.
   Pass `params` as `dict[str, Tensor]` instead of `list[Parameter]`
