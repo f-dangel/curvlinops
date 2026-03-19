@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from linear_operator.utils.linear_cg import linear_cg
 from numpy import column_stack
 from scipy.sparse.linalg import lsmr
 from torch import Tensor, as_tensor, cat, device, dtype, isnan
 
-from curvlinops._checks import _check_same_tensor_list_shape
 from curvlinops._torch_base import PyTorchLinearOperator
 
 
@@ -75,26 +76,27 @@ class CGInverseLinearOperator(_InversePyTorchLinearOperator):
         Example:
             >>> from torch import allclose, tensor
             >>> from curvlinops import CGInverseLinearOperator
+            >>> from curvlinops.diag import DiagonalLinearOperator
             >>> from curvlinops.examples import TensorLinearOperator
             >>> A = tensor([[4.0, 1.0, 0.0], [1.0, 3.0, 1.0], [0.0, 1.0, 2.0]])
             >>> b = tensor([1.0, 2.0, 3.0])
             >>> A_linop = TensorLinearOperator(A)
-            >>> solution = CGInverseLinearOperator(
-            ...     A_linop, max_iter=10, max_tridiag_iter=10, tolerance=1e-7
+            >>> A_inv_b = CGInverseLinearOperator(
+            ...     A_linop, max_iter=3, max_tridiag_iter=3, tolerance=1e-7
             ... ) @ b
-            >>> inverse_diagonal = TensorLinearOperator(A.diag().reciprocal().diag())
-            >>> solution_preconditioned = CGInverseLinearOperator(
+            >>> inverse_diagonal = DiagonalLinearOperator([A.diag().reciprocal()])
+            >>> A_inv_b_preconditioned = CGInverseLinearOperator(
             ...     A_linop,
-            ...     max_iter=10,
-            ...     max_tridiag_iter=10,
+            ...     max_iter=3,
+            ...     max_tridiag_iter=3,
             ...     tolerance=1e-7,
             ...     preconditioner=inverse_diagonal.__matmul__,
             ... ) @ b
-            >>> solution.round(decimals=4)
+            >>> A_inv_b.round(decimals=4)
             tensor([0.2222, 0.1111, 1.4444])
-            >>> solution_preconditioned.round(decimals=4)
+            >>> A_inv_b_preconditioned.round(decimals=4)
             tensor([0.2222, 0.1111, 1.4444])
-            >>> allclose(solution, solution_preconditioned)
+            >>> allclose(A_inv_b, A_inv_b_preconditioned)
             True
         """
         super().__init__(A)
@@ -227,7 +229,7 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
         num_terms: int = 100,
         scale: float = 1.0,
         check_nan: bool = True,
-        preconditioner: None | PyTorchLinearOperator = None,
+        preconditioner: None | Callable[[Tensor], Tensor] = None,
     ):
         r"""Store the linear operator whose inverse should be represented.
 
@@ -275,19 +277,17 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
                 :math:`\mathbf{A}^{-1} \approx \alpha \sum_{k=0}^{K}
                 (\mathbf{I} - \alpha \mathbf{P}\mathbf{A})^k \mathbf{P}`,
                 where :math:`\alpha` is given by ``scale``. This preconditioned
-                formulation is inspired by Wang et al. (NeurIPS 2025). ``preconditioner``
-                should have the same in-/out-shapes as ``A``. Default: ``None``.
-
-        Raises:
-            ValueError: If ``preconditioner`` is provided with incompatible shapes.
+                formulation is inspired by Wang et al. (NeurIPS 2025).
+                ``preconditioner`` should be a callable that applies a left
+                preconditioning operation to a supplied vector or matrix in tensor
+                format, e.g. a `PyTorchLinearOperator`'s ``__matmul__`` method.
+                Default: ``None``.
         """
         super().__init__(A)
         self._num_terms = num_terms
         self._scale = scale
         self._check_nan = check_nan
         self._preconditioner = preconditioner
-        if preconditioner is not None:
-            _check_same_tensor_list_shape(A, preconditioner)
 
     def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         """Multiply the inverse of A onto a matrix in list format.
@@ -301,18 +301,30 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
         Raises:
             ValueError: If ``NaN`` check is turned on and ``NaN`` values are detected.
         """
+        X_flat = cat([x.flatten(end_dim=-2) for x in X])
+        _, num_vecs = X_flat.shape
+
         preconditioned = self._preconditioner is not None
         if not preconditioned:
             rhs_list = X
             apply_iteration_operator = self._A._matmat
         else:
-            rhs_list = self._preconditioner @ X
+            rhs_flat = self._preconditioner(X_flat)
+            rhs_list = [
+                r.reshape(*s, num_vecs)
+                for r, s in zip(rhs_flat.split(self._out_shape_flat), self._out_shape)
+            ]
 
-            # Use the public matmul interface for preconditioned updates so
-            # tensor/list pre-/post-processing stays consistent across all
-            # preconditioner operator types.
             def apply_iteration_operator(v_list: list[Tensor]) -> list[Tensor]:
-                return self._preconditioner @ (self._A @ v_list)
+                v_flat = cat([v.flatten(end_dim=-2) for v in v_list])
+                A_v_flat = self._A @ v_flat
+                PA_v_flat = self._preconditioner(A_v_flat)
+                return [
+                    r.reshape(*s, num_vecs)
+                    for r, s in zip(
+                        PA_v_flat.split(self._out_shape_flat), self._out_shape
+                    )
+                ]
 
         result_list = [x.clone() for x in rhs_list]
         v_list = [x.clone() for x in rhs_list]
@@ -338,10 +350,21 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
 
         Returns:
             A linear operator representing the adjoint.
+
+        Raises:
+            NotImplementedError: If the preconditioner's adjoint cannot be inferred.
         """
-        preconditioner = (
-            None if self._preconditioner is None else self._preconditioner._adjoint()
-        )
+        preconditioner = None
+        if self._preconditioner is not None:
+            preconditioner_linop = getattr(self._preconditioner, "__self__", None)
+            if isinstance(preconditioner_linop, PyTorchLinearOperator):
+                preconditioner = preconditioner_linop.adjoint().__matmul__
+            else:
+                raise NotImplementedError(
+                    "Adjoint with a preconditioner is only supported when the "
+                    "preconditioner is a bound PyTorchLinearOperator.__matmul__ "
+                    "method."
+                )
         return NeumannInverseLinearOperator(
             self._A._adjoint(),
             num_terms=self._num_terms,
