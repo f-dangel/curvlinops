@@ -1065,7 +1065,8 @@ def check_linop_callable_model_func(
     Args:
         linop_cls: The linear operator class to test.
         ground_truth_fn: The functorch ground truth function (e.g.
-            ``functorch_hessian``, ``functorch_ggn``).
+            ``functorch_hessian``, ``functorch_ggn``). Must have signature
+            ``(model_func, loss_func, params_dict, data) -> Tensor``.
     """
     manual_seed(0)
     model = Sequential(Linear(4, 3), Linear(3, 2)).to(dtype=float64)

@@ -116,15 +116,19 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
     diagonal as a list of tensors.
 
     Attributes:
+        SUPPORTS_FUNCTIONAL: Whether the operator supports callable model_func.
         FIXED_DATA_ORDER: Whether the data loader must return the same data
             for every iteration. Set to ``True`` when ``mc_samples > 0``.
     """
 
+    SUPPORTS_FUNCTIONAL: bool = True
+
     def __init__(
         self,
-        model_func: Module,
+        model_func: Module
+        | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
         loss_func: Callable[[Tensor, Tensor], Tensor],
-        params: list[Parameter],
+        params: list[Parameter] | dict[str, Tensor],
         data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
@@ -141,11 +145,13 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
             mini-batch labels y.
 
         Args:
-            model_func: A function that maps the mini-batch input X to predictions.
-                Could be a PyTorch module representing a neural network.
+            model_func: Either an ``nn.Module`` or a callable with signature
+                ``(params_dict, X) -> prediction``.
             loss_func: Loss function criterion. Maps predictions and mini-batch labels
                 to a scalar value.
-            params: List of differentiable parameters used by the prediction function.
+            params: Parameters for the model. Either a ``list[Parameter]`` (requires
+                ``model_func`` to be a ``Module``) or a ``dict[str, Tensor]`` (requires
+                ``model_func`` to be a callable).
             data: Source from which mini-batches can be drawn, for instance a list of
                 mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``. Note that ``X``
                 could be a ``dict`` or ``UserDict``; this is useful for custom models.

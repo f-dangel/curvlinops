@@ -4,7 +4,7 @@ from torch import float64
 
 from curvlinops.examples.functorch import functorch_ggn
 from curvlinops.ggn_diagonal import GGNDiagonalLinearOperator
-from test.utils import change_dtype, compare_matmat
+from test.utils import change_dtype, check_linop_callable_model_func, compare_matmat
 
 
 def test_GGNDiagonalLinearOperator_matvec(case):
@@ -25,3 +25,14 @@ def test_GGNDiagonalLinearOperator_matvec(case):
         .diag()  # embed it back into a matrix
     )
     compare_matmat(G_op, G_mat)
+
+
+def test_GGNDiagonalLinearOperator_callable_model_func():
+    """Test GGN diagonal with a callable model_func and different parameter values."""
+
+    def ggn_diagonal_ground_truth(*args, **kwargs):
+        return functorch_ggn(*args, **kwargs).diag().diag()
+
+    check_linop_callable_model_func(
+        GGNDiagonalLinearOperator, ggn_diagonal_ground_truth
+    )
