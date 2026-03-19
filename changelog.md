@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Support plain callable `(params_dict, X) -> prediction` as `model_func`
   (with `params` as `dict[str, Tensor]`):
   - `HessianLinearOperator` ([PR](https://github.com/f-dangel/curvlinops/pull/275))
-  - `GGNLinearOperator` ([PR](https://github.com/f-dangel/curvlinops/pull/276))
+  - `GGNLinearOperator` ([PR](https://github.com/f-dangel/curvlinops/pull/277))
+  - `EFLinearOperator` ([PR](https://github.com/f-dangel/curvlinops/pull/278))
   - `KFACLinearOperator` and `EKFACLinearOperator` with `backend="make_fx"`
     ([PR](https://github.com/f-dangel/curvlinops/pull/271))
 

@@ -191,20 +191,21 @@ def functorch_gradient_and_loss(
 
 
 def functorch_empirical_fisher(
-    model_func: Module,
+    model_func: Module | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
     loss_func: Module,
-    params: list[Tensor],
+    params: list[Tensor] | dict[str, Tensor],
     data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
     input_key: str | None = None,
 ) -> Tensor:
     """Compute the empirical Fisher with functorch.
 
     Args:
-        model_func: A function that maps the mini-batch input X to predictions.
-            Could be a PyTorch module representing a neural network.
+        model_func: Either an ``nn.Module`` or a callable with signature
+            ``(params_dict, X) -> prediction``.
         loss_func: Loss function criterion. Maps predictions and mini-batch labels
             to a scalar value.
-        params: List of differentiable parameters used by the prediction function.
+        params: Either a ``list[Tensor]`` (for Module) or ``dict[str, Tensor]``
+            (for callable).
         data: Source from which mini-batches can be drawn, for instance a list of
             mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
         input_key: Key to obtain the input tensor when ``X`` is a dict-like object.
@@ -212,9 +213,9 @@ def functorch_empirical_fisher(
     Returns:
         Square matrix containing the empirical Fisher.
     """
-    (dev,) = {p.device for p in params}
+    params_dict, f = _prepare_params_and_model(model_func, params)
+    (dev,) = {p.device for p in params_dict.values()}
     X, y = _concatenate_batches(data, input_key, device=dev)
-    params_dict = _make_params_dict(model_func, params)
 
     def losses(
         X: Tensor | MutableMapping, y: Tensor, params_dict: dict[str, Tensor]
@@ -231,7 +232,7 @@ def functorch_empirical_fisher(
         Returns:
             1d tensor containing all elementary losses.
         """
-        output = functional_call(model_func, params_dict, X)
+        output = f(params_dict, X)
 
         flatten_output = {
             MSELoss: "batch ... d_out -> (batch ... d_out)",
@@ -256,7 +257,7 @@ def functorch_empirical_fisher(
         MSELoss: y.shape[:-1].numel(),
         BCEWithLogitsLoss: y.shape[:-1].numel(),
     }[loss_func.__class__]
-    num_params = sum(p.numel() for p in params)
+    num_params = sum(p.numel() for p in params_dict.values())
 
     # the losses which model the same random variable
     grouped_losses = y.numel() // num_losses

@@ -122,6 +122,7 @@ class EFLinearOperator(CurvatureLinearOperator):
 
     SUPPORTED_LOSSES = (MSELoss, CrossEntropyLoss, BCEWithLogitsLoss)
     SELF_ADJOINT: bool = True
+    SUPPORTS_FUNCTIONAL: bool = True
 
     @cached_property
     def _vp(
