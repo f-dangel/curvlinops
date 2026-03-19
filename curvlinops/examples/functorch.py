@@ -78,9 +78,9 @@ def functorch_hessian(
 
 
 def functorch_ggn(
-    model_func: Module,
+    model_func: Module | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
     loss_func: Module,
-    params: list[Tensor],
+    params: list[Tensor] | dict[str, Tensor],
     data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
     input_key: str | None = None,
 ) -> Tensor:
@@ -89,11 +89,12 @@ def functorch_ggn(
     The GGN is the Hessian when the model is replaced by its linearization.
 
     Args:
-        model_func: A function that maps the mini-batch input X to predictions.
-            Could be a PyTorch module representing a neural network.
+        model_func: Either an ``nn.Module`` or a callable with signature
+            ``(params_dict, X) -> prediction``.
         loss_func: Loss function criterion. Maps predictions and mini-batch labels
             to a scalar value.
-        params: List of differentiable parameters used by the prediction function.
+        params: Either a ``list[Tensor]`` (for Module) or ``dict[str, Tensor]``
+            (for callable).
         data: Source from which mini-batches can be drawn, for instance a list of
             mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
         input_key: Key to obtain the input tensor when ``X`` is a dict-like object.
@@ -101,9 +102,9 @@ def functorch_ggn(
     Returns:
         Square matrix containing the GGN.
     """
-    (dev,) = {p.device for p in params}
+    params_dict, f = _prepare_params_and_model(model_func, params)
+    (dev,) = {p.device for p in params_dict.values()}
     X, y = _concatenate_batches(data, input_key, device=dev)
-    params_dict = _make_params_dict(model_func, params)
 
     def linearized_model(
         anchor_dict: dict[str, Tensor],
@@ -115,14 +116,8 @@ def functorch_ggn(
         Returns:
             Linearized model output at the provided parameters.
         """
-
-        def model_fn_params_only(params_dict: dict[str, Tensor]) -> Tensor:
-            return functional_call(model_func, params_dict, X)
-
         diff_dict = {n: params_dict[n] - anchor_dict[n] for n in params_dict}
-        model_at_anchor, jvp_diff = jvp(
-            model_fn_params_only, (anchor_dict,), (diff_dict,)
-        )
+        model_at_anchor, jvp_diff = jvp(lambda p: f(p, X), (anchor_dict,), (diff_dict,))
 
         return model_at_anchor + jvp_diff
 
