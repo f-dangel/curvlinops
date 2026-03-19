@@ -8,13 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added/New
 
-- Support callable `model_func` in `HessianLinearOperator`
-  ([PR](https://github.com/f-dangel/curvlinops/pull/275))
-
-- Support plain callable `(params_dict, X) -> prediction` as `model_func` in
-  `KFACLinearOperator` and `EKFACLinearOperator` with `backend="make_fx"`.
-  Pass `params` as `dict[str, Tensor]` instead of `list[Parameter]`
-  ([PR](https://github.com/f-dangel/curvlinops/pull/271))
+- Support plain callable `(params_dict, X) -> prediction` as `model_func`
+  (with `params` as `dict[str, Tensor]`):
+  - `HessianLinearOperator` ([PR](https://github.com/f-dangel/curvlinops/pull/275))
+  - `GGNLinearOperator` ([PR](https://github.com/f-dangel/curvlinops/pull/276))
+  - `KFACLinearOperator` and `EKFACLinearOperator` with `backend="make_fx"`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/271))
 
 - **Backward-incompatible:** Add MC-sampling option (`mc_samples`) to
   `GGNLinearOperator` as replacement for the Fisher, remove `FisherMCLinearOperator`

@@ -237,6 +237,7 @@ class GGNLinearOperator(CurvatureLinearOperator):
     """
 
     SELF_ADJOINT: bool = True
+    SUPPORTS_FUNCTIONAL: bool = True
     MC_SUPPORTED_LOSSES = (MSELoss, CrossEntropyLoss, BCEWithLogitsLoss)
 
     def __init__(
