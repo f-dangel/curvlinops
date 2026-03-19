@@ -52,7 +52,7 @@ def test_CGInverseLinearOperator_damped_GGN(inv_case, delta_rel: float = 2e-2):
     # specify tolerance and turn off internal damping to get solution with accuracy
     jacobi_preconditioner = TensorLinearOperator(damped_GGN_naive.diag().reciprocal().diag())
     cg_kwargs = {"eps": 0, "tolerance": 1e-10, "max_iter": 500, "max_tridiag_iter": 500}
-    inv_GGN = CGInverseLinearOperator(GGN + damping, **cg_kwargs)
+    inv_GGN = CGInverseLinearOperator(GGN + damping)
     compare_consecutive_matmats(inv_GGN)
     inv_GGN_precond = CGInverseLinearOperator(
         GGN + damping,
@@ -135,7 +135,7 @@ def test_NeumannInverseLinearOperator_preconditioner():
     A_linop = TensorLinearOperator(A)
     preconditioner_richardson = IdentityLinearOperator(A_linop._in_shape, A.device, A.dtype) * theta
     inv_A_neumann_richardson = NeumannInverseLinearOperator(
-        TensorLinearOperator(A), num_terms=100, preconditioner=preconditioner_richardson
+        TensorLinearOperator(A), num_terms=100, preconditioner=preconditioner_richardson.__matmul__
     )
     compare_consecutive_matmats(inv_A_neumann_richardson)
     compare_matmat(inv_A_neumann_richardson, inv_A, **tols)
@@ -144,7 +144,7 @@ def test_NeumannInverseLinearOperator_preconditioner():
     diag_A = A.diag()
     preconditioner_jacobi = TensorLinearOperator(diag_A.reciprocal().diag())
     inv_A_neumann_jacobi = NeumannInverseLinearOperator(
-        TensorLinearOperator(A), num_terms=20, preconditioner=preconditioner_jacobi
+        TensorLinearOperator(A), num_terms=20, preconditioner=preconditioner_jacobi.__matmul__
     )
     compare_consecutive_matmats(inv_A_neumann_jacobi)
     compare_matmat(inv_A_neumann_jacobi, inv_A, **tols)
@@ -154,7 +154,7 @@ def test_NeumannInverseLinearOperator_preconditioner():
     D = A.diag().diag()
     preconditioner_gauss_seidel = TensorLinearOperator((L + D).inverse())
     inv_A_neumann_gauss_seidel = NeumannInverseLinearOperator(
-        TensorLinearOperator(A), num_terms=20, preconditioner=preconditioner_gauss_seidel
+        TensorLinearOperator(A), num_terms=20, preconditioner=preconditioner_gauss_seidel.__matmul__
     )
     compare_consecutive_matmats(inv_A_neumann_gauss_seidel) 
     compare_matmat(inv_A_neumann_gauss_seidel, inv_A, **tols)
