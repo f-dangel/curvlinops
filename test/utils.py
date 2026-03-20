@@ -16,7 +16,6 @@ from torch import (
     device,
     dtype,
     eye,
-    float64,
     linalg,
     logdet,
     manual_seed,
@@ -1052,50 +1051,39 @@ def change_dtype(case: tuple, dt: dtype) -> tuple:
     return model_func, loss_func, params, data, batch_size_fn
 
 
-def make_callable_model_func_test_case() -> tuple[
-    Callable[[dict[str, Tensor], Tensor], Tensor],
+def to_functional(
+    model_func: Module,
+    loss_func: Module,
+    params: list[Tensor],
+    data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
+    batch_size_fn: Callable[[MutableMapping | Tensor], int] | None,
+) -> tuple[
+    Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
+    Module,
     dict[str, Tensor],
-    list[tuple[Tensor, Tensor]],
+    Iterable[tuple[Tensor | MutableMapping, Tensor]],
+    Callable[[MutableMapping | Tensor], int] | None,
 ]:
-    """Create a callable model function with random params for testing.
+    """Convert a Module-based test case to a callable-based test case.
 
-    Returns:
-        Tuple of (model_fn, params_dict, data) where ``model_fn`` has signature
-        ``(params_dict, X) -> prediction`` and ``params_dict`` contains random
-        values different from the underlying module's parameters.
-    """
-    manual_seed(0)
-    model = Sequential(Linear(4, 3), Linear(3, 2)).to(dtype=float64)
-    data = [(rand(5, 4, dtype=float64), rand(5, 2, dtype=float64))]
-    params_dict = {n: rand_like(p) for n, p in model.named_parameters()}
-
-    def model_fn(params_dict, X):
-        return functional_call(model, params_dict, (X,))
-
-    return model_fn, params_dict, data
-
-
-def check_linop_callable_model_func(
-    linop_cls: type,
-    ground_truth_fn: Callable,
-) -> None:
-    """Check that a linear operator works with a callable model_func.
-
-    Creates a callable-based operator with random parameter values (different
-    from the module's own parameters) and verifies it matches the functorch
-    ground truth.
+    Creates a callable wrapper around the module and random parameter values
+    (different from the module's own parameters) to verify that operators
+    correctly use the provided params dict rather than the module's state.
 
     Args:
-        linop_cls: The linear operator class to test.
-        ground_truth_fn: The functorch ground truth function (e.g.
-            ``functorch_hessian``, ``functorch_ggn``). Must have signature
-            ``(model_func, loss_func, params_dict, data) -> Tensor``.
+        model_func: The neural network module.
+        loss_func: The loss function.
+        params: List of model parameters.
+        data: The data.
+        batch_size_fn: Optional batch size function.
+
+    Returns:
+        Tuple of (model_fn, loss_func, params_dict, data, batch_size_fn).
     """
-    model_fn, params_dict, data = make_callable_model_func_test_case()
-    loss_func = MSELoss()
+    ptr_to_name = {p.data_ptr(): name for name, p in model_func.named_parameters()}
+    params_dict = {ptr_to_name[p.data_ptr()]: rand_like(p) for p in params}
 
-    op = linop_cls(model_fn, loss_func, params_dict, data)
-    mat = ground_truth_fn(model_fn, loss_func, params_dict, data).detach()
+    def model_fn(params_dict: dict[str, Tensor], X: Tensor | MutableMapping) -> Tensor:
+        return functional_call(model_func, params_dict, (X,))
 
-    compare_consecutive_matmats(op)
-    compare_matmat(op, mat)
+    return model_fn, loss_func, params_dict, data, batch_size_fn

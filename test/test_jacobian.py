@@ -8,18 +8,12 @@ from test.utils import (
     change_dtype,
     compare_consecutive_matmats,
     compare_matmat,
-    make_callable_model_func_test_case,
+    to_functional,
 )
 
 
-def test_JacobianLinearOperator(case):
-    """Test matrix-matrix multiplication with the Jacobian.
-
-    Args:
-        case: Tuple of model, loss function, parameters, data, and batch size getter.
-    """
-    model_func, _, params, data, batch_size_fn = change_dtype(case, float64)
-
+def _test_jacobian(model_func, loss_func, params, data, batch_size_fn):
+    """Shared test logic for Jacobian (Module or callable)."""
     J = JacobianLinearOperator(model_func, params, data, batch_size_fn=batch_size_fn)
     J_mat = functorch_jacobian(model_func, params, data, input_key="x").detach()
 
@@ -27,14 +21,8 @@ def test_JacobianLinearOperator(case):
     compare_matmat(J, J_mat)
 
 
-def test_TransposedJacobianLinearOperator(case):
-    """Test matrix-matrix multiplication with the transpose Jacobian.
-
-    Args:
-        case: Tuple of model, loss function, parameters, data, and batch size getter.
-    """
-    model_func, _, params, data, batch_size_fn = change_dtype(case, float64)
-
+def _test_transposed_jacobian(model_func, loss_func, params, data, batch_size_fn):
+    """Shared test logic for transposed Jacobian (Module or callable)."""
     JT = TransposedJacobianLinearOperator(
         model_func, params, data, batch_size_fn=batch_size_fn
     )
@@ -44,23 +32,37 @@ def test_TransposedJacobianLinearOperator(case):
     compare_matmat(JT, JT_mat)
 
 
-def test_JacobianLinearOperator_callable_model_func():
-    """Test Jacobian with a callable model_func and different parameter values."""
-    model_fn, params_dict, data = make_callable_model_func_test_case()
+def test_JacobianLinearOperator(case):
+    """Test Jacobian with Module model_func.
 
-    J = JacobianLinearOperator(model_fn, params_dict, data)
-    J_mat = functorch_jacobian(model_fn, params_dict, data).detach()
-
-    compare_consecutive_matmats(J)
-    compare_matmat(J, J_mat)
+    Args:
+        case: Tuple of model, loss function, parameters, data, and batch size getter.
+    """
+    _test_jacobian(*change_dtype(case, float64))
 
 
-def test_TransposedJacobianLinearOperator_callable_model_func():
-    """Test transposed Jacobian with a callable model_func."""
-    model_fn, params_dict, data = make_callable_model_func_test_case()
+def test_JacobianLinearOperator_functional(case):
+    """Test Jacobian with callable model_func.
 
-    JT = TransposedJacobianLinearOperator(model_fn, params_dict, data)
-    JT_mat = functorch_jacobian(model_fn, params_dict, data).detach().T
+    Args:
+        case: Tuple of model, loss function, parameters, data, and batch size getter.
+    """
+    _test_jacobian(*to_functional(*change_dtype(case, float64)))
 
-    compare_consecutive_matmats(JT)
-    compare_matmat(JT, JT_mat)
+
+def test_TransposedJacobianLinearOperator(case):
+    """Test transposed Jacobian with Module model_func.
+
+    Args:
+        case: Tuple of model, loss function, parameters, data, and batch size getter.
+    """
+    _test_transposed_jacobian(*change_dtype(case, float64))
+
+
+def test_TransposedJacobianLinearOperator_functional(case):
+    """Test transposed Jacobian with callable model_func.
+
+    Args:
+        case: Tuple of model, loss function, parameters, data, and batch size getter.
+    """
+    _test_transposed_jacobian(*to_functional(*change_dtype(case, float64)))

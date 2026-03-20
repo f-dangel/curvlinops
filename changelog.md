@@ -67,6 +67,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+- Update `functorch_gradient_and_loss` to accept callable model_func.
+  Add `to_functional` test helper and parametrized functional tests for
+  all operators
+  ([PR](https://github.com/f-dangel/curvlinops/pull/281))
+
 - Refactor `_data_prediction_loss_gradient` to use `torch.func.grad_and_value`
   instead of `torch.autograd.grad`, removing the `requires_grad` requirement
   on params for callable model functions
