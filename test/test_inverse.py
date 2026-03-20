@@ -30,14 +30,19 @@ def test_CGInverseLinearOperator_damped_GGN(inv_case, delta_rel: float = 2e-2):
             to obtain the damping value.
     """
     model_func, loss_func, params, data, batch_size_fn = change_dtype(inv_case, float64)
-    (dev,), (dt,) = {p.device for p in params}, {p.dtype for p in params}
+    (dev,), (dt,) = (
+        {p.device for p in params.values()},
+        {p.dtype for p in params.values()},
+    )
 
     GGN_naive = functorch_ggn(
         model_func, loss_func, params, data, input_key="x"
     ).detach()
     # add damping proportional to average trace
     delta = delta_rel * GGN_naive.diag().mean().item()
-    damping = delta * IdentityLinearOperator([p.shape for p in params], dev, dt)
+    damping = delta * IdentityLinearOperator(
+        [p.shape for p in params.values()], dev, dt
+    )
     GGN = GGNLinearOperator(
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn
     )
@@ -54,12 +59,17 @@ def test_CGInverseLinearOperator_damped_GGN(inv_case, delta_rel: float = 2e-2):
 def test_LSMRInverseLinearOperator_damped_GGN(inv_case, delta: float = 2e-2):
     """Test matrix multiplication with the inverse damped GGN with LSMR."""
     model_func, loss_func, params, data, batch_size_fn = change_dtype(inv_case, float64)
-    (dev,), (dt,) = {p.device for p in params}, {p.dtype for p in params}
+    (dev,), (dt,) = (
+        {p.device for p in params.values()},
+        {p.dtype for p in params.values()},
+    )
 
     GGN = GGNLinearOperator(
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn
     )
-    damping = delta * IdentityLinearOperator([p.shape for p in params], dev, dt)
+    damping = delta * IdentityLinearOperator(
+        [p.shape for p in params.values()], dev, dt
+    )
 
     # set hyperparameters such that LSMR is accurate enough
     inv_GGN = LSMRInverseLinearOperator(

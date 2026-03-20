@@ -11,7 +11,6 @@ from test.utils import (
     compare_consecutive_matmats,
     compare_matmat,
     compare_matmat_expectation,
-    to_functional,
 )
 
 MAX_REPEATS_MC_SAMPLES = [(4_000, 1), (40, 100)]
@@ -21,8 +20,14 @@ MAX_REPEATS_MC_SAMPLES_IDS = [
 CHECK_EVERY = 100
 
 
-def _test_ggn(model_func, loss_func, params, data, batch_size_fn):
-    """Shared test logic for GGN (Module or callable)."""
+def test_GGNLinearOperator_matvec(case):
+    """Test matrix-matrix multiplication with the GGN.
+
+    Args:
+        case: Tuple of model, loss function, parameters, data, and batch size getter.
+    """
+    model_func, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
+
     G = GGNLinearOperator(
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn
     )
@@ -30,24 +35,6 @@ def _test_ggn(model_func, loss_func, params, data, batch_size_fn):
 
     compare_consecutive_matmats(G)
     compare_matmat(G, G_mat)
-
-
-def test_GGNLinearOperator_matvec(case):
-    """Test GGN with Module model_func.
-
-    Args:
-        case: Tuple of model, loss function, parameters, data, and batch size getter.
-    """
-    _test_ggn(*change_dtype(case, float64))
-
-
-def test_GGNLinearOperator_functional(case):
-    """Test GGN with callable model_func.
-
-    Args:
-        case: Tuple of model, loss function, parameters, data, and batch size getter.
-    """
-    _test_ggn(*to_functional(*change_dtype(case, float64)))
 
 
 @mark.parametrize(

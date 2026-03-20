@@ -50,6 +50,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed/Removed
 
+- **Backward-incompatible:** Migrate `params` from `list[Parameter]` to
+  `dict[str, Tensor]` across all operators. Pass
+  ``dict(model.named_parameters())`` instead of ``list(model.parameters())``.
+  Remove `SUPPORTS_FUNCTIONAL` flag and `identify_free_parameters` from init
+  ([PR](https://github.com/f-dangel/curvlinops/pull/283))
+
 - **Backward-incompatible:** Remove block-diagonal Hessian support (`block_sizes`
   parameter from `HessianLinearOperator` and `CurvatureLinearOperator`)
   ([PR](https://github.com/f-dangel/curvlinops/pull/267))

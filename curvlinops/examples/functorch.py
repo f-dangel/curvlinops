@@ -129,8 +129,6 @@ def functorch_ggn(
     ) -> Tensor:
         """Compute the loss given a mini-batch under a linearized NN around anchor.
 
-        # noqa: DAR101
-
         Returns:
             f(X, θ₀) + (J_θ₀ f(X, θ₀)) @ (θ - θ₀) with f the neural network, θ₀ the anchor
             point of the linearization, and θ the evaluation point.
@@ -387,12 +385,10 @@ def _prepare_params_and_model(
         ValueError: If ``model_func`` and ``params`` types are incompatible.
     """
     if isinstance(model_func, Module):
-        if not isinstance(params, list):
-            raise ValueError(
-                "Module model_func requires params as list[Tensor], "
-                f"got {type(params).__name__}."
-            )
-        params_dict = _make_params_dict(model_func, params)
+        if isinstance(params, list):
+            params_dict = _make_params_dict(model_func, params)
+        else:
+            params_dict = params
 
         def f(params_dict: dict[str, Tensor], X: Tensor | MutableMapping) -> Tensor:
             return functional_call(model_func, params_dict, X)

@@ -24,7 +24,6 @@ from torch.nn import (
     CrossEntropyLoss,
     Module,
     MSELoss,
-    Parameter,
 )
 
 from curvlinops._torch_base import _ChainPyTorchLinearOperator
@@ -98,7 +97,7 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
         model_func: Module
         | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
         loss_func: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
-        params: list[Parameter] | dict[str, Tensor],
+        params: dict[str, Tensor],
         data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
@@ -128,8 +127,6 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
                 ``backend="make_fx"`` and ``params`` as ``dict[str, Tensor]``.
             loss_func: The loss function.
             params: The parameters defining the Fisher/GGN that will be approximated
-                through KFAC. Either a ``list[Parameter]`` (for ``Module``) or a
-                ``dict[str, Tensor]`` (for callable ``model_func``).
             data: A data loader containing the data of the Fisher/GGN.
             progressbar: Whether to show a progress bar when computing the Kronecker
                 factors. Defaults to ``False``.

@@ -3,7 +3,7 @@
 from collections.abc import Callable, Iterable, MutableMapping
 
 from torch import Tensor
-from torch.nn import Module, Parameter
+from torch.nn import Module
 
 from curvlinops.computers.ggn_diagonal import GGNDiagonalComputer
 from curvlinops.diag import DiagonalLinearOperator
@@ -27,7 +27,7 @@ class GGNDiagonalLinearOperator(DiagonalLinearOperator):
         model_func: Module
         | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
         loss_func: Callable[[Tensor, Tensor], Tensor],
-        params: list[Parameter] | dict[str, Tensor],
+        params: dict[str, Tensor],
         data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,

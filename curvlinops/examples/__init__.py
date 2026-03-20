@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, MutableMapping
 
 from torch import Tensor, device, dtype, einsum, ones
-from torch.nn import Module, Parameter
+from torch.nn import Module
 
 from curvlinops._empirical_risk import _EmpiricalRiskMixin
 from curvlinops._torch_base import PyTorchLinearOperator
@@ -15,7 +15,7 @@ from curvlinops.diag import DiagonalLinearOperator
 def gradient_and_loss(
     model_func: Module,
     loss_func: Module,
-    params: list[Parameter],
+    params: dict[str, Tensor],
     data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
     batch_size_fn: Callable[[MutableMapping | Tensor], int] | None = None,
     num_data: int | None = None,

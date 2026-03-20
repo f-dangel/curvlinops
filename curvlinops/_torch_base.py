@@ -19,7 +19,7 @@ from torch import (
     zeros_like,
 )
 from torch.func import vmap
-from torch.nn import Module, Parameter
+from torch.nn import Module
 
 from curvlinops._checks import (
     _check_matmul_compatible_shape,
@@ -178,7 +178,7 @@ class PyTorchLinearOperator:
                 The list must contain tensors of shape ``[*N1, K], [*N2, K], ...``,
                 where ``N1, N2, ...`` are the shapes of the linear operator's columns.
 
-        Returns: # noqa: D402
+        Returns:
             A list of tensors with shape ``[*M1, K], [*M2, K], ...``, where ``M1, M2,
             ...`` are the shapes of the linear operator's rows.
 
@@ -198,7 +198,7 @@ class PyTorchLinearOperator:
     def _adjoint(self) -> PyTorchLinearOperator:
         """Adjoint of the linear operator.
 
-        Returns: # noqa: D402
+        Returns:
             The adjoint of the linear operator.
 
         Raises:
@@ -520,7 +520,7 @@ class PyTorchLinearOperator:
     def device(self) -> device:
         """Infer the linear operator's device.
 
-        Returns:  # noqa: D402
+        Returns:
             The device of the linear operator.
 
         Raises:
@@ -532,7 +532,7 @@ class PyTorchLinearOperator:
     def dtype(self) -> dtype:
         """Infer the linear operator's data type.
 
-        Returns: # noqa: D402
+        Returns:
             The data type of the linear operator.
 
         Raises:
@@ -835,7 +835,7 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
         model_func: Module
         | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
         loss_func: Callable[[Tensor, Tensor], Tensor] | None,
-        params: list[Parameter] | dict[str, Tensor],
+        params: dict[str, Tensor],
         data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
@@ -852,15 +852,12 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
 
         Args:
             model_func: Either an ``nn.Module`` or a callable with signature
-                ``(params_dict, X) -> prediction``. Callable support requires
-                the subclass to set ``SUPPORTS_FUNCTIONAL = True``.
+                ``(params_dict, X) -> prediction``.
             loss_func: Loss function criterion. Maps predictions and mini-batch labels
                 to a scalar value. If ``None``, there is no loss function and the
                 represented matrix is independent of the loss function.
-            params: Parameters for the model. Either a ``list[Parameter]`` (requires
-                ``model_func`` to be a ``Module``) or a ``dict[str, Tensor]`` (requires
-                ``model_func`` to be a callable). When passing a dict, the
-                parameter ordering follows dict insertion order.
+            params: Dictionary mapping parameter names to tensors. The parameter
+                ordering follows dict insertion order.
             data: Source from which mini-batches can be drawn, for instance a list of
                 mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``. Note that ``X``
                 could be a ``dict`` or ``UserDict``; this is useful for custom models.
@@ -999,7 +996,7 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
             y: Ground truth.
             v: Vector as a dict keyed by parameter names.
 
-        Returns: # noqa: D402
+        Returns:
            Result of matrix-vector multiplication as a dict.
 
         Raises:

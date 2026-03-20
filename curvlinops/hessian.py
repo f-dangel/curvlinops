@@ -101,7 +101,7 @@ class HessianLinearOperator(CurvatureLinearOperator):
         >>> D_in, D_out = 4, 2
         >>> num_data, num_batches = 10, 3
         >>> model = Linear(D_in, D_out, bias=False)
-        >>> params = list(model.parameters())
+        >>> params = dict(model.named_parameters())
         >>> loss_func = MSELoss(reduction='sum')
         >>>
         >>> # Generate synthetic dataset and chunk into batches
@@ -124,7 +124,6 @@ class HessianLinearOperator(CurvatureLinearOperator):
     """
 
     SELF_ADJOINT: bool = True
-    SUPPORTS_FUNCTIONAL: bool = True
 
     @cached_property
     def _vp(

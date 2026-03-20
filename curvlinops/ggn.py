@@ -6,7 +6,7 @@ from functools import cached_property
 from einops import einsum
 from torch import Generator, Tensor, no_grad
 from torch.func import jacrev, jvp, vjp, vmap
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, Module, MSELoss, Parameter
+from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, Module, MSELoss
 
 from curvlinops._torch_base import CurvatureLinearOperator
 from curvlinops.ggn_utils import make_grad_output_fn
@@ -237,14 +237,13 @@ class GGNLinearOperator(CurvatureLinearOperator):
     """
 
     SELF_ADJOINT: bool = True
-    SUPPORTS_FUNCTIONAL: bool = True
     MC_SUPPORTED_LOSSES = (MSELoss, CrossEntropyLoss, BCEWithLogitsLoss)
 
     def __init__(
         self,
         model_func: Module,
         loss_func: Callable[[Tensor, Tensor], Tensor],
-        params: list[Parameter],
+        params: dict[str, Tensor],
         data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,

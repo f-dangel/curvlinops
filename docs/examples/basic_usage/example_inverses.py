@@ -66,7 +66,7 @@ model = Sequential(
     Sigmoid(),
     Linear(D_hidden, D_out),
 ).to(DEVICE, DTYPE)
-params = [p for p in model.parameters() if p.requires_grad]
+params = {n: p for n, p in model.named_parameters() if p.requires_grad}
 
 loss_function = MSELoss(reduction="mean").to(DEVICE, DTYPE)
 
@@ -82,7 +82,7 @@ loss_function = MSELoss(reduction="mean").to(DEVICE, DTYPE)
 
 data = [(X1, y1), (X2, y2)]
 GGN = GGNLinearOperator(model, loss_function, params, data)
-shapes = [p.shape for p in params]
+shapes = [p.shape for p in params.values()]
 delta = 1e-2
 damping = delta * IdentityLinearOperator(shapes, GGN.device, DTYPE)
 damped_GGN = GGN + damping

@@ -45,7 +45,7 @@ def initialize_case(
 
     model_func = case["model_func"]().to(case["device"])
     loss_func = case["loss_func"]().to(case["device"])
-    params = [p for p in model_func.parameters() if p.requires_grad]
+    params = {n: p for n, p in model_func.named_parameters() if p.requires_grad}
     data = case["data"]()
 
     # In some KFAC cases,

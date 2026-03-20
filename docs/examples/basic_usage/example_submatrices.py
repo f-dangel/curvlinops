@@ -50,7 +50,7 @@ model = Sequential(
     Sigmoid(),
     Linear(D_hidden, D_out),
 ).to(DEVICE)
-params = [p for p in model.parameters() if p.requires_grad]
+params = {n: p for n, p in model.named_parameters() if p.requires_grad}
 
 loss_function = MSELoss(reduction="mean").to(DEVICE)
 
@@ -69,7 +69,7 @@ H_functorch = functorch_hessian(model, loss_function, params, data)
 
 H = HessianLinearOperator(model, loss_function, params, data)
 
-num_params = sum(p.numel() for p in params)
+num_params = sum(p.numel() for p in params.values())
 identity = eye(num_params, device=DEVICE)
 assert allclose_report(H_functorch, H @ identity)
 
@@ -96,7 +96,7 @@ def extract_block(mat: Tensor, params: list[Tensor], i: int, j: int) -> Tensor:
     Returns:
         Block ``(i, j)``. Has shape ``[params[i].numel(), params[j].numel()]``.
     """
-    param_dims = [p.numel() for p in params]
+    param_dims = [p.numel() for p in params.values()]
     row_start, row_end = sum(param_dims[:i]), sum(param_dims[: i + 1])
     col_start, col_end = sum(param_dims[:j]), sum(param_dims[: j + 1])
 
@@ -149,7 +149,7 @@ assert allclose_report(
 # columns. We can use the :class:`curvlinops.SubmatrixLinearOperator` class for
 # that:
 
-param_dims = [p.numel() for p in params]
+param_dims = [p.numel() for p in params.values()]
 i, j = 0, 1
 row_start, row_end = sum(param_dims[:i]), sum(param_dims[: i + 1])
 col_start, col_end = sum(param_dims[:j]), sum(param_dims[: j + 1])

@@ -77,7 +77,7 @@ def setup_submatrix_linear_operator(case, operator_case, submatrix_case):
         Tuple of the SubmatrixLinearOperator, dense submatrix, and index lists.
     """
     model_func, loss_func, params, data, batch_size_fn = case
-    dim = sum(p.numel() for p in params)
+    dim = sum(p.numel() for p in params.values())
     row_idxs = submatrix_case["row_idx_fn"](dim)
     col_idxs = submatrix_case["col_idx_fn"](dim)
 

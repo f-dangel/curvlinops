@@ -26,7 +26,6 @@ from torch.nn import (
     Linear,
     Module,
     MSELoss,
-    Parameter,
     Sequential,
 )
 
@@ -73,7 +72,7 @@ BACKENDS_IDS = BACKENDS
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_kfac_type2(
     kfac_exact_case: tuple[
-        Module, MSELoss, list[Parameter], Iterable[tuple[Tensor, Tensor]]
+        Module, MSELoss, dict[str, Tensor], Iterable[tuple[Tensor, Tensor]]
     ],
     shuffle: bool,
     exclude: str,
@@ -132,7 +131,7 @@ def test_kfac_type2_weight_sharing(
     kfac_weight_sharing_exact_case: tuple[
         WeightShareModel | Conv2dModel,
         MSELoss,
-        list[Parameter],
+        dict[str, Tensor],
         dict[str, Iterable[tuple[Tensor, Tensor]]],
     ],
     setting: str,
@@ -159,7 +158,7 @@ def test_kfac_type2_weight_sharing(
     model.setting = setting
     if isinstance(model, Conv2dModel):
         # parameters are only initialized after the setting property is set
-        params = [p for p in model.parameters() if p.requires_grad]
+        params = {n: p for n, p in model.named_parameters() if p.requires_grad}
     params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
     data = data[setting]
     model, loss_func, params, data, batch_size_fn = change_dtype(
@@ -219,7 +218,7 @@ def _test_weight_tying_type2(
 
     model = SplitConcatModel(D, bias=bias)
     loss_func = MSELoss(reduction=reduction)
-    params = [p for p in model.parameters() if p.requires_grad]
+    params = {n: p for n, p in model.named_parameters() if p.requires_grad}
     data = [
         (rand(1, 2 * D), regression_targets((1, 2 * D))),
     ]
@@ -296,7 +295,7 @@ def test_kfac_type2_mixed_bias_weight_tying(
 
     model = WeightTiedSplitConcatModel(D, bias1=True, bias2=False)
     loss_func = MSELoss(reduction=reduction)
-    params = [p for p in model.parameters() if p.requires_grad]
+    params = {n: p for n, p in model.named_parameters() if p.requires_grad}
     data = [(rand(1, 2 * D), regression_targets((1, 2 * D)))]
     model, loss_func, params, data, _ = change_dtype(
         (model, loss_func, params, data, None), float64
@@ -338,7 +337,7 @@ def test_kfac_type2_multi_module_conflicting_biases(reduction: str):
 
     model = WeightTiedSplitConcatModel(D, bias1=True, bias2=True)
     loss_func = MSELoss(reduction=reduction)
-    params = list(model.parameters())
+    params = dict(model.named_parameters())
     data = [(rand(1, 2 * D), regression_targets((1, 2 * D)))]
 
     with raises(ValueError, match="conflicting biases"):
@@ -356,7 +355,7 @@ def test_kfac_type2_multi_module_conflicting_biases(reduction: str):
 @mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
 def test_kfac_mc(
     kfac_exact_case: tuple[
-        Module, MSELoss, list[Parameter], Iterable[tuple[Tensor, Tensor]]
+        Module, MSELoss, dict[str, Tensor], Iterable[tuple[Tensor, Tensor]]
     ],
     backend: str,
 ):
@@ -402,7 +401,7 @@ def test_kfac_mc_weight_sharing(
     kfac_weight_sharing_exact_case: tuple[
         WeightShareModel | Conv2dModel,
         MSELoss,
-        list[Parameter],
+        dict[str, Tensor],
         dict[str, Iterable[tuple[Tensor, Tensor]]],
     ],
     setting: str,
@@ -421,7 +420,7 @@ def test_kfac_mc_weight_sharing(
     model.setting = setting
     if isinstance(model, Conv2dModel):
         # parameters are only initialized after the setting property is set
-        params = [p for p in model.parameters() if p.requires_grad]
+        params = {n: p for n, p in model.named_parameters() if p.requires_grad}
     data = data[setting]
     model, loss_func, params, data, batch_size_fn = change_dtype(
         (model, loss_func, params, data, batch_size_fn), float64
@@ -458,7 +457,7 @@ def test_kfac_one_datum(
     kfac_exact_one_datum_case: tuple[
         Module,
         BCEWithLogitsLoss | CrossEntropyLoss,
-        list[Parameter],
+        dict[str, Tensor],
         Iterable[tuple[Tensor, Tensor]],
     ],
     backend: str,
@@ -493,7 +492,7 @@ def test_kfac_mc_one_datum(
     kfac_exact_one_datum_case: tuple[
         Module,
         BCEWithLogitsLoss | CrossEntropyLoss,
-        list[Parameter],
+        dict[str, Tensor],
         Iterable[tuple[Tensor, Tensor]],
     ],
     backend: str,
@@ -528,7 +527,7 @@ def test_kfac_mc_one_datum(
     # Need to use larger tolerances on GPU, despite float64
     tols = (
         MC_TOLS
-        if "cpu" in str(params[0].device)
+        if "cpu" in str(next(iter(params.values())).device)
         else {k: 2 * v for k, v in MC_TOLS.items()}
     )
     assert allclose_report(ggn / scale, kfac_mat / scale, **tols)
@@ -539,7 +538,7 @@ def test_kfac_ef_one_datum(
     kfac_exact_one_datum_case: tuple[
         Module,
         BCEWithLogitsLoss | CrossEntropyLoss,
-        list[Parameter],
+        dict[str, Tensor],
         Iterable[tuple[Tensor, Tensor]],
     ],
     backend: str,
@@ -641,7 +640,7 @@ def test_multi_dim_output(
         ).to(dev)
 
     # KFAC for deep linear network with 4d input and output
-    params = list(model.parameters())
+    params = dict(model.named_parameters())
     kfac = KFACLinearOperator(
         model, loss_func, params, data, fisher_type=fisher_type, backend=backend
     )
@@ -654,7 +653,7 @@ def test_multi_dim_output(
         Linear(4, 3),
         Flatten(start_dim=0, end_dim=-2),
     ).to(dev)
-    params_flat = list(model_flat.parameters())
+    params_flat = dict(model_flat.named_parameters())
     data_flat = [
         (
             (x, y.flatten(start_dim=0, end_dim=-2))
@@ -720,7 +719,7 @@ def test_expand_setting_scaling(
             (X2, classification_targets((4, S, S), 3)),
         ]
     model = UnetModel(loss).to(dev).double()
-    params = list(model.parameters())
+    params = dict(model.named_parameters())
 
     # KFAC with sum reduction
     loss_func = loss(reduction="sum").to(dev)
@@ -856,7 +855,7 @@ def test_logdet(case, backend):
 
 @mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
 def test_forward_only_fisher_type(
-    case: tuple[Module, MSELoss, list[Parameter], Iterable[tuple[Tensor, Tensor]]],
+    case: tuple[Module, MSELoss, dict[str, Tensor], Iterable[tuple[Tensor, Tensor]]],
     backend: str,
 ):
     """Test the KFAC with forward-only Fisher (used for FOOF) implementation.
@@ -904,7 +903,7 @@ def test_forward_only_fisher_type(
 @mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
 def test_forward_only_fisher_type_exact_case(
     single_layer_case: tuple[
-        Module, MSELoss, list[Parameter], Iterable[tuple[Tensor, Tensor]]
+        Module, MSELoss, dict[str, Tensor], Iterable[tuple[Tensor, Tensor]]
     ],
     backend: str,
 ):
@@ -961,7 +960,7 @@ def test_forward_only_fisher_type_exact_weight_sharing_case(
     single_layer_weight_sharing_case: tuple[
         WeightShareModel | Conv2dModel,
         MSELoss,
-        list[Parameter],
+        dict[str, Tensor],
         dict[str, Iterable[tuple[Tensor, Tensor]]],
     ],
     setting: str,
@@ -1001,7 +1000,7 @@ def test_forward_only_fisher_type_exact_weight_sharing_case(
     model.setting = setting
     if isinstance(model, Conv2dModel):
         # parameters are only initialized after the setting property is set
-        params = [p for p in model.parameters() if p.requires_grad]
+        params = {n: p for n, p in model.named_parameters() if p.requires_grad}
     data = data[setting]
 
     ggn = block_diagonal(
@@ -1052,18 +1051,18 @@ def _check_does_not_affect_grad(linop_cls):
     y = rand(batch_size, D_out)
     model = Linear(D_in, D_out)
 
-    params = list(model.parameters())
+    params = dict(model.named_parameters())
     # set gradients to random numbers
-    for p in params:
+    for p in params.values():
         p.grad = rand_like(p)
     # make independent copies
-    grads_before = [p.grad.clone() for p in params]
+    grads_before = [p.grad.clone() for p in params.values()]
 
     # create and compute the linear operator
     _ = linop_cls(model, MSELoss(), params, [(X, y)])
 
     # make sure gradients are unchanged
-    for grad_before, p in zip(grads_before, params):
+    for grad_before, p in zip(grads_before, params.values()):
         assert allclose(grad_before, p.grad)
 
 
@@ -1081,7 +1080,7 @@ def _check_torch_save_load(linop_cls: type, tmp_path: Path) -> None:
     """
     manual_seed(0)
     model = Linear(3, 2)
-    params = list(model.parameters())
+    params = dict(model.named_parameters())
     data = [(rand(4, 3), rand(4, 2))]
 
     linop = linop_cls(model, MSELoss(), params, data)
@@ -1113,7 +1112,7 @@ def test_string_in_enum(fisher_type: str, kfac_approx: str):
     KFACLinearOperator(
         model,
         MSELoss(),
-        list(model.parameters()),
+        dict(model.named_parameters()),
         [(rand(2, 2), rand(2, 2))],
         fisher_type=fisher_type,
         kfac_approx=kfac_approx,
@@ -1145,7 +1144,7 @@ def test_bug_132_dtype_deterministic_checks(dev: device, backend: str):
     data = [(X, y)]
 
     model = Linear(D_in, D_out).to(dev, dt)
-    params = [p for p in model.parameters() if p.requires_grad]
+    params = {n: p for n, p in model.named_parameters() if p.requires_grad}
 
     loss_func = MSELoss().to(dev, dt)
 
@@ -1165,7 +1164,7 @@ def test_KFAC_inverse_damped_matmat(
     case: tuple[
         Module,
         MSELoss | CrossEntropyLoss,
-        list[Parameter],
+        dict[str, Tensor],
         Iterable[tuple[Tensor, Tensor]],
     ],
     fisher_type: str,
@@ -1199,11 +1198,11 @@ def test_KFAC_inverse_damped_matmat(
     compare_matmat(inv_KFAC, inv_KFAC_naive)
 
 
-def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901
+def test_KFAC_inverse_heuristically_damped_matmat(
     case: tuple[
         Module,
         MSELoss | CrossEntropyLoss,
-        list[Parameter],
+        dict[str, Tensor],
         Iterable[tuple[Tensor, Tensor]],
     ],
     delta: float = 1e-2,
@@ -1254,7 +1253,7 @@ def test_KFAC_inverse_exactly_damped_matmat(
     case: tuple[
         Module,
         MSELoss | CrossEntropyLoss,
-        list[Parameter],
+        dict[str, Tensor],
         Iterable[tuple[Tensor, Tensor]],
     ],
     delta: float = 1e-2,
@@ -1297,7 +1296,7 @@ def _check_make_fx_flatten_different_batch_sizes(linop_cls):
     manual_seed(0)
     model = Sequential(Flatten(), Linear(6, 3))
     loss_func = MSELoss()
-    params = list(model.parameters())
+    params = dict(model.named_parameters())
     # Two batches with different sizes to exercise the per-batch-size cache
     data = [
         (rand(2, 2, 3), regression_targets((2, 3))),
@@ -1335,7 +1334,7 @@ def _check_callable_model_func(linop_cls):
     manual_seed(0)
     model = Sequential(Linear(4, 3), Linear(3, 2))
     loss_func = MSELoss()
-    params = list(model.parameters())
+    params = dict(model.named_parameters())
     data = [(rand(5, 4), regression_targets((5, 2)))]
 
     # Module-based hooks backend (reference)
@@ -1362,10 +1361,6 @@ def _check_callable_model_func(linop_cls):
     )
     different_mat = different_kfac @ eye_like(different_kfac)
     assert not allclose_report(module_mat, different_mat)
-
-    # Module + different params as list raises (not the model's actual parameters)
-    with raises(ValueError, match="not found in model"):
-        linop_cls(model, loss_func, list(different_params.values()), data)
 
 
 def test_kfac_callable_model_func():

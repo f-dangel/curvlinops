@@ -74,7 +74,7 @@ model = Sequential(
     Sigmoid(),
     Linear(D_hidden, C),
 ).to(DEVICE)
-params = [p for p in model.parameters() if p.requires_grad]
+params = {n: p for n, p in model.named_parameters() if p.requires_grad}
 
 loss_function = CrossEntropyLoss(reduction="mean").to(DEVICE)
 

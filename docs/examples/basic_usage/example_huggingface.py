@@ -155,7 +155,7 @@ def batch_size_fn(x: MutableMapping):
     return x["input_ids"].shape[0]
 
 
-params = [p for p in model.parameters() if p.requires_grad]
+params = {n: p for n, p in model.named_parameters() if p.requires_grad}
 
 ggn = GGNLinearOperator(
     model,
@@ -166,7 +166,7 @@ ggn = GGNLinearOperator(
     batch_size_fn=batch_size_fn,  # Remember to specify this!
 )
 
-G = ggn @ eye(ggn.shape[0], device=params[0].device)
+G = ggn @ eye(ggn.shape[0], device=next(iter(params.values())).device)
 
 print(f"GGN shape: {G.shape}")
 

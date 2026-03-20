@@ -4,16 +4,17 @@ from torch import float64
 
 from curvlinops import EFLinearOperator
 from curvlinops.examples.functorch import functorch_empirical_fisher
-from test.utils import (
-    change_dtype,
-    compare_consecutive_matmats,
-    compare_matmat,
-    to_functional,
-)
+from test.utils import change_dtype, compare_consecutive_matmats, compare_matmat
 
 
-def _test_ef(model_func, loss_func, params, data, batch_size_fn):
-    """Shared test logic for empirical Fisher (Module or callable)."""
+def test_EFLinearOperator(case):
+    """Test matrix-matrix multiplication with the (transposed) empirical Fisher.
+
+    Args:
+        case: Tuple of model, loss function, parameters, data, and batch size getter.
+    """
+    model_func, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
+
     E = EFLinearOperator(
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn
     )
@@ -23,21 +24,3 @@ def _test_ef(model_func, loss_func, params, data, batch_size_fn):
 
     compare_consecutive_matmats(E)
     compare_matmat(E, E_mat)
-
-
-def test_EFLinearOperator(case):
-    """Test empirical Fisher with Module model_func.
-
-    Args:
-        case: Tuple of model, loss function, parameters, data, and batch size getter.
-    """
-    _test_ef(*change_dtype(case, float64))
-
-
-def test_EFLinearOperator_functional(case):
-    """Test empirical Fisher with callable model_func.
-
-    Args:
-        case: Tuple of model, loss function, parameters, data, and batch size getter.
-    """
-    _test_ef(*to_functional(*change_dtype(case, float64)))

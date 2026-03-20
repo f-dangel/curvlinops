@@ -116,9 +116,7 @@ class MakeFxKFACComputer(_BaseKFACComputer):
     Supports both ``nn.Module`` and plain callable ``model_func``.
     """
 
-    SUPPORTS_FUNCTIONAL: bool = True
-
-    def _compute_kronecker_factors(  # noqa: C901
+    def _compute_kronecker_factors(
         self,
     ) -> tuple[
         dict[ParamGroupKey, Tensor], dict[ParamGroupKey, Tensor], list[ParamGroup]

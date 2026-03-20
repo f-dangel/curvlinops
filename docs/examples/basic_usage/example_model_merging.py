@@ -145,7 +145,7 @@ per_task_fishers = {
         GGNDiagonalLinearOperator(
             model,
             loss_function,
-            [p for p in model.parameters() if p.requires_grad],
+            {n: p for n, p in model.named_parameters() if p.requires_grad},
             data_loader,
         )
         for model, loss_function, data_loader in zip(
@@ -156,7 +156,7 @@ per_task_fishers = {
         GGNLinearOperator(
             model,
             loss_function,
-            [p for p in model.parameters() if p.requires_grad],
+            {n: p for n, p in model.named_parameters() if p.requires_grad},
             data_loader,
         )
         for model, loss_function, data_loader in zip(
@@ -238,7 +238,7 @@ for key in per_task_fishers:
 merged_models = {}
 for key, params_vec in merged_params.items():
     model = make_architecture()
-    params = [p for p in model.parameters() if p.requires_grad]
+    params = {n: p for n, p in model.named_parameters() if p.requires_grad}
     for theta, param in zip(vector_to_parameter_list(params_vec, params), params):
         param.data = theta.to(param.device, param.dtype).data
     merged_models[key] = model

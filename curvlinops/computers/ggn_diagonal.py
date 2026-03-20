@@ -6,7 +6,7 @@ from functools import partial
 
 from torch import Generator, Tensor, no_grad, zeros_like
 from torch.func import vjp, vmap
-from torch.nn import Module, Parameter
+from torch.nn import Module
 
 from curvlinops._checks import (
     _check_supports_batched_and_unbatched_inputs,
@@ -116,19 +116,16 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
     diagonal as a list of tensors.
 
     Attributes:
-        SUPPORTS_FUNCTIONAL: Whether the operator supports callable model_func.
         FIXED_DATA_ORDER: Whether the data loader must return the same data
             for every iteration. Set to ``True`` when ``mc_samples > 0``.
     """
-
-    SUPPORTS_FUNCTIONAL: bool = True
 
     def __init__(
         self,
         model_func: Module
         | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
         loss_func: Callable[[Tensor, Tensor], Tensor],
-        params: list[Parameter] | dict[str, Tensor],
+        params: dict[str, Tensor],
         data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
