@@ -16,8 +16,9 @@ and generalized to all linear layers with weight sharing in
   Kronecker-Factored Approximate Curvature for Modern Neural Network Architectures (NeurIPS).
 """
 
+from contextlib import contextmanager
 from functools import partial
-from typing import Any
+from typing import Any, Iterator
 
 from einops import einsum
 from torch import Tensor, autograd
@@ -70,6 +71,34 @@ def _module_name_from_param(param_name: str) -> str:
     return param_name.rsplit(".", 1)[0] if "." in param_name else ""
 
 
+@contextmanager
+def _use_params(module: Module, params_dict: dict[str, Tensor]):
+    """Temporarily replace a module's parameters with the given values.
+
+    Restores the original parameter data after the context exits.
+    Handles weight tying correctly since tied parameters share the same
+    ``Parameter`` object — setting ``.data`` once affects all uses.
+
+    Args:
+        module: The module whose parameters to replace.
+        params_dict: Dictionary mapping parameter names to replacement tensors.
+
+    Yields:
+        None.
+    """
+    originals = {}
+    for name, param in module.named_parameters():
+        if name in params_dict:
+            originals[name] = param.data
+            param.data = params_dict[name]
+    try:
+        yield
+    finally:
+        for name, param in module.named_parameters():
+            if name in originals:
+                param.data = originals[name]
+
+
 class HooksKFACComputer(_BaseKFACComputer):
     r"""Computes KFAC's Kronecker factors using forward/backward hooks.
 
@@ -93,6 +122,14 @@ class HooksKFACComputer(_BaseKFACComputer):
 
     (see :class:`curvlinops.GGNLinearOperator` with ``mc_samples > 0``).
     """
+
+    def _computation_context(self) -> Iterator[None]:
+        """Set module parameters from ``self._params`` during computation.
+
+        Returns:
+            Context manager that temporarily replaces the module's parameters.
+        """
+        return _use_params(self._model_module, self._params)
 
     def _get_module(self, group: ParamGroup) -> Module:
         """Get the module corresponding to a parameter group.

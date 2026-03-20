@@ -67,6 +67,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+- Add `_use_params` context manager to temporarily set module parameters
+  during hooks-based KFAC/EKFAC computation, enabling correct behavior
+  when `params` dict values differ from the module's own parameters
+  ([PR](https://github.com/f-dangel/curvlinops/pull/282))
+
 - Update `functorch_gradient_and_loss` to accept callable model_func.
   Add `to_functional` test helper and parametrized functional tests for
   all operators
