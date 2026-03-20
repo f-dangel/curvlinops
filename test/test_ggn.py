@@ -8,10 +8,10 @@ from curvlinops.examples.functorch import functorch_ggn
 from test.test_kfac import MC_TOLS
 from test.utils import (
     change_dtype,
-    check_linop_callable_model_func,
     compare_consecutive_matmats,
     compare_matmat,
     compare_matmat_expectation,
+    to_functional,
 )
 
 MAX_REPEATS_MC_SAMPLES = [(4_000, 1), (40, 100)]
@@ -21,14 +21,8 @@ MAX_REPEATS_MC_SAMPLES_IDS = [
 CHECK_EVERY = 100
 
 
-def test_GGNLinearOperator_matvec(case):
-    """Test matrix-matrix multiplication with the GGN.
-
-    Args:
-        case: Tuple of model, loss function, parameters, data, and batch size getter.
-    """
-    model_func, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
-
+def _test_ggn(model_func, loss_func, params, data, batch_size_fn):
+    """Shared test logic for GGN (Module or callable)."""
     G = GGNLinearOperator(
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn
     )
@@ -36,6 +30,24 @@ def test_GGNLinearOperator_matvec(case):
 
     compare_consecutive_matmats(G)
     compare_matmat(G, G_mat)
+
+
+def test_GGNLinearOperator_matvec(case):
+    """Test GGN with Module model_func.
+
+    Args:
+        case: Tuple of model, loss function, parameters, data, and batch size getter.
+    """
+    _test_ggn(*change_dtype(case, float64))
+
+
+def test_GGNLinearOperator_functional(case):
+    """Test GGN with callable model_func.
+
+    Args:
+        case: Tuple of model, loss function, parameters, data, and batch size getter.
+    """
+    _test_ggn(*to_functional(*change_dtype(case, float64)))
 
 
 @mark.parametrize(
@@ -63,8 +75,3 @@ def test_GGNLinearOperator_mc_expectation(case, max_repeats: int, mc_samples: in
 
     compare_consecutive_matmats(G)
     compare_matmat_expectation(G, G_mat, max_repeats, CHECK_EVERY, **MC_TOLS)
-
-
-def test_GGNLinearOperator_callable_model_func():
-    """Test GGN with a callable model_func and different parameter values."""
-    check_linop_callable_model_func(GGNLinearOperator, functorch_ggn)

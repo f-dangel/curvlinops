@@ -147,30 +147,32 @@ def functorch_ggn(
 
 
 def functorch_gradient_and_loss(
-    model_func: Module,
+    model_func: Module | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
     loss_func: Module,
-    params: list[Tensor],
+    params: list[Tensor] | dict[str, Tensor],
     data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
     input_key: str | None = None,
 ) -> tuple[list[Tensor], Tensor]:
     """Compute the gradient and loss with functorch.
 
     Args:
-        model_func: A function that maps the mini-batch input X to predictions.
-            Could be a PyTorch module representing a neural network.
+        model_func: Either an ``nn.Module`` or a callable with signature
+            ``(params_dict, X) -> prediction``.
         loss_func: Loss function criterion. Maps predictions and mini-batch labels
             to a scalar value.
-        params: List of differentiable parameters used by the prediction function.
+        params: Either a ``list[Tensor]`` (for Module) or ``dict[str, Tensor]``
+            (for callable).
         data: Source from which mini-batches can be drawn, for instance a list of
             mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
         input_key: Key to obtain the input tensor when ``X`` is a dict-like object.
 
     Returns:
-        Loss, and gradient in same format as the parameters.
+        Gradient as a list of tensors (in the same order as ``params``), and
+        the loss value.
     """
-    (dev,) = {p.device for p in params}
+    params_dict, f = _prepare_params_and_model(model_func, params)
+    (dev,) = {p.device for p in params_dict.values()}
     X, y = _concatenate_batches(data, input_key, device=dev)
-    params_dict = _make_params_dict(model_func, params)
 
     def loss(
         X: Tensor | MutableMapping, y: Tensor, params_dict: dict[str, Tensor]
@@ -180,7 +182,7 @@ def functorch_gradient_and_loss(
         Returns:
             Scalar loss value.
         """
-        output = functional_call(model_func, params_dict, X)
+        output = f(params_dict, X)
         return functional_call(loss_func, {}, (output, y))
 
     params_argnum = 2
