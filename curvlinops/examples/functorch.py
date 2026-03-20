@@ -273,17 +273,18 @@ def functorch_empirical_fisher(
 
 
 def functorch_jacobian(
-    model_func: Module,
-    params: list[Tensor],
+    model_func: Module | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
+    params: list[Tensor] | dict[str, Tensor],
     data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
     input_key: str | None = None,
 ) -> Tensor:
     """Compute the Jacobian with functorch.
 
     Args:
-        model_func: A function that maps the mini-batch input X to predictions.
-            Could be a PyTorch module representing a neural network.
-        params: List of differentiable parameters used by the prediction function.
+        model_func: Either an ``nn.Module`` or a callable with signature
+            ``(params_dict, X) -> prediction``.
+        params: Either a ``list[Tensor]`` (for Module) or ``dict[str, Tensor]``
+            (for callable).
         data: Source from which mini-batches can be drawn, for instance a list of
             mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
         input_key: Key to obtain the input tensor when ``X`` is a dict-like object.
@@ -293,12 +294,12 @@ def functorch_jacobian(
         total number of parameters, ``N`` the total number of data points, and ``C``
         the model's output space dimension.
     """
-    (dev,) = {p.device for p in params}
+    params_dict, f = _prepare_params_and_model(model_func, params)
+    (dev,) = {p.device for p in params_dict.values()}
     X, _ = _concatenate_batches(data, input_key, device=dev)
-    params_dict = _make_params_dict(model_func, params)
 
     def model_fn_params_only(params_dict: dict[str, Tensor]) -> Tensor:
-        return functional_call(model_func, params_dict, X)
+        return f(params_dict, X)
 
     # concatenate over flattened parameters and flattened outputs
     jac = jacrev(model_fn_params_only)(params_dict)
