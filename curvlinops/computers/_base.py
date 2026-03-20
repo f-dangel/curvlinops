@@ -6,6 +6,7 @@ backend (hooks or FX graph tracing).
 """
 
 from collections.abc import Callable, Iterable, MutableMapping
+from contextlib import AbstractContextManager, nullcontext
 from typing import Any
 
 from einops import rearrange
@@ -181,6 +182,18 @@ class _BaseKFACComputer(_EmpiricalRiskMixin):
             batch_size_fn=batch_size_fn,
         )
 
+    def _computation_context(self) -> AbstractContextManager:
+        """Return a context manager for the computation.
+
+        By default returns ``nullcontext``. Subclasses can override to
+        temporarily modify state during computation (e.g. setting module
+        parameters from ``self._params``).
+
+        Returns:
+            A context manager.
+        """
+        return nullcontext()
+
     def compute(
         self,
     ) -> tuple[
@@ -194,7 +207,8 @@ class _BaseKFACComputer(_EmpiricalRiskMixin):
             (``tuple[str, ...]``) to covariance matrices and ``mapping`` is a
             list of parameter groups.
         """
-        return self._compute_kronecker_factors()
+        with self._computation_context():
+            return self._compute_kronecker_factors()
 
     def _compute_kronecker_factors(
         self,
@@ -332,12 +346,15 @@ class _EKFACMixin:
             matrices, the third maps group keys to eigenvalue corrections, and
             ``mapping`` is a list of parameter groups.
         """
-        input_covariances, gradient_covariances, mapping = super().compute()
-        input_covariances = self._eigenvectors_(input_covariances)
-        gradient_covariances = self._eigenvectors_(gradient_covariances)
-        corrected_eigenvalues = self.compute_eigenvalue_correction(
-            input_covariances, gradient_covariances, mapping
-        )
+        with self._computation_context():
+            input_covariances, gradient_covariances, mapping = (
+                self._compute_kronecker_factors()
+            )
+            input_covariances = self._eigenvectors_(input_covariances)
+            gradient_covariances = self._eigenvectors_(gradient_covariances)
+            corrected_eigenvalues = self.compute_eigenvalue_correction(
+                input_covariances, gradient_covariances, mapping
+            )
         return input_covariances, gradient_covariances, corrected_eigenvalues, mapping
 
     @staticmethod
