@@ -22,7 +22,7 @@ from typing import Any, Iterator
 
 from einops import einsum
 from torch import Tensor, autograd
-from torch.nn import Conv2d, Module, Parameter
+from torch.nn import Conv2d, Module
 from torch.utils.hooks import RemovableHandle
 
 from curvlinops.computers._base import (
@@ -365,7 +365,7 @@ class HooksKFACComputer(_BaseKFACComputer):
     @classmethod
     def compute_parameter_groups(
         cls,
-        params: list[Tensor | Parameter],
+        params: list[Tensor],
         model_func: Module,
         separate_weight_and_bias: bool = True,
     ) -> list[ParamGroup]:
@@ -377,7 +377,7 @@ class HooksKFACComputer(_BaseKFACComputer):
         performance.
 
         Args:
-            params: Dictionary mapping parameter names to tensors.
+            params: List of parameter tensors.
             model_func: The model function.
             separate_weight_and_bias: Whether to treat weight and bias as
                 separate parameter groups.
