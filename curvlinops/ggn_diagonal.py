@@ -46,9 +46,7 @@ class GGNDiagonalLinearOperator(DiagonalLinearOperator):
                 ``(params_dict, X) -> prediction``.
             loss_func: Loss function criterion. Maps predictions and mini-batch labels
                 to a scalar value.
-            params: Parameters for the model. Either a ``list[Parameter]`` (requires
-                ``model_func`` to be a ``Module``) or a ``dict[str, Tensor]`` (requires
-                ``model_func`` to be a callable).
+            params: Dictionary mapping parameter names to tensors.
             data: Source from which mini-batches can be drawn, for instance a list of
                 mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``. Note that ``X``
                 could be a ``dict`` or ``UserDict``; this is useful for custom models.

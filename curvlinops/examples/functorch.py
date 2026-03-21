@@ -36,7 +36,7 @@ def blocks_to_matrix(blocks: dict[str, dict[str, Tensor]]) -> Tensor:
 def functorch_hessian(
     model_func: Module | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
     loss_func: Module,
-    params: list[Tensor] | dict[str, Tensor],
+    params: dict[str, Tensor],
     data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
     input_key: str | None = None,
 ) -> Tensor:
@@ -47,8 +47,7 @@ def functorch_hessian(
             ``(params_dict, X) -> prediction``.
         loss_func: Loss function criterion. Maps predictions and mini-batch labels
             to a scalar value.
-        params: Either a ``list[Tensor]`` (for Module) or ``dict[str, Tensor]``
-            (for callable).
+        params: Dictionary mapping parameter names to tensors.
         data: Source from which mini-batches can be drawn, for instance a list of
             mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
         input_key: Key to obtain the input tensor when ``X`` is a dict-like object.
@@ -80,7 +79,7 @@ def functorch_hessian(
 def functorch_ggn(
     model_func: Module | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
     loss_func: Module,
-    params: list[Tensor] | dict[str, Tensor],
+    params: dict[str, Tensor],
     data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
     input_key: str | None = None,
 ) -> Tensor:
@@ -93,8 +92,7 @@ def functorch_ggn(
             ``(params_dict, X) -> prediction``.
         loss_func: Loss function criterion. Maps predictions and mini-batch labels
             to a scalar value.
-        params: Either a ``list[Tensor]`` (for Module) or ``dict[str, Tensor]``
-            (for callable).
+        params: Dictionary mapping parameter names to tensors.
         data: Source from which mini-batches can be drawn, for instance a list of
             mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
         input_key: Key to obtain the input tensor when ``X`` is a dict-like object.
@@ -147,7 +145,7 @@ def functorch_ggn(
 def functorch_gradient_and_loss(
     model_func: Module | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
     loss_func: Module,
-    params: list[Tensor] | dict[str, Tensor],
+    params: dict[str, Tensor],
     data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
     input_key: str | None = None,
 ) -> tuple[list[Tensor], Tensor]:
@@ -158,8 +156,7 @@ def functorch_gradient_and_loss(
             ``(params_dict, X) -> prediction``.
         loss_func: Loss function criterion. Maps predictions and mini-batch labels
             to a scalar value.
-        params: Either a ``list[Tensor]`` (for Module) or ``dict[str, Tensor]``
-            (for callable).
+        params: Dictionary mapping parameter names to tensors.
         data: Source from which mini-batches can be drawn, for instance a list of
             mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
         input_key: Key to obtain the input tensor when ``X`` is a dict-like object.
@@ -193,7 +190,7 @@ def functorch_gradient_and_loss(
 def functorch_empirical_fisher(
     model_func: Module | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
     loss_func: Module,
-    params: list[Tensor] | dict[str, Tensor],
+    params: dict[str, Tensor],
     data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
     input_key: str | None = None,
 ) -> Tensor:
@@ -204,8 +201,7 @@ def functorch_empirical_fisher(
             ``(params_dict, X) -> prediction``.
         loss_func: Loss function criterion. Maps predictions and mini-batch labels
             to a scalar value.
-        params: Either a ``list[Tensor]`` (for Module) or ``dict[str, Tensor]``
-            (for callable).
+        params: Dictionary mapping parameter names to tensors.
         data: Source from which mini-batches can be drawn, for instance a list of
             mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
         input_key: Key to obtain the input tensor when ``X`` is a dict-like object.
@@ -274,7 +270,7 @@ def functorch_empirical_fisher(
 
 def functorch_jacobian(
     model_func: Module | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
-    params: list[Tensor] | dict[str, Tensor],
+    params: dict[str, Tensor],
     data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
     input_key: str | None = None,
 ) -> Tensor:
@@ -283,8 +279,7 @@ def functorch_jacobian(
     Args:
         model_func: Either an ``nn.Module`` or a callable with signature
             ``(params_dict, X) -> prediction``.
-        params: Either a ``list[Tensor]`` (for Module) or ``dict[str, Tensor]``
-            (for callable).
+        params: Dictionary mapping parameter names to tensors.
         data: Source from which mini-batches can be drawn, for instance a list of
             mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
         input_key: Key to obtain the input tensor when ``X`` is a dict-like object.

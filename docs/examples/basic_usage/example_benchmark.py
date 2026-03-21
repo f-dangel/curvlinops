@@ -40,7 +40,6 @@ from torch.nn import (
     Linear,
     MaxPool2d,
     Module,
-    Parameter,
     ReLU,
     Sequential,
 )
@@ -154,7 +153,7 @@ def setup_synthetic_mnist_cnn(
 
 def setup_problem(
     problem_str: str, linop_str: str, dev: device
-) -> tuple[Module, Module, list[Parameter], Iterable[tuple[Tensor, Tensor]]]:
+) -> tuple[Module, Module, dict[str, Tensor], Iterable[tuple[Tensor, Tensor]]]:
     """Set up the neural net, loss function, parameters, and data.
 
     Args:
@@ -231,7 +230,7 @@ def setup_linop(
     linop_str: str,
     model: Module,
     loss_function: Module,
-    params: list[Parameter],
+    params: dict[str, Tensor],
     data: Iterable[tuple[Tensor, Tensor]],
     check_deterministic: bool = True,
 ) -> PyTorchLinearOperator:
