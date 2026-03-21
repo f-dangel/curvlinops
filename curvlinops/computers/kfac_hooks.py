@@ -377,7 +377,7 @@ class HooksKFACComputer(_BaseKFACComputer):
         performance.
 
         Args:
-            params: List of parameters.
+            params: Dictionary mapping parameter names to tensors.
             model_func: The model function.
             separate_weight_and_bias: Whether to treat weight and bias as
                 separate parameter groups.

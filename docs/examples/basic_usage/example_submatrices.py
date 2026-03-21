@@ -94,7 +94,8 @@ def extract_block(mat: Tensor, params: dict[str, Tensor], i: int, j: int) -> Ten
         j: Column index of the block to be extracted.
 
     Returns:
-        Block ``(i, j)``. Has shape ``[params[i].numel(), params[j].numel()]``.
+        Block ``(i, j)``. Has shape ``[P_i, P_j]`` where ``P_i`` and ``P_j``
+            are the number of elements of the ``i``-th and ``j``-th parameter.
     """
     param_dims = [p.numel() for p in params.values()]
     row_start, row_end = sum(param_dims[:i]), sum(param_dims[: i + 1])

@@ -124,9 +124,9 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
         Args:
             model_func: Either an ``nn.Module`` or a callable with signature
                 ``(params_dict, X) -> prediction``. Callables require
-                ``backend="make_fx"`` and ``params`` as ``dict[str, Tensor]``.
+                ``backend="make_fx"``.
             loss_func: The loss function.
-            params: The parameters defining the Fisher/GGN that will be approximated
+            params: The parameters defining the Fisher/GGN that will be approximated.
             data: A data loader containing the data of the Fisher/GGN.
             progressbar: Whether to show a progress bar when computing the Kronecker
                 factors. Defaults to ``False``.

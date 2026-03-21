@@ -264,7 +264,7 @@ class GGNLinearOperator(CurvatureLinearOperator):
                 Could be a PyTorch module representing a neural network.
             loss_func: Loss function criterion. Maps predictions and mini-batch labels
                 to a scalar value.
-            params: List of differentiable parameters used by the prediction function.
+            params: Dictionary mapping parameter names to differentiable tensors.
             data: Source from which mini-batches can be drawn, for instance a list of
                 mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``. Note that ``X``
                 could be a ``dict`` or ``UserDict``; this is useful for custom models.

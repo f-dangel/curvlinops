@@ -25,7 +25,7 @@ def gradient_and_loss(
     Args:
         model_func: The neural network.
         loss_func: The loss function.
-        params: List of differentiable parameters.
+        params: Dictionary mapping parameter names to differentiable tensors.
         data: Source from which mini-batches can be drawn, for instance a list of
             mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
         batch_size_fn: Function that returns the batch size given an input ``X``.
