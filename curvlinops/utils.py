@@ -7,7 +7,7 @@ from einops import rearrange
 from numpy import cumsum, ndarray
 from torch import Generator, Tensor, as_tensor, device, dtype
 from torch.func import functional_call
-from torch.nn import CrossEntropyLoss, Module, Parameter
+from torch.nn import CrossEntropyLoss, Module
 
 
 def _infer_device(objects: Iterable) -> device:
@@ -181,49 +181,6 @@ def assert_divisible_by(num: int, divisor: int, name: str):
     """
     if num % divisor != 0:
         raise ValueError(f"{name} ({num}) must be divisible by {divisor}.")
-
-
-def identify_free_parameters(
-    model: Module, params: list[Parameter]
-) -> dict[str, Parameter]:
-    """Identify free parameters by matching them against a model's named parameters.
-
-    Matches each parameter in ``params`` to its name in ``model`` by data pointer.
-    Validates that there are no duplicates in ``params``.
-
-    Args:
-        model: The model whose named parameters to search.
-        params: List of parameters to identify.
-
-    Returns:
-        Ordered dict mapping parameter names to parameter tensors.
-
-    Raises:
-        ValueError: If ``params`` contains duplicate tensors or if a parameter
-            is not found in the model.
-    """
-    # Check for duplicates in params
-    param_ptrs = [p.data_ptr() for p in params]
-    if len(set(param_ptrs)) != len(param_ptrs):
-        raise ValueError(
-            "params contains duplicate parameters (same tensor passed twice)."
-        )
-
-    # Build ptr -> name mapping from model's named parameters
-    ptr_to_name = {p.data_ptr(): name for name, p in model.named_parameters()}
-
-    # Match params to names
-    named_params: dict[str, Parameter] = {}
-    for p in params:
-        ptr = p.data_ptr()
-        if ptr not in ptr_to_name:
-            raise ValueError(
-                f"Parameter with data_ptr {ptr} not found in model. "
-                f"All free parameters must be part of model.parameters()."
-            )
-        named_params[ptr_to_name[ptr]] = p
-
-    return named_params
 
 
 def make_functional_call(module: Module) -> Callable[..., Tensor]:

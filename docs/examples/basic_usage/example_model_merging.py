@@ -239,7 +239,9 @@ merged_models = {}
 for key, params_vec in merged_params.items():
     model = make_architecture()
     params = {n: p for n, p in model.named_parameters() if p.requires_grad}
-    for theta, param in zip(vector_to_parameter_list(params_vec, params), params):
+    for theta, param in zip(
+        vector_to_parameter_list(params_vec, params.values()), params.values()
+    ):
         param.data = theta.to(param.device, param.dtype).data
     merged_models[key] = model
 
