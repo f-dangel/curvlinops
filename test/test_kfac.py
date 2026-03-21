@@ -411,7 +411,7 @@ def test_kfac_mc_weight_sharing(
 
     Args:
         kfac_weight_sharing_exact_case: A fixture that returns a model, loss function,
-            list of parameters, and data.
+            dict of parameters, and data.
         setting: The weight-sharing setting to use. Can be ``KFACType.EXPAND`` or
             ``KFACType.REDUCE``.
         backend: The backend to use for computing Kronecker factors.
@@ -861,7 +861,7 @@ def test_forward_only_fisher_type(
     """Test the KFAC with forward-only Fisher (used for FOOF) implementation.
 
     Args:
-        case: A fixture that returns a model, loss function, list of parameters, and
+        case: A fixture that returns a model, loss function, dict of parameters, and
             data.
         backend: The backend to use for computing Kronecker factors.
     """
@@ -991,7 +991,7 @@ def test_forward_only_fisher_type_exact_weight_sharing_case(
 
     Args:
         single_layer_weight_sharing_case: A fixture that returns a model, loss function,
-            list of parameters, and data.
+            dict of parameters, and data.
         setting: The weight-sharing setting to use. Can be ``KFACType.EXPAND`` or
             ``KFACType.REDUCE``.
         backend: The backend to use for computing Kronecker factors.

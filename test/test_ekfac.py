@@ -254,7 +254,7 @@ def test_ekfac_mc_weight_sharing(
 
     Args:
         kfac_weight_sharing_exact_case: A fixture that returns a model, loss function,
-            list of parameters, and data.
+            dict of parameters, and data.
         setting: The weight-sharing setting to use. Can be ``KFACType.EXPAND`` or
             ``KFACType.REDUCE``.
     """
