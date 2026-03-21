@@ -241,7 +241,8 @@ class GGNLinearOperator(CurvatureLinearOperator):
 
     def __init__(
         self,
-        model_func: Module,
+        model_func: Module
+        | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
         loss_func: Callable[[Tensor, Tensor], Tensor],
         params: dict[str, Tensor],
         data: Iterable[tuple[Tensor | MutableMapping, Tensor]],

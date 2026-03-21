@@ -136,7 +136,6 @@ class HooksKFACComputer(_BaseKFACComputer):
         Raises:
             ValueError: If ``model_func`` is not an ``nn.Module``.
         """
-        super().__init__(*args, **kwargs)
         model_func = args[0] if args else kwargs.get("model_func")
         if not isinstance(model_func, Module):
             raise ValueError(
@@ -144,6 +143,7 @@ class HooksKFACComputer(_BaseKFACComputer):
                 "Use backend='make_fx' for callable model functions."
             )
         self._model_module = model_func
+        super().__init__(*args, **kwargs)
 
     def _computation_context(self) -> Iterator[None]:
         """Set module parameters from ``self._params`` during computation.
