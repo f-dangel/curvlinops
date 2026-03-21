@@ -6,6 +6,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Migration guide: `params` is now `dict[str, Tensor]`
+
+All operators now require `params` as a `dict[str, Tensor]` instead of
+`list[Parameter]`. This affects every call site. Here is how to update your code:
+
+```python
+# Before
+params = [p for p in model.parameters() if p.requires_grad]
+H = HessianLinearOperator(model, loss, params, data)
+
+# After
+params = {n: p for n, p in model.named_parameters() if p.requires_grad}
+H = HessianLinearOperator(model, loss, params, data)
+```
+
+If all parameters require gradients, this simplifies to:
+
+```python
+# Before
+H = HessianLinearOperator(model, loss, list(model.parameters()), data)
+
+# After
+H = HessianLinearOperator(model, loss, dict(model.named_parameters()), data)
+```
+
+Other common patterns that need updating:
+
+```python
+# Accessing device/dtype
+# Before: params[0].device
+# After:  next(iter(params.values())).device
+
+# Iterating over parameter tensors
+# Before: for p in params: ...
+# After:  for p in params.values(): ...
+
+# Number of parameters
+# Before: sum(p.numel() for p in params)
+# After:  sum(p.numel() for p in params.values())
+```
+
+See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
+
 ### Added/New
 
 - Support plain callable `(params_dict, X) -> prediction` as `model_func`
