@@ -86,7 +86,6 @@ class _EmpiricalRiskMixin:
             )
 
         if isinstance(model_func, Module):
-            self._model_module = model_func
             self._model_func = make_functional_call(model_func)
         elif callable(model_func):
             self._model_func = model_func

@@ -23,9 +23,10 @@ def gradient_and_loss(
     """Evaluate the gradient and loss on a data set.
 
     Args:
-        model_func: The neural network.
+        model_func: The neural network's forward pass (an ``nn.Module``).
         loss_func: The loss function.
-        params: Dictionary mapping parameter names to differentiable tensors.
+        params: The parameter values at which the gradient is evaluated. A
+            dictionary mapping parameter names to tensors.
         data: Source from which mini-batches can be drawn, for instance a list of
             mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
         batch_size_fn: Function that returns the batch size given an input ``X``.

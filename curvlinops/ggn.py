@@ -260,11 +260,13 @@ class GGNLinearOperator(CurvatureLinearOperator):
             mini-batch labels y.
 
         Args:
-            model_func: A function that maps the mini-batch input X to predictions.
-                Could be a PyTorch module representing a neural network.
+            model_func: The neural network's forward pass, defining the functional
+                relationship ``(params, X) -> prediction``. Either an ``nn.Module``
+                (architecture) or a callable ``(params_dict, X) -> prediction``.
             loss_func: Loss function criterion. Maps predictions and mini-batch labels
                 to a scalar value.
-            params: Dictionary mapping parameter names to differentiable tensors.
+            params: The parameter values at which the GGN is evaluated. A dictionary
+                mapping parameter names to tensors.
             data: Source from which mini-batches can be drawn, for instance a list of
                 mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``. Note that ``X``
                 could be a ``dict`` or ``UserDict``; this is useful for custom models.

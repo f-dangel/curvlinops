@@ -160,8 +160,11 @@ class JacobianLinearOperator(CurvatureLinearOperator):
         Note that the data must be supplied in deterministic order.
 
         Args:
-            model_func: Neural network function.
-            params: Neural network parameters.
+            model_func: The neural network's forward pass, defining the functional
+                relationship ``(params, X) -> prediction``. Either an ``nn.Module``
+                (architecture) or a callable ``(params_dict, X) -> prediction``.
+            params: The parameter values at which the Jacobian is evaluated. A
+                dictionary mapping parameter names to tensors.
             data: Iterable of batched input-target pairs.
             progressbar: Show progress bar.
             check_deterministic: Check if model and data are deterministic.
@@ -283,8 +286,11 @@ class TransposedJacobianLinearOperator(CurvatureLinearOperator):
         Note that the data must be supplied in deterministic order.
 
         Args:
-            model_func: Neural network function.
-            params: Neural network parameters.
+            model_func: The neural network's forward pass, defining the functional
+                relationship ``(params, X) -> prediction``. Either an ``nn.Module``
+                (architecture) or a callable ``(params_dict, X) -> prediction``.
+            params: The parameter values at which the Jacobian is evaluated. A
+                dictionary mapping parameter names to tensors.
             data: Iterable of batched input-target pairs.
             progressbar: Show progress bar.
             check_deterministic: Check if model and data are deterministic.

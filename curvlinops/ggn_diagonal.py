@@ -42,11 +42,13 @@ class GGNDiagonalLinearOperator(DiagonalLinearOperator):
         computes the diagonal, and passes it to the parent class.
 
         Args:
-            model_func: Either an ``nn.Module`` or a callable with signature
-                ``(params_dict, X) -> prediction``.
+            model_func: The neural network's forward pass, defining the functional
+                relationship ``(params, X) -> prediction``. Either an ``nn.Module``
+                (architecture) or a callable ``(params_dict, X) -> prediction``.
             loss_func: Loss function criterion. Maps predictions and mini-batch labels
                 to a scalar value.
-            params: Dictionary mapping parameter names to tensors.
+            params: The parameter values at which the GGN diagonal is evaluated. A
+                dictionary mapping parameter names to tensors.
             data: Source from which mini-batches can be drawn, for instance a list of
                 mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``. Note that ``X``
                 could be a ``dict`` or ``UserDict``; this is useful for custom models.
