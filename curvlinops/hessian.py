@@ -113,7 +113,7 @@ class HessianLinearOperator(CurvatureLinearOperator):
         >>>
         >>> # Compare with the known Hessian matrix 2 I ⊗ Xᵀ X
         >>> H_mat = 2 * kron(eye(D_out), X.T @ X)
-        >>> P = sum(p.numel() for p in params)
+        >>> P = sum(p.numel() for p in params.values())
         >>> v = rand(P) # generate a random vector
         >>> (H_mat @ v).allclose(H_op @ v)
         True
