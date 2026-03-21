@@ -48,13 +48,16 @@ class _EmpiricalRiskMixin:
         """Set up the shared state for empirical risk computation.
 
         Args:
-            model_func: Either an ``nn.Module`` or a callable with signature
-                ``(params_dict, X) -> prediction``. If a ``Module``, it will be
-                wrapped via ``make_functional_call``.
+            model_func: The neural network's forward pass, defining the functional
+                relationship ``(params, X) -> prediction``. Either an ``nn.Module``
+                (architecture) or a callable ``(params_dict, X) -> prediction``.
+                If a ``Module``, it will be wrapped via ``make_functional_call``.
             loss_func: Loss function criterion. Maps predictions and mini-batch labels
                 to a scalar value. ``None`` means the represented quantity is independent
                 of the loss function.
-            params: Dictionary mapping parameter names to tensors.
+            params: The parameter values at which the matrix is evaluated.
+                A dictionary mapping parameter names to tensors (use
+                ``dict(model.named_parameters())``).
             data: Source from which mini-batches can be drawn, for instance a list of
                 mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
             progressbar: Show a progressbar during computation.

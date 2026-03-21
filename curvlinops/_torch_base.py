@@ -851,13 +851,16 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
             mini-batch labels y.
 
         Args:
-            model_func: Either an ``nn.Module`` or a callable with signature
-                ``(params_dict, X) -> prediction``.
+            model_func: The neural network's forward pass, defining the functional
+                relationship ``(params, X) -> prediction``. Either an ``nn.Module``
+                (architecture) or a callable ``(params_dict, X) -> prediction``.
             loss_func: Loss function criterion. Maps predictions and mini-batch labels
                 to a scalar value. If ``None``, there is no loss function and the
                 represented matrix is independent of the loss function.
-            params: Dictionary mapping parameter names to tensors. The parameter
-                ordering follows dict insertion order.
+            params: The parameter values at which the curvature matrix is evaluated.
+                A dictionary mapping parameter names to tensors (use
+                ``dict(model.named_parameters())``). The parameter ordering follows
+                dict insertion order.
             data: Source from which mini-batches can be drawn, for instance a list of
                 mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``. Note that ``X``
                 could be a ``dict`` or ``UserDict``; this is useful for custom models.
