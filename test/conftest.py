@@ -28,7 +28,7 @@ def initialize_case(
 ) -> tuple[
     Callable[[Tensor], Tensor],
     Callable[[Tensor, Tensor], Tensor],
-    list[Tensor],
+    dict[str, Tensor],
     Iterable[tuple[Tensor, Tensor]],
     Callable[[MutableMapping], int] | None,
 ]:
@@ -67,7 +67,7 @@ def case(
 ) -> tuple[
     Callable[[Tensor], Tensor],
     Callable[[Tensor, Tensor], Tensor],
-    list[Tensor],
+    dict[str, Tensor],
     Iterable[tuple[Tensor, Tensor]],
     Callable[[MutableMapping], int] | None,
 ]:
@@ -86,7 +86,7 @@ def inv_case(
 ) -> tuple[
     Callable[[Tensor], Tensor],
     Callable[[Tensor, Tensor], Tensor],
-    list[Tensor],
+    dict[str, Tensor],
     Iterable[tuple[Tensor, Tensor]],
     Callable[[MutableMapping], int] | None,
 ]:
@@ -105,7 +105,7 @@ def cnn_case(
 ) -> tuple[
     Callable[[Tensor], Tensor],
     Callable[[Tensor, Tensor], Tensor],
-    list[Tensor],
+    dict[str, Tensor],
     Iterable[tuple[Tensor, Tensor]],
     Callable[[MutableMapping], int] | None,
 ]:
@@ -124,7 +124,7 @@ def non_deterministic_case(
 ) -> tuple[
     Callable[[Tensor], Tensor],
     Callable[[Tensor, Tensor], Tensor],
-    list[Tensor],
+    dict[str, Tensor],
     Iterable[tuple[Tensor, Tensor]],
     Callable[[MutableMapping], int] | None,
 ]:
@@ -143,14 +143,14 @@ def kfac_exact_case(
 ) -> tuple[
     Module,
     MSELoss,
-    list[Tensor],
+    dict[str, Tensor],
     Iterable[tuple[Tensor, Tensor]],
     Callable[[MutableMapping], int] | None,
 ]:
     """Prepare a test case for which KFAC equals the GGN.
 
     Yields:
-        A neural network, the mean-squared error function, a list of parameters, and
+        A neural network, the mean-squared error function, a dict of parameters, and
         a data set.
     """
     case = request.param
@@ -163,14 +163,14 @@ def kfac_weight_sharing_exact_case(
 ) -> tuple[
     Module,
     MSELoss,
-    list[Tensor],
+    dict[str, Tensor],
     Iterable[tuple[Tensor, Tensor]],
     Callable[[MutableMapping], int] | None,
 ]:
     """Prepare a test case with weight-sharing for which KFAC equals the GGN.
 
     Yields:
-        A neural network, the mean-squared error function, a list of parameters, and
+        A neural network, the mean-squared error function, a dict of parameters, and
         a data set.
     """
     case = request.param
@@ -183,14 +183,14 @@ def kfac_exact_one_datum_case(
 ) -> tuple[
     Module,
     Module,
-    list[Tensor],
+    dict[str, Tensor],
     Iterable[tuple[Tensor, Tensor]],
     Callable[[MutableMapping], int] | None,
 ]:
     """Prepare a test case for which KFAC equals the GGN and one datum is used.
 
     Yields:
-        A neural network, loss function, a list of parameters, and
+        A neural network, loss function, a dict of parameters, and
         a data set with a single datum.
     """
     case = request.param
@@ -203,14 +203,14 @@ def single_layer_case(
 ) -> tuple[
     Module,
     Module,
-    list[Tensor],
+    dict[str, Tensor],
     Iterable[tuple[Tensor, Tensor]],
     Callable[[MutableMapping], int] | None,
 ]:
     """Prepare a test case with a single-layer model for which FOOF is exact.
 
     Yields:
-        A neural network, loss function, a list of parameters, and
+        A neural network, loss function, a dict of parameters, and
         a data set with a single datum.
     """
     case = request.param
@@ -223,14 +223,14 @@ def single_layer_weight_sharing_case(
 ) -> tuple[
     Module,
     Module,
-    list[Tensor],
+    dict[str, Tensor],
     Iterable[tuple[Tensor, Tensor]],
     Callable[[MutableMapping], int] | None,
 ]:
     """Test case with a single-layer model with weight-sharing for which FOOF is exact.
 
     Yields:
-        A neural network, loss function, a list of parameters, and
+        A neural network, loss function, a dict of parameters, and
         a data set with a single datum.
     """
     case = request.param
