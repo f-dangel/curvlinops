@@ -110,6 +110,7 @@ def extract_block(mat: Tensor, params: dict[str, Tensor], i: int, j: int) -> Ten
 # the first layer's weights in our model.
 
 i, j = 0, 0
+param_names = list(params.keys())
 H_param0_functorch = extract_block(H_functorch, params, i, j)
 
 # %%
@@ -117,7 +118,8 @@ H_param0_functorch = extract_block(H_functorch, params, i, j)
 # We can build a linear operator for this sub-Hessian by only providing the
 # first layer's weight as parameter:
 
-H_param0 = HessianLinearOperator(model, loss_function, [params[i]], data)
+param_i = {param_names[i]: params[param_names[i]]}
+H_param0 = HessianLinearOperator(model, loss_function, param_i, data)
 
 # %%
 #
@@ -128,7 +130,7 @@ H_param0 = HessianLinearOperator(model, loss_function, [params[i]], data)
 # from our ground truth:
 
 assert allclose_report(
-    H_param0_functorch, H_param0 @ eye(params[i].numel(), device=DEVICE)
+    H_param0_functorch, H_param0 @ eye(params[param_names[i]].numel(), device=DEVICE)
 )
 
 # %%
