@@ -179,7 +179,7 @@ class HooksKFACComputer(_BaseKFACComputer):
             Tuple of (input_covariances, gradient_covariances, mapping).
         """
         mapping = self.compute_parameter_groups(
-            list(self._params.values()),
+            self._params,
             self._model_module,
             self._separate_weight_and_bias,
         )
@@ -388,7 +388,7 @@ class HooksKFACComputer(_BaseKFACComputer):
     @classmethod
     def compute_parameter_groups(
         cls,
-        params: list[Tensor],
+        params: dict[str, Tensor],
         model_func: Module,
         separate_weight_and_bias: bool = True,
     ) -> list[ParamGroup]:
@@ -400,7 +400,7 @@ class HooksKFACComputer(_BaseKFACComputer):
         performance.
 
         Args:
-            params: List of parameter tensors.
+            params: Dictionary mapping parameter names to tensors.
             model_func: The model function.
             separate_weight_and_bias: Whether to treat weight and bias as
                 separate parameter groups.
@@ -413,25 +413,20 @@ class HooksKFACComputer(_BaseKFACComputer):
         """
         _role = {"weight": "W", "bias": "b"}
 
-        param_ids = {p.data_ptr() for p in params}
-        ptr_to_name = {
-            p.data_ptr(): name
-            for name, p in model_func.named_parameters()
-            if p.data_ptr() in param_ids
-        }
+        param_names = set(params.keys())
         groups: list[ParamGroup] = []
-        processed = set()
+        processed: set[str] = set()
 
-        for _, mod in model_func.named_modules():
-            if isinstance(mod, cls._SUPPORTED_MODULES) and any(
-                p.data_ptr() in param_ids for p in mod.parameters()
-            ):
-                param_roles: ParamGroup = {}
-                for p_name, p in mod.named_parameters(recurse=False):
-                    p_id = p.data_ptr()
-                    if p_id in param_ids:
-                        param_roles[_role[p_name]] = ptr_to_name[p_id]
-                        processed.add(p_id)
+        for mod_name, mod in model_func.named_modules():
+            if not isinstance(mod, cls._SUPPORTED_MODULES):
+                continue
+            param_roles: ParamGroup = {}
+            for p_name, _ in mod.named_parameters(recurse=False):
+                full_name = f"{mod_name}.{p_name}" if mod_name else p_name
+                if full_name in param_names:
+                    param_roles[_role[p_name]] = full_name
+                    processed.add(full_name)
+            if param_roles:
                 param_dicts = (
                     [{r: n} for r, n in param_roles.items()]
                     if separate_weight_and_bias
@@ -440,7 +435,7 @@ class HooksKFACComputer(_BaseKFACComputer):
                 groups.extend(param_dicts)
 
         # check that all parameters are in known modules
-        if len(processed) != len(param_ids):
+        if len(processed) != len(param_names):
             raise NotImplementedError("Found parameters in un-supported layers.")
 
         return groups
