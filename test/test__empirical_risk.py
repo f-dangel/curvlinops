@@ -33,5 +33,5 @@ def test_model_func_and_params_validation():
     _DummyMixin(f, loss, {"w": rand(2, 1)}, data, **no_check)
 
     # Old-style list params raises TypeError with migration hint
-    with raises(TypeError, match="dict\\(model.named_parameters\\(\\)\\)"):
+    with raises(TypeError, match="params must be a dict"):
         _DummyMixin(model, loss, list(model.parameters()), data, **no_check)
