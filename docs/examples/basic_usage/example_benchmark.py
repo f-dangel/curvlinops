@@ -179,20 +179,17 @@ def setup_problem(
 
     # Only use parameters of supported layers for KFAC
     if linop_str in {"KFAC", "KFAC inverse", "EKFAC", "EKFAC inverse"}:
-        supported_layers = [
-            m for m in model.modules() if isinstance(m, (Linear, Conv2d))
-        ]
-        supported_ptrs = set()
-        for m in supported_layers:
+        params = {}
+        for mod_name, mod in model.named_modules():
+            if not isinstance(mod, (Linear, Conv2d)):
+                continue
             # ignore the last layer of GPT because it has 50k outputs, which
             # will yield an extremely large Kronecker factor
-            if all(d <= 50_000 for d in m.weight.shape):
-                supported_ptrs.update(p.data_ptr() for p in m.parameters())
-        params = {
-            n: p
-            for n, p in model.named_parameters()
-            if p.requires_grad and p.data_ptr() in supported_ptrs
-        }
+            if all(d <= 50_000 for d in mod.weight.shape):
+                for p_name, p in mod.named_parameters(recurse=False):
+                    full_name = f"{mod_name}.{p_name}" if mod_name else p_name
+                    if p.requires_grad:
+                        params[full_name] = p
     else:
         params = {n: p for n, p in model.named_parameters() if p.requires_grad}
 
