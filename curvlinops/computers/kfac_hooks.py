@@ -179,9 +179,7 @@ class HooksKFACComputer(_BaseKFACComputer):
             Tuple of (input_covariances, gradient_covariances, mapping).
         """
         mapping = self.compute_parameter_groups(
-            self._params,
-            self._model_module,
-            self._separate_weight_and_bias,
+            self._params, self._model_module, self._separate_weight_and_bias
         )
 
         # Create empty dictionaries to be populated by hooks
