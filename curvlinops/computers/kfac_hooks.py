@@ -123,12 +123,7 @@ class HooksKFACComputer(_BaseKFACComputer):
     (see :class:`curvlinops.GGNLinearOperator` with ``mc_samples > 0``).
     """
 
-    def __init__(
-        self,
-        model_func: Module,
-        *args,
-        **kwargs,
-    ):
+    def __init__(self, model_func: Module, *args, **kwargs):
         """Initialize and validate that ``model_func`` is an ``nn.Module``.
 
         The hooks backend requires an ``nn.Module`` to register forward/backward
