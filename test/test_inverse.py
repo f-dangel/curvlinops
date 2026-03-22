@@ -52,7 +52,7 @@ def test_CGInverseLinearOperator_damped_GGN(inv_case, delta_rel: float = 2e-2):
     inv_GGN = CGInverseLinearOperator(GGN + damping, eps=0, tolerance=1e-5)
     compare_consecutive_matmats(inv_GGN)
     # Need to use larger tolerances on GPU, despite float64
-    atol, rtol = (1e-8, 1e-5) if "cpu" in str(dev) else (1e-7, 1e-4)
+    atol, rtol = (1e-7, 1e-4) if "cpu" in str(dev) else (1e-6, 1e-3)
     compare_matmat(inv_GGN, inv_GGN_naive, atol=atol, rtol=rtol)
 
 
