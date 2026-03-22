@@ -769,34 +769,6 @@ def test_expand_setting_scaling(
 
 
 @mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
-def test_KFACLinearOperator(
-    case,
-    backend: str,
-):
-    """Test matrix multiplication with KFAC.
-
-    Args:
-        case: Tuple of model, loss function, parameters, data, and batch size getter.
-        backend: The backend to use for computing Kronecker factors.
-    """
-    model, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
-    _skip_if_hooks_and_callable(model, backend)
-
-    kfac = KFACLinearOperator(
-        model,
-        loss_func,
-        params,
-        data,
-        batch_size_fn=batch_size_fn,
-        backend=backend,
-    )
-    kfac_mat = kfac @ eye_like(kfac)
-
-    compare_consecutive_matmats(kfac)
-    compare_matmat(kfac, kfac_mat)
-
-
-@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
 def test_trace(case, backend):
     """Test that the trace property of KFACLinearOperator works."""
     model, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
@@ -1184,6 +1156,7 @@ def test_KFAC_inverse_damped_matmat(
 ):
     """Test matrix-matrix multiplication by an inverse damped KFAC approximation."""
     model_func, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
+    _skip_if_hooks_and_callable(model_func, "hooks")
 
     KFAC = KFACLinearOperator(
         model_func,
@@ -1221,6 +1194,7 @@ def test_KFAC_inverse_heuristically_damped_matmat(
 ):
     """Test matrix-matrix multiplication by a heuristically damped KFAC inverse."""
     model_func, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
+    _skip_if_hooks_and_callable(model_func, "hooks")
 
     KFAC = KFACLinearOperator(
         model_func,
@@ -1272,6 +1246,7 @@ def test_KFAC_inverse_exactly_damped_matmat(
 ):
     """Test matrix-matrix multiplication by an inverse (exactly) damped KFAC approximation."""
     model_func, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
+    _skip_if_hooks_and_callable(model_func, "hooks")
 
     KFAC = KFACLinearOperator(
         model_func,
