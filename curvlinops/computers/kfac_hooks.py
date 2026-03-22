@@ -16,7 +16,6 @@ and generalized to all linear layers with weight sharing in
   Kronecker-Factored Approximate Curvature for Modern Neural Network Architectures (NeurIPS).
 """
 
-from collections.abc import Callable, MutableMapping
 from contextlib import contextmanager
 from functools import partial
 from typing import Any, Iterator
@@ -126,8 +125,7 @@ class HooksKFACComputer(_BaseKFACComputer):
 
     def __init__(
         self,
-        model_func: Module
-        | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
+        model_func: Module,
         *args,
         **kwargs,
     ):
