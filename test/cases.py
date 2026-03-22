@@ -18,6 +18,7 @@ from torch.nn import (
     ReLU,
     Sequential,
 )
+from torch.nn.functional import linear, relu
 from torch.utils.data import DataLoader, TensorDataset
 
 from curvlinops.kfac_utils import KFACType
@@ -263,7 +264,8 @@ CASES_NO_DEVICE = INV_CASES_NO_DEVICE + [
 def _make_callable_case():
     """Create a test case with a callable model_func (no nn.Module).
 
-    A simple two-layer ReLU network implemented with raw tensor operations.
+    Uses ``F.linear`` so the FX graph contains patterns recognizable by the
+    KFAC IO collector.
 
     Returns:
         Dictionary with model_func as a callable, separate params, and data.
@@ -277,9 +279,8 @@ def _make_callable_case():
     }
 
     def model_func(p: dict[str, Tensor], X: Tensor) -> Tensor:
-        h = X @ p["W1"].T + p["b1"]
-        h = h.clamp(min=0)
-        return h @ p["W2"].T + p["b2"]
+        h = relu(linear(X, p["W1"], p["b1"]))
+        return linear(h, p["W2"], p["b2"])
 
     return {
         "model_func": lambda: model_func,
