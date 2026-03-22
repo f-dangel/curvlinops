@@ -92,7 +92,7 @@ def regression_targets(size: tuple[int]) -> Tensor:
 
 
 def maybe_exclude_or_shuffle_parameters(
-    params: dict[str, Tensor], model: Module, exclude: str, shuffle: bool
+    params: dict[str, Tensor], model: Module, exclude: str | None, shuffle: bool
 ) -> dict[str, Tensor]:
     """Maybe exclude or shuffle parameters.
 

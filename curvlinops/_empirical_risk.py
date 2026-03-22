@@ -77,12 +77,19 @@ class _EmpiricalRiskMixin:
                 safeguard, only turn it off if you know what you are doing.
 
         Raises:
+            TypeError: If ``params`` is not a ``dict``.
             ValueError: If ``X`` is a ``MutableMapping`` and ``batch_size_fn`` is not
                 specified.
         """
         if isinstance(next(iter(data))[0], MutableMapping) and batch_size_fn is None:
             raise ValueError(
                 "When using dict-like custom data, `batch_size_fn` is required."
+            )
+
+        if not isinstance(params, dict):
+            raise TypeError(
+                f"params must be a dict[str, Tensor], got {type(params).__name__}. "
+                "Use dict(model.named_parameters()) instead of list(model.parameters())."
             )
 
         if isinstance(model_func, Module):
