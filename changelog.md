@@ -6,6 +6,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Migration guide: `params` is now `dict[str, Tensor]`
+
+All operators now require `params` as a `dict[str, Tensor]` instead of
+`list[Parameter]`. This affects every call site. Here is how to update your code:
+
+```python
+# Before
+params = [p for p in model.parameters() if p.requires_grad]
+H = HessianLinearOperator(model, loss, params, data)
+
+# After
+params = {n: p for n, p in model.named_parameters() if p.requires_grad}
+H = HessianLinearOperator(model, loss, params, data)
+```
+
+See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
+
 ### Added/New
 
 - Support plain callable `(params_dict, X) -> prediction` as `model_func`
@@ -49,6 +66,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([PR](https://github.com/f-dangel/curvlinops/pull/257))
 
 ### Fixed/Removed
+
+- **Backward-incompatible:** Migrate `params` from `list[Parameter]` to
+  `dict[str, Tensor]` across all operators. Pass
+  ``dict(model.named_parameters())`` instead of ``list(model.parameters())``.
+  Remove `SUPPORTS_FUNCTIONAL` flag and `identify_free_parameters` from init
+  ([PR](https://github.com/f-dangel/curvlinops/pull/283))
 
 - **Backward-incompatible:** Remove block-diagonal Hessian support (`block_sizes`
   parameter from `HessianLinearOperator` and `CurvatureLinearOperator`)

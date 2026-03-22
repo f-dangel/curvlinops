@@ -7,7 +7,7 @@ from functools import cached_property
 
 from torch import Tensor, cat, no_grad, zeros_like
 from torch.func import jvp, vjp, vmap
-from torch.nn import Module, Parameter
+from torch.nn import Module
 
 from curvlinops._torch_base import CurvatureLinearOperator
 
@@ -114,7 +114,6 @@ class JacobianLinearOperator(CurvatureLinearOperator):
     """
 
     FIXED_DATA_ORDER: bool = True
-    SUPPORTS_FUNCTIONAL: bool = True
 
     @cached_property
     def _mp(
@@ -134,7 +133,7 @@ class JacobianLinearOperator(CurvatureLinearOperator):
         self,
         model_func: Module
         | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
-        params: list[Parameter] | dict[str, Tensor],
+        params: dict[str, Tensor],
         data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
@@ -161,8 +160,11 @@ class JacobianLinearOperator(CurvatureLinearOperator):
         Note that the data must be supplied in deterministic order.
 
         Args:
-            model_func: Neural network function.
-            params: Neural network parameters.
+            model_func: The neural network's forward pass, defining the functional
+                relationship ``(params, X) -> prediction``. Either an ``nn.Module``
+                (architecture) or a callable ``(params_dict, X) -> prediction``.
+            params: The parameter values at which the Jacobian is evaluated. A
+                dictionary mapping parameter names to tensors.
             data: Iterable of batched input-target pairs.
             progressbar: Show progress bar.
             check_deterministic: Check if model and data are deterministic.
@@ -240,7 +242,6 @@ class TransposedJacobianLinearOperator(CurvatureLinearOperator):
     """
 
     FIXED_DATA_ORDER: bool = True
-    SUPPORTS_FUNCTIONAL: bool = True
 
     @cached_property
     def _mp(
@@ -258,7 +259,7 @@ class TransposedJacobianLinearOperator(CurvatureLinearOperator):
         self,
         model_func: Module
         | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
-        params: list[Parameter] | dict[str, Tensor],
+        params: dict[str, Tensor],
         data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
@@ -285,8 +286,11 @@ class TransposedJacobianLinearOperator(CurvatureLinearOperator):
         Note that the data must be supplied in deterministic order.
 
         Args:
-            model_func: Neural network function.
-            params: Neural network parameters.
+            model_func: The neural network's forward pass, defining the functional
+                relationship ``(params, X) -> prediction``. Either an ``nn.Module``
+                (architecture) or a callable ``(params_dict, X) -> prediction``.
+            params: The parameter values at which the Jacobian is evaluated. A
+                dictionary mapping parameter names to tensors.
             data: Iterable of batched input-target pairs.
             progressbar: Show progress bar.
             check_deterministic: Check if model and data are deterministic.

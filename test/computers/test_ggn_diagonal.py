@@ -27,7 +27,7 @@ def test_GGNDiagonalComputer(case, kwargs: dict):
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn, **kwargs
     ).compute()
     assert len(diag) == len(params)
-    for d, p in zip(diag.values(), params):
+    for d, p in zip(diag.values(), params.values()):
         assert d.shape == p.shape
     diag_flat = cat([d.flatten() for d in diag.values()])
 

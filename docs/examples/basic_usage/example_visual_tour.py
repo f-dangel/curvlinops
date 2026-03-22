@@ -70,8 +70,8 @@ model = Sequential(
     Linear(25, num_classes),
 ).to(DEVICE)
 
-params = [p for p in model.parameters() if p.requires_grad]
-num_params = sum(p.numel() for p in params)
+params = {n: p for n, p in model.named_parameters() if p.requires_grad}
+num_params = sum(p.numel() for p in params.values())
 num_params_layer = [
     sum(p.numel() for p in child.parameters()) for child in model.children()
 ]

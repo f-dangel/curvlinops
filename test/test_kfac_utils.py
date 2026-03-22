@@ -5,7 +5,7 @@ from torch import cat, manual_seed, rand_like
 from torch.nn import Conv2d, Linear, Sequential
 
 from curvlinops.kfac_utils import FromCanonicalLinearOperator, ToCanonicalLinearOperator
-from curvlinops.utils import allclose_report, identify_free_parameters
+from curvlinops.utils import allclose_report
 
 
 @mark.parametrize("separate_weight_and_bias", [True, False], ids=["separate", "joint"])
@@ -19,13 +19,13 @@ def test_CanonicalLinearOperator(separate_weight_and_bias: bool):
 
     # Natural order would be: w1, b1, w2, b2, w3
     # Create unconventional order: w1, b2, b1, w3, w2
-    natural_params = list(net.parameters())
-    new_order = [0, 3, 1, 4, 2]
-    params = [natural_params[idx] for idx in new_order]
-
-    # Build named params dict preserving the unconventional order
-    named_params = identify_free_parameters(net, params)
-    assert list(named_params.keys()) == [
+    natural_params = dict(net.named_parameters())
+    # Natural order would be: w1, b1, w2, b2, w3
+    # Create unconventional order: w1, b2, b1, w3, w2
+    keys = list(natural_params.keys())
+    new_order = [keys[i] for i in [0, 3, 1, 4, 2]]
+    params = {k: natural_params[k] for k in new_order}
+    assert list(params.keys()) == [
         "0.weight",  # w1
         "1.bias",  # b2
         "0.bias",  # b1
@@ -51,13 +51,13 @@ def test_CanonicalLinearOperator(separate_weight_and_bias: bool):
         ]
 
     # Extract param shapes, device, and dtype
-    param_shapes = {name: p.shape for name, p in named_params.items()}
-    device = params[0].device
-    dtype = params[0].dtype
+    param_shapes = {name: p.shape for name, p in params.items()}
+    device = next(iter(params.values())).device
+    dtype = next(iter(params.values())).dtype
 
     # Verify correct behavior of canonicalization for this case
-    x = [rand_like(p) for p in named_params.values()]
-    # Order in named_params follows the unconventional order: w1, b2, b1, w3, w2
+    x = [rand_like(p) for p in params.values()]
+    # Order in params follows the unconventional order: w1, b2, b1, w3, w2
     x_w1, x_b2, x_b1, x_w3, x_w2 = x
 
     x_canonical = (

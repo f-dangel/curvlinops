@@ -49,7 +49,7 @@ model = nn.Sequential(
     nn.Sigmoid(),
     nn.Linear(D_hidden, D_out),
 ).to(DEVICE)
-params = [p for p in model.parameters() if p.requires_grad]
+params = {n: p for n, p in model.named_parameters() if p.requires_grad}
 
 loss_function = nn.MSELoss(reduction="mean").to(DEVICE)
 

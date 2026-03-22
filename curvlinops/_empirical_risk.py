@@ -4,14 +4,13 @@ from collections.abc import Callable, Iterable, Iterator, MutableMapping
 
 from torch import Tensor, device, dtype, tensor, zeros_like
 from torch.func import grad_and_value
-from torch.nn import CrossEntropyLoss, Module, Parameter
+from torch.nn import CrossEntropyLoss, Module
 from tqdm import tqdm
 
 from curvlinops.utils import (
     _infer_device,
     _infer_dtype,
     allclose_report,
-    identify_free_parameters,
     make_functional_call,
 )
 
@@ -28,22 +27,17 @@ class _EmpiricalRiskMixin:
             number of per-example loss terms (e.g. tokens per sequence). When
             ``True`` and ``num_per_example_loss_terms`` is not provided, it
             will be inferred from the data. Default: ``False``.
-        SUPPORTS_FUNCTIONAL: Whether the operator supports a plain callable
-            ``(params_dict, X) -> prediction`` as ``model_func`` (with
-            ``params`` as ``dict[str, Tensor]``). When ``False``,
-            ``model_func`` must be an ``nn.Module``. Default: ``False``.
     """
 
     FIXED_DATA_ORDER: bool = False
     NEEDS_NUM_PER_EXAMPLE_LOSS_TERMS: bool = False
-    SUPPORTS_FUNCTIONAL: bool = False
 
     def __init__(
         self,
         model_func: Module
         | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
         loss_func: Callable[[Tensor, Tensor], Tensor] | None,
-        params: list[Parameter] | dict[str, Tensor],
+        params: dict[str, Tensor],
         data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
         batch_size_fn: Callable[[MutableMapping | Tensor], int] | None = None,
@@ -54,15 +48,16 @@ class _EmpiricalRiskMixin:
         """Set up the shared state for empirical risk computation.
 
         Args:
-            model_func: Either an ``nn.Module`` or a callable with signature
-                ``(params_dict, X) -> prediction``. If a ``Module``, it will be
-                wrapped via ``make_functional_call``.
+            model_func: The neural network's forward pass, defining the functional
+                relationship ``(params, X) -> prediction``. Either an ``nn.Module``
+                (architecture) or a callable ``(params_dict, X) -> prediction``.
+                If a ``Module``, it will be wrapped via ``make_functional_call``.
             loss_func: Loss function criterion. Maps predictions and mini-batch labels
                 to a scalar value. ``None`` means the represented quantity is independent
                 of the loss function.
-            params: Parameters for the model. Either a ``list[Parameter]`` (requires
-                ``model_func`` to be a ``Module``) or a ``dict[str, Tensor]`` (requires
-                ``model_func`` to be a callable).
+            params: The parameter values at which the matrix is evaluated.
+                A dictionary mapping parameter names to tensors (use
+                ``dict(model.named_parameters())``).
             data: Source from which mini-batches can be drawn, for instance a list of
                 mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
             progressbar: Show a progressbar during computation.
@@ -82,6 +77,7 @@ class _EmpiricalRiskMixin:
                 safeguard, only turn it off if you know what you are doing.
 
         Raises:
+            TypeError: If ``params`` is not a ``dict``.
             ValueError: If ``X`` is a ``MutableMapping`` and ``batch_size_fn`` is not
                 specified.
         """
@@ -90,31 +86,22 @@ class _EmpiricalRiskMixin:
                 "When using dict-like custom data, `batch_size_fn` is required."
             )
 
+        if not isinstance(params, dict):
+            raise TypeError(
+                f"params must be a dict[str, Tensor], got {type(params).__name__}. "
+                "Use dict(model.named_parameters()) instead of list(model.parameters())."
+            )
+
         if isinstance(model_func, Module):
-            if not isinstance(params, list):
-                raise ValueError(
-                    "Module model_func requires params as list[Parameter]."
-                )
-            self._model_module = model_func
             self._model_func = make_functional_call(model_func)
-            self._params = identify_free_parameters(model_func, params)
-        else:
-            if not callable(model_func):
-                raise ValueError(
-                    "model_func must be an nn.Module or a callable, "
-                    f"got {type(model_func).__name__}."
-                )
-            if not self.SUPPORTS_FUNCTIONAL:
-                raise ValueError(
-                    f"{self.__class__.__name__} does not support callable model_func. "
-                    "Pass an nn.Module instead."
-                )
-            if not isinstance(params, dict):
-                raise ValueError(
-                    "Callable model_func requires params as dict[str, Tensor]."
-                )
+        elif callable(model_func):
             self._model_func = model_func
-            self._params = params
+        else:
+            raise ValueError(
+                "model_func must be an nn.Module or a callable, "
+                f"got {type(model_func).__name__}."
+            )
+        self._params = params
         self._loss_func = loss_func
         self._data = data
         self._progressbar = progressbar

@@ -22,7 +22,7 @@ from typing import Any, Iterator
 
 from einops import einsum
 from torch import Tensor, autograd
-from torch.nn import Conv2d, Module, Parameter
+from torch.nn import Conv2d, Module
 from torch.utils.hooks import RemovableHandle
 
 from curvlinops.computers._base import (
@@ -123,6 +123,29 @@ class HooksKFACComputer(_BaseKFACComputer):
     (see :class:`curvlinops.GGNLinearOperator` with ``mc_samples > 0``).
     """
 
+    def __init__(self, model_func: Module, *args, **kwargs):
+        """Initialize and validate that ``model_func`` is an ``nn.Module``.
+
+        The hooks backend requires an ``nn.Module`` to register forward/backward
+        hooks. Callable model functions are not supported (use ``backend="make_fx"``).
+
+        Args:
+            model_func: The neural network's forward pass. Must be an ``nn.Module``
+                for the hooks backend.
+            *args: Positional arguments forwarded to ``_BaseKFACComputer``.
+            **kwargs: Keyword arguments forwarded to ``_BaseKFACComputer``.
+
+        Raises:
+            ValueError: If ``model_func`` is not an ``nn.Module``.
+        """
+        if not isinstance(model_func, Module):
+            raise ValueError(
+                "The hooks backend requires model_func to be an nn.Module. "
+                "Use backend='make_fx' for callable model functions."
+            )
+        self._model_module = model_func
+        super().__init__(model_func, *args, **kwargs)
+
     def _computation_context(self) -> Iterator[None]:
         """Set module parameters from ``self._params`` during computation.
 
@@ -156,9 +179,7 @@ class HooksKFACComputer(_BaseKFACComputer):
             Tuple of (input_covariances, gradient_covariances, mapping).
         """
         mapping = self.compute_parameter_groups(
-            list(self._params.values()),
-            self._model_module,
-            self._separate_weight_and_bias,
+            self._params, self._model_module, self._separate_weight_and_bias
         )
 
         # Create empty dictionaries to be populated by hooks
@@ -237,11 +258,15 @@ class HooksKFACComputer(_BaseKFACComputer):
 
         # Backpropagate all vectors (0 for forward-only, 1 for empirical,
         # mc_samples for MC, and C (number of output features per datum) for TYPE2).
+        # Use the module's Parameter objects (not self._params values) because
+        # autograd.grad requires tensors that are in the computation graph.
+        module_params = dict(self._model_module.named_parameters())
+        grad_params = [module_params[n] for n in self._params]
         num_vectors = grad_outputs.shape[0]
         for v in range(num_vectors):
             autograd.grad(
                 output,
-                list(self._params.values()),
+                grad_params,
                 grad_outputs=grad_outputs[v],
                 retain_graph=v < num_vectors - 1,
             )
@@ -365,7 +390,7 @@ class HooksKFACComputer(_BaseKFACComputer):
     @classmethod
     def compute_parameter_groups(
         cls,
-        params: list[Tensor | Parameter],
+        params: dict[str, Tensor],
         model_func: Module,
         separate_weight_and_bias: bool = True,
     ) -> list[ParamGroup]:
@@ -377,7 +402,7 @@ class HooksKFACComputer(_BaseKFACComputer):
         performance.
 
         Args:
-            params: List of parameters.
+            params: Dictionary mapping parameter names to tensors.
             model_func: The model function.
             separate_weight_and_bias: Whether to treat weight and bias as
                 separate parameter groups.
@@ -390,25 +415,20 @@ class HooksKFACComputer(_BaseKFACComputer):
         """
         _role = {"weight": "W", "bias": "b"}
 
-        param_ids = {p.data_ptr() for p in params}
-        ptr_to_name = {
-            p.data_ptr(): name
-            for name, p in model_func.named_parameters()
-            if p.data_ptr() in param_ids
-        }
+        param_names = set(params.keys())
         groups: list[ParamGroup] = []
-        processed = set()
+        processed: set[str] = set()
 
-        for _, mod in model_func.named_modules():
-            if isinstance(mod, cls._SUPPORTED_MODULES) and any(
-                p.data_ptr() in param_ids for p in mod.parameters()
-            ):
-                param_roles: ParamGroup = {}
-                for p_name, p in mod.named_parameters(recurse=False):
-                    p_id = p.data_ptr()
-                    if p_id in param_ids:
-                        param_roles[_role[p_name]] = ptr_to_name[p_id]
-                        processed.add(p_id)
+        for mod_name, mod in model_func.named_modules():
+            if not isinstance(mod, cls._SUPPORTED_MODULES):
+                continue
+            param_roles: ParamGroup = {}
+            for p_name, _ in mod.named_parameters(recurse=False):
+                full_name = f"{mod_name}.{p_name}" if mod_name else p_name
+                if full_name in param_names:
+                    param_roles[_role[p_name]] = full_name
+                    processed.add(full_name)
+            if param_roles:
                 param_dicts = (
                     [{r: n} for r, n in param_roles.items()]
                     if separate_weight_and_bias
@@ -417,7 +437,10 @@ class HooksKFACComputer(_BaseKFACComputer):
                 groups.extend(param_dicts)
 
         # check that all parameters are in known modules
-        if len(processed) != len(param_ids):
-            raise NotImplementedError("Found parameters in un-supported layers.")
+        if unsupported := param_names - processed:
+            raise NotImplementedError(
+                f"Parameters {unsupported} are not in supported layers "
+                f"({cls._SUPPORTED_MODULES})."
+            )
 
         return groups

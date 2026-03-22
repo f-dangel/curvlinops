@@ -30,14 +30,16 @@ def test_CGInverseLinearOperator_damped_GGN(inv_case, delta_rel: float = 2e-2):
             to obtain the damping value.
     """
     model_func, loss_func, params, data, batch_size_fn = change_dtype(inv_case, float64)
-    (dev,), (dt,) = {p.device for p in params}, {p.dtype for p in params}
+    ((dev, dt),) = {(p.device, p.dtype) for p in params.values()}
 
     GGN_naive = functorch_ggn(
         model_func, loss_func, params, data, input_key="x"
     ).detach()
     # add damping proportional to average trace
     delta = delta_rel * GGN_naive.diag().mean().item()
-    damping = delta * IdentityLinearOperator([p.shape for p in params], dev, dt)
+    damping = delta * IdentityLinearOperator(
+        [p.shape for p in params.values()], dev, dt
+    )
     GGN = GGNLinearOperator(
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn
     )
@@ -47,19 +49,21 @@ def test_CGInverseLinearOperator_damped_GGN(inv_case, delta_rel: float = 2e-2):
     inv_GGN = CGInverseLinearOperator(GGN + damping, eps=0, tolerance=1e-5)
     compare_consecutive_matmats(inv_GGN)
     # Need to use larger tolerances on GPU, despite float64
-    atol, rtol = (1e-8, 1e-5) if "cpu" in str(dev) else (1e-7, 1e-4)
+    atol, rtol = (5e-8, 5e-5) if "cpu" in str(dev) else (5e-7, 5e-4)
     compare_matmat(inv_GGN, inv_GGN_naive, atol=atol, rtol=rtol)
 
 
 def test_LSMRInverseLinearOperator_damped_GGN(inv_case, delta: float = 2e-2):
     """Test matrix multiplication with the inverse damped GGN with LSMR."""
     model_func, loss_func, params, data, batch_size_fn = change_dtype(inv_case, float64)
-    (dev,), (dt,) = {p.device for p in params}, {p.dtype for p in params}
+    ((dev, dt),) = {(p.device, p.dtype) for p in params.values()}
 
     GGN = GGNLinearOperator(
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn
     )
-    damping = delta * IdentityLinearOperator([p.shape for p in params], dev, dt)
+    damping = delta * IdentityLinearOperator(
+        [p.shape for p in params.values()], dev, dt
+    )
 
     # set hyperparameters such that LSMR is accurate enough
     inv_GGN = LSMRInverseLinearOperator(

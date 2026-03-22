@@ -6,7 +6,7 @@ from functools import cached_property
 from einops import einsum
 from torch import Generator, Tensor, no_grad
 from torch.func import jacrev, jvp, vjp, vmap
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, Module, MSELoss, Parameter
+from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, Module, MSELoss
 
 from curvlinops._torch_base import CurvatureLinearOperator
 from curvlinops.ggn_utils import make_grad_output_fn
@@ -237,14 +237,14 @@ class GGNLinearOperator(CurvatureLinearOperator):
     """
 
     SELF_ADJOINT: bool = True
-    SUPPORTS_FUNCTIONAL: bool = True
     MC_SUPPORTED_LOSSES = (MSELoss, CrossEntropyLoss, BCEWithLogitsLoss)
 
     def __init__(
         self,
-        model_func: Module,
+        model_func: Module
+        | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
         loss_func: Callable[[Tensor, Tensor], Tensor],
-        params: list[Parameter],
+        params: dict[str, Tensor],
         data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
@@ -261,11 +261,13 @@ class GGNLinearOperator(CurvatureLinearOperator):
             mini-batch labels y.
 
         Args:
-            model_func: A function that maps the mini-batch input X to predictions.
-                Could be a PyTorch module representing a neural network.
+            model_func: The neural network's forward pass, defining the functional
+                relationship ``(params, X) -> prediction``. Either an ``nn.Module``
+                (architecture) or a callable ``(params_dict, X) -> prediction``.
             loss_func: Loss function criterion. Maps predictions and mini-batch labels
                 to a scalar value.
-            params: List of differentiable parameters used by the prediction function.
+            params: The parameter values at which the GGN is evaluated. A dictionary
+                mapping parameter names to tensors.
             data: Source from which mini-batches can be drawn, for instance a list of
                 mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``. Note that ``X``
                 could be a ``dict`` or ``UserDict``; this is useful for custom models.

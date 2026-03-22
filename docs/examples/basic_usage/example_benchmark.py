@@ -40,7 +40,6 @@ from torch.nn import (
     Linear,
     MaxPool2d,
     Module,
-    Parameter,
     ReLU,
     Sequential,
 )
@@ -154,7 +153,7 @@ def setup_synthetic_mnist_cnn(
 
 def setup_problem(
     problem_str: str, linop_str: str, dev: device
-) -> tuple[Module, Module, list[Parameter], Iterable[tuple[Tensor, Tensor]]]:
+) -> tuple[Module, Module, dict[str, Tensor], Iterable[tuple[Tensor, Tensor]]]:
     """Set up the neural net, loss function, parameters, and data.
 
     Args:
@@ -180,17 +179,19 @@ def setup_problem(
 
     # Only use parameters of supported layers for KFAC
     if linop_str in {"KFAC", "KFAC inverse", "EKFAC", "EKFAC inverse"}:
-        params = []
-        supported_layers = [
-            m for m in model.modules() if isinstance(m, (Linear, Conv2d))
-        ]
-        for m in supported_layers:
+        params = {}
+        for mod_name, mod in model.named_modules():
+            if not isinstance(mod, (Linear, Conv2d)):
+                continue
             # ignore the last layer of GPT because it has 50k outputs, which
             # will yield an extremely large Kronecker factor
-            if all(d <= 50_000 for d in m.weight.shape):
-                params.extend([p for p in m.parameters() if p.requires_grad])
+            if all(d <= 50_000 for d in mod.weight.shape):
+                for p_name, p in mod.named_parameters(recurse=False):
+                    full_name = f"{mod_name}.{p_name}" if mod_name else p_name
+                    if p.requires_grad:
+                        params[full_name] = p
     else:
-        params = [p for p in model.parameters() if p.requires_grad]
+        params = {n: p for n, p in model.named_parameters() if p.requires_grad}
 
     return model, loss_function, params, data
 
@@ -226,7 +227,7 @@ def setup_linop(
     linop_str: str,
     model: Module,
     loss_function: Module,
-    params: list[Parameter],
+    params: dict[str, Tensor],
     data: Iterable[tuple[Tensor, Tensor]],
     check_deterministic: bool = True,
 ) -> PyTorchLinearOperator:

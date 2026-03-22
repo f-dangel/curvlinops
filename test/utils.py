@@ -20,13 +20,12 @@ from torch import (
     logdet,
     manual_seed,
     rand,
-    rand_like,
     randint,
     randperm,
     trace,
     zeros_like,
 )
-from torch.func import functional_call, vmap
+from torch.func import vmap
 from torch.nn import (
     AdaptiveAvgPool2d,
     BCEWithLogitsLoss,
@@ -37,7 +36,6 @@ from torch.nn import (
     Linear,
     Module,
     MSELoss,
-    Parameter,
     ReLU,
     Sequential,
     Upsample,
@@ -94,26 +92,26 @@ def regression_targets(size: tuple[int]) -> Tensor:
 
 
 def maybe_exclude_or_shuffle_parameters(
-    params: list[Parameter], model: Module, exclude: str, shuffle: bool
-):
+    params: dict[str, Tensor], model: Module, exclude: str | None, shuffle: bool
+) -> dict[str, Tensor]:
     """Maybe exclude or shuffle parameters.
 
     Args:
-        params: List of parameters.
+        params: Dictionary mapping parameter names to tensors.
         model: The neural network.
-        exclude: Parameter to exclude.
+        exclude: Parameter name substring to exclude (``"weight"`` or ``"bias"``).
         shuffle: Whether to shuffle the parameters.
 
     Returns:
-        List of parameters.
+        Dictionary of parameters.
     """
     assert exclude in {None, "weight", "bias"}
     if exclude is not None:
-        names = {p.data_ptr(): name for name, p in model.named_parameters()}
-        params = [p for p in params if exclude not in names[p.data_ptr()]]
+        params = {n: p for n, p in params.items() if exclude not in n}
     if shuffle:
-        permutation = randperm(len(params))
-        params = [params[i] for i in permutation]
+        keys = list(params.keys())
+        perm = randperm(len(keys)).tolist()
+        params = {keys[i]: params[keys[i]] for i in perm}
     return params
 
 
@@ -121,7 +119,7 @@ def block_diagonal(
     linear_operator: type[CurvatureLinearOperator],
     model: Module,
     loss_func: Module,
-    params: list[Parameter],
+    params: dict[str, Tensor],
     data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
     batch_size_fn: Callable[[MutableMapping], int] | None = None,
     separate_weight_and_bias: bool = True,
@@ -153,7 +151,7 @@ def block_diagonal(
         **(optional_linop_args or {}),
     )
     linop_mat = linop @ eye_like(linop)
-    sizes = [p.numel() for p in params]
+    sizes = [p.numel() for p in params.values()]
     # matrix_blocks[i, j] corresponds to the block of (params[i], params[j])
     matrix_blocks = [
         list(block.split(sizes, dim=1)) for block in linop_mat.split(sizes, dim=0)
@@ -162,26 +160,21 @@ def block_diagonal(
     # find out which blocks to keep
     num_params = len(params)
     keep = [(i, i) for i in range(num_params)]
-    param_ids = [p.data_ptr() for p in params]
+    param_names = list(params.keys())
 
     # keep blocks corresponding to jointly-treated weights and biases
     if not separate_weight_and_bias:
-        # find all layers with weight and bias
-        has_weight_and_bias = [
-            mod
-            for mod in model.modules()
-            if hasattr(mod, "weight") and hasattr(mod, "bias") and mod.bias is not None
-        ]
-        # only keep those whose parameters are included
-        has_weight_and_bias = [
-            mod
-            for mod in has_weight_and_bias
-            if mod.weight.data_ptr() in param_ids and mod.bias.data_ptr() in param_ids
-        ]
-        for mod in has_weight_and_bias:
-            w_pos = param_ids.index(mod.weight.data_ptr())
-            b_pos = param_ids.index(mod.bias.data_ptr())
-            keep.extend([(w_pos, b_pos), (b_pos, w_pos)])
+        for mod_name, mod in model.named_modules():
+            if not (
+                hasattr(mod, "weight") and hasattr(mod, "bias") and mod.bias is not None
+            ):
+                continue
+            w_name = f"{mod_name}.weight" if mod_name else "weight"
+            b_name = f"{mod_name}.bias" if mod_name else "bias"
+            if w_name in params and b_name in params:
+                w_pos = param_names.index(w_name)
+                b_pos = param_names.index(b_name)
+                keep.extend([(w_pos, b_pos), (b_pos, w_pos)])
 
     for i, j in product(range(num_params), range(num_params)):
         if (i, j) not in keep:
@@ -859,7 +852,7 @@ def _test_inplace_activations(
     loss_func = MSELoss().to(dev)
     batch_size = 1
     data = [(rand(batch_size, 6), regression_targets((batch_size, 2)))]
-    params = list(model.parameters())
+    params = dict(model.named_parameters())
 
     # 1) compare (E)KFAC and GGN
     ggn = block_diagonal(GGNLinearOperator, model, loss_func, params, data)
@@ -877,12 +870,12 @@ def _test_inplace_activations(
     assert allclose_report(ggn, ggn_no_inplace)
 
 
-def _test_property(  # noqa: C901
+def _test_property(
     linop_cls: type[KFACLinearOperator | EKFACLinearOperator],
     property_name: str,
     model: Module,
     loss_func: Module,
-    params: list[Parameter],
+    params: dict[str, Tensor],
     data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
     batch_size_fn: Callable[[MutableMapping], int] | None,
     separate_weight_and_bias: bool = True,
@@ -950,7 +943,7 @@ def _test_property(  # noqa: C901
 def _test_ekfac_closer_to_exact_than_kfac(
     model: Module,
     loss_func: Module,
-    params: list[Parameter],
+    params: dict[str, Tensor],
     data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
     batch_size_fn: Callable[[MutableMapping], int] | None,
     fisher_type: FisherType,
@@ -1039,7 +1032,10 @@ def change_dtype(case: tuple, dt: dtype) -> tuple:
     """
     model_func, loss_func, params, data, batch_size_fn = case
 
-    model_func, loss_func = model_func.to(dt), loss_func.to(dt)
+    if isinstance(model_func, Module):
+        model_func = model_func.to(dt)
+    loss_func = loss_func.to(dt)
+    params = {n: p.to(dt) for n, p in params.items()}
     data = [
         (
             cast_input(X, dt),
@@ -1049,41 +1045,3 @@ def change_dtype(case: tuple, dt: dtype) -> tuple:
     ]
 
     return model_func, loss_func, params, data, batch_size_fn
-
-
-def to_functional(
-    model_func: Module,
-    loss_func: Module,
-    params: list[Tensor],
-    data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
-    batch_size_fn: Callable[[MutableMapping | Tensor], int] | None,
-) -> tuple[
-    Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
-    Module,
-    dict[str, Tensor],
-    Iterable[tuple[Tensor | MutableMapping, Tensor]],
-    Callable[[MutableMapping | Tensor], int] | None,
-]:
-    """Convert a Module-based test case to a callable-based test case.
-
-    Creates a callable wrapper around the module and random parameter values
-    (different from the module's own parameters) to verify that operators
-    correctly use the provided params dict rather than the module's state.
-
-    Args:
-        model_func: The neural network module.
-        loss_func: The loss function.
-        params: List of model parameters.
-        data: The data.
-        batch_size_fn: Optional batch size function.
-
-    Returns:
-        Tuple of (model_fn, loss_func, params_dict, data, batch_size_fn).
-    """
-    ptr_to_name = {p.data_ptr(): name for name, p in model_func.named_parameters()}
-    params_dict = {ptr_to_name[p.data_ptr()]: rand_like(p) for p in params}
-
-    def model_fn(params_dict: dict[str, Tensor], X: Tensor | MutableMapping) -> Tensor:
-        return functional_call(model_func, params_dict, (X,))
-
-    return model_fn, loss_func, params_dict, data, batch_size_fn

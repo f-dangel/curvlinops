@@ -20,7 +20,6 @@ from torch.nn import (
     Linear,
     Module,
     MSELoss,
-    Parameter,
 )
 
 from curvlinops._empirical_risk import _EmpiricalRiskMixin
@@ -56,7 +55,7 @@ class _BaseKFACComputer(_EmpiricalRiskMixin):
         model_func: Module
         | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
         loss_func: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
-        params: list[Parameter] | dict[str, Tensor],
+        params: dict[str, Tensor],
         data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
@@ -76,13 +75,12 @@ class _BaseKFACComputer(_EmpiricalRiskMixin):
                 - Only Linear and Conv2d modules are supported.
 
         Args:
-            model_func: Either an ``nn.Module`` or a callable with signature
-                ``(params_dict, X) -> prediction``. Callables are only supported
-                by subclasses with ``SUPPORTS_FUNCTIONAL = True``.
+            model_func: The neural network's forward pass, defining the functional
+                relationship ``(params, X) -> prediction``. Either an ``nn.Module``
+                (architecture) or a callable ``(params_dict, X) -> prediction``.
             loss_func: The loss function.
-            params: The parameters defining the Fisher/GGN that will be approximated
-                through KFAC. Either a ``list[Parameter]`` (for ``Module``) or a
-                ``dict[str, Tensor]`` (for callable ``model_func``).
+            params: The parameter values at which the Fisher/GGN is approximated.
+                A dictionary mapping parameter names to tensors.
             data: A data loader containing the data of the Fisher/GGN.
             progressbar: Whether to show a progress bar when computing the Kronecker
                 factors. Defaults to ``False``.

@@ -13,7 +13,6 @@ from torch.nn import (
     Linear,
     Module,
     MSELoss,
-    Parameter,
     Sequential,
 )
 
@@ -62,7 +61,7 @@ from test.utils import (
 @mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
 def test_ekfac_type2(
     kfac_exact_case: tuple[
-        Module, MSELoss, list[Parameter], Iterable[tuple[Tensor, Tensor]]
+        Module, MSELoss, dict[str, Tensor], Iterable[tuple[Tensor, Tensor]]
     ],
     shuffle: bool,
     exclude: str,
@@ -123,7 +122,7 @@ def test_ekfac_type2_weight_sharing(
     kfac_weight_sharing_exact_case: tuple[
         WeightShareModel | Conv2dModel,
         MSELoss,
-        list[Parameter],
+        dict[str, Tensor],
         dict[str, Iterable[tuple[Tensor, Tensor]]],
     ],
     setting: str,
@@ -153,7 +152,7 @@ def test_ekfac_type2_weight_sharing(
     if isinstance(model, Conv2dModel):
         # For `Conv2dModel` the parameters are only initialized after the setting
         # property is set, so we have to redefine `params` after `model.setting = ...`.
-        params = [p for p in model.parameters() if p.requires_grad]
+        params = {n: p for n, p in model.named_parameters() if p.requires_grad}
     params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
     data = data[setting]
     # Flatten targets assuming only the first dimension is the batch dimension
@@ -204,7 +203,7 @@ def test_ekfac_type2_weight_tying(
 
 def test_ekfac_mc(
     kfac_exact_case: tuple[
-        Module, MSELoss, list[Parameter], Iterable[tuple[Tensor, Tensor]]
+        Module, MSELoss, dict[str, Tensor], Iterable[tuple[Tensor, Tensor]]
     ],
 ):
     """Test the EKFAC implementation using MC samples against the exact GGN.
@@ -246,7 +245,7 @@ def test_ekfac_mc_weight_sharing(
     kfac_weight_sharing_exact_case: tuple[
         WeightShareModel | Conv2dModel,
         MSELoss,
-        list[Parameter],
+        dict[str, Tensor],
         dict[str, Iterable[tuple[Tensor, Tensor]]],
     ],
     setting: str,
@@ -255,7 +254,7 @@ def test_ekfac_mc_weight_sharing(
 
     Args:
         kfac_weight_sharing_exact_case: A fixture that returns a model, loss function,
-            list of parameters, and data.
+            dict of parameters, and data.
         setting: The weight-sharing setting to use. Can be ``KFACType.EXPAND`` or
             ``KFACType.REDUCE``.
     """
@@ -266,7 +265,7 @@ def test_ekfac_mc_weight_sharing(
     if isinstance(model, Conv2dModel):
         # For `Conv2dModel` the parameters are only initialized after the setting
         # property is set, so we have to redefine `params` after `model.setting = ...`.
-        params = [p for p in model.parameters() if p.requires_grad]
+        params = {n: p for n, p in model.named_parameters() if p.requires_grad}
     data = data[setting]
     # Flatten targets assuming only the first dimension is the batch dimension
     # since EKFAC only supports 2d targets.
@@ -304,7 +303,7 @@ def test_ekfac_one_datum(
     kfac_exact_one_datum_case: tuple[
         Module,
         BCEWithLogitsLoss | CrossEntropyLoss,
-        list[Parameter],
+        dict[str, Tensor],
         Iterable[tuple[Tensor, Tensor]],
     ],
 ):
@@ -336,7 +335,7 @@ def test_ekfac_mc_one_datum(
     kfac_exact_one_datum_case: tuple[
         Module,
         BCEWithLogitsLoss | CrossEntropyLoss,
-        list[Parameter],
+        dict[str, Tensor],
         Iterable[tuple[Tensor, Tensor]],
     ],
 ):
@@ -369,7 +368,7 @@ def test_ekfac_mc_one_datum(
     # Need to use larger tolerances on GPU despite float64
     tols = (
         MC_TOLS
-        if "cpu" in str(params[0].device)
+        if "cpu" in str(next(iter(params.values())).device)
         else {k: 2 * v for k, v in MC_TOLS.items()}
     )
     assert allclose_report(ggn / scale, ekfac_mat / scale, **tols)
@@ -379,7 +378,7 @@ def test_ekfac_ef_one_datum(
     kfac_exact_one_datum_case: tuple[
         Module,
         BCEWithLogitsLoss | CrossEntropyLoss,
-        list[Parameter],
+        dict[str, Tensor],
         Iterable[tuple[Tensor, Tensor]],
     ],
 ):
@@ -481,7 +480,7 @@ def test_multi_dim_output(
         ).to(dev)
 
     # EKFAC for deep linear network with 4d input and output
-    params = list(model.parameters())
+    params = dict(model.named_parameters())
     with raises(ValueError, match="Only 2d output"):
         EKFACLinearOperator(
             model,
@@ -538,7 +537,7 @@ def test_expand_setting_scaling(
             (X2, classification_targets((4 * S * S,), 3)),
         ]
     model = UnetModel(loss, flatten=True).to(dev)
-    params = list(model.parameters())
+    params = dict(model.named_parameters())
 
     # EKFAC with sum reduction
     loss_func = loss(reduction="sum").to(dev)
@@ -709,7 +708,7 @@ def test_EKFAC_inverse_exactly_damped_matmat(
     inv_case: tuple[
         Module,
         MSELoss | CrossEntropyLoss,
-        list[Parameter],
+        dict[str, Tensor],
         Iterable[tuple[Tensor, Tensor]],
     ],
     delta: float = 1e-2,

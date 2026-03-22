@@ -116,9 +116,13 @@ class MakeFxKFACComputer(_BaseKFACComputer):
     Supports both ``nn.Module`` and plain callable ``model_func``.
     """
 
-    SUPPORTS_FUNCTIONAL: bool = True
+    def __init__(self, *args, **kwargs):
+        """Initialize and enable gradients on params for autograd.grad."""
+        super().__init__(*args, **kwargs)
+        for p in self._params.values():
+            p.requires_grad_(True)
 
-    def _compute_kronecker_factors(  # noqa: C901
+    def _compute_kronecker_factors(
         self,
     ) -> tuple[
         dict[ParamGroupKey, Tensor], dict[ParamGroupKey, Tensor], list[ParamGroup]

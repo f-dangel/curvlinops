@@ -24,7 +24,6 @@ from torch.nn import (
     CrossEntropyLoss,
     Module,
     MSELoss,
-    Parameter,
 )
 
 from curvlinops._torch_base import _ChainPyTorchLinearOperator
@@ -98,7 +97,7 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
         model_func: Module
         | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
         loss_func: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
-        params: list[Parameter] | dict[str, Tensor],
+        params: dict[str, Tensor],
         data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
@@ -123,13 +122,13 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
                   Use ``backend="make_fx"`` for weight-tied architectures.
 
         Args:
-            model_func: Either an ``nn.Module`` or a callable with signature
-                ``(params_dict, X) -> prediction``. Callables require
-                ``backend="make_fx"`` and ``params`` as ``dict[str, Tensor]``.
+            model_func: The neural network's forward pass, defining the functional
+                relationship ``(params, X) -> prediction``. Either an ``nn.Module``
+                (architecture) or a callable ``(params_dict, X) -> prediction``.
+                Callables require ``backend="make_fx"``.
             loss_func: The loss function.
-            params: The parameters defining the Fisher/GGN that will be approximated
-                through KFAC. Either a ``list[Parameter]`` (for ``Module``) or a
-                ``dict[str, Tensor]`` (for callable ``model_func``).
+            params: The parameter values at which the Fisher/GGN is approximated.
+                A dictionary mapping parameter names to tensors.
             data: A data loader containing the data of the Fisher/GGN.
             progressbar: Whether to show a progress bar when computing the Kronecker
                 factors. Defaults to ``False``.

@@ -36,7 +36,7 @@ def blocks_to_matrix(blocks: dict[str, dict[str, Tensor]]) -> Tensor:
 def functorch_hessian(
     model_func: Module | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
     loss_func: Module,
-    params: list[Tensor] | dict[str, Tensor],
+    params: dict[str, Tensor],
     data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
     input_key: str | None = None,
 ) -> Tensor:
@@ -47,8 +47,7 @@ def functorch_hessian(
             ``(params_dict, X) -> prediction``.
         loss_func: Loss function criterion. Maps predictions and mini-batch labels
             to a scalar value.
-        params: Either a ``list[Tensor]`` (for Module) or ``dict[str, Tensor]``
-            (for callable).
+        params: Dictionary mapping parameter names to tensors.
         data: Source from which mini-batches can be drawn, for instance a list of
             mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
         input_key: Key to obtain the input tensor when ``X`` is a dict-like object.
@@ -80,7 +79,7 @@ def functorch_hessian(
 def functorch_ggn(
     model_func: Module | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
     loss_func: Module,
-    params: list[Tensor] | dict[str, Tensor],
+    params: dict[str, Tensor],
     data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
     input_key: str | None = None,
 ) -> Tensor:
@@ -93,8 +92,7 @@ def functorch_ggn(
             ``(params_dict, X) -> prediction``.
         loss_func: Loss function criterion. Maps predictions and mini-batch labels
             to a scalar value.
-        params: Either a ``list[Tensor]`` (for Module) or ``dict[str, Tensor]``
-            (for callable).
+        params: Dictionary mapping parameter names to tensors.
         data: Source from which mini-batches can be drawn, for instance a list of
             mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
         input_key: Key to obtain the input tensor when ``X`` is a dict-like object.
@@ -129,8 +127,6 @@ def functorch_ggn(
     ) -> Tensor:
         """Compute the loss given a mini-batch under a linearized NN around anchor.
 
-        # noqa: DAR101
-
         Returns:
             f(X, θ₀) + (J_θ₀ f(X, θ₀)) @ (θ - θ₀) with f the neural network, θ₀ the anchor
             point of the linearization, and θ the evaluation point.
@@ -149,7 +145,7 @@ def functorch_ggn(
 def functorch_gradient_and_loss(
     model_func: Module | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
     loss_func: Module,
-    params: list[Tensor] | dict[str, Tensor],
+    params: dict[str, Tensor],
     data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
     input_key: str | None = None,
 ) -> tuple[list[Tensor], Tensor]:
@@ -160,8 +156,7 @@ def functorch_gradient_and_loss(
             ``(params_dict, X) -> prediction``.
         loss_func: Loss function criterion. Maps predictions and mini-batch labels
             to a scalar value.
-        params: Either a ``list[Tensor]`` (for Module) or ``dict[str, Tensor]``
-            (for callable).
+        params: Dictionary mapping parameter names to tensors.
         data: Source from which mini-batches can be drawn, for instance a list of
             mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
         input_key: Key to obtain the input tensor when ``X`` is a dict-like object.
@@ -195,7 +190,7 @@ def functorch_gradient_and_loss(
 def functorch_empirical_fisher(
     model_func: Module | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
     loss_func: Module,
-    params: list[Tensor] | dict[str, Tensor],
+    params: dict[str, Tensor],
     data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
     input_key: str | None = None,
 ) -> Tensor:
@@ -206,8 +201,7 @@ def functorch_empirical_fisher(
             ``(params_dict, X) -> prediction``.
         loss_func: Loss function criterion. Maps predictions and mini-batch labels
             to a scalar value.
-        params: Either a ``list[Tensor]`` (for Module) or ``dict[str, Tensor]``
-            (for callable).
+        params: Dictionary mapping parameter names to tensors.
         data: Source from which mini-batches can be drawn, for instance a list of
             mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
         input_key: Key to obtain the input tensor when ``X`` is a dict-like object.
@@ -276,7 +270,7 @@ def functorch_empirical_fisher(
 
 def functorch_jacobian(
     model_func: Module | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
-    params: list[Tensor] | dict[str, Tensor],
+    params: dict[str, Tensor],
     data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
     input_key: str | None = None,
 ) -> Tensor:
@@ -285,8 +279,7 @@ def functorch_jacobian(
     Args:
         model_func: Either an ``nn.Module`` or a callable with signature
             ``(params_dict, X) -> prediction``.
-        params: Either a ``list[Tensor]`` (for Module) or ``dict[str, Tensor]``
-            (for callable).
+        params: Dictionary mapping parameter names to tensors.
         data: Source from which mini-batches can be drawn, for instance a list of
             mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
         input_key: Key to obtain the input tensor when ``X`` is a dict-like object.
@@ -348,25 +341,9 @@ def _concatenate_batches(
         return X, y
 
 
-def _make_params_dict(model_func: Module, params: list[Tensor]) -> dict[str, Tensor]:
-    """Create a named dictionary for the parameter list.
-
-    Required for ``functorch``'s ``functional_call`` API.
-
-    Args:
-        model_func: A PyTorch module representing a neural network.
-        params: List of differentiable parameters used by the prediction function.
-
-    Returns:
-        Dictionary mapping parameter names to parameter tensors.
-    """
-    name_dict = {p.data_ptr(): name for name, p in model_func.named_parameters()}
-    return {name_dict[p.data_ptr()]: p for p in params}
-
-
 def _prepare_params_and_model(
     model_func: Module | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
-    params: list[Tensor] | dict[str, Tensor],
+    params: dict[str, Tensor],
 ) -> tuple[
     dict[str, Tensor],
     Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
@@ -376,38 +353,25 @@ def _prepare_params_and_model(
     Args:
         model_func: Either an ``nn.Module`` or a callable with signature
             ``(params_dict, X) -> prediction``.
-        params: Either a ``list[Tensor]`` (for Module) or ``dict[str, Tensor]``
-            (for callable).
+        params: Dictionary mapping parameter names to parameter tensors.
 
     Returns:
         Tuple of (params_dict, model_callable) where ``model_callable`` has
         signature ``(params_dict, X) -> prediction``.
 
     Raises:
-        ValueError: If ``model_func`` and ``params`` types are incompatible.
+        ValueError: If ``model_func`` is not an ``nn.Module`` or callable.
     """
     if isinstance(model_func, Module):
-        if not isinstance(params, list):
-            raise ValueError(
-                "Module model_func requires params as list[Tensor], "
-                f"got {type(params).__name__}."
-            )
-        params_dict = _make_params_dict(model_func, params)
 
         def f(params_dict: dict[str, Tensor], X: Tensor | MutableMapping) -> Tensor:
             return functional_call(model_func, params_dict, X)
 
-    else:
-        if not callable(model_func):
-            raise ValueError(
-                "model_func must be an nn.Module or a callable, "
-                f"got {type(model_func).__name__}."
-            )
-        if not isinstance(params, dict):
-            raise ValueError(
-                "Callable model_func requires params as dict[str, Tensor], "
-                f"got {type(params).__name__}."
-            )
-        params_dict = params
+    elif callable(model_func):
         f = model_func
-    return params_dict, f
+    else:
+        raise ValueError(
+            "model_func must be an nn.Module or a callable, "
+            f"got {type(model_func).__name__}."
+        )
+    return params, f

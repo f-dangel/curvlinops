@@ -14,7 +14,7 @@ def test_gradient_and_loss(
     case: tuple[
         Callable[[Tensor], Tensor],
         Callable[[Tensor, Tensor], Tensor],
-        list[Tensor],
+        dict[str, Tensor],
         Iterable[tuple[Tensor | MutableMapping, Tensor]],
         Callable[[MutableMapping], int] | None,
     ],

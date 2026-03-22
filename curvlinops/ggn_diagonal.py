@@ -3,7 +3,7 @@
 from collections.abc import Callable, Iterable, MutableMapping
 
 from torch import Tensor
-from torch.nn import Module, Parameter
+from torch.nn import Module
 
 from curvlinops.computers.ggn_diagonal import GGNDiagonalComputer
 from curvlinops.diag import DiagonalLinearOperator
@@ -27,7 +27,7 @@ class GGNDiagonalLinearOperator(DiagonalLinearOperator):
         model_func: Module
         | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
         loss_func: Callable[[Tensor, Tensor], Tensor],
-        params: list[Parameter] | dict[str, Tensor],
+        params: dict[str, Tensor],
         data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
@@ -42,13 +42,13 @@ class GGNDiagonalLinearOperator(DiagonalLinearOperator):
         computes the diagonal, and passes it to the parent class.
 
         Args:
-            model_func: Either an ``nn.Module`` or a callable with signature
-                ``(params_dict, X) -> prediction``.
+            model_func: The neural network's forward pass, defining the functional
+                relationship ``(params, X) -> prediction``. Either an ``nn.Module``
+                (architecture) or a callable ``(params_dict, X) -> prediction``.
             loss_func: Loss function criterion. Maps predictions and mini-batch labels
                 to a scalar value.
-            params: Parameters for the model. Either a ``list[Parameter]`` (requires
-                ``model_func`` to be a ``Module``) or a ``dict[str, Tensor]`` (requires
-                ``model_func`` to be a callable).
+            params: The parameter values at which the GGN diagonal is evaluated. A
+                dictionary mapping parameter names to tensors.
             data: Source from which mini-batches can be drawn, for instance a list of
                 mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``. Note that ``X``
                 could be a ``dict`` or ``UserDict``; this is useful for custom models.
