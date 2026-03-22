@@ -160,26 +160,21 @@ def block_diagonal(
     # find out which blocks to keep
     num_params = len(params)
     keep = [(i, i) for i in range(num_params)]
-    param_ids = [p.data_ptr() for p in params.values()]
+    param_names = list(params.keys())
 
     # keep blocks corresponding to jointly-treated weights and biases
     if not separate_weight_and_bias:
-        # find all layers with weight and bias
-        has_weight_and_bias = [
-            mod
-            for mod in model.modules()
-            if hasattr(mod, "weight") and hasattr(mod, "bias") and mod.bias is not None
-        ]
-        # only keep those whose parameters are included
-        has_weight_and_bias = [
-            mod
-            for mod in has_weight_and_bias
-            if mod.weight.data_ptr() in param_ids and mod.bias.data_ptr() in param_ids
-        ]
-        for mod in has_weight_and_bias:
-            w_pos = param_ids.index(mod.weight.data_ptr())
-            b_pos = param_ids.index(mod.bias.data_ptr())
-            keep.extend([(w_pos, b_pos), (b_pos, w_pos)])
+        for mod_name, mod in model.named_modules():
+            if not (
+                hasattr(mod, "weight") and hasattr(mod, "bias") and mod.bias is not None
+            ):
+                continue
+            w_name = f"{mod_name}.weight" if mod_name else "weight"
+            b_name = f"{mod_name}.bias" if mod_name else "bias"
+            if w_name in params and b_name in params:
+                w_pos = param_names.index(w_name)
+                b_pos = param_names.index(b_name)
+                keep.extend([(w_pos, b_pos), (b_pos, w_pos)])
 
     for i, j in product(range(num_params), range(num_params)):
         if (i, j) not in keep:
@@ -1038,6 +1033,7 @@ def change_dtype(case: tuple, dt: dtype) -> tuple:
     model_func, loss_func, params, data, batch_size_fn = case
 
     model_func, loss_func = model_func.to(dt), loss_func.to(dt)
+    params = {n: p.to(dt) for n, p in params.items()}
     data = [
         (
             cast_input(X, dt),

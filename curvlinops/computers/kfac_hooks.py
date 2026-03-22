@@ -258,11 +258,15 @@ class HooksKFACComputer(_BaseKFACComputer):
 
         # Backpropagate all vectors (0 for forward-only, 1 for empirical,
         # mc_samples for MC, and C (number of output features per datum) for TYPE2).
+        # Use the module's Parameter objects (not self._params values) because
+        # autograd.grad requires tensors that are in the computation graph.
+        module_params = dict(self._model_module.named_parameters())
+        grad_params = [module_params[n] for n in self._params]
         num_vectors = grad_outputs.shape[0]
         for v in range(num_vectors):
             autograd.grad(
                 output,
-                list(self._params.values()),
+                grad_params,
                 grad_outputs=grad_outputs[v],
                 retain_graph=v < num_vectors - 1,
             )

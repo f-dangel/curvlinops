@@ -2,6 +2,7 @@
 
 from collections.abc import Callable, Iterable, MutableMapping
 
+import torch
 from numpy import random
 from pytest import fixture
 from torch import Tensor, manual_seed
@@ -45,7 +46,11 @@ def initialize_case(
 
     model_func = case["model_func"]().to(case["device"])
     loss_func = case["loss_func"]().to(case["device"])
-    params = {n: p for n, p in model_func.named_parameters() if p.requires_grad}
+    params = {
+        n: 0.01 * torch.rand_like(p) + p.data
+        for n, p in model_func.named_parameters()
+        if p.requires_grad
+    }
     data = case["data"]()
 
     # In some KFAC cases,

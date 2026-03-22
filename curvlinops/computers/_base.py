@@ -179,6 +179,9 @@ class _BaseKFACComputer(_EmpiricalRiskMixin):
             num_per_example_loss_terms=num_per_example_loss_terms,
             batch_size_fn=batch_size_fn,
         )
+        # KFAC uses autograd.grad which requires tensors with requires_grad
+        for p in self._params.values():
+            p.requires_grad_(True)
 
     def _computation_context(self) -> AbstractContextManager:
         """Return a context manager for the computation.
