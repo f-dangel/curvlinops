@@ -26,6 +26,7 @@ from torch.nn import (
     Linear,
     Module,
     MSELoss,
+    ReLU,
     Sequential,
 )
 
@@ -1366,3 +1367,16 @@ def _check_callable_model_func(linop_cls):
 def test_kfac_callable_model_func():
     """Test KFAC make_fx with a plain Callable model_func."""
     _check_callable_model_func(KFACLinearOperator)
+
+
+def test_kfac_unsupported_layer_params():
+    """Test that params from unsupported layers raise NotImplementedError."""
+    manual_seed(0)
+    model = Sequential(Linear(4, 3), ReLU(), Linear(3, 2))
+    loss_func = MSELoss()
+    data = [(rand(5, 4), rand(5, 2))]
+    # Include a bogus param name not belonging to any supported layer
+    params = dict(model.named_parameters())
+    params["bogus"] = rand(3)
+    with raises(NotImplementedError, match="un-supported layers"):
+        KFACLinearOperator(model, loss_func, params, data)
