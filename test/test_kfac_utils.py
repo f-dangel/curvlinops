@@ -24,15 +24,14 @@ def test_CanonicalLinearOperator(separate_weight_and_bias: bool):
     # Create unconventional order: w1, b2, b1, w3, w2
     keys = list(natural_params.keys())
     new_order = [keys[i] for i in [0, 3, 1, 4, 2]]
-    named_params = {k: natural_params[k] for k in new_order}
-    assert list(named_params.keys()) == [
+    params = {k: natural_params[k] for k in new_order}
+    assert list(params.keys()) == [
         "0.weight",  # w1
         "1.bias",  # b2
         "0.bias",  # b1
         "2.weight",  # w3
         "1.weight",  # w2
     ]
-    params = named_params
 
     # Define param_groups: with separate treatment each role is its own group,
     # with joint treatment weight and bias form one group
@@ -52,13 +51,13 @@ def test_CanonicalLinearOperator(separate_weight_and_bias: bool):
         ]
 
     # Extract param shapes, device, and dtype
-    param_shapes = {name: p.shape for name, p in named_params.items()}
+    param_shapes = {name: p.shape for name, p in params.items()}
     device = next(iter(params.values())).device
     dtype = next(iter(params.values())).dtype
 
     # Verify correct behavior of canonicalization for this case
-    x = [rand_like(p) for p in named_params.values()]
-    # Order in named_params follows the unconventional order: w1, b2, b1, w3, w2
+    x = [rand_like(p) for p in params.values()]
+    # Order in params follows the unconventional order: w1, b2, b1, w3, w2
     x_w1, x_b2, x_b1, x_w3, x_w2 = x
 
     x_canonical = (
