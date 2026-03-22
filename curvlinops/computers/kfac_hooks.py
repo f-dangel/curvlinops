@@ -16,6 +16,7 @@ and generalized to all linear layers with weight sharing in
   Kronecker-Factored Approximate Curvature for Modern Neural Network Architectures (NeurIPS).
 """
 
+from collections.abc import Callable, MutableMapping
 from contextlib import contextmanager
 from functools import partial
 from typing import Any, Iterator
@@ -123,27 +124,34 @@ class HooksKFACComputer(_BaseKFACComputer):
     (see :class:`curvlinops.GGNLinearOperator` with ``mc_samples > 0``).
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(
+        self,
+        model_func: Module
+        | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
+        *args,
+        **kwargs,
+    ):
         """Initialize and validate that ``model_func`` is an ``nn.Module``.
 
         The hooks backend requires an ``nn.Module`` to register forward/backward
         hooks. Callable model functions are not supported (use ``backend="make_fx"``).
 
         Args:
+            model_func: The neural network's forward pass. Must be an ``nn.Module``
+                for the hooks backend.
             *args: Positional arguments forwarded to ``_BaseKFACComputer``.
             **kwargs: Keyword arguments forwarded to ``_BaseKFACComputer``.
 
         Raises:
             ValueError: If ``model_func`` is not an ``nn.Module``.
         """
-        model_func = args[0] if args else kwargs.get("model_func")
         if not isinstance(model_func, Module):
             raise ValueError(
                 "The hooks backend requires model_func to be an nn.Module. "
                 "Use backend='make_fx' for callable model functions."
             )
         self._model_module = model_func
-        super().__init__(*args, **kwargs)
+        super().__init__(model_func, *args, **kwargs)
 
     def _computation_context(self) -> Iterator[None]:
         """Set module parameters from ``self._params`` during computation.
