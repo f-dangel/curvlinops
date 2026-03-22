@@ -437,7 +437,10 @@ class HooksKFACComputer(_BaseKFACComputer):
                 groups.extend(param_dicts)
 
         # check that all parameters are in known modules
-        if len(processed) != len(param_names):
-            raise NotImplementedError("Found parameters in un-supported layers.")
+        if unsupported := param_names - processed:
+            raise NotImplementedError(
+                f"Parameters {unsupported} are not in supported layers "
+                f"({cls._SUPPORTED_MODULES})."
+            )
 
         return groups

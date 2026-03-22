@@ -1376,5 +1376,5 @@ def test_kfac_unsupported_layer_params():
     data = [(rand(5, 4), rand(5, 2))]
     params = dict(model.named_parameters())
     params["bogus"] = rand(3)
-    with raises(NotImplementedError, match="un-supported"):
+    with raises(NotImplementedError, match="not in supported layers"):
         KFACLinearOperator(model, loss_func, params, data)
