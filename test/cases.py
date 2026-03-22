@@ -3,7 +3,7 @@
 from collections import UserDict
 from collections.abc import MutableMapping
 
-from torch import rand, rand_like
+from torch import Tensor, rand, rand_like
 from torch.nn import (
     BatchNorm1d,
     BCEWithLogitsLoss,
@@ -255,8 +255,48 @@ CASES_NO_DEVICE = INV_CASES_NO_DEVICE + [
     },
 ]
 
+###############################################################################
+#                    CALLABLE MODEL_FUNC (non-Module)                         #
+###############################################################################
+
+
+def _make_callable_case():
+    """Create a test case with a callable model_func (no nn.Module).
+
+    A simple two-layer ReLU network implemented with raw tensor operations.
+
+    Returns:
+        Dictionary with model_func as a callable, separate params, and data.
+    """
+    D_in, D_hidden, D_out = 10, 5, 3
+    params = {
+        "W1": rand(D_hidden, D_in),
+        "b1": rand(D_hidden),
+        "W2": rand(D_out, D_hidden),
+        "b2": rand(D_out),
+    }
+
+    def model_func(p: dict[str, Tensor], X: Tensor) -> Tensor:
+        h = X @ p["W1"].T + p["b1"]
+        h = h.clamp(min=0)
+        return h @ p["W2"].T + p["b2"]
+
+    return {
+        "model_func": lambda: model_func,
+        "params": lambda: params,
+        "loss_func": lambda: CrossEntropyLoss(reduction="mean"),
+        "data": lambda: [
+            (rand(3, D_in), classification_targets((3,), D_out)),
+            (rand(4, D_in), classification_targets((4,), D_out)),
+        ],
+        "seed": 0,
+    }
+
+
+CALLABLE_CASES_NO_DEVICE = [_make_callable_case()]
+
 CASES = []
-for case in CASES_NO_DEVICE:
+for case in CASES_NO_DEVICE + CALLABLE_CASES_NO_DEVICE:
     for device in DEVICES:
         case_with_device = {**case, "device": device}
         CASES.append(case_with_device)

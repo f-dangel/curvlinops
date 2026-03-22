@@ -5,7 +5,7 @@ from math import sqrt
 from pathlib import Path
 
 from einops.layers.torch import Rearrange
-from pytest import mark, raises
+from pytest import mark, raises, skip
 from torch import (
     Tensor,
     allclose,
@@ -60,6 +60,12 @@ MC_TOLS = {"rtol": 1e-1, "atol": 1.5e-2}
 # Backend parametrization
 BACKENDS = list(KFACLinearOperator._BACKENDS)
 BACKENDS_IDS = BACKENDS
+
+
+def _skip_if_hooks_and_callable(model_func, backend: str):
+    """Skip test if the hooks backend is used with a non-Module model_func."""
+    if backend == "hooks" and not isinstance(model_func, Module):
+        skip("Hooks backend requires nn.Module.")
 
 
 @mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
@@ -774,6 +780,7 @@ def test_KFACLinearOperator(
         backend: The backend to use for computing Kronecker factors.
     """
     model, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
+    _skip_if_hooks_and_callable(model, backend)
 
     kfac = KFACLinearOperator(
         model,
@@ -793,6 +800,7 @@ def test_KFACLinearOperator(
 def test_trace(case, backend):
     """Test that the trace property of KFACLinearOperator works."""
     model, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
+    _skip_if_hooks_and_callable(model, backend)
     _test_property(
         KFACLinearOperator,
         "trace",
@@ -809,6 +817,7 @@ def test_trace(case, backend):
 def test_frobenius_norm(case, backend):
     """Test that the Frobenius norm property of KFACLinearOperator works."""
     model, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
+    _skip_if_hooks_and_callable(model, backend)
     _test_property(
         KFACLinearOperator,
         "frobenius_norm",
@@ -825,6 +834,7 @@ def test_frobenius_norm(case, backend):
 def test_det(case, backend):
     """Test that the determinant property of KFACLinearOperator works."""
     model, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
+    _skip_if_hooks_and_callable(model, backend)
     _test_property(
         KFACLinearOperator,
         "det",
@@ -841,6 +851,7 @@ def test_det(case, backend):
 def test_logdet(case, backend):
     """Test that the log determinant property of KFACLinearOperator works."""
     model, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
+    _skip_if_hooks_and_callable(model, backend)
     _test_property(
         KFACLinearOperator,
         "logdet",
@@ -866,6 +877,7 @@ def test_forward_only_fisher_type(
         backend: The backend to use for computing Kronecker factors.
     """
     model, loss_func, params, data, batch_size_fn = case
+    _skip_if_hooks_and_callable(model, backend)
 
     # Compute KFAC with `fisher_type=FisherType.EMPIRICAL`
     # (could be any but `FisherType.FORWARD_ONLY`)

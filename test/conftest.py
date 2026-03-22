@@ -43,13 +43,17 @@ def initialize_case(
     random.seed(case["seed"])
     manual_seed(case["seed"])
 
-    model_func = case["model_func"]().to(case["device"])
+    model_func = case["model_func"]()
     loss_func = case["loss_func"]().to(case["device"])
-    params = {
-        n: 0.01 * rand_like(p) + p.data
-        for n, p in model_func.named_parameters()
-        if p.requires_grad
-    }
+    if isinstance(model_func, Module):
+        model_func = model_func.to(case["device"])
+        params = {
+            n: 0.01 * rand_like(p) + p.data
+            for n, p in model_func.named_parameters()
+            if p.requires_grad
+        }
+    else:
+        params = {n: p.to(case["device"]) for n, p in case["params"]().items()}
     data = case["data"]()
 
     # In some KFAC cases,

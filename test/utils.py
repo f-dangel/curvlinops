@@ -1032,7 +1032,9 @@ def change_dtype(case: tuple, dt: dtype) -> tuple:
     """
     model_func, loss_func, params, data, batch_size_fn = case
 
-    model_func, loss_func = model_func.to(dt), loss_func.to(dt)
+    if isinstance(model_func, Module):
+        model_func = model_func.to(dt)
+    loss_func = loss_func.to(dt)
     params = {n: p.to(dt) for n, p in params.items()}
     data = [
         (
