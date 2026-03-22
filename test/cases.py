@@ -285,10 +285,10 @@ def _make_callable_case():
     return {
         "model_func": lambda: model_func,
         "params": lambda: params,
-        "loss_func": lambda: CrossEntropyLoss(reduction="mean"),
+        "loss_func": lambda: MSELoss(reduction="mean"),
         "data": lambda: [
-            (rand(3, D_in), classification_targets((3,), D_out)),
-            (rand(4, D_in), classification_targets((4,), D_out)),
+            (rand(3, D_in), regression_targets((3, D_out))),
+            (rand(4, D_in), regression_targets((4, D_out))),
         ],
         "seed": 0,
     }
