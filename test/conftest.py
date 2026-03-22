@@ -2,10 +2,9 @@
 
 from collections.abc import Callable, Iterable, MutableMapping
 
-import torch
 from numpy import random
 from pytest import fixture
-from torch import Tensor, manual_seed
+from torch import Tensor, manual_seed, rand_like
 from torch.nn import Module, MSELoss
 
 import test.utils
@@ -47,7 +46,7 @@ def initialize_case(
     model_func = case["model_func"]().to(case["device"])
     loss_func = case["loss_func"]().to(case["device"])
     params = {
-        n: 0.01 * torch.rand_like(p) + p.data
+        n: 0.01 * rand_like(p) + p.data
         for n, p in model_func.named_parameters()
         if p.requires_grad
     }
