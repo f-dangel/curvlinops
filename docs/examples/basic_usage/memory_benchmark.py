@@ -17,6 +17,7 @@ from example_benchmark import (
     PROBLEM_STRS,
     SKIP_EXISTING,
     benchpath,
+    reference_benchpath,
     setup_linop,
     setup_problem,
 )
@@ -27,7 +28,66 @@ from torch.nn.attention import SDPBackend, sdpa_kernel
 from curvlinops.examples import gradient_and_loss
 
 
-def run_peakmem_benchmark(  # noqa: C901, PLR0915
+def _measure_peak_memory(func, is_cuda: bool) -> float:
+    """Run func and return peak memory in bytes.
+
+    Args:
+        func: The function to measure.
+        is_cuda: Whether to use CUDA memory tracking.
+
+    Returns:
+        Peak memory in bytes.
+    """
+    if is_cuda:
+        func()
+        cuda.synchronize()
+        peakmem_bytes = cuda.max_memory_allocated()
+        cuda.reset_peak_memory_stats()
+    else:
+        peakmem_bytes = memory_usage(func, interval=1e-4, max_usage=True) * 2**20
+    return peakmem_bytes
+
+
+def run_reference_peakmem_benchmark(problem_str: str, device_str: str):
+    """Measure peak memory for gradient_and_loss (once per problem).
+
+    Uses all model parameters (not a KFAC subset).
+
+    Args:
+        problem_str: The problem.
+        device_str: The device.
+    """
+    savepath = reference_benchpath(problem_str, device_str, metric="peakmem")
+    if SKIP_EXISTING and path.exists(savepath):
+        print(
+            f"[Memory] Skipping reference on {problem_str} and {device_str}"
+        )
+        return
+
+    dev = device(device_str)
+    is_cuda = "cuda" in str(dev)
+
+    def func():
+        manual_seed(0)
+        # Use "Hessian" to get all parameters (not the KFAC subset)
+        model, loss_function, params, data = setup_problem(
+            problem_str, "Hessian", dev
+        )
+        _ = gradient_and_loss(model, loss_function, params, data)
+        if is_cuda:
+            cuda.synchronize()
+
+    peakmem_gib = _measure_peak_memory(func, is_cuda) / 2**30
+    print(
+        f"[Memory] Reference gradient_and_loss on {problem_str} and {device_str}:"
+        + f" {peakmem_gib:.2f} GiB"
+    )
+
+    with open(savepath, "w") as f:
+        json.dump({"peakmem": peakmem_gib}, f)
+
+
+def run_peakmem_benchmark(  # noqa: C901
     linop_str: str, problem_str: str, device_str: str, op_str: str
 ):
     """Execute the memory benchmark for a given linear operator class and save results.
@@ -36,7 +96,7 @@ def run_peakmem_benchmark(  # noqa: C901, PLR0915
         linop_str: The linear operator.
         problem_str: The problem.
         device_str: The device.
-        op_str: The operation that is benchmarked.
+        op_str: The operation that is benchmarked (``"precompute"`` or ``"matvec"``).
     """
     savepath = benchpath(linop_str, problem_str, device_str, op_str, metric="peakmem")
     if SKIP_EXISTING and path.exists(savepath):
@@ -48,16 +108,6 @@ def run_peakmem_benchmark(  # noqa: C901, PLR0915
 
     dev = device(device_str)
     is_cuda = "cuda" in str(dev)
-
-    def f_gradient_and_loss():
-        manual_seed(0)  # make deterministic
-
-        model, loss_function, params, data = setup_problem(problem_str, linop_str, dev)
-
-        _ = gradient_and_loss(model, loss_function, params, data)
-
-        if is_cuda:
-            cuda.synchronize()
 
     def f_precompute():
         manual_seed(0)  # make deterministic
@@ -94,21 +144,9 @@ def run_peakmem_benchmark(  # noqa: C901, PLR0915
         if is_cuda:
             cuda.synchronize()
 
-    func = {
-        "gradient_and_loss": f_gradient_and_loss,
-        "precompute": f_precompute,
-        "matvec": f_matvec,
-    }[op_str]
+    func = {"precompute": f_precompute, "matvec": f_matvec}[op_str]
 
-    if is_cuda:
-        func()
-        cuda.synchronize()
-        peakmem_bytes = cuda.max_memory_allocated()
-        cuda.reset_peak_memory_stats()
-    else:
-        peakmem_bytes = memory_usage(func, interval=1e-4, max_usage=True) * 2**20
-
-    peakmem_gib = peakmem_bytes / 2**30
+    peakmem_gib = _measure_peak_memory(func, is_cuda) / 2**30
     print(
         f"[Memory] {linop_str}'s {op_str} on {problem_str} and {device_str}:"
         + f" {peakmem_gib:.2f} GiB"
@@ -145,6 +183,14 @@ if __name__ == "__main__":
         help="The operation to benchmark.",
         choices=OP_STRS,
     )
+    parser.add_argument(
+        "--reference",
+        action="store_true",
+        help="Measure reference gradient_and_loss (ignores --linop and --op).",
+    )
 
     args = parser.parse_args()
-    run_peakmem_benchmark(args.linop, args.problem, args.device, args.op)
+    if args.reference:
+        run_reference_peakmem_benchmark(args.problem, args.device)
+    else:
+        run_peakmem_benchmark(args.linop, args.problem, args.device, args.op)

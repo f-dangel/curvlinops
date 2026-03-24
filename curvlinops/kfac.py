@@ -172,7 +172,9 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
                 the cost of one traversal through the data loader. It is expected to be
                 the same for all examples. Defaults to ``None``.
             separate_weight_and_bias: Whether to treat weights and biases separately.
-                Defaults to ``True``.
+                Defaults to ``True``. Setting this to ``False`` is more efficient
+                because gradient covariances are computed once per layer rather than
+                separately for weight and bias.
             num_data: Number of data points. If ``None``, it is inferred from the data
                 at the cost of one traversal through the data loader.
             batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
