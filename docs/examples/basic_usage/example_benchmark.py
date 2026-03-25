@@ -136,11 +136,44 @@ if ON_RTD:
     PROBLEM_STRS = ["synthetic_mnist_cnn"]
 else:
     PROBLEM_STRS = [
+        "synthetic_mnist_mlp",
         "synthetic_mnist_cnn",
         "synthetic_cifar10_resnet18",
         "synthetic_imagenet_resnet50",
         "synthetic_shakespeare_nanogpt",
     ]
+
+
+def setup_synthetic_mnist_mlp(
+    batch_size: int = 512,
+) -> tuple[Sequential, CrossEntropyLoss, list[tuple[Tensor, Tensor]]]:
+    """Set up a synthetic MNIST MLP problem for the benchmark.
+
+    Args:
+        batch_size: The batch size to use. Default is ``512``.
+
+    Returns:
+        The neural net, loss function, and data.
+    """
+    X = rand(batch_size, 784)
+    y = randint(0, 10, (batch_size,))
+    data = [(X, y)]
+    model = Sequential(
+        Linear(784, 1024),
+        ReLU(),
+        Linear(1024, 512),
+        ReLU(),
+        Linear(512, 256),
+        ReLU(),
+        Linear(256, 128),
+        ReLU(),
+        Linear(128, 64),
+        ReLU(),
+        Linear(64, 10),
+    )
+    loss_function = CrossEntropyLoss()
+
+    return model, loss_function, data
 
 
 def setup_synthetic_mnist_cnn(
@@ -191,6 +224,7 @@ def setup_problem(
         The neural net, loss function, parameters, and data.
     """
     setup_func = {
+        "synthetic_mnist_mlp": setup_synthetic_mnist_mlp,
         "synthetic_mnist_cnn": setup_synthetic_mnist_cnn,
         "synthetic_cifar10_resnet18": setup_synthetic_cifar10_resnet18,
         "synthetic_imagenet_resnet50": setup_synthetic_imagenet_resnet50,
