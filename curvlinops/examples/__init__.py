@@ -22,6 +22,12 @@ def gradient_and_loss(
 ) -> tuple[list[Tensor], Tensor]:
     """Evaluate the gradient and loss on a data set.
 
+    Note:
+        This uses ``torch.autograd.grad`` internally, not ``torch.func.grad``.
+        The functional API (``torch.func.grad_and_value``) uses ~2x the peak GPU
+        memory of ``autograd.grad`` for the same computation
+        (see `pytorch#134612 <https://github.com/pytorch/pytorch/issues/134612>`_).
+
     Args:
         model_func: The neural network's forward pass (an ``nn.Module``).
         loss_func: The loss function.
