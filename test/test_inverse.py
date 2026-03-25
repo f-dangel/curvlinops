@@ -104,7 +104,7 @@ def test_KFAC_EKFAC_preconditioners_for_CG_and_Neumann(delta: float = 0.0):
     X = randn(6, 3).double()
     y = randn(6, 2).double()
     data = [(X, y)]
-    params = [p for p in model.parameters() if p.requires_grad]
+    params = {n: p for n, p in model.named_parameters() if p.requires_grad}
 
     GGN_naive = functorch_ggn(model, loss_func, params, data).detach()
     damped_GGN_naive = GGN_naive + delta * eye_like(GGN_naive)
@@ -112,7 +112,7 @@ def test_KFAC_EKFAC_preconditioners_for_CG_and_Neumann(delta: float = 0.0):
     inv_GGN_naive_linop = TensorLinearOperator(inv_GGN_naive)
 
     GGN = GGNLinearOperator(model, loss_func, params, data)
-    damping = delta * IdentityLinearOperator([p.shape for p in params], X.device, X.dtype)
+    damping = delta * IdentityLinearOperator([p.shape for n, p in params.items()], X.device, X.dtype)
 
     KFAC = KFACLinearOperator(
         model,
