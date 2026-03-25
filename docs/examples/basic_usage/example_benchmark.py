@@ -500,9 +500,7 @@ def benchpath(
     )
 
 
-def reference_benchpath(
-    problem_str: str, device_str: str, metric: str = "time"
-) -> str:
+def reference_benchpath(problem_str: str, device_str: str, metric: str = "time") -> str:
     """Get the path to save the reference gradient_and_loss benchmark.
 
     This is measured once per problem (not per linop).
@@ -599,9 +597,7 @@ def _skip_if_exists(savepath: str, label: str) -> bool:
 # The gradient_and_loss reference is measured once per problem (not per linop).
 
 
-def run_reference_benchmark(
-    problem_str: str, device_str: str, num_repeats: int = 1
-):
+def run_reference_benchmark(problem_str: str, device_str: str, num_repeats: int = 1):
     """Measure gradient_and_loss once per problem as a reference baseline.
 
     Uses all model parameters (not a KFAC subset) so the reference is
@@ -626,7 +622,10 @@ def run_reference_benchmark(
 
     best, _ = _time_function(func, is_cuda, num_repeats)
     _save_and_print(
-        savepath, "Time", "time", best,
+        savepath,
+        "Time",
+        "time",
+        best,
         f"Reference gradient_and_loss on {problem_str} and {device_str}",
     )
 
@@ -716,7 +715,7 @@ def _get_precompute_ops(linop_str: str) -> list[str]:
         return ["kfac_factors"]
 
 
-def run_precompute_benchmark(  # noqa: C901
+def run_precompute_benchmark(  # noqa: C901, B023, PLR0912, PLR0915
     linop_str: str, problem_str: str, device_str: str, num_repeats: int = 1
 ):
     """Benchmark precomputation sub-phases for a KFAC/EKFAC operator.
@@ -757,13 +756,11 @@ def run_precompute_benchmark(  # noqa: C901
         if op_str == "kfac_factors" and linop_str not in _IS_FX:
             if linop_str in _IS_EKFAC:
                 # Use computer to measure just factor computation
-                computer = setup_computer(
-                    linop_str, model, loss_function, params, data
-                )
+                computer = setup_computer(linop_str, model, loss_function, params, data)
 
-                def f_factors():
-                    with computer._computation_context():
-                        return computer._compute_kronecker_factors()
+                def f_factors():  # noqa: B023
+                    with computer._computation_context():  # noqa: B023
+                        return computer._compute_kronecker_factors()  # noqa: B023
 
                 best, (input_cov, grad_cov, mapping) = _time_function(
                     f_factors, is_cuda, num_repeats
@@ -780,44 +777,38 @@ def run_precompute_benchmark(  # noqa: C901
         elif op_str == "eigh":
             # Ensure factors are available
             if "input_cov" not in dir():
-                computer = setup_computer(
-                    linop_str, model, loss_function, params, data
-                )
+                computer = setup_computer(linop_str, model, loss_function, params, data)
                 with computer._computation_context():
-                    input_cov, grad_cov, mapping = (
-                        computer._compute_kronecker_factors()
-                    )
+                    input_cov, grad_cov, mapping = computer._compute_kronecker_factors()
             input_cov_copy = {k: v.clone() for k, v in input_cov.items()}
             grad_cov_copy = {k: v.clone() for k, v in grad_cov.items()}
 
-            def f_eigh():
-                ic = {k: v.clone() for k, v in input_cov_copy.items()}
-                gc = {k: v.clone() for k, v in grad_cov_copy.items()}
-                return _EKFACMixin._eigenvectors_(ic), _EKFACMixin._eigenvectors_(gc)
+            def f_eigh():  # noqa: B023
+                ic = {k: v.clone() for k, v in input_cov_copy.items()}  # noqa: B023
+                gc = {k: v.clone() for k, v in grad_cov_copy.items()}  # noqa: B023
+                return _EKFACMixin._eigenvectors_(ic), _EKFACMixin._eigenvectors_(gc)  # noqa: B023
 
-            best, (input_cov, grad_cov) = _time_function(
-                f_eigh, is_cuda, num_repeats
-            )
+            # noqa: B023
+            best, (input_cov, grad_cov) = _time_function(f_eigh, is_cuda, num_repeats)
 
         elif op_str == "eigenvalue_correction":
             # Ensure eigenvectors are available
             if "mapping" not in dir():
-                computer = setup_computer(
-                    linop_str, model, loss_function, params, data
-                )
+                computer = setup_computer(linop_str, model, loss_function, params, data)
                 with computer._computation_context():
-                    input_cov, grad_cov, mapping = (
-                        computer._compute_kronecker_factors()
-                    )
+                    input_cov, grad_cov, mapping = computer._compute_kronecker_factors()
                 input_cov = _EKFACMixin._eigenvectors_(input_cov)
                 grad_cov = _EKFACMixin._eigenvectors_(grad_cov)
 
-            def f_correction():
-                with computer._computation_context():
-                    return computer.compute_eigenvalue_correction(
-                        input_cov, grad_cov, mapping
-                    )
+            def f_correction():  # noqa: B023
+                with computer._computation_context():  # noqa: B023
+                    return computer.compute_eigenvalue_correction(  # noqa: B023
+                        input_cov,  # noqa: B023
+                        grad_cov,  # noqa: B023
+                        mapping,  # noqa: B023
+                    )  # noqa: B023
 
+            # noqa: B023
             best, _ = _time_function(f_correction, is_cuda, num_repeats)
 
         elif op_str == "cholesky_inverse":
@@ -827,10 +818,10 @@ def run_precompute_benchmark(  # noqa: C901
                     model, loss_function, params, data, **common_kwargs
                 )
 
-            def f_inverse():
-                return kfac_linop.inverse(damping=1e-3)
+            def f_inverse():  # noqa: B023
+                return kfac_linop.inverse(damping=1e-3)  # noqa: B023
 
-            best, _ = _time_function(f_inverse, is_cuda, num_repeats)
+            best, _ = _time_function(f_inverse, is_cuda, num_repeats)  # noqa: B023
 
         elif op_str == "tracing":
             from curvlinops.computers.io_collector import with_kfac_io
@@ -840,10 +831,10 @@ def run_precompute_benchmark(  # noqa: C901
             model_func = make_functional_call(model)
             X_example = next(iter(data))[0].to(dev)
 
-            def f_tracing():
-                return with_kfac_io(model_func, X_example, params, FisherType.MC)
+            def f_tracing():  # noqa: B023
+                return with_kfac_io(model_func, X_example, params, FisherType.MC)  # noqa: B023
 
-            best, _ = _time_function(f_tracing, is_cuda, num_repeats)
+            best, _ = _time_function(f_tracing, is_cuda, num_repeats)  # noqa: B023
 
         elif op_str == "kfac_factors" and linop_str in _IS_FX:
             # FX factors = total precompute - tracing
@@ -921,7 +912,9 @@ if __name__ == "__main__":
 
     # Total precompute (needed for FX factors derivation)
     for device_str, problem_str, linop_str in product(
-        DEVICE_STRS, PROBLEM_STRS, [l for l in LINOP_STRS if l in _KFAC_LIKE]
+        DEVICE_STRS,
+        PROBLEM_STRS,
+        [linop for linop in LINOP_STRS if linop in _KFAC_LIKE],
     ):
         run_total_precompute_benchmark(
             linop_str, problem_str, device_str, num_repeats=10
@@ -929,11 +922,11 @@ if __name__ == "__main__":
 
     # Precompute sub-phase breakdown (KFAC-like only)
     for device_str, problem_str, linop_str in product(
-        DEVICE_STRS, PROBLEM_STRS, [l for l in LINOP_STRS if l in _KFAC_LIKE]
+        DEVICE_STRS,
+        PROBLEM_STRS,
+        [linop for linop in LINOP_STRS if linop in _KFAC_LIKE],
     ):
-        run_precompute_benchmark(
-            linop_str, problem_str, device_str, num_repeats=10
-        )
+        run_precompute_benchmark(linop_str, problem_str, device_str, num_repeats=10)
 
 # %%
 #
@@ -1008,7 +1001,7 @@ def visualize_precompute_benchmark(
     Returns:
         The figure and axes.
     """
-    kfac = [l for l in linop_strs if l in _KFAC_LIKE]
+    kfac = [linop for linop in linop_strs if linop in _KFAC_LIKE]
     fig, ax = plt.subplots()
 
     precompute_colors = {
@@ -1039,9 +1032,7 @@ def visualize_precompute_benchmark(
                 and name not in _IS_KFAC_INVERSE_HOOKS
             )
             file_op = (
-                "precompute"
-                if op == "kfac_factors" and is_plain_kfac_hooks
-                else op
+                "precompute" if op == "kfac_factors" and is_plain_kfac_hooks else op
             )
             fpath = benchpath(name, problem_str, device_str, file_op)
             if not path.exists(fpath):
@@ -1050,8 +1041,12 @@ def visualize_precompute_benchmark(
                 t = json.load(f)["time"]
             label = precompute_labels[op] if op not in labels_shown else None
             ax.barh(
-                idx, width=t, left=left,
-                color=precompute_colors[op], label=label, height=0.6,
+                idx,
+                width=t,
+                left=left,
+                color=precompute_colors[op],
+                label=label,
+                height=0.6,
             )
             labels_shown.add(op)
             left += t
@@ -1101,7 +1096,7 @@ if __name__ == "__main__":
             )
             plt.close()
 
-        kfac_linops = [l for l in LINOP_STRS if l in _KFAC_LIKE]
+        kfac_linops = [linop for linop in LINOP_STRS if linop in _KFAC_LIKE]
         with plt.rc_context(plot_config):
             fig, ax = visualize_precompute_benchmark(
                 kfac_linops, problem_str, device_str

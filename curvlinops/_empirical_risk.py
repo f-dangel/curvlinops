@@ -7,6 +7,14 @@ from torch import Tensor, device, dtype, tensor, zeros_like
 from torch.autograd import grad
 from torch.func import grad_and_value
 from torch.nn import CrossEntropyLoss, Module
+from tqdm import tqdm
+
+from curvlinops.utils import (
+    _infer_device,
+    _infer_dtype,
+    allclose_report,
+    make_functional_call,
+)
 
 
 @contextmanager
@@ -27,14 +35,6 @@ def _enable_requires_grad(tensors: list[Tensor]):
     finally:
         for t, rg in zip(tensors, original):
             t.requires_grad_(rg)
-from tqdm import tqdm
-
-from curvlinops.utils import (
-    _infer_device,
-    _infer_dtype,
-    allclose_report,
-    make_functional_call,
-)
 
 
 class _EmpiricalRiskMixin:
