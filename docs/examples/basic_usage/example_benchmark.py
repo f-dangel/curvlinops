@@ -37,9 +37,7 @@ from torch import Tensor, arange, cuda, device, manual_seed, rand, randint
 from torch.nn import (
     Conv2d,
     CrossEntropyLoss,
-    Flatten,
     Linear,
-    MaxPool2d,
     Module,
     ReLU,
     Sequential,
@@ -133,11 +131,10 @@ save_environment_info()
 
 # Supported problems
 if ON_RTD:
-    PROBLEM_STRS = ["synthetic_mnist_cnn"]
+    PROBLEM_STRS = ["synthetic_mnist_mlp"]
 else:
     PROBLEM_STRS = [
         "synthetic_mnist_mlp",
-        "synthetic_mnist_cnn",
         "synthetic_cifar10_resnet18",
         "synthetic_imagenet_resnet50",
         "synthetic_shakespeare_nanogpt",
@@ -176,40 +173,6 @@ def setup_synthetic_mnist_mlp(
     return model, loss_function, data
 
 
-def setup_synthetic_mnist_cnn(
-    batch_size: int = 512,
-) -> tuple[Sequential, CrossEntropyLoss, list[tuple[Tensor, Tensor]]]:
-    """Set up a synthetic MNIST CNN problem for the benchmark.
-
-    Args:
-        batch_size: The batch size to use. Default is ``512``.
-
-    Returns:
-        The neural net, loss function, and data.
-    """
-    X = rand(batch_size, 1, 28, 28)
-    y = randint(0, 10, (batch_size,))
-    data = [(X, y)]
-    model = Sequential(
-        Conv2d(1, 16, 3, padding=1),
-        MaxPool2d(2),
-        ReLU(),
-        Conv2d(16, 16, 3, padding=1),
-        MaxPool2d(2),
-        ReLU(),
-        Conv2d(16, 16, 3, padding=1),
-        MaxPool2d(2),
-        ReLU(),
-        Flatten(),
-        Linear(144, 64),
-        ReLU(),
-        Linear(64, 10),
-    )
-    loss_function = CrossEntropyLoss()
-
-    return model, loss_function, data
-
-
 def setup_problem(
     problem_str: str, linop_str: str, dev: device
 ) -> tuple[Module, Module, dict[str, Tensor], Iterable[tuple[Tensor, Tensor]]]:
@@ -225,7 +188,6 @@ def setup_problem(
     """
     setup_func = {
         "synthetic_mnist_mlp": setup_synthetic_mnist_mlp,
-        "synthetic_mnist_cnn": setup_synthetic_mnist_cnn,
         "synthetic_cifar10_resnet18": setup_synthetic_cifar10_resnet18,
         "synthetic_imagenet_resnet50": setup_synthetic_imagenet_resnet50,
         "synthetic_shakespeare_nanogpt": setup_synthetic_shakespeare_nanogpt,
