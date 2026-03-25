@@ -20,9 +20,6 @@ Generalized Gauss-Newton
 Fisher (approximate)
 --------------------
 
-.. autoclass:: curvlinops.FisherMCLinearOperator
-   :members: __init__
-
 .. autoclass:: curvlinops.KFACLinearOperator
    :members: __init__, inverse, trace, det, logdet, frobenius_norm
 
@@ -100,10 +97,4 @@ Frobenius norm approximation
 
 .. autoclass:: curvlinops.hutchinson_squared_fro
 
-Experimental
-============
 
-Experimental features may be subject to changes or become deprecated.
-
-.. autoclass:: curvlinops.experimental.ActivationHessianLinearOperator
-   :members: __init__

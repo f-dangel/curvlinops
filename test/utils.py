@@ -36,7 +36,6 @@ from torch.nn import (
     Linear,
     Module,
     MSELoss,
-    Parameter,
     ReLU,
     Sequential,
     Upsample,
@@ -45,7 +44,6 @@ from torch.nn import (
 from curvlinops import (
     EFLinearOperator,
     EKFACLinearOperator,
-    FisherMCLinearOperator,
     FisherType,
     GGNLinearOperator,
     KFACLinearOperator,
@@ -81,18 +79,6 @@ def classification_targets(size: tuple[int], num_classes: int) -> Tensor:
     return randint(size=size, low=0, high=num_classes)
 
 
-def binary_classification_targets(size: tuple[int]) -> Tensor:
-    """Create random binary targets.
-
-    Args:
-        size: Size of the targets to create.
-
-    Returns:
-        Random targets (float).
-    """
-    return classification_targets(size, 2).float()
-
-
 def regression_targets(size: tuple[int]) -> Tensor:
     """Create random targets for regression.
 
@@ -106,26 +92,26 @@ def regression_targets(size: tuple[int]) -> Tensor:
 
 
 def maybe_exclude_or_shuffle_parameters(
-    params: list[Parameter], model: Module, exclude: str, shuffle: bool
-):
+    params: dict[str, Tensor], model: Module, exclude: str | None, shuffle: bool
+) -> dict[str, Tensor]:
     """Maybe exclude or shuffle parameters.
 
     Args:
-        params: List of parameters.
+        params: Dictionary mapping parameter names to tensors.
         model: The neural network.
-        exclude: Parameter to exclude.
+        exclude: Parameter name substring to exclude (``"weight"`` or ``"bias"``).
         shuffle: Whether to shuffle the parameters.
 
     Returns:
-        List of parameters.
+        Dictionary of parameters.
     """
     assert exclude in {None, "weight", "bias"}
     if exclude is not None:
-        names = {p.data_ptr(): name for name, p in model.named_parameters()}
-        params = [p for p in params if exclude not in names[p.data_ptr()]]
+        params = {n: p for n, p in params.items() if exclude not in n}
     if shuffle:
-        permutation = randperm(len(params))
-        params = [params[i] for i in permutation]
+        keys = list(params.keys())
+        perm = randperm(len(keys)).tolist()
+        params = {keys[i]: params[keys[i]] for i in perm}
     return params
 
 
@@ -133,7 +119,7 @@ def block_diagonal(
     linear_operator: type[CurvatureLinearOperator],
     model: Module,
     loss_func: Module,
-    params: list[Parameter],
+    params: dict[str, Tensor],
     data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
     batch_size_fn: Callable[[MutableMapping], int] | None = None,
     separate_weight_and_bias: bool = True,
@@ -165,7 +151,7 @@ def block_diagonal(
         **(optional_linop_args or {}),
     )
     linop_mat = linop @ eye_like(linop)
-    sizes = [p.numel() for p in params]
+    sizes = [p.numel() for p in params.values()]
     # matrix_blocks[i, j] corresponds to the block of (params[i], params[j])
     matrix_blocks = [
         list(block.split(sizes, dim=1)) for block in linop_mat.split(sizes, dim=0)
@@ -174,26 +160,21 @@ def block_diagonal(
     # find out which blocks to keep
     num_params = len(params)
     keep = [(i, i) for i in range(num_params)]
-    param_ids = [p.data_ptr() for p in params]
+    param_names = list(params.keys())
 
     # keep blocks corresponding to jointly-treated weights and biases
     if not separate_weight_and_bias:
-        # find all layers with weight and bias
-        has_weight_and_bias = [
-            mod
-            for mod in model.modules()
-            if hasattr(mod, "weight") and hasattr(mod, "bias") and mod.bias is not None
-        ]
-        # only keep those whose parameters are included
-        has_weight_and_bias = [
-            mod
-            for mod in has_weight_and_bias
-            if mod.weight.data_ptr() in param_ids and mod.bias.data_ptr() in param_ids
-        ]
-        for mod in has_weight_and_bias:
-            w_pos = param_ids.index(mod.weight.data_ptr())
-            b_pos = param_ids.index(mod.bias.data_ptr())
-            keep.extend([(w_pos, b_pos), (b_pos, w_pos)])
+        for mod_name, mod in model.named_modules():
+            if not (
+                hasattr(mod, "weight") and hasattr(mod, "bias") and mod.bias is not None
+            ):
+                continue
+            w_name = f"{mod_name}.weight" if mod_name else "weight"
+            b_name = f"{mod_name}.bias" if mod_name else "bias"
+            if w_name in params and b_name in params:
+                w_pos = param_names.index(w_name)
+                b_pos = param_names.index(b_name)
+                keep.extend([(w_pos, b_pos), (b_pos, w_pos)])
 
     for i, j in product(range(num_params), range(num_params)):
         if (i, j) not in keep:
@@ -361,6 +342,74 @@ class WeightShareModel(Sequential):
             vmap(postprocess_one_datum) if has_batch else postprocess_one_datum
         )
         return postprocess_fn(sequential_output)
+
+
+class SplitConcatModel(Module):
+    """Model where the same linear layer is applied to split input halves.
+
+    Input of shape ``(batch, 2*D)`` is split into two ``(batch, D)`` halves,
+    the same ``Linear(D, D, bias=False)`` is applied to each, and results
+    are concatenated back to ``(batch, 2*D)``. This creates weight tying
+    (the same parameter used in two independent affine operations).
+    """
+
+    def __init__(self, D: int, bias: bool = False):
+        """Initialize with a shared ``Linear(D, D)`` layer.
+
+        Args:
+            D: Feature dimension of each half.
+            bias: Whether the shared linear layer has a bias.
+        """
+        super().__init__()
+        self.linear = Linear(D, D, bias=bias)
+        self._D = D
+
+    def forward(self, x: Tensor) -> Tensor:
+        """Split input, apply shared linear to each half, concatenate.
+
+        Args:
+            x: Input tensor of shape ``(batch, 2*D)``.
+
+        Returns:
+            Output tensor of shape ``(batch, 2*D)``.
+        """
+        x1, x2 = x.split(self._D, dim=-1)
+        return cat([self.linear(x1), self.linear(x2)], dim=-1)
+
+
+class WeightTiedSplitConcatModel(Module):
+    """Two linear modules with tied weights and independent bias configs.
+
+    Input of shape ``(batch, 2*D)`` is split into two ``(batch, D)`` halves.
+    Each half is processed by a separate ``Linear`` module whose weights are
+    tied. Biases are configured independently per module.
+    """
+
+    def __init__(self, D: int, bias1: bool = False, bias2: bool = False):
+        """Initialize with two weight-tied linear modules.
+
+        Args:
+            D: Feature dimension of each half.
+            bias1: Whether the first module has a bias.
+            bias2: Whether the second module has a bias.
+        """
+        super().__init__()
+        self.linear1 = Linear(D, D, bias=bias1)
+        self.linear2 = Linear(D, D, bias=bias2)
+        self.linear2.weight = self.linear1.weight
+        self._D = D
+
+    def forward(self, x: Tensor) -> Tensor:
+        """Split input, apply weight-tied linears to each half, concatenate.
+
+        Args:
+            x: Input tensor of shape ``(batch, 2*D)``.
+
+        Returns:
+            Output tensor of shape ``(batch, 2*D)``.
+        """
+        x1, x2 = x.split(self._D, dim=-1)
+        return cat([self.linear1(x1), self.linear2(x2)], dim=-1)
 
 
 class Conv2dModel(Module):
@@ -661,7 +710,7 @@ def compare_consecutive_matmats(
 
 
 def compare_matmat_expectation(
-    op: FisherMCLinearOperator,
+    op: GGNLinearOperator,
     mat: Tensor,
     max_repeats: int,
     check_every: int,
@@ -784,7 +833,9 @@ def check_estimator_convergence(
 
 
 def _test_inplace_activations(
-    linop_cls: type[KFACLinearOperator | EKFACLinearOperator], dev: device
+    linop_cls: type[KFACLinearOperator | EKFACLinearOperator],
+    dev: device,
+    backend: str,
 ):
     """Test that (E)KFAC works if the network has in-place activations.
 
@@ -794,17 +845,20 @@ def _test_inplace_activations(
     Args:
         linop_cls: The linear operator class to test.
         dev: The device to run the test on.
+        backend: The backend to use for computing Kronecker factors.
     """
     manual_seed(0)
     model = Sequential(Linear(6, 3), ReLU(inplace=True), Linear(3, 2)).to(dev)
     loss_func = MSELoss().to(dev)
     batch_size = 1
     data = [(rand(batch_size, 6), regression_targets((batch_size, 2)))]
-    params = list(model.parameters())
+    params = dict(model.named_parameters())
 
     # 1) compare (E)KFAC and GGN
     ggn = block_diagonal(GGNLinearOperator, model, loss_func, params, data)
-    linop = linop_cls(model, loss_func, params, data, fisher_type=FisherType.TYPE2)
+    linop = linop_cls(
+        model, loss_func, params, data, fisher_type=FisherType.TYPE2, backend=backend
+    )
     linop_mat = linop @ eye_like(linop)
     assert allclose_report(ggn, linop_mat)
 
@@ -816,18 +870,19 @@ def _test_inplace_activations(
     assert allclose_report(ggn, ggn_no_inplace)
 
 
-def _test_property(  # noqa: C901
+def _test_property(
     linop_cls: type[KFACLinearOperator | EKFACLinearOperator],
     property_name: str,
     model: Module,
     loss_func: Module,
-    params: list[Parameter],
+    params: dict[str, Tensor],
     data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
     batch_size_fn: Callable[[MutableMapping], int] | None,
-    separate_weight_and_bias: bool,
-    check_deterministic: bool,
+    separate_weight_and_bias: bool = True,
+    check_deterministic: bool = False,
     rtol: float = 1e-5,
     atol: float = 1e-8,
+    backend: str = "hooks",
 ):
     """Test a property of (E)KFAC.
 
@@ -845,6 +900,7 @@ def _test_property(  # noqa: C901
             operator.
         rtol: Relative tolerance for the comparison. Default: ``1e-5``.
         atol: Absolute tolerance for the comparison. Default: ``1e-8``.
+        backend: The backend to use for computing Kronecker factors.
     """
     # Create instance of linear operator
     linop = linop_cls(
@@ -855,6 +911,7 @@ def _test_property(  # noqa: C901
         batch_size_fn=batch_size_fn,
         separate_weight_and_bias=separate_weight_and_bias,
         check_deterministic=check_deterministic,
+        backend=backend,
     )
 
     # Add damping manually to avoid singular matrices for logdet
@@ -886,13 +943,13 @@ def _test_property(  # noqa: C901
 def _test_ekfac_closer_to_exact_than_kfac(
     model: Module,
     loss_func: Module,
-    params: list[Parameter],
+    params: dict[str, Tensor],
     data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
     batch_size_fn: Callable[[MutableMapping], int] | None,
-    exclude: str,
-    separate_weight_and_bias: bool,
     fisher_type: FisherType,
     kfac_approx: bool,
+    separate_weight_and_bias: bool = True,
+    backend: str = "hooks",
 ):
     """Test that EKFAC is closer in Frobenius norm to the exact quantity than KFAC.
 
@@ -902,19 +959,21 @@ def _test_ekfac_closer_to_exact_than_kfac(
         params: The parameters w.r.t. which the property will be computed.
         data: A data loader.
         batch_size_fn: A function that returns the batch size given a dict-like ``X``.
+        fisher_type: The type of Fisher approximation.
+        kfac_approx: The type of KFAC approximation.
         separate_weight_and_bias: Whether to treat weight and bias of a layer as
             separate blocks in the block-diagonal.
-        exclude: Parameter to exclude.
-        fisher_type: The type of Fisher approximation.
-        kfac_approx: THe type of KFAC approximation.
+        backend: The backend to use for computing Kronecker factors.
     """
     # Compute exact block-wise ground truth quantity.
     linop_cls = {
         FisherType.TYPE2: GGNLinearOperator,
-        FisherType.MC: FisherMCLinearOperator,
+        FisherType.MC: GGNLinearOperator,
         FisherType.EMPIRICAL: EFLinearOperator,
     }[fisher_type]
-    optional_linop_args = {"seed": 1} if fisher_type == FisherType.MC else {}
+    optional_linop_args = (
+        {"mc_samples": 1, "seed": 1} if fisher_type == FisherType.MC else {}
+    )
     exact = block_diagonal(
         linop_cls,
         model,
@@ -936,6 +995,7 @@ def _test_ekfac_closer_to_exact_than_kfac(
         separate_weight_and_bias=separate_weight_and_bias,
         fisher_type=fisher_type,
         kfac_approx=kfac_approx,
+        backend=backend,
         **optional_linop_args,
     )
     kfac_mat = kfac @ eye_like(kfac)
@@ -948,6 +1008,7 @@ def _test_ekfac_closer_to_exact_than_kfac(
         separate_weight_and_bias=separate_weight_and_bias,
         fisher_type=fisher_type,
         kfac_approx=kfac_approx,
+        backend=backend,
         **optional_linop_args,
     )
     ekfac_mat = ekfac @ eye_like(ekfac)
@@ -956,11 +1017,7 @@ def _test_ekfac_closer_to_exact_than_kfac(
     exact_norm = linalg.matrix_norm(exact)
     exact_kfac_dist = linalg.matrix_norm(exact - kfac_mat) / exact_norm
     exact_ekfac_dist = linalg.matrix_norm(exact - ekfac_mat) / exact_norm
-    assert exact_kfac_dist > exact_ekfac_dist or (
-        allclose_report(exact_kfac_dist, exact_ekfac_dist)
-        if exclude == "weight"
-        else False
-    )  # For no_weights the numerical error might dominate.
+    assert exact_kfac_dist > exact_ekfac_dist
 
 
 def change_dtype(case: tuple, dt: dtype) -> tuple:
@@ -975,9 +1032,15 @@ def change_dtype(case: tuple, dt: dtype) -> tuple:
     """
     model_func, loss_func, params, data, batch_size_fn = case
 
-    model_func, loss_func = model_func.to(dt), loss_func.to(dt)
+    if isinstance(model_func, Module):
+        model_func = model_func.to(dt)
+    loss_func = loss_func.to(dt)
+    params = {n: p.to(dt) for n, p in params.items()}
     data = [
-        (cast_input(X, dt), y.to(dt) if isinstance(loss_func, MSELoss) else y)
+        (
+            cast_input(X, dt),
+            y.to(dt) if isinstance(loss_func, (MSELoss, BCEWithLogitsLoss)) else y,
+        )
         for (X, y) in data
     ]
 

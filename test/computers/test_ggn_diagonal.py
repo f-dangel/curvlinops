@@ -8,10 +8,8 @@ from curvlinops.examples.functorch import functorch_ggn
 from curvlinops.utils import allclose_report
 from test.utils import change_dtype
 
-DIAGONAL_CASES = [{"mode": "exact"}, {"mode": "mc", "mc_samples": 20_000}]
-DIAGONAL_IDS = [
-    "_".join(f"{k}_{v}" for k, v in case.items()) for case in DIAGONAL_CASES
-]
+DIAGONAL_CASES = [{"mc_samples": 0}, {"mc_samples": 20_000}]
+DIAGONAL_IDS = ["mc_samples_0", "mc_samples_20000"]
 
 
 @mark.parametrize("kwargs", DIAGONAL_CASES, ids=DIAGONAL_IDS)
@@ -29,9 +27,9 @@ def test_GGNDiagonalComputer(case, kwargs: dict):
         model_func, loss_func, params, data, batch_size_fn=batch_size_fn, **kwargs
     ).compute()
     assert len(diag) == len(params)
-    for d, p in zip(diag, params):
+    for d, p in zip(diag.values(), params.values()):
         assert d.shape == p.shape
-    diag_flat = cat([d.flatten() for d in diag])
+    diag_flat = cat([d.flatten() for d in diag.values()])
 
     diag_ref = (
         functorch_ggn(model_func, loss_func, params, data, input_key="x")
@@ -39,7 +37,7 @@ def test_GGNDiagonalComputer(case, kwargs: dict):
         .diag()
     )
 
-    tols = {"exact": {}, "mc": {"atol": 1e-4, "rtol": 2e-2}}[kwargs["mode"]]
+    tols = {} if kwargs["mc_samples"] == 0 else {"atol": 1e-4, "rtol": 2e-2}
     assert allclose_report(diag_flat, diag_ref, **tols)
 
 
@@ -58,7 +56,7 @@ def test_GGNDiagonalComputer_sequential_consistency(case, kwargs: dict):
     )
     diag1 = computer.compute()
     diag2 = computer.compute()
-    for d1, d2 in zip(diag1, diag2):
+    for d1, d2 in zip(diag1.values(), diag2.values()):
         assert allclose(d1, d2)
 
 
@@ -70,12 +68,12 @@ def test_GGNDiagonalComputer_mc_different_seed(case):
     """
     model_func, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
     args = (model_func, loss_func, params, data)
-    kwargs = {"batch_size_fn": batch_size_fn, "mode": "mc", "mc_samples": 1}
+    kwargs = {"batch_size_fn": batch_size_fn, "mc_samples": 1}
 
     diag1 = GGNDiagonalComputer(*args, **kwargs, seed=0).compute()
     diag2 = GGNDiagonalComputer(*args, **kwargs, seed=1).compute()
 
     assert all(
         not allclose(d1, d2) or allclose(d1, zeros_like(d1))
-        for d1, d2 in zip(diag1, diag2)
+        for d1, d2 in zip(diag1.values(), diag2.values())
     )

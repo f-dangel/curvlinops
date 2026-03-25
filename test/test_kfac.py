@@ -5,7 +5,7 @@ from math import sqrt
 from pathlib import Path
 
 from einops.layers.torch import Rearrange
-from pytest import mark
+from pytest import mark, raises, skip
 from torch import (
     Tensor,
     allclose,
@@ -17,6 +17,7 @@ from torch import (
     rand_like,
     save,
 )
+from torch.func import functional_call
 from torch.linalg import inv
 from torch.nn import (
     BCEWithLogitsLoss,
@@ -25,22 +26,23 @@ from torch.nn import (
     Linear,
     Module,
     MSELoss,
-    Parameter,
     Sequential,
 )
 
 from curvlinops import EFLinearOperator, GGNLinearOperator
-from curvlinops.computers.kfac import KFACComputer
-from curvlinops.kfac import FisherType, KFACLinearOperator, KFACType
+from curvlinops.computers.kfac_hooks import HooksKFACComputer
+from curvlinops.kfac import KFACLinearOperator
+from curvlinops.kfac_utils import FisherType, KFACType
 from curvlinops.utils import allclose_report
 from test.cases import DEVICES, DEVICES_IDS
 from test.utils import (
     Conv2dModel,
+    SplitConcatModel,
     UnetModel,
     WeightShareModel,
+    WeightTiedSplitConcatModel,
     _test_inplace_activations,
     _test_property,
-    binary_classification_targets,
     block_diagonal,
     change_dtype,
     classification_targets,
@@ -55,7 +57,18 @@ from test.utils import (
 MC_SAMPLES = 3_000
 MC_TOLS = {"rtol": 1e-1, "atol": 1.5e-2}
 
+# Backend parametrization
+BACKENDS = list(KFACLinearOperator._BACKENDS)
+BACKENDS_IDS = BACKENDS
 
+
+def _skip_if_hooks_and_callable(model_func, backend: str):
+    """Skip test if the hooks backend is used with a non-Module model_func."""
+    if backend == "hooks" and not isinstance(model_func, Module):
+        skip("Hooks backend requires nn.Module.")
+
+
+@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
 @mark.parametrize(
     "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
 )
@@ -65,11 +78,12 @@ MC_TOLS = {"rtol": 1e-1, "atol": 1.5e-2}
 @mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_kfac_type2(
     kfac_exact_case: tuple[
-        Module, MSELoss, list[Parameter], Iterable[tuple[Tensor, Tensor]]
+        Module, MSELoss, dict[str, Tensor], Iterable[tuple[Tensor, Tensor]]
     ],
     shuffle: bool,
     exclude: str,
     separate_weight_and_bias: bool,
+    backend: str,
 ):
     """Test the KFAC implementation against the exact GGN.
 
@@ -81,6 +95,7 @@ def test_kfac_type2(
             or ``None``.
         separate_weight_and_bias: Whether to treat weight and bias as separate blocks in
             the KFAC matrix.
+        backend: The backend to use for computing Kronecker factors.
     """
     model, loss_func, params, data, batch_size_fn = kfac_exact_case
     params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
@@ -102,12 +117,14 @@ def test_kfac_type2(
         batch_size_fn=batch_size_fn,
         fisher_type=FisherType.TYPE2,
         separate_weight_and_bias=separate_weight_and_bias,
+        backend=backend,
     )
     kfac_mat = kfac @ eye_like(kfac)
 
     assert allclose_report(ggn, kfac_mat)
 
 
+@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
 @mark.parametrize("setting", [KFACType.EXPAND, KFACType.REDUCE])
 @mark.parametrize(
     "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
@@ -120,13 +137,14 @@ def test_kfac_type2_weight_sharing(
     kfac_weight_sharing_exact_case: tuple[
         WeightShareModel | Conv2dModel,
         MSELoss,
-        list[Parameter],
+        dict[str, Tensor],
         dict[str, Iterable[tuple[Tensor, Tensor]]],
     ],
     setting: str,
     shuffle: bool,
     exclude: str,
     separate_weight_and_bias: bool,
+    backend: str,
 ):
     """Test KFAC for linear weight-sharing layers against the exact GGN.
 
@@ -140,12 +158,13 @@ def test_kfac_type2_weight_sharing(
             or ``None``.
         separate_weight_and_bias: Whether to treat weight and bias as separate blocks in
             the KFAC matrix.
+        backend: The backend to use for computing Kronecker factors.
     """
     model, loss_func, params, data, batch_size_fn = kfac_weight_sharing_exact_case
     model.setting = setting
     if isinstance(model, Conv2dModel):
         # parameters are only initialized after the setting property is set
-        params = [p for p in model.parameters() if p.requires_grad]
+        params = {n: p for n, p in model.named_parameters() if p.requires_grad}
     params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
     data = data[setting]
     model, loss_func, params, data, batch_size_fn = change_dtype(
@@ -170,42 +189,192 @@ def test_kfac_type2_weight_sharing(
         fisher_type=FisherType.TYPE2,
         kfac_approx=setting,  # choose KFAC approximation consistent with setting
         separate_weight_and_bias=separate_weight_and_bias,
+        backend=backend,
     )
     kfac_mat = kfac @ eye_like(kfac)
 
     assert allclose_report(ggn, kfac_mat)
 
 
+def _test_weight_tying_type2(
+    linop_cls: type[KFACLinearOperator],
+    reduction: str,
+    bias: bool,
+    separate_weight_and_bias: bool,
+):
+    """Test (E)KFAC with weight tying against the exact block-diagonal GGN.
+
+    Uses a split-concat model where the same module is applied to two halves
+    of the input. With N=1, (E)KFAC-expand is exact because the two paths are
+    independent.
+
+    For ``KFACLinearOperator``, also verifies that the hooks backend gives wrong
+    results (hooks fire twice per forward, each with ``scale=1``). EKFAC hooks
+    may still be correct because the eigenvalue correction recomputes eigenvalues
+    from data, compensating for the wrong Kronecker factors.
+
+    Args:
+        linop_cls: The linear operator class to test.
+        reduction: Loss reduction mode.
+        bias: Whether the shared linear layer has a bias.
+        separate_weight_and_bias: Whether to treat weight and bias separately.
+    """
+    manual_seed(0)
+    D = 4
+
+    model = SplitConcatModel(D, bias=bias)
+    loss_func = MSELoss(reduction=reduction)
+    params = {n: p for n, p in model.named_parameters() if p.requires_grad}
+    data = [
+        (rand(1, 2 * D), regression_targets((1, 2 * D))),
+    ]
+    model, loss_func, params, data, _ = change_dtype(
+        (model, loss_func, params, data, None), float64
+    )
+
+    ggn = block_diagonal(
+        GGNLinearOperator,
+        model,
+        loss_func,
+        params,
+        data,
+        separate_weight_and_bias=separate_weight_and_bias,
+    )
+
+    for backend in BACKENDS:
+        linop = linop_cls(
+            model,
+            loss_func,
+            params,
+            data,
+            fisher_type=FisherType.TYPE2,
+            kfac_approx=KFACType.EXPAND,
+            separate_weight_and_bias=separate_weight_and_bias,
+            backend=backend,
+        )
+        linop_mat = linop @ eye_like(linop)
+
+        if backend == "make_fx":
+            # make_fx backend: exact for weight tying
+            assert allclose_report(ggn, linop_mat)
+        elif backend == "hooks" and linop_cls is KFACLinearOperator:
+            # hooks backend: incorrect KFAC factors (known limitation).
+            # EKFAC hooks may still be correct because the eigenvalue
+            # correction recomputes eigenvalues, compensating for the
+            # wrong Kronecker factors.
+            assert not allclose(ggn, linop_mat)
+
+
+@mark.parametrize("reduction", ["mean", "sum"])
+@mark.parametrize("bias", [False, True], ids=["no_bias", "with_bias"])
 @mark.parametrize(
     "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
 )
+def test_kfac_type2_weight_tying(
+    reduction: str, bias: bool, separate_weight_and_bias: bool
+):
+    """Test KFAC with weight tying against exact GGN (make_fx only)."""
+    _test_weight_tying_type2(
+        KFACLinearOperator, reduction, bias, separate_weight_and_bias
+    )
+
+
+@mark.parametrize("reduction", ["mean", "sum"])
 @mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
 )
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
+def test_kfac_type2_mixed_bias_weight_tying(
+    reduction: str, separate_weight_and_bias: bool
+):
+    """Test KFAC with mixed-bias weight tying (same W with and without bias).
+
+    Two modules share a weight. The first has bias, the second doesn't. With
+    N=1, KFAC-expand is exact because the two paths are independent. Joint
+    treatment uses bias padding (1/0) to handle the mixed case.
+
+    Args:
+        reduction: Loss reduction mode.
+        separate_weight_and_bias: Whether to treat weight and bias separately.
+    """
+    manual_seed(0)
+    D = 4
+
+    model = WeightTiedSplitConcatModel(D, bias1=True, bias2=False)
+    loss_func = MSELoss(reduction=reduction)
+    params = {n: p for n, p in model.named_parameters() if p.requires_grad}
+    data = [(rand(1, 2 * D), regression_targets((1, 2 * D)))]
+    model, loss_func, params, data, _ = change_dtype(
+        (model, loss_func, params, data, None), float64
+    )
+
+    kfac = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        fisher_type=FisherType.TYPE2,
+        kfac_approx=KFACType.EXPAND,
+        separate_weight_and_bias=separate_weight_and_bias,
+        backend="make_fx",
+    )
+    ggn = block_diagonal(
+        GGNLinearOperator,
+        model,
+        loss_func,
+        params,
+        data,
+        separate_weight_and_bias=separate_weight_and_bias,
+    )
+    assert allclose_report(ggn, kfac @ eye_like(kfac))
+
+
+@mark.parametrize("reduction", ["mean", "sum"])
+def test_kfac_type2_multi_module_conflicting_biases(reduction: str):
+    """Test that joint treatment errors when weight-tied modules have different biases.
+
+    Two modules share a weight but have different (non-tied) biases. Joint
+    treatment cannot form a single (W, b) group because the biases conflict.
+
+    Args:
+        reduction: Loss reduction mode.
+    """
+    manual_seed(0)
+    D = 4
+
+    model = WeightTiedSplitConcatModel(D, bias1=True, bias2=True)
+    loss_func = MSELoss(reduction=reduction)
+    params = dict(model.named_parameters())
+    data = [(rand(1, 2 * D), regression_targets((1, 2 * D)))]
+
+    with raises(ValueError, match="conflicting biases"):
+        KFACLinearOperator(
+            model,
+            loss_func,
+            params,
+            data,
+            fisher_type=FisherType.TYPE2,
+            separate_weight_and_bias=False,
+            backend="make_fx",
+        )
+
+
+@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
 def test_kfac_mc(
     kfac_exact_case: tuple[
-        Module, MSELoss, list[Parameter], Iterable[tuple[Tensor, Tensor]]
+        Module, MSELoss, dict[str, Tensor], Iterable[tuple[Tensor, Tensor]]
     ],
-    separate_weight_and_bias: bool,
-    exclude: str,
-    shuffle: bool,
+    backend: str,
 ):
     """Test the KFAC implementation using MC samples against the exact GGN.
 
     Args:
         kfac_exact_case: A fixture that returns a model, loss function, list of
             parameters, and data.
-        shuffle: Whether to shuffle the parameters before computing the KFAC matrix.
-        exclude: Which parameters to exclude. Can be ``'weight'``, ``'bias'``,
-            or ``None``.
-        separate_weight_and_bias: Whether to treat weight and bias as separate blocks in
-            the KFAC matrix.
+        backend: The backend to use for computing Kronecker factors.
     """
     model, loss_func, params, data, batch_size_fn = change_dtype(
         kfac_exact_case, float64
     )
-    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     ggn = block_diagonal(
         GGNLinearOperator,
@@ -214,7 +383,6 @@ def test_kfac_mc(
         params,
         data,
         batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
     )
     kfac = KFACLinearOperator(
         model,
@@ -224,7 +392,7 @@ def test_kfac_mc(
         batch_size_fn=batch_size_fn,
         fisher_type=FisherType.MC,
         mc_samples=MC_SAMPLES,
-        separate_weight_and_bias=separate_weight_and_bias,
+        backend=backend,
     )
     kfac_mat = kfac @ eye_like(kfac)
 
@@ -233,44 +401,32 @@ def test_kfac_mc(
     assert allclose_report(ggn / scale, kfac_mat / scale, **MC_TOLS)
 
 
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
+@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
 @mark.parametrize("setting", [KFACType.EXPAND, KFACType.REDUCE])
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_kfac_mc_weight_sharing(
     kfac_weight_sharing_exact_case: tuple[
         WeightShareModel | Conv2dModel,
         MSELoss,
-        list[Parameter],
+        dict[str, Tensor],
         dict[str, Iterable[tuple[Tensor, Tensor]]],
     ],
-    separate_weight_and_bias: bool,
-    exclude: str,
     setting: str,
-    shuffle: bool,
+    backend: str,
 ):
     """Test KFAC-MC for linear layers with weight sharing against the exact GGN.
 
     Args:
         kfac_weight_sharing_exact_case: A fixture that returns a model, loss function,
-            list of parameters, and data.
-        separate_weight_and_bias: Whether to treat weights and biases as separate blocks.
-        exclude: Which parameters to exclude. Can be ``'weight'``, ``'bias'``, or
-            ``None``.
+            dict of parameters, and data.
         setting: The weight-sharing setting to use. Can be ``KFACType.EXPAND`` or
             ``KFACType.REDUCE``.
-        shuffle: Whether to shuffle the parameters before computing the KFAC matrix.
+        backend: The backend to use for computing Kronecker factors.
     """
     model, loss_func, params, data, batch_size_fn = kfac_weight_sharing_exact_case
     model.setting = setting
     if isinstance(model, Conv2dModel):
         # parameters are only initialized after the setting property is set
-        params = [p for p in model.parameters() if p.requires_grad]
-    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
+        params = {n: p for n, p in model.named_parameters() if p.requires_grad}
     data = data[setting]
     model, loss_func, params, data, batch_size_fn = change_dtype(
         (model, loss_func, params, data, batch_size_fn), float64
@@ -283,7 +439,6 @@ def test_kfac_mc_weight_sharing(
         params,
         data,
         batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
     )
     kfac = KFACLinearOperator(
         model,
@@ -294,7 +449,7 @@ def test_kfac_mc_weight_sharing(
         fisher_type=FisherType.MC,
         mc_samples=MC_SAMPLES,
         kfac_approx=setting,  # choose KFAC approximation consistent with setting
-        separate_weight_and_bias=separate_weight_and_bias,
+        backend=backend,
     )
     kfac_mat = kfac @ eye_like(kfac)
 
@@ -303,27 +458,18 @@ def test_kfac_mc_weight_sharing(
     assert allclose_report(ggn / scale, kfac_mat / scale, **MC_TOLS)
 
 
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
+@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
 def test_kfac_one_datum(
     kfac_exact_one_datum_case: tuple[
         Module,
         BCEWithLogitsLoss | CrossEntropyLoss,
-        list[Parameter],
+        dict[str, Tensor],
         Iterable[tuple[Tensor, Tensor]],
     ],
-    separate_weight_and_bias: bool,
-    exclude: str,
-    shuffle: bool,
+    backend: str,
 ):
     """Test KFAC for the one-datum exact case."""
     model, loss_func, params, data, batch_size_fn = kfac_exact_one_datum_case
-    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     ggn = block_diagonal(
         GGNLinearOperator,
@@ -332,7 +478,6 @@ def test_kfac_one_datum(
         params,
         data,
         batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
     )
     kfac = KFACLinearOperator(
         model,
@@ -341,36 +486,27 @@ def test_kfac_one_datum(
         data,
         batch_size_fn=batch_size_fn,
         fisher_type=FisherType.TYPE2,
-        separate_weight_and_bias=separate_weight_and_bias,
+        backend=backend,
     )
     kfac_mat = kfac @ eye_like(kfac)
 
     assert allclose_report(ggn, kfac_mat)
 
 
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
+@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
 def test_kfac_mc_one_datum(
     kfac_exact_one_datum_case: tuple[
         Module,
         BCEWithLogitsLoss | CrossEntropyLoss,
-        list[Parameter],
+        dict[str, Tensor],
         Iterable[tuple[Tensor, Tensor]],
     ],
-    separate_weight_and_bias: bool,
-    exclude: str,
-    shuffle: bool,
+    backend: str,
 ):
     """Test KFAC-MC for the one-datum exact case."""
     model, loss_func, params, data, batch_size_fn = change_dtype(
         kfac_exact_one_datum_case, float64
     )
-    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     ggn = block_diagonal(
         GGNLinearOperator,
@@ -379,7 +515,6 @@ def test_kfac_mc_one_datum(
         params,
         data,
         batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
     )
     kfac = KFACLinearOperator(
         model,
@@ -389,7 +524,7 @@ def test_kfac_mc_one_datum(
         batch_size_fn=batch_size_fn,
         fisher_type=FisherType.MC,
         mc_samples=MC_SAMPLES,
-        separate_weight_and_bias=separate_weight_and_bias,
+        backend=backend,
     )
     kfac_mat = kfac @ eye_like(kfac)
 
@@ -398,33 +533,24 @@ def test_kfac_mc_one_datum(
     # Need to use larger tolerances on GPU, despite float64
     tols = (
         MC_TOLS
-        if "cpu" in str(params[0].device)
+        if "cpu" in str(next(iter(params.values())).device)
         else {k: 2 * v for k, v in MC_TOLS.items()}
     )
     assert allclose_report(ggn / scale, kfac_mat / scale, **tols)
 
 
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
+@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
 def test_kfac_ef_one_datum(
     kfac_exact_one_datum_case: tuple[
         Module,
         BCEWithLogitsLoss | CrossEntropyLoss,
-        list[Parameter],
+        dict[str, Tensor],
         Iterable[tuple[Tensor, Tensor]],
     ],
-    separate_weight_and_bias: bool,
-    exclude: str,
-    shuffle: bool,
+    backend: str,
 ):
     """Test empirical Fisher KFAC for the one-datum exact case."""
     model, loss_func, params, data, batch_size_fn = kfac_exact_one_datum_case
-    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     ef = block_diagonal(
         EFLinearOperator,
@@ -433,7 +559,6 @@ def test_kfac_ef_one_datum(
         params,
         data,
         batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
     )
 
     kfac = KFACLinearOperator(
@@ -443,15 +568,16 @@ def test_kfac_ef_one_datum(
         data,
         batch_size_fn=batch_size_fn,
         fisher_type=FisherType.EMPIRICAL,
-        separate_weight_and_bias=separate_weight_and_bias,
+        backend=backend,
     )
     kfac_mat = kfac @ eye_like(kfac)
 
     assert allclose_report(ef, kfac_mat)
 
 
+@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
 @mark.parametrize("dev", DEVICES, ids=DEVICES_IDS)
-def test_kfac_inplace_activations(dev: device):
+def test_kfac_inplace_activations(dev: device, backend: str):
     """Test that KFAC works if the network has in-place activations.
 
     We use a test case with a single datum as KFAC becomes exact as the number of
@@ -459,11 +585,13 @@ def test_kfac_inplace_activations(dev: device):
 
     Args:
         dev: The device to run the test on.
+        backend: The backend to use for computing Kronecker factors.
     """
-    _test_inplace_activations(KFACLinearOperator, dev)
+    _test_inplace_activations(KFACLinearOperator, dev, backend)
 
 
-@mark.parametrize("fisher_type", KFACComputer._SUPPORTED_FISHER_TYPE)
+@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
+@mark.parametrize("fisher_type", HooksKFACComputer._SUPPORTED_FISHER_TYPE)
 @mark.parametrize(
     "loss", [MSELoss, CrossEntropyLoss, BCEWithLogitsLoss], ids=["mse", "ce", "bce"]
 )
@@ -474,6 +602,7 @@ def test_multi_dim_output(
     loss: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
     reduction: str,
     dev: device,
+    backend: str,
 ):
     """Test the KFAC implementation for >2d outputs (using a 3d and 4d output).
 
@@ -482,6 +611,7 @@ def test_multi_dim_output(
         loss: The loss function to use.
         reduction: The reduction to use for the loss function.
         dev: The device to run the test on.
+        backend: The backend to use for computing Kronecker factors.
     """
     manual_seed(0)
     # set up loss function, data, and model
@@ -497,8 +627,8 @@ def test_multi_dim_output(
         model = Sequential(Linear(5, 4), Linear(4, 3)).to(dev)
     elif issubclass(loss, BCEWithLogitsLoss):
         data = [
-            (X1, binary_classification_targets((2, 7, 5, 3))),
-            (X2, binary_classification_targets((4, 7, 5, 3))),
+            (X1, rand(2, 7, 5, 3)),
+            (X2, rand(4, 7, 5, 3)),
         ]
         manual_seed(711)
         model = Sequential(Linear(5, 4), Linear(4, 3)).to(dev)
@@ -516,8 +646,10 @@ def test_multi_dim_output(
         ).to(dev)
 
     # KFAC for deep linear network with 4d input and output
-    params = list(model.parameters())
-    kfac = KFACLinearOperator(model, loss_func, params, data, fisher_type=fisher_type)
+    params = dict(model.named_parameters())
+    kfac = KFACLinearOperator(
+        model, loss_func, params, data, fisher_type=fisher_type, backend=backend
+    )
     kfac_mat = kfac @ eye_like(kfac)
 
     # KFAC for deep linear network with 4d input and equivalent 2d output
@@ -527,7 +659,7 @@ def test_multi_dim_output(
         Linear(4, 3),
         Flatten(start_dim=0, end_dim=-2),
     ).to(dev)
-    params_flat = list(model_flat.parameters())
+    params_flat = dict(model_flat.named_parameters())
     data_flat = [
         (
             (x, y.flatten(start_dim=0, end_dim=-2))
@@ -542,13 +674,15 @@ def test_multi_dim_output(
         params_flat,
         data_flat,
         fisher_type=fisher_type,
+        backend=backend,
     )
     kfac_flat_mat = kfac_flat @ eye_like(kfac_flat)
 
     assert allclose_report(kfac_mat, kfac_flat_mat)
 
 
-@mark.parametrize("fisher_type", KFACComputer._SUPPORTED_FISHER_TYPE)
+@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
+@mark.parametrize("fisher_type", HooksKFACComputer._SUPPORTED_FISHER_TYPE)
 @mark.parametrize(
     "loss", [MSELoss, CrossEntropyLoss, BCEWithLogitsLoss], ids=["mse", "ce", "bce"]
 )
@@ -557,6 +691,7 @@ def test_expand_setting_scaling(
     fisher_type: str,
     loss: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
     dev: device,
+    backend: str,
 ):
     """Test KFAC for correct scaling for expand setting with mean reduction loss.
 
@@ -566,29 +701,31 @@ def test_expand_setting_scaling(
         fisher_type: The type of Fisher matrix to use.
         loss: The loss function to use.
         dev: The device to run the test on.
+        backend: The backend to use for computing Kronecker factors.
     """
     manual_seed(0)
 
-    # set up data, loss function, and model
-    X1 = rand(2, 3, 32, 32)
-    X2 = rand(4, 3, 32, 32)
+    # set up data, loss function, and model (use float64 for numerical precision)
+    S = 8  # spatial size (small for speed; UnetModel bottleneck is S/2)
+    X1 = rand(2, 3, S, S, dtype=float64)
+    X2 = rand(4, 3, S, S, dtype=float64)
     if issubclass(loss, MSELoss):
         data = [
-            (X1, regression_targets((2, 32, 32, 3))),
-            (X2, regression_targets((4, 32, 32, 3))),
+            (X1, regression_targets((2, S, S, 3)).double()),
+            (X2, regression_targets((4, S, S, 3)).double()),
         ]
     elif issubclass(loss, BCEWithLogitsLoss):
         data = [
-            (X1, binary_classification_targets((2, 32, 32, 3))),
-            (X2, binary_classification_targets((4, 32, 32, 3))),
+            (X1, rand(2, S, S, 3, dtype=float64)),
+            (X2, rand(4, S, S, 3, dtype=float64)),
         ]
     else:
         data = [
-            (X1, classification_targets((2, 32, 32), 3)),
-            (X2, classification_targets((4, 32, 32), 3)),
+            (X1, classification_targets((2, S, S), 3)),
+            (X2, classification_targets((4, S, S), 3)),
         ]
-    model = UnetModel(loss).to(dev)
-    params = list(model.parameters())
+    model = UnetModel(loss).to(dev).double()
+    params = dict(model.named_parameters())
 
     # KFAC with sum reduction
     loss_func = loss(reduction="sum").to(dev)
@@ -598,11 +735,12 @@ def test_expand_setting_scaling(
         params,
         data,
         fisher_type=fisher_type,
+        backend=backend,
     )
     # FOOF does not scale the gradient covariances, even when using a mean reduction
     if fisher_type != FisherType.FORWARD_ONLY:
         # Simulate a mean reduction by manually scaling the gradient covariances
-        loss_term_factor = 32 * 32  # number of spatial locations of model output
+        loss_term_factor = S * S  # number of spatial locations of model output
         if issubclass(loss, (MSELoss, BCEWithLogitsLoss)):
             output_random_variable_size = 3
             # MSE loss averages over number of output channels
@@ -623,66 +761,18 @@ def test_expand_setting_scaling(
         params,
         data,
         fisher_type=fisher_type,
+        backend=backend,
     )
     kfac_mean_mat = kfac_mean @ eye_like(kfac_mean)
 
     assert allclose_report(kfac_simulated_mean_mat, kfac_mean_mat)
 
 
-@mark.parametrize("separate_weight_and_bias", [False], ids=["joint_bias"])
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
-def test_KFACLinearOperator(
-    case,
-    exclude: str,
-    separate_weight_and_bias: bool,
-    shuffle: bool,
-):
-    """Test matrix multiplication with KFAC.
-
-    Args:
-        case: Tuple of model, loss function, parameters, data, and batch size getter.
-        exclude: Which parameters to exclude. Can be ``'weight'``, ``'bias'``,
-            or ``None``.
-        separate_weight_and_bias: Whether to treat weight and bias as separate blocks in
-            the KFAC matrix.
-        shuffle: Whether to shuffle the parameters before computing the KFAC matrix.
-    """
-    model, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
-    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
-
-    kfac = KFACLinearOperator(
-        model,
-        loss_func,
-        params,
-        data,
-        batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
-    )
-    kfac_mat = kfac @ eye_like(kfac)
-
-    compare_consecutive_matmats(kfac)
-    compare_matmat(kfac, kfac_mat)
-
-
-@mark.parametrize(
-    "check_deterministic",
-    [True, False],
-    ids=["check_deterministic", "dont_check_deterministic"],
-)
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
-def test_trace(case, exclude, separate_weight_and_bias, check_deterministic, shuffle):
+@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
+def test_trace(case, backend):
     """Test that the trace property of KFACLinearOperator works."""
     model, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
-    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
+    _skip_if_hooks_and_callable(model, backend)
     _test_property(
         KFACLinearOperator,
         "trace",
@@ -691,29 +781,15 @@ def test_trace(case, exclude, separate_weight_and_bias, check_deterministic, shu
         params,
         data,
         batch_size_fn,
-        separate_weight_and_bias,
-        check_deterministic,
+        backend=backend,
     )
 
 
-@mark.parametrize(
-    "check_deterministic",
-    [True, False],
-    ids=["check_deterministic", "dont_check_deterministic"],
-)
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
-def test_frobenius_norm(
-    case, exclude, separate_weight_and_bias, check_deterministic, shuffle
-):
+@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
+def test_frobenius_norm(case, backend):
     """Test that the Frobenius norm property of KFACLinearOperator works."""
     model, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
-    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
+    _skip_if_hooks_and_callable(model, backend)
     _test_property(
         KFACLinearOperator,
         "frobenius_norm",
@@ -722,27 +798,15 @@ def test_frobenius_norm(
         params,
         data,
         batch_size_fn,
-        separate_weight_and_bias,
-        check_deterministic,
+        backend=backend,
     )
 
 
-@mark.parametrize(
-    "check_deterministic",
-    [True, False],
-    ids=["check_deterministic", "dont_check_deterministic"],
-)
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
-def test_det(case, exclude, separate_weight_and_bias, check_deterministic, shuffle):
+@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
+def test_det(case, backend):
     """Test that the determinant property of KFACLinearOperator works."""
     model, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
-    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
+    _skip_if_hooks_and_callable(model, backend)
     _test_property(
         KFACLinearOperator,
         "det",
@@ -751,27 +815,15 @@ def test_det(case, exclude, separate_weight_and_bias, check_deterministic, shuff
         params,
         data,
         batch_size_fn,
-        separate_weight_and_bias,
-        check_deterministic,
+        backend=backend,
     )
 
 
-@mark.parametrize(
-    "check_deterministic",
-    [True, False],
-    ids=["check_deterministic", "dont_check_deterministic"],
-)
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
-def test_logdet(case, exclude, separate_weight_and_bias, check_deterministic, shuffle):
+@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
+def test_logdet(case, backend):
     """Test that the log determinant property of KFACLinearOperator works."""
     model, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
-    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
+    _skip_if_hooks_and_callable(model, backend)
     _test_property(
         KFACLinearOperator,
         "logdet",
@@ -780,37 +832,24 @@ def test_logdet(case, exclude, separate_weight_and_bias, check_deterministic, sh
         params,
         data,
         batch_size_fn,
-        separate_weight_and_bias,
-        check_deterministic,
+        backend=backend,
     )
 
 
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
+@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
 def test_forward_only_fisher_type(
-    case: tuple[Module, MSELoss, list[Parameter], Iterable[tuple[Tensor, Tensor]]],
-    shuffle: bool,
-    exclude: str,
-    separate_weight_and_bias: bool,
+    case: tuple[Module, MSELoss, dict[str, Tensor], Iterable[tuple[Tensor, Tensor]]],
+    backend: str,
 ):
     """Test the KFAC with forward-only Fisher (used for FOOF) implementation.
 
     Args:
-        case: A fixture that returns a model, loss function, list of parameters, and
+        case: A fixture that returns a model, loss function, dict of parameters, and
             data.
-        shuffle: Whether to shuffle the parameters before computing the KFAC matrix.
-        exclude: Which parameters to exclude. Can be ``'weight'``, ``'bias'``,
-            or ``None``.
-        separate_weight_and_bias: Whether to treat weight and bias as separate blocks in
-            the KFAC matrix.
+        backend: The backend to use for computing Kronecker factors.
     """
     model, loss_func, params, data, batch_size_fn = case
-    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
+    _skip_if_hooks_and_callable(model, backend)
 
     # Compute KFAC with `fisher_type=FisherType.EMPIRICAL`
     # (could be any but `FisherType.FORWARD_ONLY`)
@@ -820,8 +859,8 @@ def test_forward_only_fisher_type(
         params,
         data,
         batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
         fisher_type=FisherType.EMPIRICAL,
+        backend=backend,
     )
     # Manually set all gradient covariances to the identity to simulate FOOF
     _, K, _ = foof_simulated
@@ -837,28 +876,20 @@ def test_forward_only_fisher_type(
         params,
         data,
         batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
         fisher_type=FisherType.FORWARD_ONLY,
+        backend=backend,
     )
     foof_mat = foof @ eye_like(foof)
 
     assert allclose_report(simulated_foof_mat, foof_mat)
 
 
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
+@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
 def test_forward_only_fisher_type_exact_case(
     single_layer_case: tuple[
-        Module, MSELoss, list[Parameter], Iterable[tuple[Tensor, Tensor]]
+        Module, MSELoss, dict[str, Tensor], Iterable[tuple[Tensor, Tensor]]
     ],
-    shuffle: bool,
-    exclude: str,
-    separate_weight_and_bias: bool,
+    backend: str,
 ):
     r"""Test KFAC with forward-only Fisher (FOOF) against exact GGN for one-layer model.
 
@@ -872,14 +903,9 @@ def test_forward_only_fisher_type_exact_case(
     Args:
         single_layer_case: A fixture that returns a model, loss function, list of
             parameters, and data.
-        shuffle: Whether to shuffle the parameters before computing the KFAC matrix.
-        exclude: Which parameters to exclude. Can be ``'weight'``, ``'bias'``,
-            or ``None``.
-        separate_weight_and_bias: Whether to treat weight and bias as separate blocks in
-            the KFAC matrix.
+        backend: The backend to use for computing Kronecker factors.
     """
     model, loss_func, params, data, batch_size_fn = single_layer_case
-    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
 
     # Compute exact block-diagonal GGN
     ggn = block_diagonal(
@@ -889,7 +915,6 @@ def test_forward_only_fisher_type_exact_case(
         params,
         data,
         batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
     )
 
     # Compute KFAC with `fisher_type=FisherType.FORWARD_ONLY`
@@ -899,8 +924,8 @@ def test_forward_only_fisher_type_exact_case(
         params,
         data,
         batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
         fisher_type=FisherType.FORWARD_ONLY,
+        backend=backend,
     )
     foof_mat = foof @ eye_like(foof)
 
@@ -913,25 +938,17 @@ def test_forward_only_fisher_type_exact_case(
     assert allclose_report(ggn, 2 * scale * foof_mat)
 
 
+@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
 @mark.parametrize("setting", [KFACType.EXPAND, KFACType.REDUCE])
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_forward_only_fisher_type_exact_weight_sharing_case(
     single_layer_weight_sharing_case: tuple[
         WeightShareModel | Conv2dModel,
         MSELoss,
-        list[Parameter],
+        dict[str, Tensor],
         dict[str, Iterable[tuple[Tensor, Tensor]]],
     ],
     setting: str,
-    shuffle: bool,
-    exclude: str,
-    separate_weight_and_bias: bool,
+    backend: str,
 ):
     r"""Test KFAC with forward-only Fisher (FOOF) against GGN for weight-sharing models.
 
@@ -958,21 +975,16 @@ def test_forward_only_fisher_type_exact_weight_sharing_case(
 
     Args:
         single_layer_weight_sharing_case: A fixture that returns a model, loss function,
-            list of parameters, and data.
+            dict of parameters, and data.
         setting: The weight-sharing setting to use. Can be ``KFACType.EXPAND`` or
             ``KFACType.REDUCE``.
-        shuffle: Whether to shuffle the parameters before computing the KFAC matrix.
-        exclude: Which parameters to exclude. Can be ``'weight'``, ``'bias'``,
-            or ``None``.
-        separate_weight_and_bias: Whether to treat weight and bias as separate blocks in
-            the KFAC matrix.
+        backend: The backend to use for computing Kronecker factors.
     """
     model, loss_func, params, data, batch_size_fn = single_layer_weight_sharing_case
     model.setting = setting
     if isinstance(model, Conv2dModel):
         # parameters are only initialized after the setting property is set
-        params = [p for p in model.parameters() if p.requires_grad]
-    params = maybe_exclude_or_shuffle_parameters(params, model, exclude, shuffle)
+        params = {n: p for n, p in model.named_parameters() if p.requires_grad}
     data = data[setting]
 
     ggn = block_diagonal(
@@ -982,7 +994,6 @@ def test_forward_only_fisher_type_exact_weight_sharing_case(
         params,
         data,
         batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
     )
     foof = KFACLinearOperator(
         model,
@@ -992,7 +1003,7 @@ def test_forward_only_fisher_type_exact_weight_sharing_case(
         batch_size_fn=batch_size_fn,
         fisher_type=FisherType.FORWARD_ONLY,
         kfac_approx=setting,  # choose KFAC approximation consistent with setting
-        separate_weight_and_bias=separate_weight_and_bias,
+        backend=backend,
     )
     foof_mat = foof @ eye_like(foof)
 
@@ -1024,18 +1035,18 @@ def _check_does_not_affect_grad(linop_cls):
     y = rand(batch_size, D_out)
     model = Linear(D_in, D_out)
 
-    params = list(model.parameters())
+    params = dict(model.named_parameters())
     # set gradients to random numbers
-    for p in params:
+    for p in params.values():
         p.grad = rand_like(p)
     # make independent copies
-    grads_before = [p.grad.clone() for p in params]
+    grads_before = [p.grad.clone() for p in params.values()]
 
     # create and compute the linear operator
     _ = linop_cls(model, MSELoss(), params, [(X, y)])
 
     # make sure gradients are unchanged
-    for grad_before, p in zip(grads_before, params):
+    for grad_before, p in zip(grads_before, params.values()):
         assert allclose(grad_before, p.grad)
 
 
@@ -1053,7 +1064,7 @@ def _check_torch_save_load(linop_cls: type, tmp_path: Path) -> None:
     """
     manual_seed(0)
     model = Linear(3, 2)
-    params = list(model.parameters())
+    params = dict(model.named_parameters())
     data = [(rand(4, 3), rand(4, 2))]
 
     linop = linop_cls(model, MSELoss(), params, data)
@@ -1085,21 +1096,23 @@ def test_string_in_enum(fisher_type: str, kfac_approx: str):
     KFACLinearOperator(
         model,
         MSELoss(),
-        list(model.parameters()),
+        dict(model.named_parameters()),
         [(rand(2, 2), rand(2, 2))],
         fisher_type=fisher_type,
         kfac_approx=kfac_approx,
     )
 
 
+@mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
 @mark.parametrize("dev", DEVICES, ids=DEVICES_IDS)
-def test_bug_132_dtype_deterministic_checks(dev: device):
+def test_bug_132_dtype_deterministic_checks(dev: device, backend: str):
     """Test whether the vectors used in the deterministic checks have correct data type.
 
     This bug was reported in https://github.com/f-dangel/curvlinops/issues/132.
 
     Args:
         dev: The device to run the test on.
+        backend: The backend to use for computing Kronecker factors.
     """
     # make deterministic
     manual_seed(0)
@@ -1115,12 +1128,14 @@ def test_bug_132_dtype_deterministic_checks(dev: device):
     data = [(X, y)]
 
     model = Linear(D_in, D_out).to(dev, dt)
-    params = [p for p in model.parameters() if p.requires_grad]
+    params = {n: p for n, p in model.named_parameters() if p.requires_grad}
 
     loss_func = MSELoss().to(dev, dt)
 
     # run deterministic checks
-    KFACLinearOperator(model, loss_func, params, data, check_deterministic=True)
+    KFACLinearOperator(
+        model, loss_func, params, data, check_deterministic=True, backend=backend
+    )
 
 
 """KFACLinearOperator.inverse() tests."""
@@ -1128,30 +1143,20 @@ def test_bug_132_dtype_deterministic_checks(dev: device):
 KFAC_MIN_DAMPING = 1e-8
 
 
-@mark.parametrize("fisher_type", KFACComputer._SUPPORTED_FISHER_TYPE)
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
+@mark.parametrize("fisher_type", HooksKFACComputer._SUPPORTED_FISHER_TYPE)
 def test_KFAC_inverse_damped_matmat(
     case: tuple[
         Module,
         MSELoss | CrossEntropyLoss,
-        list[Parameter],
+        dict[str, Tensor],
         Iterable[tuple[Tensor, Tensor]],
     ],
     fisher_type: str,
-    exclude: str,
-    separate_weight_and_bias: bool,
-    shuffle: bool,
     delta: float = 1e-2,
 ):
     """Test matrix-matrix multiplication by an inverse damped KFAC approximation."""
     model_func, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
-    params = maybe_exclude_or_shuffle_parameters(params, model_func, exclude, shuffle)
+    _skip_if_hooks_and_callable(model_func, "hooks")
 
     KFAC = KFACLinearOperator(
         model_func,
@@ -1159,7 +1164,6 @@ def test_KFAC_inverse_damped_matmat(
         params,
         data,
         batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
         fisher_type=fisher_type,
     )
 
@@ -1179,28 +1183,18 @@ def test_KFAC_inverse_damped_matmat(
     compare_matmat(inv_KFAC, inv_KFAC_naive)
 
 
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
-def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901
+def test_KFAC_inverse_heuristically_damped_matmat(
     case: tuple[
         Module,
         MSELoss | CrossEntropyLoss,
-        list[Parameter],
+        dict[str, Tensor],
         Iterable[tuple[Tensor, Tensor]],
     ],
-    exclude: str,
-    separate_weight_and_bias: bool,
-    shuffle: bool,
     delta: float = 1e-2,
 ):
     """Test matrix-matrix multiplication by a heuristically damped KFAC inverse."""
     model_func, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
-    params = maybe_exclude_or_shuffle_parameters(params, model_func, exclude, shuffle)
+    _skip_if_hooks_and_callable(model_func, "hooks")
 
     KFAC = KFACLinearOperator(
         model_func,
@@ -1208,7 +1202,6 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901
         params,
         data,
         batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
         check_deterministic=False,
     )
 
@@ -1242,28 +1235,18 @@ def test_KFAC_inverse_heuristically_damped_matmat(  # noqa: C901
     compare_matmat(inv_KFAC, inv_KFAC_naive)
 
 
-@mark.parametrize(
-    "exclude", [None, "weight", "bias"], ids=["all", "no_weights", "no_biases"]
-)
-@mark.parametrize(
-    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
-)
-@mark.parametrize("shuffle", [False, True], ids=["", "shuffled"])
 def test_KFAC_inverse_exactly_damped_matmat(
     case: tuple[
         Module,
         MSELoss | CrossEntropyLoss,
-        list[Parameter],
+        dict[str, Tensor],
         Iterable[tuple[Tensor, Tensor]],
     ],
-    exclude: str,
-    separate_weight_and_bias: bool,
-    shuffle: bool,
     delta: float = 1e-2,
 ):
     """Test matrix-matrix multiplication by an inverse (exactly) damped KFAC approximation."""
     model_func, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
-    params = maybe_exclude_or_shuffle_parameters(params, model_func, exclude, shuffle)
+    _skip_if_hooks_and_callable(model_func, "hooks")
 
     KFAC = KFACLinearOperator(
         model_func,
@@ -1271,7 +1254,6 @@ def test_KFAC_inverse_exactly_damped_matmat(
         params,
         data,
         batch_size_fn=batch_size_fn,
-        separate_weight_and_bias=separate_weight_and_bias,
     )
 
     # Exact damped inverse: inv(KFAC + delta * I)
@@ -1280,3 +1262,106 @@ def test_KFAC_inverse_exactly_damped_matmat(
 
     compare_consecutive_matmats(inv_KFAC)
     compare_matmat(inv_KFAC, inv_KFAC_naive)
+
+
+###############################################################################
+#                     make_fx backend specific tests                          #
+###############################################################################
+
+
+def _check_make_fx_flatten_different_batch_sizes(linop_cls):
+    """Check make_fx with nn.Flatten and different batch sizes.
+
+    ``nn.Flatten`` produces ``aten.view`` with a baked-in batch size during
+    real-mode ``make_fx`` tracing, so a single traced function cannot handle
+    multiple batch sizes. This verifies that the per-batch-size caching
+    handles this correctly.
+
+    Args:
+        linop_cls: The linear operator class to test.
+    """
+    manual_seed(0)
+    model = Sequential(Flatten(), Linear(6, 3))
+    loss_func = MSELoss()
+    params = dict(model.named_parameters())
+    # Two batches with different sizes to exercise the per-batch-size cache
+    data = [
+        (rand(2, 2, 3), regression_targets((2, 3))),
+        (rand(5, 2, 3), regression_targets((5, 3))),
+    ]
+
+    common_kwargs = dict(
+        check_deterministic=False,
+        fisher_type=FisherType.EMPIRICAL,
+    )
+    hooks = linop_cls(model, loss_func, params, data, backend="hooks", **common_kwargs)
+    make_fx = linop_cls(
+        model, loss_func, params, data, backend="make_fx", **common_kwargs
+    )
+
+    hooks_mat = hooks @ eye_like(hooks)
+    make_fx_mat = make_fx @ eye_like(make_fx)
+    assert allclose_report(hooks_mat, make_fx_mat)
+
+
+def test_kfac_make_fx_flatten_different_batch_sizes():
+    """Test make_fx KFAC with nn.Flatten and different batch sizes."""
+    _check_make_fx_flatten_different_batch_sizes(KFACLinearOperator)
+
+
+def _check_callable_model_func(linop_cls):
+    """Check that (E)KFAC make_fx works with a plain Callable instead of Module.
+
+    Creates a Module-based KFAC and a Callable-based KFAC and verifies they
+    produce identical matrices.
+
+    Args:
+        linop_cls: The linear operator class to test.
+    """
+    manual_seed(0)
+    model = Sequential(Linear(4, 3), Linear(3, 2))
+    loss_func = MSELoss()
+    params = dict(model.named_parameters())
+    data = [(rand(5, 4), regression_targets((5, 2)))]
+
+    # Module-based hooks backend (reference)
+    module_kfac = linop_cls(model, loss_func, params, data)
+
+    # Callable-based: wrap the Module into a plain function
+    params_dict = dict(model.named_parameters())
+
+    def model_fn(params_dict, X):
+        return functional_call(model, params_dict, (X,))
+
+    callable_kfac = linop_cls(model_fn, loss_func, params_dict, data, backend="make_fx")
+
+    module_mat = module_kfac @ eye_like(module_kfac)
+    callable_mat = callable_kfac @ eye_like(callable_kfac)
+    assert allclose_report(module_mat, callable_mat)
+
+    # Callable with different parameter values produces a different matrix
+    different_params = {
+        n: rand_like(p, requires_grad=True) for n, p in params_dict.items()
+    }
+    different_kfac = linop_cls(
+        model_fn, loss_func, different_params, data, backend="make_fx"
+    )
+    different_mat = different_kfac @ eye_like(different_kfac)
+    assert not allclose_report(module_mat, different_mat)
+
+
+def test_kfac_callable_model_func():
+    """Test KFAC make_fx with a plain Callable model_func."""
+    _check_callable_model_func(KFACLinearOperator)
+
+
+def test_kfac_unsupported_layer_params():
+    """Test that params from unsupported layers raise NotImplementedError."""
+    manual_seed(0)
+    model = Sequential(Linear(4, 3), Linear(3, 2))
+    loss_func = MSELoss()
+    data = [(rand(5, 4), rand(5, 2))]
+    params = dict(model.named_parameters())
+    params["bogus"] = rand(3)
+    with raises(NotImplementedError, match="not in supported layers"):
+        KFACLinearOperator(model, loss_func, params, data)

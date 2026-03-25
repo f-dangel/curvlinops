@@ -1,458 +1,78 @@
-"""Utility functions related to KFAC."""
+"""Utility functions specific to KFAC (patch extraction, canonical space converters).
+
+Also defines ``FisherType`` and ``KFACType`` enums used across the KFAC codebase.
+"""
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from math import sqrt
-from warnings import warn
+from enum import Enum, EnumMeta
 
 from einconv import index_pattern
 from einconv.utils import get_conv_paddings
 from einops import einsum, rearrange, reduce
-from torch import (
-    Generator,
-    Size,
-    Tensor,
-    as_tensor,
-    block_diag,
-    cat,
-    device,
-    diag,
-    dtype,
-    normal,
-    softmax,
-    zeros,
-    zeros_like,
-)
-from torch.func import grad, vmap
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
-from torch.nn.functional import one_hot, unfold
+from torch import Size, Tensor, cat, device, dtype
+from torch.nn.functional import unfold
 from torch.nn.modules.utils import _pair
 
 from curvlinops._torch_base import PyTorchLinearOperator
-from curvlinops.utils import make_functional_call
 
 
-def _warn_BCEWithLogitsLoss_targets_unchecked(
-    loss_func: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
-) -> None:
-    """Warn that BCEWithLogitsLoss targets are not verified to be binary.
+class MetaEnum(EnumMeta):
+    """Metaclass for the Enum class for desired behavior of the ``in`` operator."""
 
-    Args:
-        loss_func: The loss function being used.
-    """
-    if isinstance(loss_func, BCEWithLogitsLoss):
-        warn(
-            "BCEWithLogitsLoss only supports binary targets (0, 1), but this is "
-            "not being verified. Ensure your targets are binary to avoid "
-            "incorrect results (using _check_binary_if_BCEWithLogitsLoss).",
-            UserWarning,
-            stacklevel=3,
-        )
-
-
-def _check_binary_if_BCEWithLogitsLoss(
-    target: Tensor, loss_func: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss
-) -> None:
-    """Check if targets are binary (0 or 1) when using BCEWithLogitsLoss.
-
-    Args:
-        target: Target tensor.
-        loss_func: The loss function being used.
-
-    Raises:
-        NotImplementedError: If the loss function is BCEWithLogitsLoss but targets
-            are not binary (0 or 1).
-    """
-    if isinstance(loss_func, BCEWithLogitsLoss):
-        unique = set(target.unique().tolist())
-        if not unique.issubset({0, 1}):
-            raise NotImplementedError(
-                "Only binary targets (0, 1) are currently supported with"
-                + f" BCEWithLogitsLoss. Got values {unique}."
-            )
-
-
-def loss_hessian_matrix_sqrt(
-    output_one_datum: Tensor,
-    target_one_datum: Tensor,
-    loss_func: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
-    warn_BCEWithLogitsLoss_targets_unchecked: bool = True,
-) -> Tensor:
-    r"""Compute the loss function's matrix square root for a sample's output.
-
-    Args:
-        output_one_datum: The model's prediction on a single datum.
-            Has shape ``[C, *D]`` for CE where ``C`` is the number of classes,
-            or ``[*D]`` for MSE/BCE with ``*D`` optional (and potentially multiple)
-            sequence dimensions. Has no batch axis.
-        target_one_datum: The label of the single datum. Has shape ``[*D]``.
-            Has no batch axis.
-        loss_func: The loss function.
-        warn_BCEWithLogitsLoss_targets_unchecked: Whether to warn that targets are
-            not verified to be binary for BCEWithLogitsLoss. Default: ``True``.
-
-    Returns:
-        The matrix square root
-        :math:`\mathbf{S}` of the Hessian. Has shape ``[C, *D, C, *D]`` for CE and
-        ``[*D, *D]`` for BCE/MSE loss. Its matrix view satisfies
-
-        .. math::
-            \mathbf{S} \mathbf{S}^\top
-            =
-            \nabla^2_{\mathbf{f}} \ell(\mathbf{f}, \mathbf{y})
-
-        where :math:`\mathbf{f} := f(\mathbf{x})` is the model's prediction on a single
-        datum :math:`\mathbf{x}` and :math:`\mathbf{y}` is the label.
-
-    Below, we list the Hessian square roots for vector-valued predictions of shape ``[C]``.
-
-    Note:
-        For :class:`torch.nn.MSELoss` (with :math:`c = 1` for ``reduction='sum'``
-        and :math:`c = 1/C` for ``reduction='mean'``), we have:
-
-        .. math::
-            \ell(\mathbf{f}) &= c \sum_{i=1}^C (f_i - y_i)^2
-            \\
-            \nabla^2_{\mathbf{f}} \ell(\mathbf{f}, \mathbf{y}) &= 2 c \mathbf{I}_C
-            \\
-            \mathbf{S} &= \sqrt{2 c} \mathbf{I}_C
-
-    Note:
-        For :class:`torch.nn.CrossEntropyLoss` (with :math:`c = 1` irrespective of the
-        reduction, :math:`\mathbf{p}:=\mathrm{softmax}(\mathbf{f}) \in \mathbb{R}^C`,
-        and the element-wise natural logarithm :math:`\log`) we have:
-
-        .. math::
-            \ell(\mathbf{f}, y) = - c \log(\mathbf{p})^\top \mathrm{onehot}(y)
-            \\
-            \nabla^2_{\mathbf{f}} \ell(\mathbf{f}, y)
-            =
-            c \left(
-            \mathrm{diag}(\mathbf{p}) - \mathbf{p} \mathbf{p}^\top
-            \right)
-            \\
-            \mathbf{S} = \sqrt{c} \left(
-            \mathrm{diag}(\sqrt{\mathbf{p}}) - \sqrt{\mathbf{p}} \mathbf{p}^\top
-            \right)\,,
-
-       where the square root is applied element-wise. See for instance Example 5.1 of
-       `this thesis <https://d-nb.info/1280233206/34>`_ or equations (5) and (6) of
-       `this paper <https://arxiv.org/abs/1901.08244>`_.
-
-    Note:
-        For :class:`torch.nn.BCEWithLogitsLoss` (with :math:`c = 1` for ``reduction='sum'``
-        and :math:`c = 1/C` for ``reduction='mean'``) we have (:math:`\sigma` is the sigmoid
-        function, and assuming binary labels):
-
-        .. math::
-            \ell(\mathbf{f})
-            &=
-            c \sum_{i=1}^C - y_i \log(\sigma(f_i)) - (1 - y_i) \log(1 - \sigma(f_i))
-            \\
-            \nabla^2_{\mathbf{f}} \ell(\mathbf{f}, \mathbf{y})
-            &=
-            c \mathrm{diag}( \sigma(f_i) \odot (1 - \sigma(f_i)) )
-            \\
-            \mathbf{S}
-            &=
-            \sqrt{c} \mathrm{diag}(\sqrt{\sigma(f_i) \odot (1 - \sigma(f_i))})\,,
-
-        where the square root is applied element-wise.
-
-    Raises:
-        NotImplementedError: If the loss function is not supported.
-        NotImplementedError: If the loss function is ``BCEWithLogitsLoss`` but the
-            target is not binary.
-    """
-    # Number of losses contributed from a datum's sequence-valued prediction
-    num_features = (
-        output_one_datum.numel() / output_one_datum.shape[0]
-        if isinstance(loss_func, CrossEntropyLoss)
-        else output_one_datum.numel()
-    )
-    # Reduction factor from accumulation over losses in a sequence
-    reduction = loss_func.reduction
-    c = {"sum": 1.0, "mean": 1.0 / num_features}[reduction]
-
-    # Construct the Hessian square root as matrix (w.r.t. the flattened outputs)
-    if isinstance(loss_func, MSELoss):
-        hess_sqrt_flat = (
-            zeros_like(output_one_datum).fill_(sqrt(2 * c)).flatten().diag()
-        )
-
-    elif isinstance(loss_func, CrossEntropyLoss):
-        # Output has shape [C, d1, d2, ...], flatten into [C, d1 * d2 * ...]
-        output_flat = output_one_datum.unsqueeze(-1).flatten(start_dim=1)
-        C, D = output_flat.shape
-        p = output_flat.softmax(dim=0)
-
-        def hess_sqrt_element(p: Tensor) -> Tensor:
-            """Compute the Hessian square root for a single element of the sequence.
-
-            Args:
-                p: Vector of probabilities for a single sequence. Has shape ``[C]``.
-
-            Returns:
-                The Hessian square root matrix. Has shape ``[C, C]``.
-            """
-            p_sqrt = sqrt(c) * p.sqrt()
-            return diag(p_sqrt) - einsum(p, p_sqrt, "i, j -> i j")
-
-        # Compute the per-element Hessian square root
-        blocks_stacked = vmap(hess_sqrt_element, in_dims=-1)(p)  # [D, C, C]
-
-        # This is the Hessian square root in a rearranged basis [d1 * d2 * ... , C]
-        blocks = block_diag(*blocks_stacked)
-        # Rearrange into the basis [C, d1 * d2 * ...]
-        hess_sqrt_flat = rearrange(
-            blocks, "(d1 c1) (d2 c2) -> (c1 d1) (c2 d2)", d1=D, d2=D, c1=C, c2=C
-        )
-        hess_sqrt_flat = hess_sqrt_flat.reshape(C * D, C * D)
-
-    elif isinstance(loss_func, BCEWithLogitsLoss):
-        if warn_BCEWithLogitsLoss_targets_unchecked:
-            _warn_BCEWithLogitsLoss_targets_unchecked(loss_func)
-
-        p = output_one_datum.flatten().sigmoid()
-        hess_sqrt_diag = sqrt(c) * (p * (1 - p)).sqrt()
-        hess_sqrt_flat = hess_sqrt_diag.diag()
-
-    else:
-        raise NotImplementedError(f"Loss function {loss_func} not supported.")
-
-    # Un-flatten the output dimensions
-    output_shape = output_one_datum.shape
-    return hess_sqrt_flat.reshape(*output_shape, *output_shape)
-
-
-def _make_single_datum_sampler(
-    loss_func: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
-    warn_BCEWithLogitsLoss_targets_unchecked: bool = True,
-) -> Callable[[Tensor, int, Tensor, Generator], Tensor]:
-    """Create a function that samples gradients w.r.t. a single datum's output.
-
-    The expectation of the sampled gradient outer product is the loss function's
-    Hessian, including scaling from reductions over non-batch axes.
-
-    Args:
-        loss_func: The loss function to create the sampler for.
-        warn_BCEWithLogitsLoss_targets_unchecked: Whether to warn that targets are
-            not verified to be binary for BCEWithLogitsLoss. Default: ``True``.
-
-    Returns:
-        A function that samples gradients w.r.t. the model prediction for one datum.
-        Signature: ``(output, num_samples, target, generator) -> grad_samples``.
-        The returned gradient samples have shape ``[num_samples, *output.shape]``.
-    """
-
-    def sample_grad_output(
-        output_one_datum: Tensor,
-        num_samples: int,
-        target_one_datum: Tensor,
-        generator: Generator,
-    ) -> Tensor:
-        """Draw would-be gradients ``∇_f log p(·|f)`` with explicit generator.
-
-        Handles a single data point.
-        The would-be gradient's outer product equals the Hessian ``∇²_f log p(·|f)``
-        in expectation.
-        Currently supports ``MSELoss``, ``CrossEntropyLoss``, and
-        ``BCEWithLogitsLoss`` with arbitrary output dimensions.
-        The returned gradients include proper scaling based on the loss function's
-        reduction type over the feature dimensions.
+    def __contains__(cls, item):
+        """Return whether ``item`` is a valid Enum value.
 
         Args:
-            output_one_datum: model prediction ``f`` for one datum. Has no batch axis.
-            num_samples: Number of samples to draw.
-            target_one_datum: Labels of the datum. Has no batch axis.
-            generator: Random generator for sampling.
+            item: Candidate value.
 
         Returns:
-            Samples of the gradient w.r.t. the model prediction for one datum.
-            Has shape ``[num_samples, *output.shape]``.
-
-        Raises:
-            NotImplementedError: For unsupported loss functions.
+            ``True`` if ``item`` is a valid Enum value.
         """
-        # Number of losses contributed from a datum's sequence-valued prediction
-        num_features = (
-            output_one_datum.numel() / output_one_datum.shape[0]
-            if isinstance(loss_func, CrossEntropyLoss)
-            else output_one_datum.numel()
-        )
-        # Reduction factor from accumulation over losses in a sequence
-        reduction = loss_func.reduction
-        c = {"sum": 1.0, "mean": 1.0 / num_features}[reduction]
-
-        if isinstance(loss_func, MSELoss):
-            dev, dt = output_one_datum.device, output_one_datum.dtype
-            std = as_tensor(sqrt(2 * c), device=dev, dtype=dt)
-            mean = zeros(num_samples, *output_one_datum.shape, device=dev, dtype=dt)
-            grad_samples = normal(mean, std, generator=generator)
-
-        elif isinstance(loss_func, CrossEntropyLoss):
-            # Flatten sequence dimensions: [C, *seq] -> [C, seq_flat]
-            C = output_one_datum.shape[0]
-            output_flat = output_one_datum.unsqueeze(-1).flatten(start_dim=1)
-            prob = softmax(output_flat, dim=0)  # [C, seq_flat]
-
-            # Sample for each sequence position independently
-            # Rearrange to [seq_flat, C] for multinomial sampling
-            prob_for_sampling = rearrange(prob, "c s -> s c")
-            samples = prob_for_sampling.multinomial(
-                num_samples=num_samples, replacement=True, generator=generator
-            )  # [seq_flat, num_samples]
-            samples = rearrange(samples, "s n -> n s")  # [num_samples, seq_flat]
-            onehot_samples = one_hot(samples, num_classes=C)
-            # [num_samples, seq_flat, C] -> [num_samples, C, seq_flat]
-            onehot_samples = rearrange(onehot_samples, "n s c -> n c s")
-
-            # Expand prob to match: [C, seq_flat] -> [num_samples, C, seq_flat]
-            prob_expanded = prob.unsqueeze(0).expand_as(onehot_samples)
-            grad_samples_flat = sqrt(c) * (prob_expanded - onehot_samples)
-
-            # Reshape back to original sequence dimensions
-            out_shape = (num_samples, *output_one_datum.shape)
-            grad_samples = grad_samples_flat.reshape(out_shape)
-
-        elif isinstance(loss_func, BCEWithLogitsLoss):
-            if warn_BCEWithLogitsLoss_targets_unchecked:
-                _warn_BCEWithLogitsLoss_targets_unchecked(loss_func)
-
-            prob = output_one_datum.sigmoid()
-            # repeat ``num_sample`` times along a new leading axis
-            prob = prob.unsqueeze(0).expand(num_samples, *prob.shape)
-            sample = prob.bernoulli(generator=generator)
-            grad_samples = sqrt(c) * (prob - sample)
-
-        else:
-            raise NotImplementedError(
-                f"Supported losses: {(MSELoss, CrossEntropyLoss, BCEWithLogitsLoss)}"
-            )
-
-        return grad_samples
-
-    return sample_grad_output
+        try:
+            cls(item)
+        except ValueError:
+            return False
+        return True
 
 
-def make_grad_output_fn(
-    loss_func: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
-    mode: str,
-    mc_samples: int = 1,
-) -> Callable[[Tensor, Tensor, Generator | None], Tensor]:
-    """Create a function computing gradient output vectors for a single datum.
+class FisherType(str, Enum, metaclass=MetaEnum):
+    """Enum for the Fisher type.
 
-    For exact mode, returns the columns of the loss Hessian's matrix square root.
-    For MC mode, returns Monte-Carlo sampled gradient vectors.
-    For empirical mode, returns the gradient of the loss w.r.t. the output.
-    For forward-only mode, returns an empty tensor (no backward passes needed).
-
-    Note:
-        The binary target check for ``BCEWithLogitsLoss`` is disabled inside this
-        function (incompatible with ``vmap``). Callers must run
-        ``_check_binary_if_BCEWithLogitsLoss`` themselves before entering ``vmap``.
-
-    Note:
-        For MC mode, the returned vectors are scaled by ``1 / sqrt(mc_samples)``
-        so that the sum of their outer products approximates the Hessian, matching
-        the exact mode contract.
-
-    Args:
-        loss_func: The loss function.
-        mode: ``'exact'`` for Hessian square root, ``'mc'`` for Monte-Carlo sampling,
-            ``'empirical'`` for empirical gradients, ``'forward-only'`` for no
-            backward passes.
-        mc_samples: Number of Monte-Carlo samples (only used when ``mode='mc'``).
-            Default: ``1``.
-
-    Returns:
-        A function with signature
-        ``(output, target, generator=None) -> [num_vectors, *output.shape]``
-        operating on a single datum (no batch axis). ``num_vectors`` is
-        ``output.numel()`` for exact mode, ``mc_samples`` for MC mode, ``1``
-        for empirical mode, or ``0`` for forward-only mode.
-
-    Raises:
-        ValueError: If ``mode`` is not ``'exact'``, ``'mc'``, ``'empirical'``,
-            or ``'forward-only'``.
+    Attributes:
+        TYPE2 (str): ``'type-2'`` - Type-2 Fisher, i.e. the exact Hessian of the
+            loss w.r.t. the model outputs is used. This requires as many backward
+            passes as the output dimension, i.e. the number of classes for
+            classification.
+        MC (str): ``'mc'`` - Monte-Carlo approximation of the expectation by sampling
+            ``mc_samples`` labels from the model's predictive distribution.
+        EMPIRICAL (str): ``'empirical'`` - Empirical gradients are used which
+            corresponds to the uncentered gradient covariance, or the empirical Fisher.
+        FORWARD_ONLY (str): ``'forward-only'`` - The gradient covariances will be
+            identity matrices, see the FOOF method in
+            `Benzing, 2022 <https://arxiv.org/abs/2201.12250>`_ or ISAAC in
+            `Petersen et al., 2023 <https://arxiv.org/abs/2305.00604>`_.
     """
-    if mode not in ("exact", "mc", "empirical", "forward-only"):
-        raise ValueError(
-            f"Invalid mode {mode!r}. "
-            "Must be 'exact', 'mc', 'empirical', or 'forward-only'."
-        )
 
-    sample_grad_output = _make_single_datum_sampler(
-        loss_func, warn_BCEWithLogitsLoss_targets_unchecked=False
-    )
+    TYPE2 = "type-2"
+    MC = "mc"
+    EMPIRICAL = "empirical"
+    FORWARD_ONLY = "forward-only"
 
-    if mode == "empirical":
-        functional_loss_func = make_functional_call(loss_func, [])
 
-        def _scaled_datum_loss(prediction: Tensor, target: Tensor) -> Tensor:
-            """Compute a scaled loss for one sample, adjusting for mean reduction.
+class KFACType(str, Enum, metaclass=MetaEnum):
+    """Enum for the KFAC approximation type.
 
-            For ``MSELoss`` and ``BCEWithLogitsLoss`` with ``reduction='mean'``,
-            the loss averages over both batch and output dimensions. Since we
-            operate on a single datum (no batch), the output-dimension averaging
-            produces an extra ``1/C`` factor. We want only ``1/sqrt(C)`` so that
-            the gradient outer product gives the correct contribution to the
-            empirical Fisher.
+    KFAC-expand and KFAC-reduce are defined in
+    `Eschenhagen et al., 2023 <https://arxiv.org/abs/2311.00636>`_.
 
-            Args:
-                prediction: Model prediction for one sample, without batch dim.
-                target: Target for one sample, without batch dim.
+    Attributes:
+        EXPAND (str): ``'expand'`` - KFAC-expand approximation.
+        REDUCE (str): ``'reduce'`` - KFAC-reduce approximation.
+    """
 
-            Returns:
-                Scaled loss for one sample.
-            """
-            (C,) = prediction.shape
-            scale = (
-                sqrt(C)
-                if (
-                    isinstance(loss_func, (BCEWithLogitsLoss, MSELoss))
-                    and loss_func.reduction == "mean"
-                )
-                else 1.0
-            )
-            return scale * functional_loss_func(
-                prediction.unsqueeze(0), target.unsqueeze(0)
-            )
-
-        _empirical_grad = grad(_scaled_datum_loss, argnums=0)
-
-    def grad_output_fn(
-        output: Tensor, target: Tensor, generator: Generator | None = None
-    ) -> Tensor:
-        """Compute gradient output vectors for a single datum.
-
-        Args:
-            output: Model prediction for one datum (no batch axis).
-            target: Label for the datum (no batch axis).
-            generator: Random generator (used for MC mode, ignored otherwise).
-
-        Returns:
-            Gradient vectors of shape ``[num_vectors, *output.shape]``.
-        """
-        if mode == "forward-only":
-            return output.new_empty(0, *output.shape)
-        elif mode == "exact":
-            hessian_sqrt = loss_hessian_matrix_sqrt(
-                output,
-                target,
-                loss_func,
-                warn_BCEWithLogitsLoss_targets_unchecked=False,
-            )
-            return hessian_sqrt.reshape(*output.shape, output.numel()).movedim(-1, 0)
-        elif mode == "mc":
-            return sample_grad_output(output, mc_samples, target, generator).div_(
-                sqrt(mc_samples)
-            )
-        else:  # mode == "empirical"
-            return _empirical_grad(output, target).unsqueeze(0)
-
-    return grad_output_fn
+    EXPAND = "expand"
+    REDUCE = "reduce"
 
 
 def extract_patches(
@@ -565,27 +185,30 @@ class _CanonicalizationLinearOperator(PyTorchLinearOperator):
 
     def __init__(
         self,
-        param_shapes: list[Size],
-        param_positions: list[dict[str, int]],
-        separate_weight_and_bias: bool,
+        param_shapes: dict[str, Size],
+        param_groups: list[dict[str, str]],
         device: device,
         dtype: dtype,
     ):
         """Initialize the canonical form transformation operator.
 
         Args:
-            param_shapes: List of parameter shapes as Size objects.
-            param_positions: List of parameter position dictionaries for each layer.
-            separate_weight_and_bias: Whether to treat weights and biases separately.
+            param_shapes: Dictionary mapping full parameter names to their shapes.
+            param_groups: List of parameter group dictionaries mapping roles
+                (``'W'`` for weight, ``'b'`` for bias) to full qualified parameter
+                names. Each group is one KFAC block: ``{"W": ..., "b": ...}``
+                for joint treatment, or ``{"W": ...}`` / ``{"b": ...}`` for
+                separate treatment.
             device: Device of the parameters.
             dtype: Data type of the parameters.
         """
         self._param_shapes = param_shapes
         self._device = device
         self._dtype = dtype
+        self._param_groups = param_groups
 
-        self._param_positions = param_positions
-        self._separate_weight_and_bias = separate_weight_and_bias
+        # Precompute name → list-position mapping for _matmat
+        self._name_to_idx = {name: i for i, name in enumerate(param_shapes)}
 
         in_shape, out_shape = self._compute_shapes()
         super().__init__(in_shape, out_shape)
@@ -606,24 +229,15 @@ class _CanonicalizationLinearOperator(PyTorchLinearOperator):
         """
         canonical_shapes = []
 
-        for param_pos in self._param_positions:
-            # Handle joint weight+bias case
-            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
-                param_pos.keys()
-            ):
-                w_pos = param_pos["weight"]
-                w_shape = self._param_shapes[w_pos]
-                # Combined weight+bias gets flattened to 1D
-                total_params = (
-                    self._param_shapes[w_pos].numel() + w_shape[0]
-                )  # weight + bias
+        for param_group in self._param_groups:
+            if "W" in param_group and "b" in param_group:
+                w_name = param_group["W"]
+                w_shape = self._param_shapes[w_name]
+                total_params = w_shape.numel() + w_shape[0]  # weight + bias
                 canonical_shapes.append((total_params,))
             else:
-                # Handle separate weight and bias
-                for p_name in param_pos:
-                    pos = param_pos[p_name]
-                    # Each parameter gets flattened to 1D
-                    canonical_shapes.append((self._param_shapes[pos].numel(),))
+                for full_name in param_group.values():
+                    canonical_shapes.append((self._param_shapes[full_name].numel(),))
 
         return canonical_shapes
 
@@ -659,7 +273,7 @@ class ToCanonicalLinearOperator(_CanonicalizationLinearOperator):
         Returns:
             Tuple of (in_shape, out_shape) for original to canonical transformation.
         """
-        in_shape = [tuple(shape) for shape in self._param_shapes]
+        in_shape = [tuple(shape) for shape in self._param_shapes.values()]
         out_shape = self._compute_canonical_shapes()
         return in_shape, out_shape
 
@@ -674,23 +288,20 @@ class ToCanonicalLinearOperator(_CanonicalizationLinearOperator):
         """
         canonical_M = []
 
-        for param_pos in self._param_positions:
-            # Handle joint weight+bias case
-            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
-                param_pos.keys()
-            ):
-                w_pos, b_pos = param_pos["weight"], param_pos["bias"]
+        for param_group in self._param_groups:
+            if "W" in param_group and "b" in param_group:
+                w_name, b_name = param_group["W"], param_group["b"]
+                w_idx, b_idx = self._name_to_idx[w_name], self._name_to_idx[b_name]
                 # Flatten weight tensor into matrix and concatenate bias
-                w_flat = M[w_pos].flatten(start_dim=1, end_dim=-2)
+                w_flat = M[w_idx].flatten(start_dim=1, end_dim=-2)
                 # Add bias as additional row
-                combined = cat([w_flat, M[b_pos].unsqueeze(1)], dim=1)
+                combined = cat([w_flat, M[b_idx].unsqueeze(1)], dim=1)
                 # Flatten parameter space dimension
                 canonical_M.append(combined.flatten(end_dim=-2))
             else:
-                # Handle separate weight and bias
-                for p_name in param_pos:
-                    pos = param_pos[p_name]
-                    canonical_M.append(M[pos].flatten(end_dim=-2))
+                for full_name in param_group.values():
+                    idx = self._name_to_idx[full_name]
+                    canonical_M.append(M[idx].flatten(end_dim=-2))
 
         return canonical_M
 
@@ -702,8 +313,7 @@ class ToCanonicalLinearOperator(_CanonicalizationLinearOperator):
         """
         return FromCanonicalLinearOperator(
             self._param_shapes,
-            self._param_positions,
-            self._separate_weight_and_bias,
+            self._param_groups,
             self._device,
             self._dtype,
         )
@@ -721,7 +331,7 @@ class FromCanonicalLinearOperator(_CanonicalizationLinearOperator):
         Returns:
             Tuple of (in_shape, out_shape) for canonical to original transformation.
         """
-        out_shape = [tuple(shape) for shape in self._param_shapes]
+        out_shape = [tuple(shape) for shape in self._param_shapes.values()]
         in_shape = self._compute_canonical_shapes()
         return in_shape, out_shape
 
@@ -736,41 +346,36 @@ class FromCanonicalLinearOperator(_CanonicalizationLinearOperator):
 
         Raises:
             RuntimeError: If parameters were incorrectly processed, likely due
-                to an erroneous `self._param_positions`.
+                to an erroneous ``self._param_groups``.
         """
         original_M = [None] * len(self._param_shapes)
         (num_columns,) = {m.shape[-1] for m in M}
         processed = 0
 
-        for param_pos in self._param_positions:
-            # Handle joint weight+bias case
-            if not self._separate_weight_and_bias and {"weight", "bias"} == set(
-                param_pos.keys()
-            ):
-                w_pos, b_pos = param_pos["weight"], param_pos["bias"]
+        for param_group in self._param_groups:
+            if "W" in param_group and "b" in param_group:
+                w_name, b_name = param_group["W"], param_group["b"]
+                w_idx, b_idx = self._name_to_idx[w_name], self._name_to_idx[b_name]
                 combined = M[processed]
 
                 # Get original weight shape
-                w_shape = self._param_shapes[w_pos]
-                w_rows, w_cols = (
-                    w_shape[0],
-                    self._param_shapes[w_pos].numel() // w_shape[0],
-                )
+                w_shape = self._param_shapes[w_name]
+                w_rows = w_shape[0]
+                w_cols = w_shape.numel() // w_rows
 
                 # Reshape combined tensor back to (weight + bias) matrix
                 combined = combined.reshape(w_rows, w_cols + 1, num_columns)
                 w_part, b_part = combined.split([w_cols, 1], dim=1)
 
                 # Reshape into parameter shape
-                original_M[w_pos] = w_part.reshape(*w_shape, num_columns)
-                original_M[b_pos] = b_part.reshape(w_rows, num_columns)
+                original_M[w_idx] = w_part.reshape(*w_shape, num_columns)
+                original_M[b_idx] = b_part.reshape(w_rows, num_columns)
                 processed += 1
             else:
-                # Handle separate weight and bias
-                for p_name in param_pos:
-                    pos = param_pos[p_name]
-                    original_M[pos] = M[processed].reshape(
-                        *self._param_shapes[pos], num_columns
+                for full_name in param_group.values():
+                    idx = self._name_to_idx[full_name]
+                    original_M[idx] = M[processed].reshape(
+                        *self._param_shapes[full_name], num_columns
                     )
                     processed += 1
 
@@ -787,8 +392,7 @@ class FromCanonicalLinearOperator(_CanonicalizationLinearOperator):
         """
         return ToCanonicalLinearOperator(
             self._param_shapes,
-            self._param_positions,
-            self._separate_weight_and_bias,
+            self._param_groups,
             self._device,
             self._dtype,
         )

@@ -2,113 +2,108 @@
 
 from collections import UserDict
 from collections.abc import Callable, Iterable, MutableMapping
+from functools import partial
 
 from torch import Generator, Tensor, no_grad, zeros_like
 from torch.func import vjp, vmap
-from torch.nn import Module, Parameter
+from torch.nn import Module
 
 from curvlinops._checks import (
     _check_supports_batched_and_unbatched_inputs,
     _register_userdict_as_pytree,
 )
 from curvlinops._empirical_risk import _EmpiricalRiskMixin
-from curvlinops.kfac_utils import (
-    _check_binary_if_BCEWithLogitsLoss,
-    make_grad_output_fn,
-)
-from curvlinops.utils import _seed_generator, make_functional_model_and_loss
+from curvlinops.ggn_utils import make_grad_output_fn
+from curvlinops.kfac_utils import FisherType
+from curvlinops.utils import _seed_generator
 
 
 def make_batch_ggn_diagonal_func(
-    model_func: Module,
+    f: Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
     loss_func: Module,
-    params: tuple[Parameter, ...],
-    mode: str,
     mc_samples: int,
     batch_size_fn: Callable[[Tensor | MutableMapping], int],
 ) -> Callable[
-    [Tensor | MutableMapping, Tensor, Generator | None],
-    list[Tensor],
+    [dict[str, Tensor], Tensor | MutableMapping, Tensor, Generator | None],
+    dict[str, Tensor],
 ]:
     """Create a function that computes the GGN diagonal for a batch.
 
     Args:
-        model_func: PyTorch module representing the neural network.
+        f: Functional model with signature ``(params_dict, X) -> prediction``.
         loss_func: Loss function module.
-        params: Tuple of model parameters.
-        mode: Computation mode, either ``'exact'`` or ``'mc'``.
-        mc_samples: Number of Monte Carlo samples (used when ``mode='mc'``).
+        mc_samples: Number of Monte Carlo samples. ``0`` uses the exact GGN diagonal
+            via the loss Hessian's square root. Positive values use MC approximation.
         batch_size_fn: Function that returns the batch size given an input ``X``.
             If ``None``, defaults to using ``X.shape[0]`` for tensors or the first
             value's shape for MutableMapping inputs.
 
     Returns:
-        Function with signature ``(X, y, generator) -> List[Tensor]``
+        Function with signature ``(params_dict, X, y, generator) -> dict[str, Tensor]``
         that computes the GGN diagonal on the batch ``(X, y)``.
     """
-    # Create functional version of the model: (*params, x) -> prediction
-    f, _ = make_functional_model_and_loss(model_func, loss_func, params)
-
-    # Set up gradient output vector computation (binary target check is disabled
-    # inside because it is incompatible with vmap; checked in batch_ggn_diagonal)
-    grad_output_fn = make_grad_output_fn(loss_func, mode, mc_samples)
+    fisher_type = FisherType.TYPE2 if mc_samples == 0 else FisherType.MC
+    grad_output_fn = make_grad_output_fn(loss_func, fisher_type, mc_samples)
     reduction = loss_func.reduction
 
     def ggn_diagonal_datum(
-        x: Tensor | MutableMapping, y: Tensor, generator: Generator | None = None
-    ) -> list[Tensor]:
+        params: dict[str, Tensor],
+        x: Tensor | MutableMapping,
+        y: Tensor,
+        generator: Generator | None = None,
+    ) -> dict[str, Tensor]:
         """Compute the GGN diagonal for a single datum.
 
         Args:
+            params: Parameters of the model as a dict.
             x: Input datum.
             y: Label for the datum.
             generator: Generator for MC sampling (optional).
 
         Returns:
-            List of tensors containing the diagonal elements for each parameter.
-            Items have the same shape as the neural network's parameters.
+            Dict mapping parameter names to diagonal elements. Each tensor has
+            the same shape as the corresponding parameter.
         """
-        f_x, f_vjp = vjp(lambda *p: f(*p, x), *params)
+        f_x, f_vjp = vjp(lambda p: f(p, x), params)
         # Detach f_x: only values are needed for the grad output vectors;
         # actual parameter gradients are computed via f_vjp.
         grad_outputs = grad_output_fn(f_x.detach(), y, generator)
-        grad_params = vmap(f_vjp)(grad_outputs)
-        return [(g**2).sum(0) for g in grad_params]
+        (grad_params_dict,) = vmap(f_vjp)(grad_outputs)
+        return {k: (grad_params_dict[k] ** 2).sum(0) for k in params}
 
-    randomness = {"mc": "different", "exact": "same"}[mode]
-    # Parallelize over data points
+    randomness = "different" if fisher_type == FisherType.MC else "same"
+    # Parallelize over data points (vmap over x and y, not params or generator)
     ggn_diagonal_batched = vmap(
-        ggn_diagonal_datum, in_dims=(0, 0, None), randomness=randomness
+        ggn_diagonal_datum, in_dims=(None, 0, 0, None), randomness=randomness
     )
 
     @no_grad()
     def batch_ggn_diagonal(
-        X: Tensor | MutableMapping, y: Tensor, generator: Generator | None = None
-    ) -> list[Tensor]:
+        params: dict[str, Tensor],
+        X: Tensor | MutableMapping,
+        y: Tensor,
+        generator: Generator | None = None,
+    ) -> dict[str, Tensor]:
         """Compute the GGN diagonal on a batch.
 
         Args:
+            params: Parameters of the model as a dict.
             X: Input batch.
             y: Labels for the batch.
             generator: Random generator (optional).
 
         Returns:
-            List of tensors containing the batch GGN's diagonal elements for each
-            parameter. Items have the same shape as the neural network's
-            parameters.
+            Dict mapping parameter names to the batch GGN's diagonal elements.
+            Each tensor has the same shape as the corresponding parameter.
         """
         # Register UserDict as PyTree if needed for vmap compatibility
         if isinstance(X, UserDict):
             _register_userdict_as_pytree()
-        # We turn off this check in the function that computes the GGN diagonal for a
-        # single datum due to incompatibility with vmap. Therefore we need to re-introduce
-        # this check here.
-        _check_binary_if_BCEWithLogitsLoss(y, loss_func)
-
         # For mean reduction, we have to divide by the batch size to obtain correct
         # scale
         scale = {"sum": 1.0, "mean": 1.0 / batch_size_fn(X)}[reduction]
-        return [res.sum(0).mul_(scale) for res in ggn_diagonal_batched(X, y, generator)]
+        result_dict = ggn_diagonal_batched(params, X, y, generator)
+        return {k: v.sum(0).mul_(scale) for k, v in result_dict.items()}
 
     return batch_ggn_diagonal
 
@@ -121,26 +116,23 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
     diagonal as a list of tensors.
 
     Attributes:
-        SUPPORTED_MODES: Supported computation modes.
         FIXED_DATA_ORDER: Whether the data loader must return the same data
-            for every iteration.
+            for every iteration. Set to ``True`` when ``mc_samples > 0``.
     """
-
-    SUPPORTED_MODES: tuple[str, ...] = ("exact", "mc")
 
     def __init__(
         self,
-        model_func: Callable[[Tensor | MutableMapping], Tensor],
+        model_func: Module
+        | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
         loss_func: Callable[[Tensor, Tensor], Tensor],
-        params: list[Parameter],
+        params: dict[str, Tensor],
         data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
         num_data: int | None = None,
         batch_size_fn: Callable[[MutableMapping | Tensor], int] | None = None,
-        mode: str = "exact",
+        mc_samples: int = 0,
         seed: int = 2_147_483_647,
-        mc_samples: int = 1,
     ):
         """Set up the GGN diagonal computation.
 
@@ -150,17 +142,20 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
             mini-batch labels y.
 
         Args:
-            model_func: A function that maps the mini-batch input X to predictions.
-                Could be a PyTorch module representing a neural network.
+            model_func: The neural network's forward pass, defining the functional
+                relationship ``(params, X) -> prediction``. Either an ``nn.Module``
+                (architecture) or a callable ``(params_dict, X) -> prediction``.
             loss_func: Loss function criterion. Maps predictions and mini-batch labels
                 to a scalar value.
-            params: List of differentiable parameters used by the prediction function.
+            params: The parameter values at which the GGN diagonal is evaluated. A
+                dictionary mapping parameter names to tensors.
             data: Source from which mini-batches can be drawn, for instance a list of
                 mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``. Note that ``X``
                 could be a ``dict`` or ``UserDict``; this is useful for custom models.
                 In this case, you must (i) specify the ``batch_size_fn`` argument, and
                 (ii) take care of preprocessing like ``X.to(device)`` inside of your
-                ``model.forward()`` function.
+                ``model.forward()`` function. When using MC sampling, batches must be
+                presented in the same deterministic order (no shuffling!).
             progressbar: Show a progressbar during computation.
                 Default: ``False``.
             check_deterministic: Probe that model and data are deterministic, i.e.
@@ -174,25 +169,16 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
                 ``torch.Tensor`` inputs, this should typically return ``X.shape[0]``.
                 For ``dict``/``UserDict`` inputs, this should return the batch size of
                 the contained tensors.
-            mode: Computation mode for the GGN diagonal. ``'exact'`` computes the
-                exact diagonal using the loss Hessian's square root. ``'mc'`` uses
-                Monte Carlo approximation with sampled gradients. Default: ``'exact'``.
-            seed: Random seed for Monte Carlo sampling when ``mode='mc'``.
-                Default: ``2147483647``.
-            mc_samples: Number of Monte Carlo samples when ``mode='mc'``.
-                Default: ``1``.
-
-        Raises:
-            ValueError: If mode is not one of the supported modes.
+            mc_samples: Number of Monte-Carlo samples to approximate the loss Hessian.
+                ``0`` (default) uses the exact GGN diagonal. Positive values activate
+                the MC approximation.
+            seed: Seed for the internal random number generator used for MC sampling.
+                Only used when ``mc_samples > 0``. Default: ``2147483647``.
         """
-        if mode not in self.SUPPORTED_MODES:
-            raise ValueError(
-                f"Invalid mode {mode!r}. Must be one of {self.SUPPORTED_MODES}."
-            )
-        self.FIXED_DATA_ORDER = {"exact": False, "mc": True}[mode]
-        self._mode = mode
-        self._seed = seed
         self._mc_samples = mc_samples
+        if mc_samples > 0:
+            self.FIXED_DATA_ORDER = True
+        self._seed = seed
 
         super().__init__(
             model_func,
@@ -214,35 +200,33 @@ class GGNDiagonalComputer(_EmpiricalRiskMixin):
         """
         super()._check_deterministic()
         X, _ = next(self._loop_over_data())
-        _check_supports_batched_and_unbatched_inputs(X, self._model_func)
+        _check_supports_batched_and_unbatched_inputs(
+            X, partial(self._model_func, self._params)
+        )
 
-    def compute(self) -> list[Tensor]:
+    def compute(self) -> dict[str, Tensor]:
         """Compute the GGN diagonal on the entire data set.
 
         Returns:
-            List of tensors containing the diagonal elements for each parameter.
+            Dict mapping parameter names to diagonal elements.
         """
         batch_ggn_diagonal_func = make_batch_ggn_diagonal_func(
-            self._model_func,
-            self._loss_func,
-            tuple(self._params),
-            self._mode,
-            self._mc_samples,
-            self._batch_size_fn,
+            self._model_func, self._loss_func, self._mc_samples, self._batch_size_fn
         )
 
         generator = (
             None
-            if self._mode == "exact"
+            if self._mc_samples == 0
             else _seed_generator(None, self.device, self._seed)
         )
 
-        result = [zeros_like(p) for p in self._params]
+        result = {k: zeros_like(p) for k, p in self._params.items()}
 
-        for X, y in self._loop_over_data(desc=f"GGN diagonal ({self._mode})"):
-            batch_result = batch_ggn_diagonal_func(X, y, generator)
+        mode_str = "exact" if self._mc_samples == 0 else "mc"
+        for X, y in self._loop_over_data(desc=f"GGN diagonal ({mode_str})"):
+            batch_result = batch_ggn_diagonal_func(self._params, X, y, generator)
             normalization_factor = self._get_normalization_factor(X, y)
-            for res_p, batch_p in zip(result, batch_result, strict=True):
-                res_p.add_(batch_p, alpha=normalization_factor)
+            for k in result:
+                result[k].add_(batch_result[k], alpha=normalization_factor)
 
         return result

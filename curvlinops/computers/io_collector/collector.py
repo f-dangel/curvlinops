@@ -30,22 +30,22 @@ from curvlinops.computers.io_collector.conv import CONV_STR
 from curvlinops.computers.io_collector.linear import LINEAR_STR
 from curvlinops.computers.io_collector.patterns import match_parameter_usage
 from curvlinops.computers.io_collector.verification import verify_match_complete
-from curvlinops.computers.kfac import FisherType
+from curvlinops.kfac_utils import FisherType
 
 # Type aliases for complex return types
 LayerInfoTuple: TypeAlias = tuple[str, Node, Node, str, str | None, dict[str, Any]]
 ParamIOFunction: TypeAlias = Callable[
-    [Tensor, dict[str, Tensor]], tuple[Tensor | tuple[Any, ...], ...]
+    [dict[str, Tensor], Tensor], tuple[Tensor | tuple[Any, ...], ...]
 ]
 KFACIOFunction: TypeAlias = Callable[
-    [Tensor, dict[str, Tensor]],
-    tuple[
-        Tensor,
-        dict[str, Tensor],
-        dict[str, Tensor],
-        dict[str, dict[str, str]],
-        dict[str, dict[str, Any]],
-    ],
+    [dict[str, Tensor], Tensor],
+    tuple[Tensor, dict[str, Tensor], dict[str, Tensor]],
+]
+
+KFACIOResult: TypeAlias = tuple[
+    KFACIOFunction,
+    dict[str, dict[str, str]],
+    dict[str, dict[str, Any]],
 ]
 
 
@@ -69,20 +69,20 @@ def _modify_graph_to_include_layer_info(
 
 
 def with_param_io(
-    f: Callable[[Tensor, dict[str, Tensor]], Tensor],
+    f: Callable[[dict[str, Tensor], Tensor], Tensor],
     x: Tensor,
     named_params: dict[str, Tensor],
 ) -> ParamIOFunction:
     """Get a traced module that returns layer inputs and outputs alongside the result.
 
-    This function traces f(x, params) using torch.fx, functionalizes any
+    This function traces f(params, x) using torch.fx, functionalizes any
     inplace operations, and analyzes the graph to detect affine layer usage
     patterns (linear layers and convolutions). The returned GraphModule computes
     the original function output along with the inputs and outputs of each detected layer.
 
     Args:
-        f: A function with signature f(x, params) where x is the input tensor
-            and params is a dictionary mapping parameter names to tensors.
+        f: A function with signature f(params, x) where params is a dictionary
+            mapping parameter names to tensors and x is the input tensor.
         x: Example input tensor for tracing. Must be representative of the actual
             inputs that will be used during execution.
         named_params: Dictionary mapping parameter names to parameter tensors.
@@ -103,15 +103,15 @@ def with_param_io(
             number of traced parameter nodes doesn't match named_params, or
             if not all parameter usage paths are detected by the pattern matchers.
     """
-    # Use functionalize to remove inplace operations, then trace the function
-    gm = make_fx(functionalize(f))(x, named_params)
+    # Use functionalize to remove inplace operations, then trace the function.
+    gm = make_fx(functionalize(f))(named_params, x)
 
     # Find placeholder nodes (inputs to the graph)
-    # The first placeholder is the input x, the rest are parameters
+    # The first len(named_params) placeholders are parameters, the rest are x
     placeholders: list[Node] = [
         node for node in gm.graph.nodes if node.op == "placeholder"
     ]
-    param_nodes: list[Node] = placeholders[1:]
+    param_nodes: list[Node] = placeholders[: len(named_params)]
 
     # Establish mapping between param names and node names
     if len(named_params) != len(param_nodes):
@@ -144,6 +144,39 @@ def with_param_io(
     return gm
 
 
+def _verify_weight_bias_compatibility(
+    layer_info_tuples: tuple[LayerInfoTuple, ...], named_params: dict[str, Tensor]
+) -> None:
+    """Verify that weight-tied layers have compatible bias configurations.
+
+    A weight may appear in multiple layers (weight tying), but each usage must
+    either use the same tracked bias or no bias. Different tracked biases for
+    the same weight cannot be merged into a single affine layer.
+
+    Args:
+        layer_info_tuples: Tuples containing layer information from pattern matching.
+        named_params: Dictionary mapping parameter names to parameter tensors.
+
+    Raises:
+        ValueError: If conflicting biases are detected for a shared weight.
+    """
+    _non_tracked = {None, NOT_A_PARAM}
+    weight_to_biases: dict[str, set[str | None]] = defaultdict(set)
+    for layer_info_tuple in layer_info_tuples:
+        _, _, _, weight_name, bias_name, _ = layer_info_tuple
+        if weight_name in named_params:
+            weight_to_biases[weight_name].add(bias_name)
+
+    for weight_name, biases in weight_to_biases.items():
+        tracked_biases = biases - _non_tracked
+        if len(tracked_biases) > 1:
+            raise ValueError(
+                f"Weight '{weight_name}' is used with conflicting biases "
+                f"{tracked_biases}. Weight-tied layers must share the same "
+                f"bias or use no bias."
+            )
+
+
 def _verify_supported_by_kfac(
     layer_info_tuples: tuple[LayerInfoTuple, ...], named_params: dict[str, Tensor]
 ) -> None:
@@ -154,26 +187,10 @@ def _verify_supported_by_kfac(
         named_params: Dictionary mapping parameter names to parameter tensors.
 
     Raises:
-        ValueError: If unsupported patterns are detected (multiple parameter usage,
-            transposed convolutions, or non-2D convolutions).
+        ValueError: If unsupported patterns are detected (conflicting biases for
+            a shared weight, transposed convolutions, or non-2D convolutions).
     """
-    # Check parameter usage once during setup
-    # Make sure that each parameter is only used in a single layer info
-    # (multiple usages are currently unsupported)
-    param_usages = dict.fromkeys(named_params, 0)
-    for layer_info_tuple in layer_info_tuples:
-        # Each layer_info_tuple is:
-        # ("Linear", y_node, x_node, weight_name, bias_name, hyperparams)
-        _, _, _, weight_name, bias_name, _ = layer_info_tuple
-        if weight_name in param_usages:
-            param_usages[weight_name] += 1
-        if bias_name in param_usages:
-            param_usages[bias_name] += 1
-
-    if any(usage > 1 for usage in param_usages.values()):
-        raise ValueError(
-            f"Parameters used multiple times (currently unsupported): {param_usages}"
-        )
+    _verify_weight_bias_compatibility(layer_info_tuples, named_params)
 
     # Make sure there is no transposed and no 1D or 3D convolution
     for layer_info_tuple in layer_info_tuples:
@@ -251,19 +268,19 @@ def _process_layer_info_tuple(
     # Build parameter names mapping
     param_names = {}
     if weight_name != NOT_A_PARAM:
-        param_names["weight"] = weight_name
+        param_names["W"] = weight_name
     if bias_name not in {None, NOT_A_PARAM}:
-        param_names["bias"] = bias_name
+        param_names["b"] = bias_name
 
     return layer_name, store_input, store_output, param_names, hyperparams
 
 
 def with_kfac_io(
-    f: Callable[[Tensor, dict[str, Tensor]], Tensor],
+    f: Callable[[dict[str, Tensor], Tensor], Tensor],
     x: Tensor,
     named_params: dict[str, Tensor],
     fisher_type: FisherType,
-) -> KFACIOFunction:
+) -> KFACIOResult:
     """Return a function that collects layer inputs/outputs for KFAC computation.
 
     This function analyzes the provided function to detect affine layer operations
@@ -271,9 +288,12 @@ def with_kfac_io(
     the inputs and outputs needed for KFAC (Kronecker-Factored Approximate Curvature)
     computation alongside the original function output.
 
+    Layer metadata (parameter names and hyperparameters) is extracted statically from
+    the FX graph and returned directly, without requiring a forward pass.
+
     Args:
         f: Function to trace and augment with KFAC IO collection. Should have signature
-            f(x, params) -> output where x is the input tensor and params is a parameter dict.
+            f(params, x) -> output where params is a parameter dict and x is the input tensor.
         x: Example input tensor for tracing. Must be representative of actual inputs.
         named_params: Dictionary mapping parameter names to parameter tensors. Keys should
             match parameter names used in function f.
@@ -281,12 +301,10 @@ def with_kfac_io(
             ``FisherType.EMPIRICAL``, ``FisherType.FORWARD_ONLY``).
 
     Returns:
-        A traced function with the same signature as f but returning a 5-tuple:
-            - Original function output (Tensor)
-            - Layer inputs (dict[str, Tensor]): Maps layer names to input tensors
-            - Layer outputs (dict[str, Tensor]): Maps layer names to output tensors
+        A 3-tuple containing:
+            - A traced function returning ``(output, layer_inputs, layer_outputs)``
             - Layer parameter names (dict[str, dict[str, str]]): Maps layer names to
-              parameter name mappings (e.g., {"weight": "conv1.weight", "bias": "conv1.bias"})
+              parameter name mappings (e.g., {"W": "conv1.weight", "b": "conv1.bias"})
             - Layer hyperparameters (dict[str, dict[str, Any]]): Maps layer names to
               hyperparameter dictionaries (empty for linear layers, contains stride/padding/etc
               for convolution layers)
@@ -328,26 +346,15 @@ def with_kfac_io(
         layer_hyperparams[layer_name] = hyperparams
 
     def f_and_kfac_io(
-        x: Tensor, params: dict[str, Tensor]
-    ) -> tuple[
-        Tensor,
-        dict[str, Tensor],
-        dict[str, Tensor],
-        dict[str, dict[str, str]],
-        dict[str, dict[str, Any]],
-    ]:
-        """Evaluate the function and return all relevant in/outputs for KFAC.
+        params: dict[str, Tensor], x: Tensor
+    ) -> tuple[Tensor, dict[str, Tensor], dict[str, Tensor]]:
+        """Evaluate the function and return layer inputs/outputs for KFAC.
 
         Returns:
-            Tuple containing:
-                - Original function output
-                - Layer inputs (dict mapping layer names to input tensors)
-                - Layer outputs (dict mapping layer names to output tensors)
-                - Layer parameter names (dict mapping layer names to param name dicts)
-                - Layer hyperparameters (dict mapping layer names to hyperparameter dicts)
+            Tuple of ``(output, layer_inputs, layer_outputs)``.
         """
         # Evaluate the function and its param IOs
-        out_with_io = f_with_param_io(x, params)
+        out_with_io = f_with_param_io(params, x)
         out, layer_infos = out_with_io[0], out_with_io[1:]
 
         # Use pre-computed layer configuration to collect inputs and outputs
@@ -364,6 +371,6 @@ def with_kfac_io(
             if store_output:
                 layer_outputs[layer_name] = y
 
-        return (out, layer_inputs, layer_outputs, layer_names, layer_hyperparams)
+        return (out, layer_inputs, layer_outputs)
 
-    return make_fx(f_and_kfac_io)(x, named_params)
+    return make_fx(f_and_kfac_io)(named_params, x), layer_names, layer_hyperparams

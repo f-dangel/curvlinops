@@ -139,13 +139,13 @@ for task_idx in range(T):
 per_task_fishers = {
     # Diagonal approximation as used in the seminal paper
     # (Precisely speaking, the seminal paper uses a randomized approximation of the
-    # Fisher based on sampling that can be achieved with `fisher_type='mc'` and
-    # `mc_samples=1`. For simplicity we compute the exact GGN/Fisher diagonal here.)
+    # Fisher based on sampling that can be achieved with `mc_samples=1`.
+    # For simplicity we compute the exact GGN/Fisher diagonal here.)
     "diag(F)": [
         GGNDiagonalLinearOperator(
             model,
             loss_function,
-            [p for p in model.parameters() if p.requires_grad],
+            {n: p for n, p in model.named_parameters() if p.requires_grad},
             data_loader,
         )
         for model, loss_function, data_loader in zip(
@@ -156,7 +156,7 @@ per_task_fishers = {
         GGNLinearOperator(
             model,
             loss_function,
-            [p for p in model.parameters() if p.requires_grad],
+            {n: p for n, p in model.named_parameters() if p.requires_grad},
             data_loader,
         )
         for model, loss_function, data_loader in zip(
@@ -238,8 +238,10 @@ for key in per_task_fishers:
 merged_models = {}
 for key, params_vec in merged_params.items():
     model = make_architecture()
-    params = [p for p in model.parameters() if p.requires_grad]
-    for theta, param in zip(vector_to_parameter_list(params_vec, params), params):
+    params = {n: p for n, p in model.named_parameters() if p.requires_grad}
+    for theta, param in zip(
+        vector_to_parameter_list(params_vec, params.values()), params.values()
+    ):
         param.data = theta.to(param.device, param.dtype).data
     merged_models[key] = model
 

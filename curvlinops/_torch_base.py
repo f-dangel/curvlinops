@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, MutableMapping
+from functools import cached_property
 
 import numpy
 from scipy.sparse.linalg import LinearOperator
@@ -17,7 +18,8 @@ from torch import (
     rand,
     zeros_like,
 )
-from torch.nn import Parameter
+from torch.func import vmap
+from torch.nn import Module
 
 from curvlinops._checks import (
     _check_matmul_compatible_shape,
@@ -176,7 +178,7 @@ class PyTorchLinearOperator:
                 The list must contain tensors of shape ``[*N1, K], [*N2, K], ...``,
                 where ``N1, N2, ...`` are the shapes of the linear operator's columns.
 
-        Returns: # noqa: D402
+        Returns:
             A list of tensors with shape ``[*M1, K], [*M2, K], ...``, where ``M1, M2,
             ...`` are the shapes of the linear operator's rows.
 
@@ -196,7 +198,7 @@ class PyTorchLinearOperator:
     def _adjoint(self) -> PyTorchLinearOperator:
         """Adjoint of the linear operator.
 
-        Returns: # noqa: D402
+        Returns:
             The adjoint of the linear operator.
 
         Raises:
@@ -518,7 +520,7 @@ class PyTorchLinearOperator:
     def device(self) -> device:
         """Infer the linear operator's device.
 
-        Returns:  # noqa: D402
+        Returns:
             The device of the linear operator.
 
         Raises:
@@ -530,7 +532,7 @@ class PyTorchLinearOperator:
     def dtype(self) -> dtype:
         """Infer the linear operator's data type.
 
-        Returns: # noqa: D402
+        Returns:
             The data type of the linear operator.
 
         Raises:
@@ -822,27 +824,23 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
     implement ``_get_in_shape`` and ``_get_out_shape``.
 
     Attributes:
-        SUPPORTS_BLOCKS: Whether the linear operator supports multiplication with
-            a block-diagonal approximation rather than the full matrix.
-            Default: ``False``.
         FIXED_DATA_ORDER: Whether the data loader must return the same data
             for every iteration. Default: ``False``.
     """
 
-    SUPPORTS_BLOCKS: bool = False
     FIXED_DATA_ORDER: bool = False
 
     def __init__(
         self,
-        model_func: Callable[[Tensor | MutableMapping], Tensor],
+        model_func: Module
+        | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
         loss_func: Callable[[Tensor, Tensor], Tensor] | None,
-        params: list[Parameter],
+        params: dict[str, Tensor],
         data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
         num_data: int | None = None,
         num_per_example_loss_terms: int | None = None,
-        block_sizes: list[int] | None = None,
         batch_size_fn: Callable[[MutableMapping | Tensor], int] | None = None,
     ):
         """Linear operator for curvature matrices of empirical risks.
@@ -853,12 +851,16 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
             mini-batch labels y.
 
         Args:
-            model_func: A function that maps the mini-batch input X to predictions.
-                Could be a PyTorch module representing a neural network.
+            model_func: The neural network's forward pass, defining the functional
+                relationship ``(params, X) -> prediction``. Either an ``nn.Module``
+                (architecture) or a callable ``(params_dict, X) -> prediction``.
             loss_func: Loss function criterion. Maps predictions and mini-batch labels
                 to a scalar value. If ``None``, there is no loss function and the
                 represented matrix is independent of the loss function.
-            params: List of differentiable parameters used by the prediction function.
+            params: The parameter values at which the curvature matrix is evaluated.
+                A dictionary mapping parameter names to tensors (use
+                ``dict(model.named_parameters())``). The parameter ordering follows
+                dict insertion order.
             data: Source from which mini-batches can be drawn, for instance a list of
                 mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``. Note that ``X``
                 could be a ``dict`` or ``UserDict``; this is useful for custom models.
@@ -878,34 +880,11 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
                 number of tokens in a sequence. Only used by subclasses with
                 ``NEEDS_NUM_PER_EXAMPLE_LOSS_TERMS = True``. If ``None``, it is
                 inferred from the data when needed. Default: ``None``.
-            block_sizes: This argument will be ignored if the linear operator does not
-                support blocks. List of integers indicating the number of
-                ``nn.Parameter``s forming a block. Entries must sum to ``len(params)``.
-                For instance ``[len(params)]`` considers the full matrix, while
-                ``[1, 1, ...]`` corresponds to a block diagonal approximation where
-                each parameter forms its own block.
             batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
                 needs to be specified. The intended behavior is to consume the first
                 entry of the iterates from ``data`` and return their batch size.
 
-        Raises:
-            ValueError: If ``block_sizes`` is specified but the linear operator does not
-                support blocks.
-            ValueError: If the sum of blocks does not equal the number of parameters.
-            ValueError: If any block size is not positive.
-            ValueError: If ``X`` is not a tensor and ``batch_size_fn`` is not specified.
         """
-        if block_sizes is not None:
-            if not self.SUPPORTS_BLOCKS:
-                raise ValueError(
-                    "Block sizes were specified but operator does not support blocking."
-                )
-            if sum(block_sizes) != len(params):
-                raise ValueError("Sum of blocks must equal the number of parameters.")
-            if any(s <= 0 for s in block_sizes):
-                raise ValueError("Block sizes must be positive.")
-        self._block_sizes = [len(params)] if block_sizes is None else block_sizes
-
         _EmpiricalRiskMixin.__init__(
             self,
             model_func,
@@ -931,7 +910,7 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
         Returns:
             Shapes of the linear operator's input tensor product space.
         """
-        return [tuple(p.shape) for p in self._params]
+        return [tuple(p.shape) for p in self._params.values()]
 
     def _get_out_shape(self) -> list[tuple[int, ...]]:
         """Return linear operator's output space dimensions.
@@ -939,7 +918,7 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
         Returns:
             Shapes of the linear operator's output tensor product space.
         """
-        return [tuple(p.shape) for p in self._params]
+        return [tuple(p.shape) for p in self._params.values()]
 
     def _matmat(self, M: list[Tensor]) -> list[Tensor]:
         """Matrix-matrix multiplication.
@@ -964,10 +943,40 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
 
         return AM
 
+    @cached_property
+    def _mp(self) -> Callable:
+        """Cached vmap wrapper that parallelizes :meth:`_matvec_batch` over columns.
+
+        Returns:
+            Function ``(X, y, M) -> result`` that applies the mini-batch matrix to
+            a matrix ``M`` in tensor list format by vmapping the single-vector
+            :meth:`_matvec_batch` over the trailing dimension.
+        """
+        keys = list(self._params.keys())
+
+        def _matvec_batch_tuple(
+            X: MutableMapping | Tensor, y: Tensor, v: tuple[Tensor, ...]
+        ) -> tuple[Tensor, ...]:
+            v_dict = dict(zip(keys, v))
+            result_dict = self._matvec_batch(X, y, v_dict)
+            return tuple(result_dict[k] for k in keys)
+
+        return vmap(
+            _matvec_batch_tuple,
+            in_dims=(None, None, -1),
+            out_dims=-1,
+            randomness="same",
+        )
+
     def _matmat_batch(
         self, X: MutableMapping | Tensor, y: Tensor, M: list[Tensor]
     ) -> list[Tensor]:
-        """Apply the mini-batch matrix to a vector.
+        """Apply the mini-batch matrix to a matrix in tensor list format.
+
+        Uses :attr:`_mp`, a cached vmap of :meth:`_matvec_batch`, over the trailing
+        (column) dimension of ``M``. Subclasses that need custom matrix-level logic
+        (e.g. reusing intermediate computations across columns) can override this
+        method directly.
 
         Args:
             X: Input to the DNN.
@@ -975,8 +984,23 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
             M: Matrix in list format (same shape as trainable model parameters with
                 additional trailing dimension of size number of columns).
 
-        Returns: # noqa: D402
-           Result of matrix-multiplication in list format.
+        Returns:
+            Result of matrix-multiplication in list format.
+        """
+        return list(self._mp(X, y, tuple(M)))
+
+    def _matvec_batch(
+        self, X: MutableMapping | Tensor, y: Tensor, v: dict[str, Tensor]
+    ) -> dict[str, Tensor]:
+        """Apply the mini-batch matrix to a vector in dict format.
+
+        Args:
+            X: Input to the DNN.
+            y: Ground truth.
+            v: Vector as a dict keyed by parameter names.
+
+        Returns:
+           Result of matrix-vector multiplication as a dict.
 
         Raises:
             NotImplementedError: Must be implemented by descendants.

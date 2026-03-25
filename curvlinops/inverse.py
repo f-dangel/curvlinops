@@ -203,8 +203,6 @@ class LSMRInverseLinearOperator(_InversePyTorchLinearOperator):
 class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
     """Class for inverse linear operators via truncated Neumann series.
 
-    # noqa: B950
-
     See https://en.wikipedia.org/w/index.php?title=Neumann_series&oldid=1131424698#Approximate_matrix_inversion.
 
     Motivated by

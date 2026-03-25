@@ -50,7 +50,7 @@ model = Sequential(
     Sigmoid(),
     Linear(D_hidden, D_out),
 ).to(DEVICE)
-params = [p for p in model.parameters() if p.requires_grad]
+params = {n: p for n, p in model.named_parameters() if p.requires_grad}
 
 loss_function = MSELoss(reduction="mean").to(DEVICE)
 
@@ -69,7 +69,7 @@ H_functorch = functorch_hessian(model, loss_function, params, data)
 
 H = HessianLinearOperator(model, loss_function, params, data)
 
-num_params = sum(p.numel() for p in params)
+num_params = sum(p.numel() for p in params.values())
 identity = eye(num_params, device=DEVICE)
 assert allclose_report(H_functorch, H @ identity)
 
@@ -84,7 +84,7 @@ assert allclose_report(H_functorch, H @ identity)
 # Let's define a function to extract these blocks from the Hessian:
 
 
-def extract_block(mat: Tensor, params: list[Tensor], i: int, j: int) -> Tensor:
+def extract_block(mat: Tensor, params: dict[str, Tensor], i: int, j: int) -> Tensor:
     """Extract the Hessian block from parameters ``i`` and ``j``.
 
     Args:
@@ -94,9 +94,10 @@ def extract_block(mat: Tensor, params: list[Tensor], i: int, j: int) -> Tensor:
         j: Column index of the block to be extracted.
 
     Returns:
-        Block ``(i, j)``. Has shape ``[params[i].numel(), params[j].numel()]``.
+        Block ``(i, j)``. Has shape ``[P_i, P_j]`` where ``P_i`` and ``P_j``
+            are the number of elements of the ``i``-th and ``j``-th parameter.
     """
-    param_dims = [p.numel() for p in params]
+    param_dims = [p.numel() for p in params.values()]
     row_start, row_end = sum(param_dims[:i]), sum(param_dims[: i + 1])
     col_start, col_end = sum(param_dims[:j]), sum(param_dims[: j + 1])
 
@@ -109,6 +110,7 @@ def extract_block(mat: Tensor, params: list[Tensor], i: int, j: int) -> Tensor:
 # the first layer's weights in our model.
 
 i, j = 0, 0
+param_names = list(params.keys())
 H_param0_functorch = extract_block(H_functorch, params, i, j)
 
 # %%
@@ -116,7 +118,8 @@ H_param0_functorch = extract_block(H_functorch, params, i, j)
 # We can build a linear operator for this sub-Hessian by only providing the
 # first layer's weight as parameter:
 
-H_param0 = HessianLinearOperator(model, loss_function, [params[i]], data)
+param_i = {param_names[i]: params[param_names[i]]}
+H_param0 = HessianLinearOperator(model, loss_function, param_i, data)
 
 # %%
 #
@@ -127,7 +130,7 @@ H_param0 = HessianLinearOperator(model, loss_function, [params[i]], data)
 # from our ground truth:
 
 assert allclose_report(
-    H_param0_functorch, H_param0 @ eye(params[i].numel(), device=DEVICE)
+    H_param0_functorch, H_param0 @ eye(params[param_names[i]].numel(), device=DEVICE)
 )
 
 # %%
@@ -149,7 +152,7 @@ assert allclose_report(
 # columns. We can use the :class:`curvlinops.SubmatrixLinearOperator` class for
 # that:
 
-param_dims = [p.numel() for p in params]
+param_dims = [p.numel() for p in params.values()]
 i, j = 0, 1
 row_start, row_end = sum(param_dims[:i]), sum(param_dims[: i + 1])
 col_start, col_end = sum(param_dims[:j]), sum(param_dims[: j + 1])

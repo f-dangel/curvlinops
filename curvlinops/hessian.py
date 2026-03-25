@@ -1,109 +1,73 @@
 """Contains a linear operator implementation of the Hessian."""
 
 from collections.abc import Callable, MutableMapping
-from functools import cached_property, partial
+from functools import cached_property
 
 from torch import Tensor, no_grad
-from torch.func import jacrev, jvp, vmap
-from torch.nn import Module, Parameter
+from torch.func import jacrev, jvp
+from torch.nn import Module
 
 from curvlinops._torch_base import CurvatureLinearOperator
-from curvlinops.utils import make_functional_model_and_loss, split_list
+from curvlinops.utils import make_functional_loss
 
 
-def make_batch_hessian_matrix_product(
-    model_func: Module,
+def make_batch_hessian_vector_product(
+    f: Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
     loss_func: Module,
-    params: tuple[Parameter, ...],
-    block_sizes: list[int] | None = None,
-) -> Callable[[Tensor, Tensor, tuple[Tensor, ...]], tuple[Tensor, ...]]:
-    r"""Set up function that multiplies the mini-batch Hessian onto a matrix in list format.
+) -> Callable[
+    [dict[str, Tensor], Tensor | MutableMapping, tuple, dict[str, Tensor]],
+    dict[str, Tensor],
+]:
+    r"""Set up function that multiplies the mini-batch Hessian onto a vector in dict format.
 
     Args:
-        model_func: The neural network :math:`f_{\mathbf{\theta}}`.
+        f: Functional model with signature ``(params_dict, X) -> prediction``.
         loss_func: The loss function :math:`\ell`.
-        params: A tuple of parameters w.r.t. which the Hessian is computed.
-            All parameters must be part of ``model_func.parameters()``.
-        block_sizes: Sizes of parameter blocks for block-diagonal approximation.
-            If ``None``, the full Hessian is used.
 
     Returns:
-        A function that takes inputs ``X``, ``y``, and a matrix ``M`` in list
-        format, and returns the mini-batch Hessian applied to ``M`` in list format.
+        A function ``(params_dict, X, loss_args, v_dict) -> Hv`` that takes
+        parameters as a dict, model input ``X``, loss arguments
+        ``loss_args = (y,)``, and a vector ``v`` as a dict, and returns the
+        mini-batch Hessian applied to ``v`` as a dict.
     """
-    # Determine block structure
-    block_sizes = [len(params)] if block_sizes is None else block_sizes
-
-    # Create block-specific functional calls: *block_params, X -> prediction
-    block_params = split_list(list(params), block_sizes)
-    block_functionals = []
-
-    for block in block_params:
-        # criterion functional c is the same for all blocks
-        f_block, c = make_functional_model_and_loss(model_func, loss_func, tuple(block))
-        block_functionals.append(f_block)
+    c = make_functional_loss(loss_func)
 
     @no_grad()
     def hessian_vector_product(
-        X: Tensor, y: Tensor, *v: tuple[Tensor, ...]
-    ) -> tuple[Tensor, ...]:
-        """Multiply the mini-batch Hessian on a vector in list format.
+        params: dict[str, Tensor],
+        X: Tensor | MutableMapping,
+        loss_args: tuple,
+        v: dict[str, Tensor],
+    ) -> dict[str, Tensor]:
+        """Multiply the mini-batch Hessian on a vector in dict format.
 
         Args:
-            X: Input to the DNN.
-            y: Ground truth.
-            *v: Vector to be multiplied with in tensor list format.
+            params: Parameters of the model as a dict.
+            X: Input to the model.
+            loss_args: Arguments forwarded to the loss function, e.g. ``(y,)``.
+            v: Vector as a dict matching the structure of ``params``.
 
         Returns:
-            Result of Hessian multiplication in list format. Has the same shape as
-            ``v``, i.e. each tensor in the list has the shape of a parameter.
+            Result of Hessian multiplication as a dict with the same keys as
+            ``params``.
         """
-        # Split input vectors by blocks
-        v_blocks = split_list(list(v), block_sizes)
+        (y,) = loss_args
 
-        # Set up loss functions for each block
-        block_grad_fns = []
-
-        def loss_fn(
-            f: Callable[[tuple[Tensor, ...], Tensor | MutableMapping], Tensor],
-            *params: tuple[Tensor, ...],
-        ) -> Tensor:
-            """Compute the mini-batch loss given the neural net and its parameters.
+        def loss_fn(p: dict[str, Tensor]) -> Tensor:
+            """Compute the mini-batch loss.
 
             Args:
-                f: Functional model with signature (*params, X) -> prediction
-                *params: Parameters for the functional model.
+                p: Model parameters as a dict.
 
             Returns:
                 Mini-batch loss.
             """
-            return c(f(*params, X), y)
+            return c(f(p, X), (y,))
 
-        for f_block, ps in zip(block_functionals, block_params):
-            # Define the loss function composition for this block
-            block_loss_fn = partial(loss_fn, f_block)
-            block_grad_fn = jacrev(block_loss_fn, argnums=tuple(range(len(ps))))
-            block_grad_fns.append(block_grad_fn)
+        _, hvp = jvp(jacrev(loss_fn), (params,), (v,))
+        return hvp
 
-        # Compute the HVPs per block and concatenate the results
-        hvps = []
-        for grad_fn, ps, vs in zip(block_grad_fns, block_params, v_blocks):
-            _, hvp_block = jvp(grad_fn, tuple(ps), tuple(vs))
-            hvps.extend(hvp_block)
-
-        return tuple(hvps)
-
-    # Parallelize over vectors to multiply onto a matrix in list format
-    list_format_vmap_dims = tuple(p.ndim for p in params)  # last axis
-    return vmap(
-        hessian_vector_product,
-        # No vmap in X, y, last-axis vmap over vector in list format
-        in_dims=(None, None, *list_format_vmap_dims),
-        # Vmapped output axis is last
-        out_dims=list_format_vmap_dims,
-        # We want each vector to be multiplied with the same mini-batch Hessian
-        randomness="same",
-    )
+    return hessian_vector_product
 
 
 class HessianLinearOperator(CurvatureLinearOperator):
@@ -137,7 +101,7 @@ class HessianLinearOperator(CurvatureLinearOperator):
         >>> D_in, D_out = 4, 2
         >>> num_data, num_batches = 10, 3
         >>> model = Linear(D_in, D_out, bias=False)
-        >>> params = list(model.parameters())
+        >>> params = dict(model.named_parameters())
         >>> loss_func = MSELoss(reduction='sum')
         >>>
         >>> # Generate synthetic dataset and chunk into batches
@@ -149,54 +113,44 @@ class HessianLinearOperator(CurvatureLinearOperator):
         >>>
         >>> # Compare with the known Hessian matrix 2 I ⊗ Xᵀ X
         >>> H_mat = 2 * kron(eye(D_out), X.T @ X)
-        >>> P = sum(p.numel() for p in params)
+        >>> P = sum(p.numel() for p in params.values())
         >>> v = rand(P) # generate a random vector
         >>> (H_mat @ v).allclose(H_op @ v)
         True
 
     Attributes:
-        SUPPORTS_BLOCKS: Whether the linear operator supports block operations.
-            Default is ``True``.
         SELF_ADJOINT: Whether the linear operator is self-adjoint (``True`` for
             Hessians).
     """
 
     SELF_ADJOINT: bool = True
-    SUPPORTS_BLOCKS: bool = True
 
     @cached_property
-    def _mp(
+    def _vp(
         self,
     ) -> Callable[
-        [Tensor | MutableMapping, Tensor, tuple[Tensor, ...]], tuple[Tensor, ...]
+        [dict[str, Tensor], Tensor | MutableMapping, tuple, dict[str, Tensor]],
+        dict[str, Tensor],
     ]:
-        """Lazy initialization of batch-Hessian matrix product function.
+        """Lazy initialization of batch-Hessian vector product function.
 
         Returns:
-            Function that computes mini-batch Hessian-vector products, given inputs
-            ``X``, labels ``y``, and the entries ``v1, v2, ...`` of the vector in list
-            format. Produces a list of tensors with the same shape as the input vector
-            that represents the result of the batch-Hessian multiplication.
+            Function that computes mini-batch Hessian-vector products with signature
+            ``(params_dict, X, loss_args, v_dict) -> Hv_dict``.
         """
-        return make_batch_hessian_matrix_product(
-            self._model_func, self._loss_func, tuple(self._params), self._block_sizes
-        )
+        return make_batch_hessian_vector_product(self._model_func, self._loss_func)
 
-    def _matmat_batch(
-        self, X: Tensor | MutableMapping, y: Tensor, M: list[Tensor]
-    ) -> list[Tensor]:
-        """Apply the mini-batch Hessian to a matrix.
+    def _matvec_batch(
+        self, X: Tensor | MutableMapping, y: Tensor, v: dict[str, Tensor]
+    ) -> dict[str, Tensor]:
+        """Apply the mini-batch Hessian to a vector.
 
         Args:
             X: Input to the DNN.
             y: Ground truth.
-            M: Matrix to be multiplied with in tensor list format.
-                Tensors have same shape as trainable model parameters, and an
-                additional trailing axis for the matrix columns.
+            v: Vector as a dict keyed by parameter names.
 
         Returns:
-            Result of Hessian multiplication in list format. Has the same shape as
-            ``M``, i.e. each tensor in the list has the shape of a parameter and a
-            trailing dimension of matrix columns.
+            Result of Hessian-vector multiplication as a dict.
         """
-        return list(self._mp(X, y, *M))
+        return self._vp(self._params, X, (y,), v)

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, MutableMapping
 
 from torch import Tensor, device, dtype, einsum, ones
-from torch.nn import Module, Parameter
+from torch.nn import Module
 
 from curvlinops._empirical_risk import _EmpiricalRiskMixin
 from curvlinops._torch_base import PyTorchLinearOperator
@@ -15,7 +15,7 @@ from curvlinops.diag import DiagonalLinearOperator
 def gradient_and_loss(
     model_func: Module,
     loss_func: Module,
-    params: list[Parameter],
+    params: dict[str, Tensor],
     data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
     batch_size_fn: Callable[[MutableMapping | Tensor], int] | None = None,
     num_data: int | None = None,
@@ -23,9 +23,10 @@ def gradient_and_loss(
     """Evaluate the gradient and loss on a data set.
 
     Args:
-        model_func: The neural network.
+        model_func: The neural network's forward pass (an ``nn.Module``).
         loss_func: The loss function.
-        params: List of differentiable parameters.
+        params: The parameter values at which the gradient is evaluated. A
+            dictionary mapping parameter names to tensors.
         data: Source from which mini-batches can be drawn, for instance a list of
             mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
         batch_size_fn: Function that returns the batch size given an input ``X``.

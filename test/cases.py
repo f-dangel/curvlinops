@@ -3,7 +3,7 @@
 from collections import UserDict
 from collections.abc import MutableMapping
 
-from torch import rand, rand_like
+from torch import Tensor, rand, rand_like
 from torch.nn import (
     BatchNorm1d,
     BCEWithLogitsLoss,
@@ -18,12 +18,12 @@ from torch.nn import (
     ReLU,
     Sequential,
 )
+from torch.nn.functional import linear, relu
 from torch.utils.data import DataLoader, TensorDataset
 
-from curvlinops.kfac import KFACType
+from curvlinops.kfac_utils import KFACType
 from test.utils import (
     WeightShareModel,
-    binary_classification_targets,
     classification_targets,
     get_available_devices,
     regression_targets,
@@ -85,33 +85,33 @@ INV_CASES_NO_DEVICE = [
         ],
         "seed": 0,
     },
-    # binary softmax cross-entropy loss, one output
+    # BCE loss, one output, soft labels in [0, 1]
     {
         "model_func": lambda: Sequential(Linear(10, 5), ReLU(), Linear(5, 1)),
         "loss_func": lambda: BCEWithLogitsLoss(reduction="mean"),
         "data": lambda: [
-            (rand(3, 10), binary_classification_targets((3, 1))),
-            (rand(4, 10), binary_classification_targets((4, 1))),
+            (rand(3, 10), rand(3, 1)),
+            (rand(4, 10), rand(4, 1)),
         ],
         "seed": 0,
     },
-    # binary softmax cross-entropy loss, multiple outputs (tests the reduction factor)
+    # BCE loss, multiple outputs, soft labels (tests the reduction factor)
     {
         "model_func": lambda: Sequential(Linear(10, 5), ReLU(), Linear(5, 2)),
         "loss_func": lambda: BCEWithLogitsLoss(reduction="mean"),
         "data": lambda: [
-            (rand(3, 10), binary_classification_targets((3, 2))),
-            (rand(4, 10), binary_classification_targets((4, 2))),
+            (rand(3, 10), rand(3, 2)),
+            (rand(4, 10), rand(4, 2)),
         ],
         "seed": 0,
     },
-    # binary softmax cross-entropy loss, multiple outputs and sum reduction
+    # BCE loss, multiple outputs, sum reduction, soft labels
     {
         "model_func": lambda: Sequential(Linear(10, 5), ReLU(), Linear(5, 2)),
         "loss_func": lambda: BCEWithLogitsLoss(reduction="sum"),
         "data": lambda: [
-            (rand(3, 10), binary_classification_targets((3, 2))),
-            (rand(4, 10), binary_classification_targets((4, 2))),
+            (rand(3, 10), rand(3, 2)),
+            (rand(4, 10), rand(4, 2)),
         ],
         "seed": 0,
     },
@@ -150,13 +150,13 @@ INV_CASES_NO_DEVICE = [
         ],
         "seed": 0,
     },
-    # BCE
+    # BCE with soft labels
     {
         "model_func": lambda: ModelWithDictInput(num_classes=1),
         "loss_func": lambda: BCEWithLogitsLoss(reduction="mean"),
         "data": lambda: [
-            (UserDict({"x": rand(3, 10)}), binary_classification_targets((3, 1))),
-            ({"x": rand(4, 10)}, binary_classification_targets((4, 1))),
+            (UserDict({"x": rand(3, 10)}), rand(3, 1)),
+            ({"x": rand(4, 10)}, rand(4, 1)),
         ],
         "seed": 0,
     },
@@ -212,25 +212,25 @@ CASES_NO_DEVICE = INV_CASES_NO_DEVICE + [
         ],
         "seed": 0,
     },
-    # binary softmax cross-entropy loss, multiple outputs, additional input/output
-    # dimension, and mean reduction (tests the reduction factor)
+    # BCE loss, multiple outputs, additional input/output dimension, soft labels,
+    # mean reduction (tests the reduction factor)
     {
         "model_func": lambda: Sequential(Linear(10, 5), ReLU(), Linear(5, 2)),
         "loss_func": lambda: BCEWithLogitsLoss(reduction="mean"),
         "data": lambda: [
-            (rand(3, 5, 10), binary_classification_targets((3, 5, 2))),
-            (rand(4, 5, 10), binary_classification_targets((4, 5, 2))),
+            (rand(3, 5, 10), rand(3, 5, 2)),
+            (rand(4, 5, 10), rand(4, 5, 2)),
         ],
         "seed": 0,
     },
-    # binary softmax cross-entropy loss, multiple outputs, additional input/output
-    # dimension, and sum reduction
+    # BCE loss, multiple outputs, additional input/output dimension, soft labels,
+    # sum reduction
     {
         "model_func": lambda: Sequential(Linear(10, 5), ReLU(), Linear(5, 2)),
         "loss_func": lambda: BCEWithLogitsLoss(reduction="sum"),
         "data": lambda: [
-            (rand(3, 5, 10), binary_classification_targets((3, 5, 2))),
-            (rand(4, 5, 10), binary_classification_targets((4, 5, 2))),
+            (rand(3, 5, 10), rand(3, 5, 2)),
+            (rand(4, 5, 10), rand(4, 5, 2)),
         ],
         "seed": 0,
     },
@@ -256,8 +256,48 @@ CASES_NO_DEVICE = INV_CASES_NO_DEVICE + [
     },
 ]
 
+###############################################################################
+#                    CALLABLE MODEL_FUNC (non-Module)                         #
+###############################################################################
+
+
+def _make_callable_case():
+    """Create a test case with a callable model_func (no nn.Module).
+
+    Uses ``F.linear`` so the FX graph contains patterns recognizable by the
+    KFAC IO collector.
+
+    Returns:
+        Dictionary with model_func as a callable, separate params, and data.
+    """
+    D_in, D_hidden, D_out = 10, 5, 3
+    params = {
+        "W1": rand(D_hidden, D_in),
+        "b1": rand(D_hidden),
+        "W2": rand(D_out, D_hidden),
+        "b2": rand(D_out),
+    }
+
+    def model_func(p: dict[str, Tensor], X: Tensor) -> Tensor:
+        h = relu(linear(X, p["W1"], p["b1"]))
+        return linear(h, p["W2"], p["b2"])
+
+    return {
+        "model_func": lambda: model_func,
+        "params": lambda: params,
+        "loss_func": lambda: MSELoss(reduction="mean"),
+        "data": lambda: [
+            (rand(3, D_in), regression_targets((3, D_out))),
+            (rand(4, D_in), regression_targets((4, D_out))),
+        ],
+        "seed": 0,
+    }
+
+
+CALLABLE_CASES_NO_DEVICE = [_make_callable_case()]
+
 CASES = []
-for case in CASES_NO_DEVICE:
+for case in CASES_NO_DEVICE + CALLABLE_CASES_NO_DEVICE:
     for device in DEVICES:
         case_with_device = {**case, "device": device}
         CASES.append(case_with_device)
@@ -400,12 +440,3 @@ for case in NON_DETERMINISTIC_CASES_NO_DEVICE:
     for device in DEVICES:
         case_with_device = {**case, "device": device}
         NON_DETERMINISTIC_CASES.append(case_with_device)
-
-
-BLOCK_SIZES_FNS = {
-    "full": lambda params: None,
-    "per-parameter-blocks": lambda params: [1 for _ in range(len(params))],
-    "two-blocks": lambda params: (
-        [1] if len(params) == 1 else [len(params) // 2, len(params) - len(params) // 2]
-    ),
-}

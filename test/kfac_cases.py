@@ -13,12 +13,11 @@ from torch.nn import (
     Sequential,
 )
 
-from curvlinops.kfac import KFACType
+from curvlinops.kfac_utils import KFACType
 from test.cases import ModelWithDictInput
 from test.utils import (
     Conv2dModel,
     WeightShareModel,
-    binary_classification_targets,
     classification_targets,
     get_available_devices,
     regression_targets,
@@ -101,12 +100,12 @@ KFAC_WEIGHT_SHARING_EXACT_CASES_NO_DEVICE_NO_LOSS_FUNC = [
         "model_func": Conv2dModel,
         "data": lambda: {
             KFACType.EXPAND: [
-                (rand(2, 3, 20, 20), regression_targets((2, 21, 21, 2))),
-                (rand(7, 3, 20, 20), regression_targets((7, 21, 21, 2))),
+                (rand(2, 3, 8, 8), regression_targets((2, 9, 9, 2))),
+                (rand(7, 3, 8, 8), regression_targets((7, 9, 9, 2))),
             ],
             KFACType.REDUCE: [
-                (rand(1, 3, 20, 20), regression_targets((1, 2))),
-                (rand(8, 3, 20, 20), regression_targets((8, 2))),
+                (rand(1, 3, 8, 8), regression_targets((1, 2))),
+                (rand(8, 3, 8, 8), regression_targets((8, 2))),
             ],
         },
         "seed": 0,
@@ -147,13 +146,13 @@ KFAC_EXACT_ONE_DATUM_CASES_NO_DEVICE = [
     {
         "model_func": lambda: Sequential(Linear(4, 3), Linear(3, 2)),
         "loss_func": lambda: BCEWithLogitsLoss(reduction="mean"),
-        "data": lambda: [(rand(1, 4), binary_classification_targets((1, 2)))],
+        "data": lambda: [(rand(1, 4), rand(1, 2))],
         "seed": 0,
     },
     {
         "model_func": lambda: Sequential(Linear(4, 3), Linear(3, 2)),
         "loss_func": lambda: BCEWithLogitsLoss(reduction="sum"),
-        "data": lambda: [(rand(1, 4), binary_classification_targets((1, 2)))],
+        "data": lambda: [(rand(1, 4), rand(1, 2))],
         "seed": 0,
     },
 ]
@@ -234,12 +233,12 @@ SINGLE_LAYER_WEIGHT_SHARING_CASES_NO_DEVICE_NO_LOSS_FUNC = [
         "model_func": Conv2dModel,
         "data": lambda: {
             KFACType.EXPAND: [
-                (rand(7, 3, 20, 20), regression_targets((7, 21, 21, 2))),
-                (rand(7, 3, 20, 20), regression_targets((7, 21, 21, 2))),
+                (rand(7, 3, 8, 8), regression_targets((7, 9, 9, 2))),
+                (rand(7, 3, 8, 8), regression_targets((7, 9, 9, 2))),
             ],
             KFACType.REDUCE: [
-                (rand(8, 3, 20, 20), regression_targets((8, 2))),
-                (rand(8, 3, 20, 20), regression_targets((8, 2))),
+                (rand(8, 3, 8, 8), regression_targets((8, 2))),
+                (rand(8, 3, 8, 8), regression_targets((8, 2))),
             ],
         },
         "seed": 0,

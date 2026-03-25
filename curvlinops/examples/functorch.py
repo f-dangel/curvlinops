@@ -1,6 +1,6 @@
 """Contains functorch functionality for the examples."""
 
-from collections.abc import Iterable, MutableMapping
+from collections.abc import Callable, Iterable, MutableMapping
 from math import sqrt
 
 import torch
@@ -34,20 +34,20 @@ def blocks_to_matrix(blocks: dict[str, dict[str, Tensor]]) -> Tensor:
 
 
 def functorch_hessian(
-    model_func: Module,
+    model_func: Module | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
     loss_func: Module,
-    params: list[Tensor],
+    params: dict[str, Tensor],
     data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
     input_key: str | None = None,
 ) -> Tensor:
     """Compute the Hessian with functorch.
 
     Args:
-        model_func: A function that maps the mini-batch input X to predictions.
-            Could be a PyTorch module representing a neural network.
+        model_func: Either an ``nn.Module`` or a callable with signature
+            ``(params_dict, X) -> prediction``.
         loss_func: Loss function criterion. Maps predictions and mini-batch labels
             to a scalar value.
-        params: List of differentiable parameters used by the prediction function.
+        params: Dictionary mapping parameter names to tensors.
         data: Source from which mini-batches can be drawn, for instance a list of
             mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
         input_key: Key to obtain the input tensor when ``X`` is a dict-like object.
@@ -55,9 +55,9 @@ def functorch_hessian(
     Returns:
         Square matrix containing the Hessian.
     """
-    (dev,) = {p.device for p in params}
+    params_dict, f = _prepare_params_and_model(model_func, params)
+    (dev,) = {p.device for p in params_dict.values()}
     X, y = _concatenate_batches(data, input_key, device=dev)
-    params_dict = _make_params_dict(model_func, params)
 
     def loss(
         X: Tensor | MutableMapping, y: Tensor, params_dict: dict[str, Tensor]
@@ -67,7 +67,7 @@ def functorch_hessian(
         Returns:
             Scalar loss value.
         """
-        output = functional_call(model_func, params_dict, X)
+        output = f(params_dict, X)
         return functional_call(loss_func, {}, (output, y))
 
     params_argnum = 2
@@ -77,9 +77,9 @@ def functorch_hessian(
 
 
 def functorch_ggn(
-    model_func: Module,
+    model_func: Module | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
     loss_func: Module,
-    params: list[Tensor],
+    params: dict[str, Tensor],
     data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
     input_key: str | None = None,
 ) -> Tensor:
@@ -88,11 +88,11 @@ def functorch_ggn(
     The GGN is the Hessian when the model is replaced by its linearization.
 
     Args:
-        model_func: A function that maps the mini-batch input X to predictions.
-            Could be a PyTorch module representing a neural network.
+        model_func: Either an ``nn.Module`` or a callable with signature
+            ``(params_dict, X) -> prediction``.
         loss_func: Loss function criterion. Maps predictions and mini-batch labels
             to a scalar value.
-        params: List of differentiable parameters used by the prediction function.
+        params: Dictionary mapping parameter names to tensors.
         data: Source from which mini-batches can be drawn, for instance a list of
             mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
         input_key: Key to obtain the input tensor when ``X`` is a dict-like object.
@@ -100,9 +100,9 @@ def functorch_ggn(
     Returns:
         Square matrix containing the GGN.
     """
-    (dev,) = {p.device for p in params}
+    params_dict, f = _prepare_params_and_model(model_func, params)
+    (dev,) = {p.device for p in params_dict.values()}
     X, y = _concatenate_batches(data, input_key, device=dev)
-    params_dict = _make_params_dict(model_func, params)
 
     def linearized_model(
         anchor_dict: dict[str, Tensor],
@@ -114,14 +114,8 @@ def functorch_ggn(
         Returns:
             Linearized model output at the provided parameters.
         """
-
-        def model_fn_params_only(params_dict: dict[str, Tensor]) -> Tensor:
-            return functional_call(model_func, params_dict, X)
-
         diff_dict = {n: params_dict[n] - anchor_dict[n] for n in params_dict}
-        model_at_anchor, jvp_diff = jvp(
-            model_fn_params_only, (anchor_dict,), (diff_dict,)
-        )
+        model_at_anchor, jvp_diff = jvp(lambda p: f(p, X), (anchor_dict,), (diff_dict,))
 
         return model_at_anchor + jvp_diff
 
@@ -132,8 +126,6 @@ def functorch_ggn(
         params_dict: dict[str, Tensor],
     ) -> Tensor:
         """Compute the loss given a mini-batch under a linearized NN around anchor.
-
-        # noqa: DAR101
 
         Returns:
             f(X, θ₀) + (J_θ₀ f(X, θ₀)) @ (θ - θ₀) with f the neural network, θ₀ the anchor
@@ -151,30 +143,31 @@ def functorch_ggn(
 
 
 def functorch_gradient_and_loss(
-    model_func: Module,
+    model_func: Module | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
     loss_func: Module,
-    params: list[Tensor],
+    params: dict[str, Tensor],
     data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
     input_key: str | None = None,
 ) -> tuple[list[Tensor], Tensor]:
     """Compute the gradient and loss with functorch.
 
     Args:
-        model_func: A function that maps the mini-batch input X to predictions.
-            Could be a PyTorch module representing a neural network.
+        model_func: Either an ``nn.Module`` or a callable with signature
+            ``(params_dict, X) -> prediction``.
         loss_func: Loss function criterion. Maps predictions and mini-batch labels
             to a scalar value.
-        params: List of differentiable parameters used by the prediction function.
+        params: Dictionary mapping parameter names to tensors.
         data: Source from which mini-batches can be drawn, for instance a list of
             mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
         input_key: Key to obtain the input tensor when ``X`` is a dict-like object.
 
     Returns:
-        Loss, and gradient in same format as the parameters.
+        Gradient as a list of tensors (in the same order as ``params``), and
+        the loss value.
     """
-    (dev,) = {p.device for p in params}
+    params_dict, f = _prepare_params_and_model(model_func, params)
+    (dev,) = {p.device for p in params_dict.values()}
     X, y = _concatenate_batches(data, input_key, device=dev)
-    params_dict = _make_params_dict(model_func, params)
 
     def loss(
         X: Tensor | MutableMapping, y: Tensor, params_dict: dict[str, Tensor]
@@ -184,7 +177,7 @@ def functorch_gradient_and_loss(
         Returns:
             Scalar loss value.
         """
-        output = functional_call(model_func, params_dict, X)
+        output = f(params_dict, X)
         return functional_call(loss_func, {}, (output, y))
 
     params_argnum = 2
@@ -195,20 +188,20 @@ def functorch_gradient_and_loss(
 
 
 def functorch_empirical_fisher(
-    model_func: Module,
+    model_func: Module | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
     loss_func: Module,
-    params: list[Tensor],
+    params: dict[str, Tensor],
     data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
     input_key: str | None = None,
 ) -> Tensor:
     """Compute the empirical Fisher with functorch.
 
     Args:
-        model_func: A function that maps the mini-batch input X to predictions.
-            Could be a PyTorch module representing a neural network.
+        model_func: Either an ``nn.Module`` or a callable with signature
+            ``(params_dict, X) -> prediction``.
         loss_func: Loss function criterion. Maps predictions and mini-batch labels
             to a scalar value.
-        params: List of differentiable parameters used by the prediction function.
+        params: Dictionary mapping parameter names to tensors.
         data: Source from which mini-batches can be drawn, for instance a list of
             mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
         input_key: Key to obtain the input tensor when ``X`` is a dict-like object.
@@ -216,9 +209,9 @@ def functorch_empirical_fisher(
     Returns:
         Square matrix containing the empirical Fisher.
     """
-    (dev,) = {p.device for p in params}
+    params_dict, f = _prepare_params_and_model(model_func, params)
+    (dev,) = {p.device for p in params_dict.values()}
     X, y = _concatenate_batches(data, input_key, device=dev)
-    params_dict = _make_params_dict(model_func, params)
 
     def losses(
         X: Tensor | MutableMapping, y: Tensor, params_dict: dict[str, Tensor]
@@ -235,7 +228,7 @@ def functorch_empirical_fisher(
         Returns:
             1d tensor containing all elementary losses.
         """
-        output = functional_call(model_func, params_dict, X)
+        output = f(params_dict, X)
 
         flatten_output = {
             MSELoss: "batch ... d_out -> (batch ... d_out)",
@@ -260,7 +253,7 @@ def functorch_empirical_fisher(
         MSELoss: y.shape[:-1].numel(),
         BCEWithLogitsLoss: y.shape[:-1].numel(),
     }[loss_func.__class__]
-    num_params = sum(p.numel() for p in params)
+    num_params = sum(p.numel() for p in params_dict.values())
 
     # the losses which model the same random variable
     grouped_losses = y.numel() // num_losses
@@ -276,17 +269,17 @@ def functorch_empirical_fisher(
 
 
 def functorch_jacobian(
-    model_func: Module,
-    params: list[Tensor],
+    model_func: Module | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
+    params: dict[str, Tensor],
     data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
     input_key: str | None = None,
 ) -> Tensor:
     """Compute the Jacobian with functorch.
 
     Args:
-        model_func: A function that maps the mini-batch input X to predictions.
-            Could be a PyTorch module representing a neural network.
-        params: List of differentiable parameters used by the prediction function.
+        model_func: Either an ``nn.Module`` or a callable with signature
+            ``(params_dict, X) -> prediction``.
+        params: Dictionary mapping parameter names to tensors.
         data: Source from which mini-batches can be drawn, for instance a list of
             mini-batches ``[(X, y), ...]`` or a torch ``DataLoader``.
         input_key: Key to obtain the input tensor when ``X`` is a dict-like object.
@@ -296,12 +289,12 @@ def functorch_jacobian(
         total number of parameters, ``N`` the total number of data points, and ``C``
         the model's output space dimension.
     """
-    (dev,) = {p.device for p in params}
+    params_dict, f = _prepare_params_and_model(model_func, params)
+    (dev,) = {p.device for p in params_dict.values()}
     X, _ = _concatenate_batches(data, input_key, device=dev)
-    params_dict = _make_params_dict(model_func, params)
 
     def model_fn_params_only(params_dict: dict[str, Tensor]) -> Tensor:
-        return functional_call(model_func, params_dict, X)
+        return f(params_dict, X)
 
     # concatenate over flattened parameters and flattened outputs
     jac = jacrev(model_fn_params_only)(params_dict)
@@ -348,17 +341,37 @@ def _concatenate_batches(
         return X, y
 
 
-def _make_params_dict(model_func: Module, params: list[Tensor]) -> dict[str, Tensor]:
-    """Create a named dictionary for the parameter list.
-
-    Required for ``functorch``'s ``functional_call`` API.
+def _prepare_params_and_model(
+    model_func: Module | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
+    params: dict[str, Tensor],
+) -> tuple[
+    dict[str, Tensor],
+    Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
+]:
+    """Prepare parameters and model function for functorch computation.
 
     Args:
-        model_func: A PyTorch module representing a neural network.
-        params: List of differentiable parameters used by the prediction function.
+        model_func: Either an ``nn.Module`` or a callable with signature
+            ``(params_dict, X) -> prediction``.
+        params: Dictionary mapping parameter names to parameter tensors.
 
     Returns:
-        Dictionary mapping parameter names to parameter tensors.
+        Tuple of (params_dict, model_callable) where ``model_callable`` has
+        signature ``(params_dict, X) -> prediction``.
+
+    Raises:
+        ValueError: If ``model_func`` is not an ``nn.Module`` or callable.
     """
-    name_dict = {p.data_ptr(): name for name, p in model_func.named_parameters()}
-    return {name_dict[p.data_ptr()]: p for p in params}
+    if isinstance(model_func, Module):
+
+        def f(params_dict: dict[str, Tensor], X: Tensor | MutableMapping) -> Tensor:
+            return functional_call(model_func, params_dict, X)
+
+    elif callable(model_func):
+        f = model_func
+    else:
+        raise ValueError(
+            "model_func must be an nn.Module or a callable, "
+            f"got {type(model_func).__name__}."
+        )
+    return params, f

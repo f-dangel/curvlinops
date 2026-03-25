@@ -2,7 +2,9 @@
 
 from curvlinops._torch_base import _ChainPyTorchLinearOperator
 from curvlinops.blockdiagonal import BlockDiagonalLinearOperator
-from curvlinops.computers.ekfac import EKFACComputer
+from curvlinops.computers._base import ParamGroup
+from curvlinops.computers.ekfac_hooks import HooksEKFACComputer
+from curvlinops.computers.ekfac_make_fx import MakeFxEKFACComputer
 from curvlinops.eigh import EighDecomposedLinearOperator
 from curvlinops.kfac import KFACLinearOperator
 from curvlinops.kronecker import KroneckerProductLinearOperator
@@ -24,40 +26,35 @@ class EKFACLinearOperator(KFACLinearOperator):
       (ICPR).
     """
 
-    _COMPUTER_CLS = EKFACComputer
+    _BACKENDS: dict[str, type] = {
+        "hooks": HooksEKFACComputer,
+        "make_fx": MakeFxEKFACComputer,
+    }
 
     @staticmethod
-    def _compute_canonical_op(computer: EKFACComputer) -> BlockDiagonalLinearOperator:
+    def _compute_canonical_op(
+        computer: HooksEKFACComputer | MakeFxEKFACComputer,
+    ) -> tuple[BlockDiagonalLinearOperator, list[ParamGroup]]:
         """Compute EKFAC factors and assemble the canonical block-diagonal operator.
 
         Args:
-            computer: An ``EKFACComputer`` instance.
+            computer: An EKFAC computer instance (hooks or FX backend).
 
         Returns:
-            Block diagonal linear operator representing EKFAC in canonical basis.
+            Tuple of (block diagonal operator in canonical basis, mapping).
         """
         input_eigvecs, gradient_eigvecs, corrected_eigenvalues, mapping = (
             computer.compute()
         )
         bases = []
         corrections = []
-        for mod_name, param_pos in mapping.items():
-            Q_a = input_eigvecs.get(mod_name, None)
-            Q_g = gradient_eigvecs[mod_name]
-            lambdas = corrected_eigenvalues[mod_name]
-
-            # Handle joint weight+bias case
-            if not computer._separate_weight_and_bias and {"weight", "bias"} == set(
-                param_pos.keys()
-            ):
-                # Single Kronecker product block for weight+bias
-                bases.append([Q_g, Q_a])
-                corrections.append(lambdas)
-            else:
-                # Separate blocks for weight and bias
-                for p_name, p_pos in param_pos.items():
-                    bases.append([Q_g, Q_a] if p_name == "weight" else [Q_g])
-                    corrections.append(lambdas[p_pos])
+        for group in mapping:
+            group_key = tuple(group.values())
+            Q_a = input_eigvecs.get(group_key)
+            Q_g = gradient_eigvecs[group_key]
+            lambdas = corrected_eigenvalues[group_key]
+            bases.append([Q_g, Q_a] if Q_a is not None else [Q_g])
+            corrections.append(lambdas)
 
         # Create Kronecker product linear operators for each block
         blocks = [
@@ -67,7 +64,7 @@ class EKFACLinearOperator(KFACLinearOperator):
             for basis, correction in zip(bases, corrections)
         ]
         # EKFAC in the canonical basis
-        return BlockDiagonalLinearOperator(blocks)
+        return BlockDiagonalLinearOperator(blocks), mapping
 
     def inverse(self, damping: float = 0.0) -> _ChainPyTorchLinearOperator:
         """Return the inverse of the EKFAC approximation.

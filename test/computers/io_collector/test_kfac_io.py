@@ -24,7 +24,7 @@ from torch.nn.functional import (
 )
 
 from curvlinops.computers.io_collector import with_kfac_io
-from curvlinops.computers.kfac import FisherType
+from curvlinops.kfac_utils import FisherType
 from curvlinops.utils import allclose_report
 from test.computers.io_collector.test_param_io import CONV2D_DEFAULT_PARAMS
 
@@ -45,7 +45,7 @@ def _verify_kfac_io(
     """Verify that with_kfac_io produces correct outputs and IO information.
 
     Args:
-        f: Function to test, with signature f(x, params) -> output.
+        f: Function to test, with signature f(params, x) -> output.
         x: Input tensor to the function.
         params: Dictionary mapping parameter names to parameter tensors.
         fisher_type: Type of Fisher information computation.
@@ -55,9 +55,11 @@ def _verify_kfac_io(
 
     dummy_x = zeros_like(x)
     dummy_params = {n: zeros_like(p) for n, p in params.items()}
-    f_and_kfac_io = with_kfac_io(f, dummy_x, dummy_params, fisher_type)
+    f_and_kfac_io, layers, hyperparams = with_kfac_io(
+        f, dummy_x, dummy_params, fisher_type
+    )
 
-    y, inputs, outputs, layers, hyperparams = f_and_kfac_io(x, params)
+    y, inputs, outputs = f_and_kfac_io(params, x)
 
     # Compare function value
     assert allclose_report(y, y_true)
@@ -79,19 +81,49 @@ def _verify_kfac_io(
     assert hyperparams == hyperparams_true
 
 
-def test_with_kfac_io_multiple_parameter_usages():
-    """Test that KFAC rejects multiple usages of the same parameter."""
+def test_with_kfac_io_weight_tying():
+    """Test that KFAC supports weight tying (same weight used multiple times)."""
     manual_seed(0)
     N, D = 2, 3
 
-    def f(x: Tensor, params: dict) -> Tensor:
+    def f(params: dict, x: Tensor) -> Tensor:
         xW = linear(x, params["weight"], bias=params["bias"])
         return linear(xW, params["weight"])
 
     x, params = rand(N, D), {"weight": rand(D, D), "bias": rand(D)}
 
-    with raises(ValueError, match="Parameters used multiple times"):
-        with_kfac_io(f, x, params, "empirical")
+    f_and_kfac_io, layer_names, layer_hparams = with_kfac_io(
+        f, x, params, FisherType.MC
+    )
+
+    # Two detected layers: both use the same weight
+    assert len(layer_names) == 2
+    assert layer_names["Linear0"]["W"] == "weight"
+    assert layer_names["Linear0"]["b"] == "bias"
+    assert layer_names["Linear1"]["W"] == "weight"
+    assert "b" not in layer_names["Linear1"]
+
+    # IO function works
+    out, inputs, outputs = f_and_kfac_io(params, x)
+    assert allclose_report(out, f(params, x))
+    assert "Linear0" in inputs and "Linear1" in inputs
+    assert "Linear0" in outputs and "Linear1" in outputs
+
+
+def test_with_kfac_io_conflicting_biases():
+    """Test that KFAC rejects weight tying with conflicting biases."""
+    manual_seed(0)
+    N, D = 2, 3
+
+    def f(params: dict, x: Tensor) -> Tensor:
+        xW = linear(x, params["weight"], bias=params["bias1"])
+        return linear(xW, params["weight"], bias=params["bias2"])
+
+    x = rand(N, D)
+    params = {"weight": rand(D, D), "bias1": rand(D), "bias2": rand(D)}
+
+    with raises(ValueError, match="conflicting biases"):
+        with_kfac_io(f, x, params, FisherType.MC)
 
 
 def test_with_kfac_io_fully_connected():
@@ -105,24 +137,24 @@ def test_with_kfac_io_fully_connected():
     N, D_in, D_out = 2, 3, 4
 
     # 1) Both weight and bias as free parameters
-    def f(x: Tensor, params: dict) -> Tensor:
+    def f(params: dict, x: Tensor) -> Tensor:
         return linear(x, params["w"], bias=params["b"])
 
     x, params = rand(N, D_in), {"w": rand(D_out, D_in), "b": rand(D_out)}
 
     for fisher_type in FisherType:
         kfac_io_true = (
-            f(x, params),
+            f(params, x),
             {"Linear0": x},
             # Forward-only KFAC does not require storing outputs
-            {} if fisher_type == FisherType.FORWARD_ONLY else {"Linear0": f(x, params)},
-            {"Linear0": {"weight": "w", "bias": "b"}},
+            {} if fisher_type == FisherType.FORWARD_ONLY else {"Linear0": f(params, x)},
+            {"Linear0": {"W": "w", "b": "b"}},
             {"Linear0": {}},  # Linear layers have empty hyperparams
         )
         _verify_kfac_io(f, x, params, fisher_type, kfac_io_true)
 
     # 2) Only weight as free parameter (frozen bias)
-    def f(x: Tensor, params: dict) -> Tensor:
+    def f(params: dict, x: Tensor) -> Tensor:
         bias = arange(D_out, dtype=x.dtype)
         return linear(x, params["w"], bias=bias)
 
@@ -130,17 +162,17 @@ def test_with_kfac_io_fully_connected():
 
     for fisher_type in FisherType:
         kfac_io_true = (
-            f(x, params),
+            f(params, x),
             {"Linear0": x},
             # Forward-only KFAC does not require storing outputs
-            {} if fisher_type == FisherType.FORWARD_ONLY else {"Linear0": f(x, params)},
-            {"Linear0": {"weight": "w"}},
+            {} if fisher_type == FisherType.FORWARD_ONLY else {"Linear0": f(params, x)},
+            {"Linear0": {"W": "w"}},
             {"Linear0": {}},  # Linear layers have empty hyperparams
         )
         _verify_kfac_io(f, x, params, fisher_type, kfac_io_true)
 
     # 3) Only bias as free parameter (frozen weight)
-    def f(x: Tensor, params: dict) -> Tensor:
+    def f(params: dict, x: Tensor) -> Tensor:
         weight = arange(D_out * D_in, dtype=x.dtype).reshape(D_out, D_in)
         return linear(x, weight, params["b"])
 
@@ -148,28 +180,28 @@ def test_with_kfac_io_fully_connected():
 
     for fisher_type in FisherType:
         kfac_io_true = (
-            f(x, params),
+            f(params, x),
             {},  # No need to store inputs for biases
             # Forward-only KFAC does not require storing outputs
-            {} if fisher_type == FisherType.FORWARD_ONLY else {"Linear0": f(x, params)},
-            {"Linear0": {"bias": "b"}},
+            {} if fisher_type == FisherType.FORWARD_ONLY else {"Linear0": f(params, x)},
+            {"Linear0": {"b": "b"}},
             {"Linear0": {}},  # Linear layers have empty hyperparams
         )
         _verify_kfac_io(f, x, params, fisher_type, kfac_io_true)
 
     # 4) Fully-connected layer without bias
-    def f(x: Tensor, params: dict) -> Tensor:
+    def f(params: dict, x: Tensor) -> Tensor:
         return linear(x, params["w"])
 
     x, params = rand(N, D_in), {"w": rand(D_out, D_in)}
 
     for fisher_type in FisherType:
         kfac_io_true = (
-            f(x, params),
+            f(params, x),
             {"Linear0": x},
             # Forward-only KFAC does not require storing outputs
-            {} if fisher_type == FisherType.FORWARD_ONLY else {"Linear0": f(x, params)},
-            {"Linear0": {"weight": "w"}},
+            {} if fisher_type == FisherType.FORWARD_ONLY else {"Linear0": f(params, x)},
+            {"Linear0": {"W": "w"}},
             {"Linear0": {}},  # Linear layers have empty hyperparams
         )
         _verify_kfac_io(f, x, params, fisher_type, kfac_io_true)
@@ -203,7 +235,7 @@ def test_kfac_io_mlp(inplace: bool):
     )
     frozen_weight_4 = randn_like(mlp.get_submodule("4").weight)
 
-    def f(x, params):
+    def f(params, x):
         assert "4.weight" not in params
         return functional_call(mlp, {**params, "4.weight": frozen_weight_4}, x)
 
@@ -225,7 +257,7 @@ def test_kfac_io_mlp(inplace: bool):
     # Verify KFAC IOs for different Fisher types
     for fisher_type in FisherType:
         kfac_io_true = (
-            f(x, params),
+            f(params, x),
             # No lin2_in here because this layer only has a free bias
             {"Linear0": lin0_in, "Linear1": lin1_in},
             # Forward-only KFAC does not require storing outputs
@@ -233,9 +265,9 @@ def test_kfac_io_mlp(inplace: bool):
             if fisher_type == FisherType.FORWARD_ONLY
             else {"Linear0": lin0_out, "Linear1": lin1_out, "Linear2": lin2_out},
             {
-                "Linear0": {"weight": "0.weight", "bias": "0.bias"},
-                "Linear1": {"weight": "2.weight"},
-                "Linear2": {"bias": "4.bias"},
+                "Linear0": {"W": "0.weight", "b": "0.bias"},
+                "Linear1": {"W": "2.weight"},
+                "Linear2": {"b": "4.bias"},
             },
             {
                 "Linear0": {},  # Linear layers have empty hyperparams
@@ -284,7 +316,7 @@ def test_kfac_io_cnn(inplace: bool):
     # Freeze the weight of the first linear layer (layer 7)
     frozen_weight_7 = randn_like(cnn.get_submodule("7").weight)
 
-    def f(x: Tensor, params: dict[str, Tensor]) -> Tensor:
+    def f(params: dict[str, Tensor], x: Tensor) -> Tensor:
         assert "7.weight" not in params
         return functional_call(cnn, {**params, "7.weight": frozen_weight_7}, x)
 
@@ -318,7 +350,7 @@ def test_kfac_io_cnn(inplace: bool):
     # Verify KFAC IOs for different Fisher types
     for fisher_type in FisherType:
         kfac_io_true = (
-            f(x, params),
+            f(params, x),
             # Inputs are stored for layers that have weights (not bias-only layers)
             {"Conv0": conv0_in, "Conv1": conv1_in, "Linear1": linear1_in},
             # Forward-only KFAC does not require storing outputs
@@ -331,16 +363,57 @@ def test_kfac_io_cnn(inplace: bool):
                 "Linear1": linear1_out,
             },
             {
-                "Conv0": {"weight": "0.weight", "bias": "0.bias"},
-                "Conv1": {"weight": "3.weight"},
-                "Linear0": {"bias": "7.bias"},
-                "Linear1": {"weight": "9.weight", "bias": "9.bias"},
+                "Conv0": {"W": "0.weight", "b": "0.bias"},
+                "Conv1": {"W": "3.weight"},
+                "Linear0": {"b": "7.bias"},
+                "Linear1": {"W": "9.weight", "b": "9.bias"},
             },
             {
-                "Conv0": {**CONV2D_DEFAULT_PARAMS, **{"padding": [1, 1]}},
-                "Conv1": {**CONV2D_DEFAULT_PARAMS, **{"stride": [2, 2]}},
+                "Conv0": {
+                    **CONV2D_DEFAULT_PARAMS,
+                    "kernel_size": [3, 3],
+                    "padding": [1, 1],
+                },
+                "Conv1": {
+                    **CONV2D_DEFAULT_PARAMS,
+                    "kernel_size": [4, 4],
+                    "stride": [2, 2],
+                },
                 "Linear0": {},  # Linear layers have empty hyperparams
                 "Linear1": {},  # Linear layers have empty hyperparams
             },
         )
         _verify_kfac_io(f, x, params, fisher_type, kfac_io_true)
+
+
+def test_kfac_io_flatten_requires_per_batch_size_tracing():
+    """Demonstrate that ``nn.Flatten`` bakes in the batch size during real tracing.
+
+    ``with_kfac_io`` uses real-mode ``make_fx`` tracing, which produces
+    ``aten.view`` with a hardcoded batch dimension for operations like
+    ``nn.Flatten``. This means a single IO function cannot handle different
+    batch sizes, motivating the per-batch-size cache in ``MakeFxKFACComputer``.
+    """
+    manual_seed(0)
+    model = Sequential(Flatten(), Linear(6, 3))
+
+    def f(params: dict[str, Tensor], x: Tensor) -> Tensor:
+        return functional_call(model, params, (x,))
+
+    params = dict(model.named_parameters())
+    x_batch2 = rand(2, 2, 3)
+    x_batch5 = rand(5, 2, 3)
+
+    # with_kfac_io traced with batch=2 works for batch=2
+    f_kfac_io, *_ = with_kfac_io(f, x_batch2, params, FisherType.EMPIRICAL)
+    out2, *_ = f_kfac_io(params, x_batch2)
+    assert out2.shape[0] == 2
+
+    # But fails for batch=5 due to hardcoded shapes from nn.Flatten
+    with raises(RuntimeError, match="shape .* is invalid for input of size"):
+        f_kfac_io(params, x_batch5)
+
+    # A separate IO function traced with batch=5 works for batch=5
+    f_kfac_io_5, *_ = with_kfac_io(f, x_batch5, params, FisherType.EMPIRICAL)
+    out5, *_ = f_kfac_io_5(params, x_batch5)
+    assert out5.shape[0] == 5

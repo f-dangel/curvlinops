@@ -24,14 +24,17 @@ from torch.nn import (
     CrossEntropyLoss,
     Module,
     MSELoss,
-    Parameter,
 )
 
 from curvlinops._torch_base import _ChainPyTorchLinearOperator
 from curvlinops.blockdiagonal import BlockDiagonalLinearOperator
-from curvlinops.computers.kfac import FisherType, KFACComputer, KFACType
+from curvlinops.computers._base import ParamGroup, _BaseKFACComputer
+from curvlinops.computers.kfac_hooks import HooksKFACComputer
+from curvlinops.computers.kfac_make_fx import MakeFxKFACComputer
 from curvlinops.kfac_utils import (
+    FisherType,
     FromCanonicalLinearOperator,
+    KFACType,
     ToCanonicalLinearOperator,
 )
 from curvlinops.kronecker import KroneckerProductLinearOperator
@@ -58,7 +61,7 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
         \approx
         \mathbf{A}_{(\text{KFAC})} \otimes \mathbf{B}_{(\text{KFAC})}
 
-    (see :class:`curvlinops.FisherMCLinearOperator` for the Fisher's definition).
+    (see :class:`curvlinops.GGNLinearOperator` with ``mc_samples > 0``).
     Loosely speaking, the first Kronecker factor is the un-centered covariance of the
     inputs to a layer. The second Kronecker factor is the un-centered covariance of
     'would-be' gradients w.r.t. the layer's output. Those 'would-be' gradients result
@@ -83,14 +86,18 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
         SELF_ADJOINT: Whether the operator is self-adjoint. ``True`` for KFAC.
     """
 
-    _COMPUTER_CLS = KFACComputer
+    _BACKENDS: dict[str, type] = {
+        "hooks": HooksKFACComputer,
+        "make_fx": MakeFxKFACComputer,
+    }
     SELF_ADJOINT: bool = True
 
     def __init__(
         self,
-        model_func: Module,
+        model_func: Module
+        | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
         loss_func: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
-        params: list[Parameter],
+        params: dict[str, Tensor],
         data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
@@ -102,18 +109,26 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
         separate_weight_and_bias: bool = True,
         num_data: int | None = None,
         batch_size_fn: Callable[[MutableMapping | Tensor], int] | None = None,
+        backend: str = "hooks",
     ):
         """Kronecker-factored approximate curvature (KFAC) proxy of the Fisher/GGN.
 
         Warning:
             This is an early proto-type with limitations:
                 - Only Linear and Conv2d modules are supported.
+                - The ``hooks`` backend assumes each module is called exactly
+                  once per forward pass. Weight tying (same module called
+                  multiple times) will silently produce incorrect results.
+                  Use ``backend="make_fx"`` for weight-tied architectures.
 
         Args:
-            model_func: The neural network. Must consist of modules.
+            model_func: The neural network's forward pass, defining the functional
+                relationship ``(params, X) -> prediction``. Either an ``nn.Module``
+                (architecture) or a callable ``(params_dict, X) -> prediction``.
+                Callables require ``backend="make_fx"``.
             loss_func: The loss function.
-            params: The parameters defining the Fisher/GGN that will be approximated
-                through KFAC.
+            params: The parameter values at which the Fisher/GGN is approximated.
+                A dictionary mapping parameter names to tensors.
             data: A data loader containing the data of the Fisher/GGN.
             progressbar: Whether to show a progress bar when computing the Kronecker
                 factors. Defaults to ``False``.
@@ -163,8 +178,20 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
             batch_size_fn: If the ``X``'s in ``data`` are not ``torch.Tensor``, this
                 needs to be specified. The intended behavior is to consume the first
                 entry of the iterates from ``data`` and return their batch size.
+            backend: The backend to use for computing Kronecker factors.
+                ``"hooks"`` uses forward/backward hooks (default).
+                ``"make_fx"`` uses FX graph tracing via the IO collector.
+                Defaults to ``"hooks"``.
+
+        Raises:
+            ValueError: If ``backend`` is not supported.
         """
-        computer = self._COMPUTER_CLS(
+        if backend not in self._BACKENDS:
+            raise ValueError(
+                f"Invalid backend: {backend!r}. Supported: {tuple(self._BACKENDS)}."
+            )
+        computer_cls = self._BACKENDS[backend]
+        computer = computer_cls(
             model_func,
             loss_func,
             params,
@@ -181,59 +208,53 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
             batch_size_fn=batch_size_fn,
         )
         # KFAC = P @ K @ PT
-        K = self._compute_canonical_op(computer)
-        P, PT = self._build_converters(computer)
+        K, mapping = self._compute_canonical_op(computer)
+        P, PT = self._build_converters(computer, mapping)
         super().__init__(P, K, PT)
 
     @staticmethod
-    def _compute_canonical_op(computer: KFACComputer) -> BlockDiagonalLinearOperator:
+    def _compute_canonical_op(
+        computer: _BaseKFACComputer,
+    ) -> tuple[BlockDiagonalLinearOperator, list[ParamGroup]]:
         """Compute Kronecker factors and assemble the canonical block-diagonal operator.
 
         Args:
-            computer: A ``KFACComputer`` instance.
+            computer: A KFAC computer instance.
 
         Returns:
-            Block diagonal linear operator representing KFAC in canonical basis.
+            Tuple of (block diagonal operator in canonical basis, mapping).
         """
         input_covariances, gradient_covariances, mapping = computer.compute()
         factors = []
-        for mod_name, param_pos in mapping.items():
-            aaT = input_covariances.get(mod_name, None)
-            ggT = gradient_covariances[mod_name]
-
-            # Handle joint weight+bias case
-            if not computer._separate_weight_and_bias and {"weight", "bias"} == set(
-                param_pos.keys()
-            ):
-                # Single Kronecker product block for weight+bias
-                factors.append([ggT, aaT])
-            else:
-                # Separate blocks for weight and bias
-                for p_name in param_pos:
-                    factors.append([ggT, aaT] if p_name == "weight" else [ggT])
+        for group in mapping:
+            group_key = tuple(group.values())
+            aaT = input_covariances.get(group_key)
+            ggT = gradient_covariances[group_key]
+            factors.append([ggT, aaT] if aaT is not None else [ggT])
 
         # Create Kronecker product linear operators for each block
         blocks = [KroneckerProductLinearOperator(*fs) for fs in factors]
 
         # KFAC in the canonical basis
-        return BlockDiagonalLinearOperator(blocks)
+        return BlockDiagonalLinearOperator(blocks), mapping
 
     @staticmethod
     def _build_converters(
-        computer: KFACComputer,
+        computer: _BaseKFACComputer,
+        mapping: list[ParamGroup],
     ) -> tuple[FromCanonicalLinearOperator, ToCanonicalLinearOperator]:
         """Build the canonical space converters.
 
         Args:
-            computer: A ``KFACComputer`` instance.
+            computer: A KFAC computer instance.
+            mapping: List of parameter groups.
 
         Returns:
             Tuple of ``(from_canonical_op, to_canonical_op)``.
         """
         PT = ToCanonicalLinearOperator(
-            [p.shape for p in computer._params],
-            list(computer._mapping.values()),
-            computer._separate_weight_and_bias,
+            {name: p.shape for name, p in computer._params.items()},
+            mapping,
             computer.device,
             computer.dtype,
         )

@@ -1,16 +1,20 @@
 """Computer for the Fisher/GGN's eigenvalue-corrected KFAC (EKFAC) approximation."""
 
 from functools import partial
-from typing import Any
 
-from einops import einsum, rearrange
-from torch import Tensor, cat
-from torch.linalg import eigh
-from torch.nn import Conv2d, Module
+from einops import einsum
+from torch import Tensor
+from torch.nn import Module
 from torch.utils.hooks import RemovableHandle
 
-from curvlinops.computers.kfac import FisherType, KFACComputer
-from curvlinops.kfac_utils import extract_patches
+from curvlinops.computers._base import ParamGroup, ParamGroupKey, _EKFACMixin
+from curvlinops.computers.kfac_hooks import HooksKFACComputer, _module_hyperparams
+from curvlinops.computers.kfac_math import (
+    compute_loss_correction,
+    grad_to_weight_sharing_format,
+    input_to_weight_sharing_format,
+)
+from curvlinops.kfac_utils import KFACType
 from curvlinops.utils import _seed_generator
 
 
@@ -27,13 +31,15 @@ def compute_eigenvalue_correction_linear_weight_sharing(
 
     Args:
         g: Output gradients of the layer with shape
-            ``[N, S, D1]``, where ``N`` is the batch size, ``S`` the weight sharing
-            dimension, and ``D1`` the output dimension.
+            ``[V, N, S, D1]``, where ``V`` is the number of gradient vectors
+            (e.g. MC samples; use ``V=1`` for type-2/empirical Fisher),
+            ``N`` is the batch size, ``S`` the weight sharing dimension,
+            and ``D1`` the output dimension.
         ggT_eigvecs: Eigenvectors of the gradient covariance with shape
             ``[D1, D1]``.
         a: Layer inputs with shape ``[N, S, D2]``, where ``D2`` is the input dimension
             or ``None`` if the layer has no weights (bias only). In that case,
-            `aaT_eigvecs` has to be `None`, too.
+            `aaT_eigvecs` has to be `None`, too. Shared across the ``V`` vectors.
         aaT_eigvecs: Eigenvectors of the input covariance with shape
             ``[D2, D2]`` or ``None`` if the layer has no weights (bias only).
         _force_strategy: If specified, forces the use of either ``'gramian'`` or
@@ -185,12 +191,12 @@ def compute_eigenvalue_correction_linear_weight_sharing(
 
     if Q2 is None and X is None:  # -> 1d (bias) case
         eigencorrection = (
-            einsum(Q1, Y, "j d1, batch shared j -> batch d1").square_().sum(0)
+            einsum(Q1, Y, "j d1, v batch shared j -> v batch d1").square_().sum((0, 1))
         )
 
     else:  # -> 2d (weight or weight+bias) case
         # Determine approach: Gramian contraction or per-example gradients
-        (_, S, D1), (_, _, D2) = g.shape, a.shape
+        (_, _, S, D1), (_, _, D2) = g.shape, a.shape
 
         # Determine approach based on _force_strategy or memory requirements
         use_gramian = (
@@ -204,13 +210,15 @@ def compute_eigenvalue_correction_linear_weight_sharing(
 
         if use_gramian:  # -> Gramian approach
             X_rot = einsum(X, Q2, "batch shared j, j d2 -> batch shared d2")
-            Y_rot = einsum(Y, Q1, "batch shared i, i d1 -> batch shared d1")
+            Y_rot = einsum(Y, Q1, "v batch shared i, i d1 -> v batch shared d1")
             # In the absence of weight sharing (S=1), this simply computes
             # (Q^T X_rot)^2 and (Q^T Y_rot)^2, then computes the correction
             X_gram = einsum(X_rot, X_rot, "batch s d2, batch t d2 -> batch s t d2")
-            Y_gram = einsum(Y_rot, Y_rot, "batch s d1, batch t d1 -> batch s t d1")
+            Y_gram = einsum(
+                Y_rot, Y_rot, "v batch s d1, v batch t d1 -> v batch s t d1"
+            )
             eigencorrection = einsum(
-                Y_gram, X_gram, "batch s t d1, batch s t d2 -> d1 d2"
+                Y_gram, X_gram, "v batch s t d1, batch s t d2 -> d1 d2"
             )
 
         else:  # -> per-example gradient approach
@@ -219,17 +227,17 @@ def compute_eigenvalue_correction_linear_weight_sharing(
                 Y,
                 X,
                 Q2,
-                "i d1, batch shared i, batch shared j, j d2 -> batch d1 d2",
+                "i d1, v batch shared i, batch shared j, j d2 -> v batch d1 d2",
             )
-            eigencorrection = rotated_per_example_gradient.square_().sum(dim=0)
+            eigencorrection = rotated_per_example_gradient.square_().sum(dim=(0, 1))
 
     return eigencorrection
 
 
-class EKFACComputer(KFACComputer):
+class HooksEKFACComputer(_EKFACMixin, HooksKFACComputer):
     """Computes EKFAC's eigenvalue-corrected Kronecker factors for the Fisher/GGN.
 
-    Extends :class:`KFACComputer` with eigenvalue decomposition of the Kronecker
+    Extends :class:`HooksKFACComputer` with eigenvalue decomposition of the Kronecker
     factors and eigenvalue correction computation.
 
     Eigenvalue-corrected Kronecker-Factored Approximate Curvature (EKFAC) was originally
@@ -245,116 +253,41 @@ class EKFACComputer(KFACComputer):
       (2018). Rotate your networks: Better weight consolidation and less catastrophic
       forgetting (ICPR).
 
-    Attributes:
-        _SUPPORTED_FISHER_TYPE: Tuple of supported Fisher types.
     """
-
-    _SUPPORTED_FISHER_TYPE: tuple[FisherType, ...] = (
-        FisherType.TYPE2,
-        FisherType.MC,
-        FisherType.EMPIRICAL,
-    )
-
-    def compute(
-        self,
-    ) -> tuple[
-        dict[str, Tensor],
-        dict[str, Tensor],
-        dict[str, Tensor | dict[int, Tensor]],
-        dict[str, dict[str, int]],
-    ]:
-        """Compute eigenvalue-corrected Kronecker factors.
-
-        Returns:
-            Tuple of ``(input_covariance_eigenvectors, gradient_covariance_eigenvectors,
-            corrected_eigenvalues, mapping)`` where the first two are dictionaries
-            mapping module names to eigenvector matrices, the third maps module names to
-            eigenvalue corrections, and ``mapping`` maps module names to dictionaries of
-            parameter names and their positions.
-        """
-        input_covariances, gradient_covariances, mapping = super().compute()
-        input_covariances = self._eigenvectors_(input_covariances)
-        gradient_covariances = self._eigenvectors_(gradient_covariances)
-        corrected_eigenvalues = self.compute_eigenvalue_correction(
-            input_covariances, gradient_covariances
-        )
-        return input_covariances, gradient_covariances, corrected_eigenvalues, mapping
-
-    def _rearrange_for_larger_than_2d_output(
-        self, output: Tensor, y: Tensor
-    ) -> tuple[Tensor, Tensor]:
-        r"""Rearrange the output and target if output is >2d.
-
-        This will determine what kind of Fisher/GGN is approximated.
-
-        Args:
-            output: The model's prediction
-                :math:`\{f_\mathbf{\theta}(\mathbf{x}_n)\}_{n=1}^N`.
-            y: The labels :math:`\{\mathbf{y}_n\}_{n=1}^N`.
-
-        Returns:
-            The rearranged outputs and targets.
-
-        Raises:
-            ValueError: If the output is not 2d and y is not 1d/2d.
-        """
-        # Our individual gradient implementation for EKFAC does not support computing
-        # the individual gradients for any loss terms that might dependent on each other,
-        # i.e., loss terms other than the per-data point loss terms.
-        if output.ndim != 2 or y.ndim not in {1, 2}:
-            raise ValueError(
-                "Only 2d output and 1d/2d target are supported for EKFAC. "
-                f"Got {output.ndim=} and {y.ndim=}."
-            )
-        return output, y
-
-    @staticmethod
-    def _eigenvectors_(dictionary: dict[Any, Tensor]) -> dict[Any, Tensor]:
-        """Replace all matrix values with their eigenvectors (inplace).
-
-        Args:
-            dictionary: A dictionary mapping module names to square matrices.
-
-        Returns:
-            The modified dictionary mapping module names to the eigenvectors of the
-            input matrices.
-        """
-        for key, value in dictionary.items():
-            dictionary[key] = eigh(value).eigenvectors
-
-        return dictionary
 
     def compute_eigenvalue_correction(
         self,
-        input_covariances_eigenvectors: dict[str, Tensor],
-        gradient_covariances_eigenvectors: dict[str, Tensor],
-    ) -> dict[str, Tensor | dict[int, Tensor]]:
+        input_covariances_eigenvectors: dict[ParamGroupKey, Tensor],
+        gradient_covariances_eigenvectors: dict[ParamGroupKey, Tensor],
+        mapping: list[ParamGroup],
+    ) -> dict[ParamGroupKey, Tensor]:
         """Compute the corrected eigenvalues for EKFAC.
 
         Args:
-            input_covariances_eigenvectors: Dictionary mapping module names to input
-                covariance eigenvectors.
-            gradient_covariances_eigenvectors: Dictionary mapping module names to
-                gradient covariance eigenvectors.
+            input_covariances_eigenvectors: Dictionary mapping parameter group keys
+                to input covariance eigenvectors.
+            gradient_covariances_eigenvectors: Dictionary mapping parameter group
+                keys to gradient covariance eigenvectors.
+            mapping: List of parameter groups.
 
         Returns:
             Dictionary containing corrected eigenvalues for each module.
         """
         # Create empty dictionary to be populated by hooks
-        corrected_eigenvalues: dict[str, Tensor | dict[int, Tensor]] = {}
+        corrected_eigenvalues: dict[ParamGroupKey, Tensor] = {}
 
         # install forward hooks
         hook_handles: list[RemovableHandle] = []
 
-        for mod_name in self._mapping:
-            module = self._model_func.get_submodule(mod_name)
+        for group in mapping:
+            module = self._get_module(group)
 
             # compute the corrected eigenvalues using the per-example gradients
             hook_handles.append(
                 module.register_forward_hook(
                     partial(
                         self._register_tensor_hook_on_output_to_accumulate_corrected_eigenvalues,
-                        module_name=mod_name,
+                        group=group,
                         input_covariances_eigenvectors=input_covariances_eigenvectors,
                         gradient_covariances_eigenvectors=gradient_covariances_eigenvectors,
                         corrected_eigenvalues=corrected_eigenvalues,
@@ -366,7 +299,7 @@ class EKFACComputer(KFACComputer):
 
         # loop over data set, computing the corrected eigenvalues
         for X, y in self._loop_over_data(desc="Eigenvalue correction"):
-            output = self._model_func(X)
+            output = self._model_module(X)
             output, y = self._rearrange_for_larger_than_2d_output(output, y)
             self._compute_loss_and_backward(output, y)
 
@@ -381,10 +314,10 @@ class EKFACComputer(KFACComputer):
         module: Module,
         inputs: tuple[Tensor],
         output: Tensor,
-        module_name: str,
-        input_covariances_eigenvectors: dict[str, Tensor],
-        gradient_covariances_eigenvectors: dict[str, Tensor],
-        corrected_eigenvalues: dict[str, Tensor | dict[int, Tensor]],
+        group: ParamGroup,
+        input_covariances_eigenvectors: dict[ParamGroupKey, Tensor],
+        gradient_covariances_eigenvectors: dict[ParamGroupKey, Tensor],
+        corrected_eigenvalues: dict[ParamGroupKey, Tensor],
     ):
         """Register tensor hook on layer's output to accumulate the corrected eigenvalues.
 
@@ -404,7 +337,7 @@ class EKFACComputer(KFACComputer):
                 eigenvalues will be installed.
             inputs: The layer's input tensors.
             output: The layer's output tensor.
-            module_name: The name of the layer in the neural network.
+            group: Parameter group for this layer.
             input_covariances_eigenvectors: Dictionary containing input covariance
                 eigenvectors.
             gradient_covariances_eigenvectors: Dictionary containing gradient
@@ -414,7 +347,7 @@ class EKFACComputer(KFACComputer):
         tensor_hook = partial(
             self._accumulate_corrected_eigenvalues,
             module=module,
-            module_name=module_name,
+            group=group,
             input_covariances_eigenvectors=input_covariances_eigenvectors,
             gradient_covariances_eigenvectors=gradient_covariances_eigenvectors,
             corrected_eigenvalues=corrected_eigenvalues,
@@ -426,10 +359,10 @@ class EKFACComputer(KFACComputer):
         self,
         grad_output: Tensor,
         module: Module,
-        module_name: str,
-        input_covariances_eigenvectors: dict[str, Tensor],
-        gradient_covariances_eigenvectors: dict[str, Tensor],
-        corrected_eigenvalues: dict[str, Tensor | dict[int, Tensor]],
+        group: ParamGroup,
+        input_covariances_eigenvectors: dict[ParamGroupKey, Tensor],
+        gradient_covariances_eigenvectors: dict[ParamGroupKey, Tensor],
+        corrected_eigenvalues: dict[ParamGroupKey, Tensor],
         inputs: tuple[Tensor],
     ):
         r"""Accumulate the corrected eigenvalues.
@@ -445,8 +378,8 @@ class EKFACComputer(KFACComputer):
 
         Args:
             grad_output: The gradient w.r.t. the output.
-            module: The layer for which corrected eigenvalues will be accumulated.
-            module_name: The name of the layer in the neural network.
+            module: The module this gradient belongs to.
+            group: Parameter group for this layer.
             input_covariances_eigenvectors: Dictionary containing input covariance
                 eigenvectors.
             gradient_covariances_eigenvectors: Dictionary containing gradient
@@ -459,71 +392,37 @@ class EKFACComputer(KFACComputer):
         """
         g = grad_output.data.detach()
         batch_size = g.shape[0]
-        if isinstance(module, Conv2d):
-            g = rearrange(g, "batch c o1 o2 -> batch o1 o2 c")
-        g = rearrange(g, "batch ... d_out -> batch (...) d_out")
 
         # We only need layer inputs to extract information w.r.t. the weights
-        param_pos = self._mapping[module_name]
-        a_required = "weight" in param_pos
+        a_required = "W" in group
 
         if len(inputs) != 1:
             raise ValueError("Modules with multiple inputs are not supported.")
         a = inputs[0].data.detach() if a_required else None
 
-        if a_required:
-            # Perform patch extraction for convolution
-            if isinstance(module, Conv2d):
-                a = extract_patches(
-                    a,
-                    module.kernel_size,
-                    module.stride,
-                    module.padding,
-                    module.dilation,
-                    module.groups,
-                )
-            # Rearrange the activations for computing per-example gradients
-            a = rearrange(a, "batch ... d_in -> batch (...) d_in")
-
-        # Compute correction for the loss scaling depending on the loss reduction used
-        num_loss_terms = batch_size * self._num_per_example_loss_terms
-        correction = {
-            "sum": 1.0,
-            "mean": num_loss_terms**2
-            / (self._N_data * self._num_per_example_loss_terms),
-        }[self._loss_func.reduction]
-
-        # Compute the corrected eigenvalues for the EKFAC approximation
-        # aaT_eigenvectors does not exist if the weight matrix of the module is excluded
-        aaT_eigenvectors = input_covariances_eigenvectors.get(module_name)
-        # ggT_eigenvectors always exists
-        ggT_eigenvectors = gradient_covariances_eigenvectors[module_name]
-
-        if not self._separate_weight_and_bias and {"weight", "bias"} == set(
-            param_pos.keys()
-        ):
-            a_augmented = cat([a, a.new_ones(*a.shape[:-1], 1)], dim=-1)
-            eigencorrection = compute_eigenvalue_correction_linear_weight_sharing(
-                g, ggT_eigenvectors, a_augmented, aaT_eigenvectors
-            )
-            self._set_or_add_(
-                corrected_eigenvalues,
-                module_name,
-                eigencorrection.mul_(correction),
+        has_joint_wb = "W" in group and "b" in group
+        hparams = _module_hyperparams(module)
+        g = grad_to_weight_sharing_format(g, KFACType.EXPAND, hparams)
+        g = g.unsqueeze(0)  # [N, S, D] -> [1, N, S, D] (V=1 for hooks backend)
+        if a is not None:
+            a = input_to_weight_sharing_format(
+                a, KFACType.EXPAND, hparams, bias_pad=1 if has_joint_wb else None
             )
 
-        else:
-            if module_name not in corrected_eigenvalues:
-                corrected_eigenvalues[module_name] = {}
-            for p_name, pos in param_pos.items():
-                eigencorrection = compute_eigenvalue_correction_linear_weight_sharing(
-                    g,
-                    ggT_eigenvectors,
-                    None if p_name == "bias" else a,
-                    aaT_eigvecs=None if p_name == "bias" else aaT_eigenvectors,
-                )
-                self._set_or_add_(
-                    corrected_eigenvalues[module_name],
-                    pos,
-                    eigencorrection.mul_(correction),
-                )
+        correction = compute_loss_correction(
+            batch_size,
+            self._num_per_example_loss_terms,
+            self._loss_func.reduction,
+            self._N_data,
+        )
+
+        group_key = tuple(group.values())
+        aaT_eigenvectors = input_covariances_eigenvectors.get(group_key)
+        ggT_eigenvectors = gradient_covariances_eigenvectors[group_key]
+
+        eigencorrection = compute_eigenvalue_correction_linear_weight_sharing(
+            g, ggT_eigenvectors, a, aaT_eigenvectors
+        )
+        self._set_or_add_(
+            corrected_eigenvalues, group_key, eigencorrection.mul_(correction)
+        )

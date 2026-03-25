@@ -4,12 +4,11 @@ from collections.abc import Callable, Iterable, MutableMapping
 
 from numpy import random
 from pytest import fixture
-from torch import Tensor, manual_seed
-from torch.nn import Module, MSELoss, Parameter
+from torch import Tensor, manual_seed, rand_like
+from torch.nn import Module, MSELoss
 
 import test.utils
 from test.cases import (
-    BLOCK_SIZES_FNS,
     CASES,
     CNN_CASES,
     INV_CASES,
@@ -29,7 +28,7 @@ def initialize_case(
 ) -> tuple[
     Callable[[Tensor], Tensor],
     Callable[[Tensor, Tensor], Tensor],
-    list[Tensor],
+    dict[str, Tensor],
     Iterable[tuple[Tensor, Tensor]],
     Callable[[MutableMapping], int] | None,
 ]:
@@ -44,9 +43,17 @@ def initialize_case(
     random.seed(case["seed"])
     manual_seed(case["seed"])
 
-    model_func = case["model_func"]().to(case["device"])
+    model_func = case["model_func"]()
     loss_func = case["loss_func"]().to(case["device"])
-    params = [p for p in model_func.parameters() if p.requires_grad]
+    if isinstance(model_func, Module):
+        model_func = model_func.to(case["device"])
+        params = {
+            n: 0.01 * rand_like(p) + p.data
+            for n, p in model_func.named_parameters()
+            if p.requires_grad
+        }
+    else:
+        params = {n: p.to(case["device"]) for n, p in case["params"]().items()}
     data = case["data"]()
 
     # In some KFAC cases,
@@ -68,7 +75,7 @@ def case(
 ) -> tuple[
     Callable[[Tensor], Tensor],
     Callable[[Tensor, Tensor], Tensor],
-    list[Tensor],
+    dict[str, Tensor],
     Iterable[tuple[Tensor, Tensor]],
     Callable[[MutableMapping], int] | None,
 ]:
@@ -87,7 +94,7 @@ def inv_case(
 ) -> tuple[
     Callable[[Tensor], Tensor],
     Callable[[Tensor, Tensor], Tensor],
-    list[Tensor],
+    dict[str, Tensor],
     Iterable[tuple[Tensor, Tensor]],
     Callable[[MutableMapping], int] | None,
 ]:
@@ -106,7 +113,7 @@ def cnn_case(
 ) -> tuple[
     Callable[[Tensor], Tensor],
     Callable[[Tensor, Tensor], Tensor],
-    list[Tensor],
+    dict[str, Tensor],
     Iterable[tuple[Tensor, Tensor]],
     Callable[[MutableMapping], int] | None,
 ]:
@@ -125,7 +132,7 @@ def non_deterministic_case(
 ) -> tuple[
     Callable[[Tensor], Tensor],
     Callable[[Tensor, Tensor], Tensor],
-    list[Tensor],
+    dict[str, Tensor],
     Iterable[tuple[Tensor, Tensor]],
     Callable[[MutableMapping], int] | None,
 ]:
@@ -138,34 +145,20 @@ def non_deterministic_case(
     yield initialize_case(case)
 
 
-@fixture(params=BLOCK_SIZES_FNS.values(), ids=BLOCK_SIZES_FNS.keys())
-def block_sizes_fn(request) -> Callable[[list[Parameter]], list[int] | None]:
-    """Generate the ``block_sizes`` argument for a linear operator.
-
-    Args:
-        request: Pytest request object.
-
-    Returns:
-        A function that generates the block sizes for a linear operator from the
-        parameters.
-    """
-    return request.param
-
-
 @fixture(params=KFAC_EXACT_CASES)
 def kfac_exact_case(
     request,
 ) -> tuple[
     Module,
     MSELoss,
-    list[Tensor],
+    dict[str, Tensor],
     Iterable[tuple[Tensor, Tensor]],
     Callable[[MutableMapping], int] | None,
 ]:
     """Prepare a test case for which KFAC equals the GGN.
 
     Yields:
-        A neural network, the mean-squared error function, a list of parameters, and
+        A neural network, the mean-squared error function, a dict of parameters, and
         a data set.
     """
     case = request.param
@@ -178,14 +171,14 @@ def kfac_weight_sharing_exact_case(
 ) -> tuple[
     Module,
     MSELoss,
-    list[Tensor],
+    dict[str, Tensor],
     Iterable[tuple[Tensor, Tensor]],
     Callable[[MutableMapping], int] | None,
 ]:
     """Prepare a test case with weight-sharing for which KFAC equals the GGN.
 
     Yields:
-        A neural network, the mean-squared error function, a list of parameters, and
+        A neural network, the mean-squared error function, a dict of parameters, and
         a data set.
     """
     case = request.param
@@ -198,14 +191,14 @@ def kfac_exact_one_datum_case(
 ) -> tuple[
     Module,
     Module,
-    list[Tensor],
+    dict[str, Tensor],
     Iterable[tuple[Tensor, Tensor]],
     Callable[[MutableMapping], int] | None,
 ]:
     """Prepare a test case for which KFAC equals the GGN and one datum is used.
 
     Yields:
-        A neural network, loss function, a list of parameters, and
+        A neural network, loss function, a dict of parameters, and
         a data set with a single datum.
     """
     case = request.param
@@ -218,14 +211,14 @@ def single_layer_case(
 ) -> tuple[
     Module,
     Module,
-    list[Tensor],
+    dict[str, Tensor],
     Iterable[tuple[Tensor, Tensor]],
     Callable[[MutableMapping], int] | None,
 ]:
     """Prepare a test case with a single-layer model for which FOOF is exact.
 
     Yields:
-        A neural network, loss function, a list of parameters, and
+        A neural network, loss function, a dict of parameters, and
         a data set with a single datum.
     """
     case = request.param
@@ -238,14 +231,14 @@ def single_layer_weight_sharing_case(
 ) -> tuple[
     Module,
     Module,
-    list[Tensor],
+    dict[str, Tensor],
     Iterable[tuple[Tensor, Tensor]],
     Callable[[MutableMapping], int] | None,
 ]:
     """Test case with a single-layer model with weight-sharing for which FOOF is exact.
 
     Yields:
-        A neural network, loss function, a list of parameters, and
+        A neural network, loss function, a dict of parameters, and
         a data set with a single datum.
     """
     case = request.param

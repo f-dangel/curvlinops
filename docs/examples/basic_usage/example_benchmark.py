@@ -40,7 +40,6 @@ from torch.nn import (
     Linear,
     MaxPool2d,
     Module,
-    Parameter,
     ReLU,
     Sequential,
 )
@@ -50,7 +49,6 @@ from tueplots import bundles
 from curvlinops import (
     EFLinearOperator,
     EKFACLinearOperator,
-    FisherMCLinearOperator,
     GGNLinearOperator,
     HessianLinearOperator,
     KFACLinearOperator,
@@ -81,7 +79,6 @@ makedirs(RESULTDIR, exist_ok=True)
 HAS_JVP = (
     HessianLinearOperator,
     GGNLinearOperator,
-    FisherMCLinearOperator,
     EFLinearOperator,
 )
 
@@ -156,7 +153,7 @@ def setup_synthetic_mnist_cnn(
 
 def setup_problem(
     problem_str: str, linop_str: str, dev: device
-) -> tuple[Module, Module, list[Parameter], Iterable[tuple[Tensor, Tensor]]]:
+) -> tuple[Module, Module, dict[str, Tensor], Iterable[tuple[Tensor, Tensor]]]:
     """Set up the neural net, loss function, parameters, and data.
 
     Args:
@@ -182,17 +179,19 @@ def setup_problem(
 
     # Only use parameters of supported layers for KFAC
     if linop_str in {"KFAC", "KFAC inverse", "EKFAC", "EKFAC inverse"}:
-        params = []
-        supported_layers = [
-            m for m in model.modules() if isinstance(m, (Linear, Conv2d))
-        ]
-        for m in supported_layers:
+        params = {}
+        for mod_name, mod in model.named_modules():
+            if not isinstance(mod, (Linear, Conv2d)):
+                continue
             # ignore the last layer of GPT because it has 50k outputs, which
             # will yield an extremely large Kronecker factor
-            if all(d <= 50_000 for d in m.weight.shape):
-                params.extend([p for p in m.parameters() if p.requires_grad])
+            if all(d <= 50_000 for d in mod.weight.shape):
+                for p_name, p in mod.named_parameters(recurse=False):
+                    full_name = f"{mod_name}.{p_name}" if mod_name else p_name
+                    if p.requires_grad:
+                        params[full_name] = p
     else:
-        params = [p for p in model.parameters() if p.requires_grad]
+        params = {n: p for n, p in model.named_parameters() if p.requires_grad}
 
     return model, loss_function, params, data
 
@@ -203,9 +202,6 @@ def setup_problem(
 
 LINOP_STRS = [
     "Hessian",
-    # NOTE Hessian block-diagonal takes much longer because we have to loop
-    # the HVPs over blocks; therefore we exclude it from the benchmark
-    # "Block-diagonal Hessian",
     "Generalized Gauss-Newton",
     "Empirical Fisher",
     "Monte-Carlo Fisher",
@@ -231,7 +227,7 @@ def setup_linop(
     linop_str: str,
     model: Module,
     loss_function: Module,
-    params: list[Parameter],
+    params: dict[str, Tensor],
     data: Iterable[tuple[Tensor, Tensor]],
     check_deterministic: bool = True,
 ) -> PyTorchLinearOperator:
@@ -252,36 +248,14 @@ def setup_linop(
     args = (model, loss_function, params, data)
     kwargs = {"check_deterministic": check_deterministic, "num_data": num_data}
 
-    if linop_str == "Block-diagonal Hessian":
-        # Figure out parameters that are in a layer (defined by an nn.Module) that
-        # forms a block, and get the parameter ids for each block
-        ids = [p.data_ptr() for p in params]
-        blocks = []
-
-        for mod in model.modules():
-            total = [p.data_ptr() for p in mod.parameters() if p.data_ptr() in ids]
-            children = [
-                p.data_ptr()
-                for child in mod.children()
-                for p in child.parameters()
-                if p.data_ptr() in total
-            ]
-            if block := [ptr for ptr in total if ptr not in children]:
-                blocks.append(block)
-
-        # re-order parameters so that parameters of blocks are consecutive
-        blocks_flat = sum(blocks, [])
-        new_order = [ids.index(ptr) for ptr in blocks_flat]
-        params = [params[i] for i in new_order]
-
-        kwargs["block_sizes"] = [len(block) for block in blocks]
+    if linop_str == "Monte-Carlo Fisher":
+        kwargs["mc_samples"] = 1
 
     linop_cls = {
         "Hessian": HessianLinearOperator,
-        "Block-diagonal Hessian": HessianLinearOperator,
         "Generalized Gauss-Newton": GGNLinearOperator,
         "Empirical Fisher": EFLinearOperator,
-        "Monte-Carlo Fisher": FisherMCLinearOperator,
+        "Monte-Carlo Fisher": GGNLinearOperator,
         "KFAC": KFACLinearOperator,
         "KFAC inverse": KFACLinearOperator,
         "EKFAC": EKFACLinearOperator,

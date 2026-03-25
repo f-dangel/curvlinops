@@ -6,7 +6,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Migration guide: `params` is now `dict[str, Tensor]`
+
+All operators now require `params` as a `dict[str, Tensor]` instead of
+`list[Parameter]`. This affects every call site. Here is how to update your code:
+
+```python
+# Before
+params = [p for p in model.parameters() if p.requires_grad]
+H = HessianLinearOperator(model, loss, params, data)
+
+# After
+params = {n: p for n, p in model.named_parameters() if p.requires_grad}
+H = HessianLinearOperator(model, loss, params, data)
+```
+
+See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
+
 ### Added/New
+
+- Support plain callable `(params_dict, X) -> prediction` as `model_func`
+  (with `params` as `dict[str, Tensor]`):
+  - `HessianLinearOperator` ([PR](https://github.com/f-dangel/curvlinops/pull/275))
+  - `GGNLinearOperator` ([PR](https://github.com/f-dangel/curvlinops/pull/277))
+  - `EFLinearOperator` ([PR](https://github.com/f-dangel/curvlinops/pull/278))
+  - `GGNDiagonalLinearOperator` ([PR](https://github.com/f-dangel/curvlinops/pull/279))
+  - `JacobianLinearOperator` and `TransposedJacobianLinearOperator`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/280))
+  - `KFACLinearOperator` and `EKFACLinearOperator` with `backend="make_fx"`
+    ([PR](https://github.com/f-dangel/curvlinops/pull/271))
+
+- **Backward-incompatible:** Add MC-sampling option (`mc_samples`) to
+  `GGNLinearOperator` as replacement for the Fisher, remove `FisherMCLinearOperator`
+  and the `mode` parameter from `GGNDiagonalLinearOperator`/`GGNDiagonalComputer`.
+  Use `mc_samples=0` (default) for the exact GGN, positive values for MC approximation
+  ([PR](https://github.com/f-dangel/curvlinops/pull/255))
 
 - Add a linear operator for the exact or Monte-Carlo-approximated GGN diagonal
   ([PR](https://github.com/f-dangel/curvlinops/pull/241))
@@ -26,18 +60,127 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Backward-incompatible:** Remove `KFACInverseLinearOperator`, replace with `(E)KFACLinearOperator.inverse()`
   ([PR](https://github.com/f-dangel/curvlinops/pull/244))
 
+- Support non-binary (soft) labels in `[0, 1]` for `BCEWithLogitsLoss` across all
+  operators (GGN, Fisher, KFAC, diagonal). The loss Hessian `diag(σ(f)·(1-σ(f)))` is
+  independent of targets, so the exact and MC GGN are valid for any target in `[0, 1]`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/257))
+
 ### Fixed/Removed
+
+- **Backward-incompatible:** Migrate `params` from `list[Parameter]` to
+  `dict[str, Tensor]` across all operators. Pass
+  ``dict(model.named_parameters())`` instead of ``list(model.parameters())``.
+  Remove `SUPPORTS_FUNCTIONAL` flag and `identify_free_parameters` from init
+  ([PR](https://github.com/f-dangel/curvlinops/pull/283))
+
+- **Backward-incompatible:** Remove block-diagonal Hessian support (`block_sizes`
+  parameter from `HessianLinearOperator` and `CurvatureLinearOperator`)
+  ([PR](https://github.com/f-dangel/curvlinops/pull/267))
+
+- **Backward-incompatible:** Remove `curvlinops.experimental` module
+  (`ActivationHessianLinearOperator`)
+  ([PR](https://github.com/f-dangel/curvlinops/pull/268))
 
 - **Backward-incompatible:** Remove `(E)KFACLinearOperator`'s `state_dict` and `from_state_dict` methods, use `torch.save(K, path)` and `torch.load(path)` instead
   ([PR](https://github.com/f-dangel/curvlinops/pull/249))
 
+- Remove `_check_binary_if_BCEWithLogitsLoss` safeguard; BCE targets are no longer
+  restricted to binary values
+  ([PR](https://github.com/f-dangel/curvlinops/pull/257))
+
 ### Internal
+
+- Add `_use_params` context manager to temporarily set module parameters
+  during hooks-based KFAC/EKFAC computation, enabling correct behavior
+  when `params` dict values differ from the module's own parameters
+  ([PR](https://github.com/f-dangel/curvlinops/pull/282))
+
+- Update `functorch_gradient_and_loss` to accept callable model_func.
+  Add `to_functional` test helper and parametrized functional tests for
+  all operators
+  ([PR](https://github.com/f-dangel/curvlinops/pull/281))
+
+- Refactor `_data_prediction_loss_gradient` to use `torch.func.grad_and_value`
+  instead of `torch.autograd.grad`, removing the `requires_grad` requirement
+  on params for callable model functions
+  ([PR](https://github.com/f-dangel/curvlinops/pull/276))
+
+- Simplify `make_grad_output_fn` to accept `FisherType` directly instead
+  of mode strings. Remove mode-mapping dicts from callers
+  ([PR](https://github.com/f-dangel/curvlinops/pull/273))
+
+- Extract `_BaseKFACComputer` and `_EKFACMixin` to eliminate diamond
+  inheritance. Rename `KFACComputer` → `HooksKFACComputer`,
+  `EKFACComputer` → `HooksEKFACComputer`. Move base class to
+  `computers/_base.py`, hooks to `kfac_hooks.py`/`ekfac_hooks.py`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/272))
+
+- Pass `_model_func` callable to `make_batch_*` functions instead of
+  `Module`, removing redundant `make_functional_call` wrapping. Align
+  IO collector to `(params, x)` convention
+  ([PR](https://github.com/f-dangel/curvlinops/pull/270))
+
+- Rename internal `_model_func` to `_model_module`. Add functional
+  `_model_func` with signature `(params_dict, X) -> prediction` via
+  `make_functional_call`, used for predictions and shape inference
+  ([PR](https://github.com/f-dangel/curvlinops/pull/269))
+
+- Simplify `make_functional_call`: drop redundant frozen parameter capture
+  (`functional_call` already falls back to module state). Split
+  `make_functional_model_and_loss` into `make_functional_call` and
+  `make_functional_loss`. Remove unused `param_names` arguments from
+  `make_batch_*` functions
+  ([PR](https://github.com/f-dangel/curvlinops/pull/266))
+
+- Introduce parameter groups for KFAC/EKFAC. Covariance dicts keyed by
+  tuples of parameter names instead of synthetic layer names. Support
+  weight tying and mixed-bias configurations in the make_fx backend.
+  Remove `ParameterUsage` dataclass in favor of plain `dict[str, str]`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/265),
+  [PR](https://github.com/f-dangel/curvlinops/pull/264),
+  [PR](https://github.com/f-dangel/curvlinops/pull/263))
+
+- Migrate internal parameter representation from `list[Parameter]` to
+  `dict[str, Parameter]` (keyed by fully-qualified name). Public API unchanged
+  (`list[Parameter]` still accepted). Tighten `model_func` type from `Callable`
+  to `Module`. KFAC `_mapping` values change from `int` positions to `str` names
+  ([PR](https://github.com/f-dangel/curvlinops/pull/262))
+
+- Reduce KFAC/EKFAC test suite from ~6,100 to ~1,100 tests by consolidating
+  `exclude`/`shuffle`/`separate_weight_and_bias` parametrization into the four
+  type-2 exactness tests (kfac/ekfac × standard/weight_sharing) and shrinking
+  Conv2d spatial dimensions in weight-sharing test cases
+  ([PR](https://github.com/f-dangel/curvlinops/pull/260))
+
+- Move shared GGN utilities (`loss_hessian_matrix_sqrt`, `make_grad_output_fn`,
+  `_make_single_datum_sampler`) from
+  `kfac_utils.py` to new `ggn_utils.py`; `kfac_utils.py` now only contains
+  KFAC-specific code (patch extraction, canonical space converters)
+  ([PR](https://github.com/f-dangel/curvlinops/pull/255))
+
+- Generalize IO collector to handle linear layers with >2D inputs
+  ([PR](https://github.com/f-dangel/curvlinops/pull/259))
 
 - Add a collector for in/outputs of linear weight sharing layers based on `make_fx`
   ([PR](https://github.com/f-dangel/curvlinops/pull/252))
 
 - Add KFAC-specific IO collector (`with_kfac_io`) that wraps the generic collector
   with validation and structured output for KFAC computation
+  ([PR](https://github.com/f-dangel/curvlinops/pull/253))
+
+- Add `make_fx` backend for `KFACLinearOperator` via `MakeFxKFACComputer`, which
+  computes Kronecker factors using FX graph tracing instead of hooks. Selectable
+  via `backend="make_fx"` parameter
+  ([PR](https://github.com/f-dangel/curvlinops/pull/258))
+
+- Add `make_fx` backend for `EKFACLinearOperator` via `MakeFxEKFACComputer`,
+  which computes eigenvalue-corrected Kronecker factors using FX graph tracing
+  instead of hooks. Selectable via `backend="make_fx"` parameter
+  ([PR](https://github.com/f-dangel/curvlinops/pull/261))
+
+- Import `FisherType` and `KFACType` directly from `curvlinops.kfac_utils`
+  instead of `curvlinops.kfac`, reducing coupling between the linear operator
+  and utility modules
   ([PR](https://github.com/f-dangel/curvlinops/pull/253))
 
 - Unify KFAC's gradient output computation for all Fisher types (`TYPE2`, `MC`,
@@ -156,6 +299,15 @@ This patch provides major performance improvements for all curvature matrices (b
     ([PR](https://github.com/f-dangel/curvlinops/pull/204))
   - (Transpose) Jacobian-vector products
     ([PR](https://github.com/f-dangel/curvlinops/pull/206))
+
+- Refactor `torch.func` code: treat parameters as a single tuple argument,
+  split data arguments into model input `X` and loss arguments `loss_args`,
+  simplify `vmap` dims to `-1`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/220))
+
+- Centralize `vmap` over matrix columns in `CurvatureLinearOperator._matmat_batch`;
+  subclasses now implement `_matvec_batch` (single vector) instead
+  ([PR](https://github.com/f-dangel/curvlinops/pull/256))
 
 ## [3.0.0] - 2025-10-16
 
