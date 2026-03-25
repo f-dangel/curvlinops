@@ -75,6 +75,7 @@ class CGInverseLinearOperator(_InversePyTorchLinearOperator):
 
         Example:
             >>> from torch import allclose, tensor
+            >>> from torch.linalg import inv
             >>> from curvlinops import CGInverseLinearOperator
             >>> from curvlinops.diag import DiagonalLinearOperator
             >>> from curvlinops.examples import TensorLinearOperator
@@ -84,6 +85,7 @@ class CGInverseLinearOperator(_InversePyTorchLinearOperator):
             >>> A_inv_b = CGInverseLinearOperator(
             ...     A_linop, max_iter=3, max_tridiag_iter=3, tolerance=1e-7
             ... ) @ b
+            >>> # Use CG with a simple diagonal preconditioner.
             >>> inverse_diagonal = DiagonalLinearOperator([A.diag().reciprocal()])
             >>> A_inv_b_preconditioned = CGInverseLinearOperator(
             ...     A_linop,
@@ -92,11 +94,12 @@ class CGInverseLinearOperator(_InversePyTorchLinearOperator):
             ...     tolerance=1e-7,
             ...     preconditioner=inverse_diagonal.__matmul__,
             ... ) @ b
+            >>> A_inv_b_exact = inv(A) @ b
             >>> A_inv_b.round(decimals=4)
             tensor([0.2222, 0.1111, 1.4444])
             >>> A_inv_b_preconditioned.round(decimals=4)
             tensor([0.2222, 0.1111, 1.4444])
-            >>> allclose(A_inv_b, A_inv_b_preconditioned)
+            >>> allclose(A_inv_b_exact, A_inv_b_preconditioned)
             True
         """
         super().__init__(A)
@@ -301,30 +304,28 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
         Raises:
             ValueError: If ``NaN`` check is turned on and ``NaN`` values are detected.
         """
-        X_flat = cat([x.flatten(end_dim=-2) for x in X])
-        _, num_vecs = X_flat.shape
-
         preconditioned = self._preconditioner is not None
+
         if not preconditioned:
             rhs_list = X
             apply_iteration_operator = self._A._matmat
         else:
-            rhs_flat = self._preconditioner(X_flat)
-            rhs_list = [
-                r.reshape(*s, num_vecs)
-                for r, s in zip(rhs_flat.split(self._out_shape_flat), self._out_shape)
-            ]
-
-            def apply_iteration_operator(v_list: list[Tensor]) -> list[Tensor]:
-                v_flat = cat([v.flatten(end_dim=-2) for v in v_list])
-                A_v_flat = self._A @ v_flat
-                PA_v_flat = self._preconditioner(A_v_flat)
+            # Apply the left preconditioner to a vector in list of tensor.
+            def P(X: list[Tensor]) -> list[Tensor]:
+                X_flat = cat([x.flatten(end_dim=-2) for x in X])
+                PX_flat = self._preconditioner(X_flat)
+                _, num_vecs = PX_flat.shape
                 return [
                     r.reshape(*s, num_vecs)
                     for r, s in zip(
-                        PA_v_flat.split(self._out_shape_flat), self._out_shape
+                        PX_flat.split(self._out_shape_flat), self._out_shape
                     )
                 ]
+
+            rhs_list = P(X)
+
+            def apply_iteration_operator(v_list: list[Tensor]) -> list[Tensor]:
+                return P(self._A @ v_list)
 
         result_list = [x.clone() for x in rhs_list]
         v_list = [x.clone() for x in rhs_list]
@@ -336,11 +337,11 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
             ]
             result_list = [result.add_(v) for result, v in zip(result_list, v_list)]
 
-            if self._check_nan and any(isnan(v).any() for v in v_list):
+            if self._check_nan and any(isnan(result).any() for result in result_list):
                 raise ValueError(
                     f"Detected NaNs after application of {idx}-th term."
                     + " This is probably because the Neumann series is non-convergent."
-                    + " Try using a better preconditioner or fewer terms."
+                    + " Try decreasing `scale` and read the comment on convergence."
                 )
 
         return [result.mul_(self._scale) for result in result_list]
