@@ -185,6 +185,13 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
                 ``"make_fx"`` uses FX graph tracing via the IO collector.
                 Defaults to ``"hooks"``.
 
+                Note: The ``"make_fx"`` backend incurs a significant one-time
+                tracing overhead (seconds for large models) on the first batch.
+                The traced function is cached by batch size, so subsequent
+                batches of the same size reuse it. However, each distinct batch
+                size triggers a re-trace. Use uniform batch sizes in the data
+                loader to avoid repeated tracing.
+
         Raises:
             ValueError: If ``backend`` is not supported.
         """
