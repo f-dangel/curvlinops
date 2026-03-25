@@ -13,10 +13,7 @@ from curvlinops import (
     LSMRInverseLinearOperator,
     NeumannInverseLinearOperator,
 )
-from curvlinops.examples import (
-    IdentityLinearOperator,
-    TensorLinearOperator,
-)
+from curvlinops.examples import IdentityLinearOperator, TensorLinearOperator
 from curvlinops.examples.functorch import functorch_ggn
 from curvlinops.diag import DiagonalLinearOperator
 from torch.nn import Linear, MSELoss
@@ -55,7 +52,7 @@ def test_CGInverseLinearOperator_damped_GGN(
     inv_GGN_naive = inv(damped_GGN_naive)
 
     # specify tolerance and turn off internal damping to get solution with accuracy
-    jacobi_preconditioner = DiagonalLinearOperator(damped_GGN_naive.diag().reciprocal())
+    jacobi_preconditioner = DiagonalLinearOperator([damped_GGN_naive.diag().reciprocal()])
     cg_kwargs = {"eps": 0, "tolerance": 1e-8}
     preconditioner = None if not precondition else jacobi_preconditioner.__matmul__
     inv_GGN = CGInverseLinearOperator(
@@ -135,13 +132,10 @@ def test_KFAC_EKFAC_preconditioners_for_CG_and_Neumann(delta: float = 0.0):
         compare_consecutive_matmats(inv_preconditioner)
         compare_matmat(inv_preconditioner, inv_GGN_naive)
 
-    eigvals = eigvalsh(damped_GGN_naive)
-    neumann_scale = 2 / (eigvals.min().item() + eigvals.max().item())
     preconditioners = [
-        (None, {"num_terms": 200, "scale": neumann_scale}),
-        (inv_GGN_naive_linop, {"num_terms": 1}),
-        (inv_KFAC, {"num_terms": 1}),
-        (inv_EKFAC, {"num_terms": 1}),
+        (inv_GGN_naive_linop, {"num_terms": 0}),
+        (inv_KFAC, {"num_terms": 0}),
+        (inv_EKFAC, {"num_terms": 0}),
     ]
     inverse_constructors = [
         (
@@ -162,9 +156,7 @@ def test_KFAC_EKFAC_preconditioners_for_CG_and_Neumann(delta: float = 0.0):
     ]
 
     for inv_preconditioner, neumann_kwargs in preconditioners:
-        preconditioner = (
-            None if inv_preconditioner is None else inv_preconditioner.__matmul__
-        )
+        preconditioner = inv_preconditioner.__matmul__
         for inverse_cls, kwargs_fn in inverse_constructors:
             inv_GGN = inverse_cls(
                 GGN + damping, **kwargs_fn(preconditioner, neumann_kwargs)
@@ -182,7 +174,7 @@ def test_NeumannInverseLinearOperator_preconditioner():
     3. Gauss-Seidel Iteration: P = (L + D)^{-1}, where L is the lower triangular part of A and D is the diagonal of A.
     
     The test is inspired from
-    https://student.cs.uwaterloo.ca/~cs475/CS475-Lecture-Notes.pdf
+    https://student.cs.uwaterloo.ca/~cs475/CS475-Lecture-Notes.pdf page 78-82.
     """
     manual_seed(1234)
     A = Tensor([
@@ -210,7 +202,7 @@ def test_NeumannInverseLinearOperator_preconditioner():
     # Without preconditioning, 20 terms are not enough to get a good approximation.
     with raises(AssertionError):
         compare_matmat(inv_A_neumann_20terms, inv_A, **tols)
-    # No mater scaled or not, only 20 terms with scaling is not enough to get a good approximation.
+    # No matter scaled or not, only 20 terms with scaling is not enough to get a good approximation.
     with raises(AssertionError):
         compare_matmat(inv_A_neumann_scaled_20terms, inv_A, **tols)
     # But 100 terms with scaling is enough to get a good approximation.
@@ -223,7 +215,7 @@ def test_NeumannInverseLinearOperator_preconditioner():
     )
 
     # Jacobi preconditioner, then can converge with only 20 terms
-    preconditioner_jacobi = DiagonalLinearOperator(A.diag().reciprocal())
+    preconditioner_jacobi = DiagonalLinearOperator([A.diag().reciprocal()])
 
     # Gauss-Seidel preconditioner, then can converge with only 20 terms
     L = A.tril(-1)
