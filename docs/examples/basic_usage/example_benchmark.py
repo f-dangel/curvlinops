@@ -521,6 +521,23 @@ def _get_precompute_ops(linop_str: str) -> list[str]:
         return ["kfac_factors"]
 
 
+def _get_no_compile_phases(linop_str: str) -> set[str]:
+    """Return phase names incompatible with ``torch.compile``.
+
+    The FX ``kfac_factors`` phase calls ``setup_linop`` which internally uses
+    ``make_fx`` — nested tracing conflicts with ``torch.compile``.
+
+    Args:
+        linop_str: The linear operator name.
+
+    Returns:
+        Set of phase names to exclude from compilation.
+    """
+    if linop_str in _IS_FX:
+        return {"kfac_factors"}
+    return set()
+
+
 def make_precompute_phases(  # noqa: C901, PLR0915
     linop_str: str,
     model: Module,
@@ -756,6 +773,7 @@ if __name__ == "__main__":
             f"{linop_str} precompute on {problem_str}",
             phases,
             is_cuda="cuda" in device_str,
+            no_compile=_get_no_compile_phases(linop_str),
         )
         # For FX operators, derive kfac_factors by subtracting other phases
         if results is not None and linop_str in _IS_FX:

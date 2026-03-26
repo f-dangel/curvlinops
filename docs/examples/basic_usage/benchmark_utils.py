@@ -43,11 +43,15 @@ class TimeBenchmark:
         self.compile = compile
 
     def time(
-        self, func: Callable, is_cuda: bool, num_repeats: int | None = None
+        self,
+        func: Callable,
+        is_cuda: bool,
+        num_repeats: int | None = None,
+        compile: bool | None = None,
     ) -> tuple[float, Any]:
         """Time a function and return (min_time, last_result).
 
-        If ``self.compile`` is ``True``, the function is wrapped with
+        If compilation is enabled, the function is wrapped with
         ``torch.compile`` before timing. The first repeat serves as
         compilation warmup and is included in the timing (so the minimum
         reflects compiled performance after warmup).
@@ -56,13 +60,16 @@ class TimeBenchmark:
             func: The function to time.
             is_cuda: Whether to synchronize CUDA before/after.
             num_repeats: Override for the number of repeats.
+            compile: Override for whether to compile. If ``None``, uses
+                ``self.compile``.
 
         Returns:
             Tuple of (minimum time across repeats, last return value).
         """
         import torch
 
-        if self.compile:
+        do_compile = compile if compile is not None else self.compile
+        if do_compile:
             func = torch.compile(func)
 
         n = num_repeats if num_repeats is not None else self.num_repeats
@@ -109,6 +116,7 @@ class TimeBenchmark:
         label: str,
         phase_fns: dict[str, Callable],
         is_cuda: bool,
+        no_compile: set[str] | None = None,
     ) -> dict[str, float] | None:
         """Time multiple phases and save all to a single JSON file.
 
@@ -121,6 +129,8 @@ class TimeBenchmark:
             label: Description for printing.
             phase_fns: Ordered dict mapping phase names to callables.
             is_cuda: Whether to synchronize CUDA.
+            no_compile: Phase names to exclude from ``torch.compile``
+                (e.g. phases that use ``make_fx`` internally).
 
         Returns:
             Dict of ``{phase_name: best_time}``, or ``None`` if skipped.
@@ -129,9 +139,11 @@ class TimeBenchmark:
             print(f"[Time] Skipping {label}")
             return None
 
+        skip_compile = no_compile or set()
         results = {}
         for phase_name, func in phase_fns.items():
-            best, _ = self.time(func, is_cuda)
+            phase_compile = None if phase_name not in skip_compile else False
+            best, _ = self.time(func, is_cuda, compile=phase_compile)
             results[phase_name] = best
             print(f"[Time] {label} / {phase_name}: {best:.4f} s")
 
