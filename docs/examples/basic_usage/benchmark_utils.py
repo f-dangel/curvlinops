@@ -24,20 +24,33 @@ class TimeBenchmark:
         skip_existing: Whether to skip measurements whose result file exists.
     """
 
-    def __init__(self, num_repeats: int = 10, skip_existing: bool = True):
+    def __init__(
+        self,
+        num_repeats: int = 10,
+        skip_existing: bool = True,
+        compile: bool = False,
+    ):
         """Set up the benchmark timer.
 
         Args:
             num_repeats: Number of repeats per measurement. Uses the minimum.
             skip_existing: Whether to skip measurements whose result file exists.
+            compile: Whether to wrap functions with ``torch.compile`` before
+                timing. The first repeat serves as compilation warmup.
         """
         self.num_repeats = num_repeats
         self.skip_existing = skip_existing
+        self.compile = compile
 
     def time(
         self, func: Callable, is_cuda: bool, num_repeats: int | None = None
     ) -> tuple[float, Any]:
         """Time a function and return (min_time, last_result).
+
+        If ``self.compile`` is ``True``, the function is wrapped with
+        ``torch.compile`` before timing. The first repeat serves as
+        compilation warmup and is included in the timing (so the minimum
+        reflects compiled performance after warmup).
 
         Args:
             func: The function to time.
@@ -47,6 +60,11 @@ class TimeBenchmark:
         Returns:
             Tuple of (minimum time across repeats, last return value).
         """
+        import torch
+
+        if self.compile:
+            func = torch.compile(func)
+
         n = num_repeats if num_repeats is not None else self.num_repeats
         times = []
         for _ in range(n):
