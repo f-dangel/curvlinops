@@ -1,12 +1,127 @@
-"""Utility functions for setting up nanoGPT."""
+"""Utility functions for benchmark setup and timing."""
 
 import inspect
+import json
+from collections.abc import Callable
 from os import path
+from time import perf_counter
+from typing import Any
 
 import requests
-from torch import Tensor, rand, randint, stack, zeros_like
+from torch import Tensor, cuda, rand, randint, stack, zeros_like
 from torch.nn import CrossEntropyLoss, Module, Parameter
 from torchvision.models import ResNet50_Weights, resnet18, resnet50
+
+
+class TimeBenchmark:
+    """Utility for timing functions and saving results to JSON.
+
+    Handles skip-if-exists, CUDA synchronization, multi-repeat timing,
+    and JSON persistence.
+
+    Args:
+        num_repeats: Number of repeats per measurement. Uses the minimum.
+        skip_existing: Whether to skip measurements whose result file exists.
+    """
+
+    def __init__(self, num_repeats: int = 10, skip_existing: bool = True):
+        """Set up the benchmark timer.
+
+        Args:
+            num_repeats: Number of repeats per measurement. Uses the minimum.
+            skip_existing: Whether to skip measurements whose result file exists.
+        """
+        self.num_repeats = num_repeats
+        self.skip_existing = skip_existing
+
+    def time(
+        self, func: Callable, is_cuda: bool, num_repeats: int | None = None
+    ) -> tuple[float, Any]:
+        """Time a function and return (min_time, last_result).
+
+        Args:
+            func: The function to time.
+            is_cuda: Whether to synchronize CUDA before/after.
+            num_repeats: Override for the number of repeats.
+
+        Returns:
+            Tuple of (minimum time across repeats, last return value).
+        """
+        n = num_repeats if num_repeats is not None else self.num_repeats
+        times = []
+        for _ in range(n):
+            if is_cuda:
+                cuda.synchronize()
+            start = perf_counter()
+            result = func()
+            if is_cuda:
+                cuda.synchronize()
+            times.append(perf_counter() - start)
+        return min(times), result
+
+    def run(
+        self, save_path: str, label: str, func: Callable, is_cuda: bool
+    ) -> float | None:
+        """Skip-if-exists, time, save to JSON, and print.
+
+        Saves ``{"time": best}`` to ``save_path``.
+
+        Args:
+            save_path: Path to the JSON result file.
+            label: Description for printing.
+            func: The function to time.
+            is_cuda: Whether to synchronize CUDA.
+
+        Returns:
+            The best time, or ``None`` if skipped.
+        """
+        if self.skip_existing and path.exists(save_path):
+            print(f"[Time] Skipping {label}")
+            return None
+
+        best, _ = self.time(func, is_cuda)
+        print(f"[Time] {label}: {best:.4f} s")
+        with open(save_path, "w") as f:
+            json.dump({"time": best}, f)
+        return best
+
+    def run_phases(
+        self,
+        save_path: str,
+        label: str,
+        phase_fns: dict[str, Callable],
+        is_cuda: bool,
+    ) -> dict[str, float] | None:
+        """Time multiple phases and save all to a single JSON file.
+
+        Each phase is timed independently. Phases run in order, so later
+        phases can depend on side effects of earlier ones (e.g. via shared
+        mutable state).
+
+        Args:
+            save_path: Path to the JSON result file.
+            label: Description for printing.
+            phase_fns: Ordered dict mapping phase names to callables.
+            is_cuda: Whether to synchronize CUDA.
+
+        Returns:
+            Dict of ``{phase_name: best_time}``, or ``None`` if skipped.
+        """
+        if self.skip_existing and path.exists(save_path):
+            print(f"[Time] Skipping {label}")
+            return None
+
+        results = {}
+        for phase_name, func in phase_fns.items():
+            best, _ = self.time(func, is_cuda)
+            results[phase_name] = best
+            print(f"[Time] {label} / {phase_name}: {best:.4f} s")
+
+        with open(save_path, "w") as f:
+            json.dump(results, f)
+        print(f"[Time] Saved {label}")
+        return results
+
 
 # In the execution with sphinx-gallery, __file__ is not defined and we need
 # to set it manually using the trick from https://stackoverflow.com/a/53293924

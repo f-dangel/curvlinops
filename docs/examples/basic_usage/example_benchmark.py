@@ -24,11 +24,11 @@ from math import floor
 from os import environ, makedirs, path
 from shutil import which
 from subprocess import CalledProcessError, CompletedProcess, run
-from time import perf_counter
 
 import matplotlib.pyplot as plt
 from benchmark_utils import (
     GPTWrapper,
+    TimeBenchmark,
     setup_synthetic_cifar10_resnet18,
     setup_synthetic_imagenet_resnet50,
     setup_synthetic_shakespeare_nanogpt,
@@ -495,165 +495,9 @@ def reference_benchpath(problem_str: str, device_str: str, metric: str = "time")
 # 2. **Precompute benchmark**: measures the pre-computation cost for KFAC/EKFAC
 #    operators, broken down into sub-phases (Kronecker factors, eigendecomposition,
 #    eigenvalue correction, Cholesky inverse, FX tracing).
-
-
-def _time_function(func, is_cuda: bool, num_repeats: int) -> float:
-    """Time a function and return the best (minimum) time.
-
-    Args:
-        func: The function to time.
-        is_cuda: Whether to synchronize CUDA before/after.
-        num_repeats: Number of repeats.
-
-    Returns:
-        Tuple of (minimum time, last result).
-    """
-    times = []
-    for _ in range(num_repeats):
-        if is_cuda:
-            cuda.synchronize()
-        start = perf_counter()
-        result = func()
-        if is_cuda:
-            cuda.synchronize()
-        times.append(perf_counter() - start)
-    return min(times), result
-
-
-def _save_and_print(savepath: str, metric_name: str, key: str, value, label: str):
-    """Save a benchmark result to JSON and print it.
-
-    Args:
-        savepath: Path to the JSON file.
-        metric_name: Name for printing (e.g. 'Time', 'Memory').
-        key: JSON key (e.g. 'time', 'peakmem').
-        value: The measured value.
-        label: Description for the print message.
-    """
-    print(f"[{metric_name}] {label}:\n\tBest: {value:.4f}")
-    with open(savepath, "w") as f:
-        json.dump({key: value}, f)
-
-
-def _skip_if_exists(savepath: str, label: str) -> bool:
-    """Check if a result file exists and print skip message if so.
-
-    Args:
-        savepath: Path to check.
-        label: Description for the skip message.
-
-    Returns:
-        True if the file exists and should be skipped.
-    """
-    if SKIP_EXISTING and path.exists(savepath):
-        print(f"[Time] Skipping {label}")
-        return True
-    return False
-
-
-# %%
 #
-# Reference baseline
-# ^^^^^^^^^^^^^^^^^^
-#
-# The gradient_and_loss reference is measured once per problem (not per linop).
-
-
-def run_reference_benchmark(problem_str: str, device_str: str, num_repeats: int = 1):
-    """Measure gradient_and_loss once per problem as a reference baseline.
-
-    Uses all model parameters (not a KFAC subset) so the reference is
-    linop-independent.
-
-    Args:
-        problem_str: The problem.
-        device_str: The device.
-        num_repeats: Number of repeats. Uses the minimum time.
-    """
-    savepath = reference_benchpath(problem_str, device_str)
-    if _skip_if_exists(savepath, f"reference on {problem_str} and {device_str}"):
-        return
-
-    manual_seed(0)
-    dev = device(device_str)
-    is_cuda = "cuda" in str(dev)
-    model, loss_function, params, data = setup_problem(problem_str, "Hessian", dev)
-
-    def func():
-        _ = gradient_and_loss(model, loss_function, params, data)
-
-    best, _ = _time_function(func, is_cuda, num_repeats)
-    _save_and_print(
-        savepath,
-        "Time",
-        "time",
-        best,
-        f"Reference gradient_and_loss on {problem_str} and {device_str}",
-    )
-
-
-# %%
-#
-# Matvec benchmark
-# ^^^^^^^^^^^^^^^^
-#
-# Measures the time of a single matrix-vector product for each linear operator.
-
-
-def run_matvec_benchmark(
-    linop_str: str, problem_str: str, device_str: str, num_repeats: int = 1
-):
-    """Benchmark the matvec time for a linear operator.
-
-    Args:
-        linop_str: The linear operator.
-        problem_str: The problem.
-        device_str: The device.
-        num_repeats: Number of repeats.
-    """
-    savepath = benchpath(linop_str, problem_str, device_str, "matvec")
-    label = f"{linop_str}'s matvec on {problem_str} and {device_str}"
-    if _skip_if_exists(savepath, label):
-        return
-
-    manual_seed(0)
-    dev = device(device_str)
-    is_cuda = "cuda" in str(dev)
-    model, loss_function, params, data = setup_problem(problem_str, linop_str, dev)
-
-    linop = setup_linop(
-        linop_str, model, loss_function, params, data, check_deterministic=False
-    )
-    v = rand(linop.shape[1], device=dev)
-
-    def func():
-        attention_double_backward = isinstance(linop, HAS_JVP) and isinstance(
-            model, GPTWrapper
-        )
-        with (
-            sdpa_kernel(SDPBackend.MATH) if attention_double_backward else nullcontext()
-        ):
-            _ = linop @ v
-
-    best, _ = _time_function(func, is_cuda, num_repeats)
-    _save_and_print(savepath, "Time", "time", best, label)
-
-
-# %%
-#
-# Precompute benchmark
-# ^^^^^^^^^^^^^^^^^^^^
-#
-# Measures the pre-computation cost for KFAC/EKFAC operators, broken down into
-# sub-phases. Each operator type has different sub-phases:
-#
-# - **KFAC (hooks)**: Kronecker factors
-# - **KFAC inverse (hooks)**: Kronecker factors + Cholesky inverse
-# - **EKFAC (hooks)**: Kronecker factors + eigenvalue correction + eigendecomposition
-# - **EKFAC inverse (hooks)**: same as EKFAC (inverse is trivial)
-# - **KFAC (fx)**: FX tracing + Kronecker factors
-# - **KFAC inverse (fx)**: FX tracing + Kronecker factors (+ Cholesky, not yet split)
-# - **EKFAC (fx)**: FX tracing + Kronecker factors + correction + decomposition
+# Both use the :class:`TimeBenchmark` utility from ``benchmark_utils`` for timing,
+# skip-if-exists, and JSON persistence.
 
 
 def _get_precompute_ops(linop_str: str) -> list[str]:
@@ -677,29 +521,31 @@ def _get_precompute_ops(linop_str: str) -> list[str]:
         return ["kfac_factors"]
 
 
-def run_precompute_benchmark(  # noqa: C901, PLR0912, PLR0915
-    linop_str: str, problem_str: str, device_str: str, num_repeats: int = 1
-):
-    """Benchmark precomputation sub-phases for a KFAC/EKFAC operator.
+def make_precompute_phases(  # noqa: C901, PLR0915
+    linop_str: str,
+    model: Module,
+    loss_function: Module,
+    params: dict[str, Tensor],
+    data,
+) -> dict[str, callable]:
+    """Build an ordered dict of phase_name -> callable for precompute sub-phases.
 
-    All sub-phase timings are stored in a single ``precompute.json`` file
-    with one key per sub-phase (e.g. ``{"kfac_factors": 0.26, "eigh": 3.19}``).
+    Phases run in order. Later phases can depend on results of earlier ones
+    via the shared ``state`` dict captured by closures.
 
     Args:
-        linop_str: The linear operator.
-        problem_str: The problem.
-        device_str: The device.
-        num_repeats: Number of repeats per sub-phase.
-    """
-    savepath = benchpath(linop_str, problem_str, device_str, "precompute")
-    label = f"{linop_str}'s precompute on {problem_str} and {device_str}"
-    if _skip_if_exists(savepath, label):
-        return
+        linop_str: The linear operator name.
+        model: The neural net.
+        loss_function: The loss function.
+        params: The parameters.
+        data: The data.
 
-    manual_seed(0)
-    dev = device(device_str)
-    is_cuda = "cuda" in str(dev)
-    model, loss_function, params, data = setup_problem(problem_str, linop_str, dev)
+    Returns:
+        Ordered dict mapping sub-phase names to timing callables.
+    """
+    from curvlinops.computers.io_collector import with_kfac_io
+    from curvlinops.kfac_utils import FisherType
+    from curvlinops.utils import make_functional_call
 
     num_data = sum(X.shape[0] for (X, _) in data)
     X0, y0 = next(iter(data))
@@ -710,91 +556,56 @@ def run_precompute_benchmark(  # noqa: C901, PLR0912, PLR0915
         num_per_example_loss_terms=num_per_example_loss_terms,
         separate_weight_and_bias=False,
     )
+    dev = next(iter(params.values())).device
+    state = {}  # shared mutable state between phases
+    phases = {}
 
-    all_ops = _get_precompute_ops(linop_str)
-    results = {}
+    if linop_str in _IS_EKFAC and linop_str not in _IS_FX:
+        # EKFAC hooks: factors → correction → eigh
+        computer = setup_computer(linop_str, model, loss_function, params, data)
 
-    for op_str in all_ops:
-        if op_str == "kfac_factors" and linop_str not in _IS_FX:
-            if linop_str in _IS_EKFAC:
-                computer = setup_computer(linop_str, model, loss_function, params, data)
-                best, (input_cov, grad_cov, mapping) = _time_function(
-                    lambda: computer._compute_kronecker_factors(),  # noqa: B023
-                    is_cuda,
-                    num_repeats,
-                )
-            else:
-                best, kfac_linop = _time_function(
-                    lambda: KFACLinearOperator(
-                        model, loss_function, params, data, **common_kwargs
-                    ),
-                    is_cuda,
-                    num_repeats,
+        def ekfac_factors():
+            with computer._computation_context():
+                state["ic"], state["gc"], state["m"] = (
+                    computer._compute_kronecker_factors()
                 )
 
-        elif op_str == "eigh":
-            if "input_cov" not in dir():
-                computer = setup_computer(linop_str, model, loss_function, params, data)
-                input_cov, grad_cov, mapping = computer._compute_kronecker_factors()
-            input_cov_copy = {k: v.clone() for k, v in input_cov.items()}
-            grad_cov_copy = {k: v.clone() for k, v in grad_cov.items()}
-
-            def _eigh():
-                ic = {k: v.clone() for k, v in input_cov_copy.items()}  # noqa: B023
-                gc = {k: v.clone() for k, v in grad_cov_copy.items()}  # noqa: B023
-                return _EKFACMixin._eigenvectors_(ic), _EKFACMixin._eigenvectors_(gc)
-
-            best, (input_cov, grad_cov) = _time_function(_eigh, is_cuda, num_repeats)
-
-        elif op_str == "eigenvalue_correction":
-            if "mapping" not in dir():
-                computer = setup_computer(linop_str, model, loss_function, params, data)
-                input_cov, grad_cov, mapping = computer._compute_kronecker_factors()
-                input_cov = _EKFACMixin._eigenvectors_(input_cov)
-                grad_cov = _EKFACMixin._eigenvectors_(grad_cov)
-
-            best, _ = _time_function(
-                lambda: computer.compute_eigenvalue_correction(  # noqa: B023
-                    input_cov,  # noqa: B023
-                    grad_cov,  # noqa: B023
-                    mapping,  # noqa: B023
-                ),
-                is_cuda,
-                num_repeats,
-            )
-
-        elif op_str == "cholesky_inverse":
-            if "kfac_linop" not in dir():
-                kfac_linop = KFACLinearOperator(
-                    model, loss_function, params, data, **common_kwargs
+        def ekfac_correction():
+            with computer._computation_context():
+                computer.compute_eigenvalue_correction(
+                    state["ic"], state["gc"], state["m"]
                 )
-            best, _ = _time_function(
-                lambda: kfac_linop.inverse(damping=1e-3),  # noqa: B023
-                is_cuda,
-                num_repeats,
+
+        def ekfac_eigh():
+            ic = {k: v.clone() for k, v in state["ic"].items()}
+            gc = {k: v.clone() for k, v in state["gc"].items()}
+            state["ic"] = _EKFACMixin._eigenvectors_(ic)
+            state["gc"] = _EKFACMixin._eigenvectors_(gc)
+
+        phases["kfac_factors"] = ekfac_factors
+        phases["eigenvalue_correction"] = ekfac_correction
+        phases["eigh"] = ekfac_eigh
+
+    elif linop_str in _IS_KFAC_INVERSE_HOOKS:
+        # KFAC inverse hooks: factors → Cholesky inverse
+        def kfac_inv_factors():
+            state["linop"] = KFACLinearOperator(
+                model, loss_function, params, data, **common_kwargs
             )
 
-        elif op_str == "tracing":
-            from curvlinops.computers.io_collector import with_kfac_io
-            from curvlinops.kfac_utils import FisherType
-            from curvlinops.utils import make_functional_call
+        def cholesky_inverse():
+            state["linop"].inverse(damping=1e-3)
 
-            model_func = make_functional_call(model)
-            X_example = next(iter(data))[0].to(dev)
-            best, _ = _time_function(
-                lambda: with_kfac_io(  # noqa: B023
-                    model_func,  # noqa: B023
-                    X_example,  # noqa: B023
-                    params,
-                    FisherType.MC,
-                ),
-                is_cuda,
-                num_repeats,
-            )
+        phases["kfac_factors"] = kfac_inv_factors
+        phases["cholesky_inverse"] = cholesky_inverse
 
-        elif op_str == "kfac_factors" and linop_str in _IS_FX:
-            # FX factors: measure total precompute and subtract tracing
-            total, _ = _time_function(
+    elif linop_str in _IS_FX and linop_str in _IS_EKFAC:
+        # EKFAC FX: factors → correction → eigh → tracing
+        computer = setup_computer(linop_str, model, loss_function, params, data)
+
+        def ekfac_fx_factors():
+            # Measure total precompute, subtract other phases later
+            total, _ = TimeBenchmark(num_repeats=1).time(
                 lambda: setup_linop(
                     linop_str,
                     model,
@@ -803,18 +614,86 @@ def run_precompute_benchmark(  # noqa: C901, PLR0912, PLR0915
                     data,
                     check_deterministic=False,
                 ),
-                is_cuda,
-                num_repeats,
+                is_cuda="cuda" in str(dev),
             )
-            best = max(total - results.get("tracing", 0.0), 0.0)
+            state["total"] = total
+            # Also compute factors for eigh/correction dependencies
+            with computer._computation_context():
+                state["ic"], state["gc"], state["m"] = (
+                    computer._compute_kronecker_factors()
+                )
 
-        results[op_str] = best
-        print(f"[Time] {linop_str}'s {op_str}: {best:.4f} s")
+        def ekfac_fx_correction():
+            with computer._computation_context():
+                computer.compute_eigenvalue_correction(
+                    state["ic"], state["gc"], state["m"]
+                )
 
-    # Write all sub-phases to a single file
-    with open(savepath, "w") as f:
-        json.dump(results, f)
-    print(f"[Time] Saved {label}")
+        def ekfac_fx_eigh():
+            ic = {k: v.clone() for k, v in state["ic"].items()}
+            gc = {k: v.clone() for k, v in state["gc"].items()}
+            state["ic"] = _EKFACMixin._eigenvectors_(ic)
+            state["gc"] = _EKFACMixin._eigenvectors_(gc)
+
+        def ekfac_fx_tracing():
+            model_func = make_functional_call(model)
+            X_example = next(iter(data))[0].to(dev)
+            with_kfac_io(model_func, X_example, params, FisherType.MC)
+
+        phases["kfac_factors"] = ekfac_fx_factors
+        phases["eigenvalue_correction"] = ekfac_fx_correction
+        phases["eigh"] = ekfac_fx_eigh
+        phases["tracing"] = ekfac_fx_tracing
+
+    elif linop_str in _IS_FX:
+        # KFAC FX: factors → tracing
+        def kfac_fx_tracing():
+            model_func = make_functional_call(model)
+            X_example = next(iter(data))[0].to(dev)
+            with_kfac_io(model_func, X_example, params, FisherType.MC)
+
+        def kfac_fx_factors():
+            # Measure total precompute, subtract tracing later
+            total, _ = TimeBenchmark(num_repeats=1).time(
+                lambda: setup_linop(
+                    linop_str,
+                    model,
+                    loss_function,
+                    params,
+                    data,
+                    check_deterministic=False,
+                ),
+                is_cuda="cuda" in str(dev),
+            )
+            state["total"] = total
+
+        phases["kfac_factors"] = kfac_fx_factors
+        phases["tracing"] = kfac_fx_tracing
+
+    else:
+        # Plain KFAC hooks: single phase
+        def kfac_factors():
+            KFACLinearOperator(model, loss_function, params, data, **common_kwargs)
+
+        phases["kfac_factors"] = kfac_factors
+
+    return phases
+
+
+def _postprocess_fx_factors(results: dict[str, float]) -> dict[str, float]:
+    """For FX operators, derive kfac_factors = total - tracing - other phases.
+
+    Args:
+        results: Raw timing results from run_phases.
+
+    Returns:
+        Adjusted results with kfac_factors derived by subtraction.
+    """
+    if "tracing" in results and results.get("kfac_factors", 0) > 0:
+        # kfac_factors was measured as total; subtract all other timed phases
+        other = sum(v for k, v in results.items() if k != "kfac_factors")
+        results["kfac_factors"] = max(results["kfac_factors"] - other, 0.0)
+    return results
 
 
 # %%
@@ -823,23 +702,67 @@ def run_precompute_benchmark(  # noqa: C901, PLR0912, PLR0915
 # ^^^^^^^^^^^^^^^^^^^^^^^^
 
 if __name__ == "__main__":
+    bench = TimeBenchmark(num_repeats=10, skip_existing=SKIP_EXISTING)
+
     # Reference baselines (once per problem)
     for device_str, problem_str in product(DEVICE_STRS, PROBLEM_STRS):
-        run_reference_benchmark(problem_str, device_str, num_repeats=10)
+        manual_seed(0)
+        dev = device(device_str)
+        model, loss_function, params, data = setup_problem(problem_str, "Hessian", dev)
+        bench.run(
+            reference_benchpath(problem_str, device_str),
+            f"Reference on {problem_str} and {device_str}",
+            lambda: gradient_and_loss(model, loss_function, params, data),  # noqa: B023
+            is_cuda="cuda" in device_str,
+        )
 
-    # Matvec benchmark (all linops)
+    # Matvec benchmark (all linops, backend-independent)
     for device_str, problem_str, linop_str in product(
         DEVICE_STRS, PROBLEM_STRS, MATVEC_LINOP_STRS
     ):
-        run_matvec_benchmark(linop_str, problem_str, device_str, num_repeats=10)
+        manual_seed(0)
+        dev = device(device_str)
+        is_cuda = "cuda" in device_str
+        model, loss_function, params, data = setup_problem(problem_str, linop_str, dev)
+        linop = setup_linop(
+            linop_str, model, loss_function, params, data, check_deterministic=False
+        )
+        v = rand(linop.shape[1], device=dev)
 
-    # Precompute benchmark (KFAC-like only, writes all sub-phases to one file)
+        def _matvec():  # noqa: B023
+            attention_db = isinstance(linop, HAS_JVP) and isinstance(model, GPTWrapper)  # noqa: B023
+            with sdpa_kernel(SDPBackend.MATH) if attention_db else nullcontext():
+                _ = linop @ v  # noqa: B023
+
+        bench.run(
+            benchpath(linop_str, problem_str, device_str, "matvec"),
+            f"{linop_str} matvec on {problem_str}",
+            _matvec,
+            is_cuda=is_cuda,
+        )
+
+    # Precompute benchmark (KFAC-like only, sub-phase breakdown)
     for device_str, problem_str, linop_str in product(
         DEVICE_STRS,
         PROBLEM_STRS,
         [linop for linop in LINOP_STRS if linop in _KFAC_LIKE],
     ):
-        run_precompute_benchmark(linop_str, problem_str, device_str, num_repeats=10)
+        manual_seed(0)
+        dev = device(device_str)
+        model, loss_function, params, data = setup_problem(problem_str, linop_str, dev)
+        phases = make_precompute_phases(linop_str, model, loss_function, params, data)
+        results = bench.run_phases(
+            benchpath(linop_str, problem_str, device_str, "precompute"),
+            f"{linop_str} precompute on {problem_str}",
+            phases,
+            is_cuda="cuda" in device_str,
+        )
+        # For FX operators, derive kfac_factors by subtracting other phases
+        if results is not None and linop_str in _IS_FX:
+            results = _postprocess_fx_factors(results)
+            save_path = benchpath(linop_str, problem_str, device_str, "precompute")
+            with open(save_path, "w") as f:
+                json.dump(results, f)
 
 # %%
 #
