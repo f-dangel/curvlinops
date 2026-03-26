@@ -284,9 +284,6 @@ _IS_INVERSE = {
 #
 # And we are interested in the following sub-routines:
 
-# Operations we are interested in (per linop)
-OP_STRS = ["precompute", "matvec"]
-
 # EKFAC precompute is split into sub-phases for detailed analysis
 # Order: factors first, then correction, then decomposition (eigh dominates, shown last)
 EKFAC_PRECOMPUTE_OPS = ["kfac_factors", "eigenvalue_correction", "eigh"]
@@ -438,31 +435,39 @@ def setup_computer(
 
 def benchpath(
     linop_str: str,
-    problem_str,
+    problem_str: str,
     device_str: str,
-    op_str: str,
-    metric: str = "time",
+    op_str: str | None = None,
+    metric: str | None = None,
 ) -> str:
-    """Get the path to save the benchmark results.
+    """Get the path to save benchmark results.
+
+    Without ``op_str``, returns the single-file path for all measurements of
+    one operator on one problem: ``{linop}_{problem}_{device}.json``.
+
+    With ``op_str`` and/or ``metric``, returns legacy paths for backward
+    compatibility during migration.
 
     Args:
         linop_str: The linear operator.
         problem_str: The problem.
         device_str: The device.
-        op_str: Operation name that is benchmarked.
-        metric: The metric to save. Default is ``'time'``.
+        op_str: Operation name (legacy). If ``None``, uses single-file format.
+        metric: Metric prefix (legacy). If ``None``, no prefix.
 
     Returns:
         The path to save the benchmark results.
     """
-    return path.join(
-        RESULTDIR,
-        f"{metric}_{linop_str.replace(' ', '-')}_{problem_str}_{device_str}"
-        + f"_{op_str}.json",
-    )
+    name = linop_str.replace(" ", "-")
+    if op_str is not None:
+        prefix = f"{metric}_" if metric else ""
+        return path.join(
+            RESULTDIR, f"{prefix}{name}_{problem_str}_{device_str}_{op_str}.json"
+        )
+    return path.join(RESULTDIR, f"{name}_{problem_str}_{device_str}.json")
 
 
-def reference_benchpath(problem_str: str, device_str: str, metric: str = "time") -> str:
+def reference_benchpath(problem_str: str, device_str: str) -> str:
     """Get the path to save the reference gradient_and_loss benchmark.
 
     This is measured once per problem (not per linop).
@@ -470,14 +475,13 @@ def reference_benchpath(problem_str: str, device_str: str, metric: str = "time")
     Args:
         problem_str: The problem.
         device_str: The device.
-        metric: The metric to save. Default is ``'time'``.
 
     Returns:
         The path to save the reference benchmark results.
     """
     return path.join(
         RESULTDIR,
-        f"{metric}_{REFERENCE_OP}_{problem_str}_{device_str}.json",
+        f"{REFERENCE_OP}_{problem_str}_{device_str}.json",
     )
 
 
@@ -733,54 +737,62 @@ if __name__ == "__main__":
             is_cuda="cuda" in device_str,
         )
 
-    # Matvec benchmark (all linops, backend-independent)
+    # Per-linop benchmarks: matvec time (+ precompute sub-phases for KFAC-like)
+    # All results for one linop on one problem go into a single JSON file.
     for device_str, problem_str, linop_str in product(
         DEVICE_STRS, PROBLEM_STRS, MATVEC_LINOP_STRS
     ):
+        save_path = benchpath(linop_str, problem_str, device_str)
+        label = f"{linop_str} on {problem_str} and {device_str}"
+        if bench.skip_existing and path.exists(save_path):
+            print(f"[Time] Skipping {label}")
+            continue
+
         manual_seed(0)
         dev = device(device_str)
         is_cuda = "cuda" in device_str
         model, loss_function, params, data = setup_problem(problem_str, linop_str, dev)
+
+        # Build the linop and measure matvec
         linop = setup_linop(
             linop_str, model, loss_function, params, data, check_deterministic=False
         )
         v = rand(linop.shape[1], device=dev)
 
         def _matvec():  # noqa: B023
-            attention_db = isinstance(linop, HAS_JVP) and isinstance(model, GPTWrapper)  # noqa: B023
+            attention_db = isinstance(linop, HAS_JVP) and isinstance(  # noqa: B023
+                model,  # noqa: B023
+                GPTWrapper,
+            )
             with sdpa_kernel(SDPBackend.MATH) if attention_db else nullcontext():
                 _ = linop @ v  # noqa: B023
 
-        bench.run(
-            benchpath(linop_str, problem_str, device_str, "matvec"),
-            f"{linop_str} matvec on {problem_str}",
-            _matvec,
-            is_cuda=is_cuda,
-        )
+        matvec_time, _ = bench.time(_matvec, is_cuda)
+        results = {"matvec": matvec_time}
+        print(f"[Time] {label} / matvec: {matvec_time:.4f} s")
 
-    # Precompute benchmark (KFAC-like only, sub-phase breakdown)
-    for device_str, problem_str, linop_str in product(
-        DEVICE_STRS,
-        PROBLEM_STRS,
-        [linop for linop in LINOP_STRS if linop in _KFAC_LIKE],
-    ):
-        manual_seed(0)
-        dev = device(device_str)
-        model, loss_function, params, data = setup_problem(problem_str, linop_str, dev)
-        phases = make_precompute_phases(linop_str, model, loss_function, params, data)
-        results = bench.run_phases(
-            benchpath(linop_str, problem_str, device_str, "precompute"),
-            f"{linop_str} precompute on {problem_str}",
-            phases,
-            is_cuda="cuda" in device_str,
-            no_compile=_get_no_compile_phases(linop_str),
-        )
-        # For FX operators, derive kfac_factors by subtracting other phases
-        if results is not None and linop_str in _IS_FX:
-            results = _postprocess_fx_factors(results)
-            save_path = benchpath(linop_str, problem_str, device_str, "precompute")
-            with open(save_path, "w") as f:
-                json.dump(results, f)
+        # Precompute sub-phases (KFAC-like only)
+        if linop_str in _KFAC_LIKE:
+            phases = make_precompute_phases(
+                linop_str, model, loss_function, params, data
+            )
+            for phase_name, func in phases.items():
+                phase_compile = (
+                    None
+                    if phase_name not in _get_no_compile_phases(linop_str)
+                    else False
+                )
+                t, _ = bench.time(func, is_cuda, compile=phase_compile)
+                results[phase_name] = t
+                print(f"[Time] {label} / {phase_name}: {t:.4f} s")
+
+            # For FX operators, derive kfac_factors by subtraction
+            if linop_str in _IS_FX:
+                results = _postprocess_fx_factors(results)
+
+        with open(save_path, "w") as f:
+            json.dump(results, f)
+        print(f"[Time] Saved {label}")
 
 # %%
 #
@@ -826,8 +838,8 @@ def visualize_matvec_benchmark(
     fig, ax = plt.subplots()
 
     for idx, name in enumerate(linop_strs):
-        with open(benchpath(name, problem_str, device_str, "matvec"), "r") as f:
-            matvec_time = json.load(f)["time"]
+        with open(benchpath(name, problem_str, device_str), "r") as f:
+            matvec_time = json.load(f)["matvec"]
         ax.barh(idx, width=matvec_time, color="tab:blue")
 
     ax.set_yticks(list(range(len(linop_strs))))
@@ -877,8 +889,8 @@ def visualize_precompute_benchmark(
     for idx, name in enumerate(kfac):
         sub_ops = _get_precompute_ops(name)
 
-        # Read all sub-phases from the single precompute file
-        fpath = benchpath(name, problem_str, device_str, "precompute")
+        # Read sub-phases from the operator's benchmark file
+        fpath = benchpath(name, problem_str, device_str)
         if not path.exists(fpath):
             continue
         with open(fpath, "r") as f:
@@ -1039,20 +1051,44 @@ if __name__ == "__main__":
         print(f"Running command: {' '.join(cmd)}")
         run_verbose(cmd)
 
-    # Per-linop measurements (precompute and matvec only)
-    for device_str, problem_str, linop_str, op_str in product(
-        DEVICE_STRS, PROBLEM_STRS, LINOP_STRS, OP_STRS
+    # Per-linop: measure peak memory and merge into the operator's JSON file
+    for device_str, problem_str, linop_str in product(
+        DEVICE_STRS, PROBLEM_STRS, MATVEC_LINOP_STRS
     ):
+        operator_path = benchpath(linop_str, problem_str, device_str)
+        # Skip if the file already has peakmem
+        if path.exists(operator_path):
+            with open(operator_path) as f:
+                existing = json.load(f)
+            if "peakmem" in existing:
+                print(f"[Memory] Skipping {linop_str} on {problem_str}")
+                continue
+
+        # Run memory measurement in subprocess (writes to a temp file)
+        mem_path = benchpath(linop_str, problem_str, device_str, op_str="peakmem")
         cmd = [
             sys.executable,
             path.join(path.dirname(__file__), "memory_benchmark.py"),
             f"--linop={linop_str}",
             f"--problem={problem_str}",
             f"--device={device_str}",
-            f"--op={op_str}",
         ]
         print(f"Running command: {' '.join(cmd)}")
         run_verbose(cmd)
+
+        # Merge peakmem into the operator's single file
+        if path.exists(mem_path) and path.exists(operator_path):
+            with open(mem_path) as f:
+                peakmem = json.load(f)["peakmem"]
+            with open(operator_path) as f:
+                data = json.load(f)
+            data["peakmem"] = peakmem
+            with open(operator_path, "w") as f:
+                json.dump(data, f)
+            # Remove the temp file
+            from os import remove
+
+            remove(mem_path)
 
 # %%
 #
@@ -1076,16 +1112,18 @@ def visualize_peakmem_benchmark(
     fig, ax = plt.subplots()
     ax.set_xlabel("Peak memory [GiB]")
 
-    # Visualize the peak memory consumption of each linear operator's matvec
-    for name in linop_strs:
-        with open(
-            benchpath(name, problem_str, device_str, "matvec", metric="peakmem"), "r"
-        ) as f:
+    # Visualize the peak memory consumption of each linear operator
+    labels = [n.replace(" (hooks)", "") for n in linop_strs]
+    for idx, name in enumerate(linop_strs):
+        fpath = benchpath(name, problem_str, device_str)
+        with open(fpath, "r") as f:
             mem = json.load(f)["peakmem"]
-        ax.barh(name, mem, color="blue")
+        ax.barh(idx, mem, color="blue")
+    ax.set_yticks(list(range(len(linop_strs))))
+    ax.set_yticklabels(labels)
 
     # Get memory consumption of gradient computation
-    with open(reference_benchpath(problem_str, device_str, metric="peakmem"), "r") as f:
+    with open(reference_benchpath(problem_str, device_str), "r") as f:
         reference = json.load(f)["peakmem"]
 
     # Add an additional axis that shows memory in multiples of gradients
@@ -1114,7 +1152,9 @@ if __name__ == "__main__":
 
     for problem_str, device_str in product(PROBLEM_STRS, DEVICE_STRS):
         with plt.rc_context(plot_config):
-            fig, ax = visualize_peakmem_benchmark(LINOP_STRS, problem_str, device_str)
+            fig, ax = visualize_peakmem_benchmark(
+                MATVEC_LINOP_STRS, problem_str, device_str
+            )
             plt.savefig(
                 figpath(problem_str, device_str, metric="peakmem"), bbox_inches="tight"
             )
