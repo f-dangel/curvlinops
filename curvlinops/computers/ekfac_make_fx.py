@@ -92,11 +92,9 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
         """
         traced_io_fns, io_param_names, layer_hparams = traced_io
 
-        io_groups: dict[ParamGroupKey, list[str]] | None = None
-        if io_param_names is not None:
-            _, io_groups = _build_param_groups_from_io(
-                io_param_names, self._separate_weight_and_bias
-            )
+        _, io_groups = _build_param_groups_from_io(
+            io_param_names, self._separate_weight_and_bias
+        )
 
         corrected_eigenvalues: dict[ParamGroupKey, Tensor] = {}
 

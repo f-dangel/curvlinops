@@ -8,6 +8,7 @@ from time import perf_counter
 from typing import Any
 
 import requests
+import torch
 from torch import Tensor, cuda, rand, randint, stack, zeros_like
 from torch.nn import CrossEntropyLoss, Module, Parameter
 from torchvision.models import ResNet50_Weights, resnet18, resnet50
@@ -20,73 +21,49 @@ class TimeBenchmark:
     and JSON persistence.
 
     Args:
+        is_cuda: Whether to synchronize CUDA before/after each measurement.
         num_repeats: Number of repeats per measurement. Uses the minimum.
         skip_existing: Whether to skip measurements whose result file exists.
     """
 
     def __init__(
         self,
+        is_cuda: bool,
         num_repeats: int = 10,
         skip_existing: bool = True,
-        compile: bool = False,
     ):
         """Set up the benchmark timer.
 
         Args:
+            is_cuda: Whether to synchronize CUDA before/after each measurement.
             num_repeats: Number of repeats per measurement. Uses the minimum.
             skip_existing: Whether to skip measurements whose result file exists.
-            compile: Whether to wrap functions with ``torch.compile`` before
-                timing. The first repeat serves as compilation warmup.
         """
+        self.is_cuda = is_cuda
         self.num_repeats = num_repeats
         self.skip_existing = skip_existing
-        self.compile = compile
 
-    def time(
-        self,
-        func: Callable,
-        is_cuda: bool,
-        num_repeats: int | None = None,
-        compile: bool | None = None,
-    ) -> tuple[float, Any]:
+    def time(self, func: Callable) -> tuple[float, Any]:
         """Time a function and return (min_time, last_result).
-
-        If compilation is enabled, the function is wrapped with
-        ``torch.compile`` before timing. The first repeat serves as
-        compilation warmup and is included in the timing (so the minimum
-        reflects compiled performance after warmup).
 
         Args:
             func: The function to time.
-            is_cuda: Whether to synchronize CUDA before/after.
-            num_repeats: Override for the number of repeats.
-            compile: Override for whether to compile. If ``None``, uses
-                ``self.compile``.
 
         Returns:
             Tuple of (minimum time across repeats, last return value).
         """
-        import torch
-
-        do_compile = compile if compile is not None else self.compile
-        if do_compile:
-            func = torch.compile(func)
-
-        n = num_repeats if num_repeats is not None else self.num_repeats
         times = []
-        for _ in range(n):
-            if is_cuda:
+        for _ in range(self.num_repeats):
+            if self.is_cuda:
                 cuda.synchronize()
             start = perf_counter()
             result = func()
-            if is_cuda:
+            if self.is_cuda:
                 cuda.synchronize()
             times.append(perf_counter() - start)
         return min(times), result
 
-    def run(
-        self, save_path: str, label: str, func: Callable, is_cuda: bool
-    ) -> float | None:
+    def run(self, save_path: str, label: str, func: Callable) -> float | None:
         """Skip-if-exists, time, save to JSON, and print.
 
         Saves ``{"time": best}`` to ``save_path``.
@@ -95,7 +72,6 @@ class TimeBenchmark:
             save_path: Path to the JSON result file.
             label: Description for printing.
             func: The function to time.
-            is_cuda: Whether to synchronize CUDA.
 
         Returns:
             The best time, or ``None`` if skipped.
@@ -104,7 +80,7 @@ class TimeBenchmark:
             print(f"[Time] Skipping {label}")
             return None
 
-        best, _ = self.time(func, is_cuda)
+        best, _ = self.time(func)
         print(f"[Time] {label}: {best:.4f} s")
         with open(save_path, "w") as f:
             json.dump({"time": best}, f)
@@ -115,8 +91,6 @@ class TimeBenchmark:
         save_path: str,
         label: str,
         phase_fns: dict[str, Callable],
-        is_cuda: bool,
-        no_compile: set[str] | None = None,
     ) -> dict[str, float] | None:
         """Time multiple phases and save all to a single JSON file.
 
@@ -128,9 +102,6 @@ class TimeBenchmark:
             save_path: Path to the JSON result file.
             label: Description for printing.
             phase_fns: Ordered dict mapping phase names to callables.
-            is_cuda: Whether to synchronize CUDA.
-            no_compile: Phase names to exclude from ``torch.compile``
-                (e.g. phases that use ``make_fx`` internally).
 
         Returns:
             Dict of ``{phase_name: best_time}``, or ``None`` if skipped.
@@ -139,11 +110,9 @@ class TimeBenchmark:
             print(f"[Time] Skipping {label}")
             return None
 
-        skip_compile = no_compile or set()
         results = {}
         for phase_name, func in phase_fns.items():
-            phase_compile = None if phase_name not in skip_compile else False
-            best, _ = self.time(func, is_cuda, compile=phase_compile)
+            best, _ = self.time(func)
             results[phase_name] = best
             print(f"[Time] {label} / {phase_name}: {best:.4f} s")
 
@@ -167,8 +136,6 @@ def save_environment_info(result_dir: str):
     Args:
         result_dir: Directory where ``environment.json`` is written.
     """
-    import torch
-
     info = {"pytorch_version": torch.__version__}
     if cuda.is_available():
         info["gpu"] = cuda.get_device_name(0)

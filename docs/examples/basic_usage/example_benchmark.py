@@ -57,7 +57,7 @@ from curvlinops._torch_base import PyTorchLinearOperator
 from curvlinops.computers._base import _EKFACMixin
 from curvlinops.computers.ekfac_hooks import HooksEKFACComputer
 from curvlinops.computers.ekfac_make_fx import MakeFxEKFACComputer
-from curvlinops.computers.kfac_hooks import HooksKFACComputer
+from curvlinops.computers.kfac_hooks import HooksKFACComputer, _use_params
 from curvlinops.computers.kfac_make_fx import MakeFxKFACComputer
 from curvlinops.examples import gradient_and_loss
 
@@ -511,23 +511,6 @@ def _get_precompute_ops(linop_str: str) -> list[str]:
         return ["kfac_factors"]
 
 
-def _get_no_compile_phases(linop_str: str) -> set[str]:
-    """Return phase names incompatible with ``torch.compile``.
-
-    The FX ``kfac_factors`` phase calls ``setup_linop`` which internally uses
-    ``make_fx`` — nested tracing conflicts with ``torch.compile``.
-
-    Args:
-        linop_str: The linear operator name.
-
-    Returns:
-        Set of phase names to exclude from compilation.
-    """
-    if linop_str in _IS_FX:
-        return {"kfac_factors"}
-    return set()
-
-
 def make_precompute_phases(  # noqa: C901, PLR0915
     linop_str: str,
     model: Module,
@@ -572,13 +555,13 @@ def make_precompute_phases(  # noqa: C901, PLR0915
         computer = setup_computer(linop_str, model, loss_function, params, data)
 
         def ekfac_factors():
-            with computer._computation_context():
+            with _use_params(computer._model_module, computer._params):
                 state["ic"], state["gc"], state["m"] = (
                     computer._compute_kronecker_factors()
                 )
 
         def ekfac_correction():
-            with computer._computation_context():
+            with _use_params(computer._model_module, computer._params):
                 computer.compute_eigenvalue_correction(
                     state["ic"], state["gc"], state["m"]
                 )
@@ -612,7 +595,7 @@ def make_precompute_phases(  # noqa: C901, PLR0915
 
         def ekfac_fx_factors():
             # Measure total precompute, subtract other phases later
-            total, _ = TimeBenchmark(num_repeats=1).time(
+            total, _ = TimeBenchmark(is_cuda="cuda" in str(dev), num_repeats=1).time(
                 lambda: setup_linop(
                     linop_str,
                     model,
@@ -621,20 +604,18 @@ def make_precompute_phases(  # noqa: C901, PLR0915
                     data,
                     check_deterministic=False,
                 ),
-                is_cuda="cuda" in str(dev),
             )
             state["total"] = total
             # Also compute factors for eigh/correction dependencies
-            with computer._computation_context():
-                state["ic"], state["gc"], state["m"] = (
-                    computer._compute_kronecker_factors()
-                )
+            state["traced_io"] = computer._trace_io_functions()
+            state["ic"], state["gc"], state["m"] = computer._compute_kronecker_factors(
+                state["traced_io"]
+            )
 
         def ekfac_fx_correction():
-            with computer._computation_context():
-                computer.compute_eigenvalue_correction(
-                    state["ic"], state["gc"], state["m"]
-                )
+            computer.compute_eigenvalue_correction(
+                state["ic"], state["gc"], state["m"], state["traced_io"]
+            )
 
         def ekfac_fx_eigh():
             ic = {k: v.clone() for k, v in state["ic"].items()}
@@ -661,7 +642,7 @@ def make_precompute_phases(  # noqa: C901, PLR0915
 
         def kfac_fx_factors():
             # Measure total precompute, subtract tracing later
-            total, _ = TimeBenchmark(num_repeats=1).time(
+            total, _ = TimeBenchmark(is_cuda="cuda" in str(dev), num_repeats=1).time(
                 lambda: setup_linop(
                     linop_str,
                     model,
@@ -709,10 +690,13 @@ def _postprocess_fx_factors(results: dict[str, float]) -> dict[str, float]:
 # ^^^^^^^^^^^^^^^^^^^^^^^^
 
 if __name__ == "__main__":
-    bench = TimeBenchmark(num_repeats=10, skip_existing=SKIP_EXISTING)
-
     # Reference baselines (once per problem)
     for device_str, problem_str in product(DEVICE_STRS, PROBLEM_STRS):
+        bench = TimeBenchmark(
+            is_cuda="cuda" in device_str,
+            num_repeats=10,
+            skip_existing=SKIP_EXISTING,
+        )
         manual_seed(0)
         dev = device(device_str)
         model, loss_function, params, data = setup_problem(problem_str, "Hessian", dev)
@@ -720,7 +704,6 @@ if __name__ == "__main__":
             reference_benchpath(problem_str, device_str),
             f"Reference on {problem_str} and {device_str}",
             lambda: gradient_and_loss(model, loss_function, params, data),  # noqa: B023
-            is_cuda="cuda" in device_str,
         )
 
     # Per-linop benchmarks: matvec time (+ precompute sub-phases for KFAC-like)
@@ -728,6 +711,11 @@ if __name__ == "__main__":
     for device_str, problem_str, linop_str in product(
         DEVICE_STRS, PROBLEM_STRS, MATVEC_LINOP_STRS
     ):
+        bench = TimeBenchmark(
+            is_cuda="cuda" in device_str,
+            num_repeats=10,
+            skip_existing=SKIP_EXISTING,
+        )
         save_path = benchpath(linop_str, problem_str, device_str)
         label = f"{linop_str} on {problem_str} and {device_str}"
         if bench.skip_existing and path.exists(save_path):
@@ -736,7 +724,6 @@ if __name__ == "__main__":
 
         manual_seed(0)
         dev = device(device_str)
-        is_cuda = "cuda" in device_str
         model, loss_function, params, data = setup_problem(problem_str, linop_str, dev)
 
         # NOTE Disable deterministic check as it will otherwise compute matvecs
@@ -755,7 +742,7 @@ if __name__ == "__main__":
             with sdpa_kernel(SDPBackend.MATH) if attention_db else nullcontext():
                 _ = linop @ v  # noqa: B023
 
-        matvec_time, _ = bench.time(_matvec, is_cuda)
+        matvec_time, _ = bench.time(_matvec)
         results = {"matvec": matvec_time}
         print(f"[Time] {label} / matvec: {matvec_time:.4f} s")
 
@@ -765,12 +752,7 @@ if __name__ == "__main__":
                 linop_str, model, loss_function, params, data
             )
             for phase_name, func in phases.items():
-                phase_compile = (
-                    None
-                    if phase_name not in _get_no_compile_phases(linop_str)
-                    else False
-                )
-                t, _ = bench.time(func, is_cuda, compile=phase_compile)
+                t, _ = bench.time(func)
                 results[phase_name] = t
                 print(f"[Time] {label} / {phase_name}: {t:.4f} s")
 

@@ -18,7 +18,7 @@ and generalized to all linear layers with weight sharing in
 
 from contextlib import contextmanager
 from functools import partial
-from typing import Any, Iterator
+from typing import Any
 
 from einops import einsum
 from torch import Tensor, autograd
@@ -146,13 +146,18 @@ class HooksKFACComputer(_BaseKFACComputer):
         self._model_module = model_func
         super().__init__(model_func, *args, **kwargs)
 
-    def _computation_context(self) -> Iterator[None]:
-        """Set module parameters from ``self._params`` during computation.
+    def compute(
+        self,
+    ) -> tuple[
+        dict[ParamGroupKey, Tensor], dict[ParamGroupKey, Tensor], list[ParamGroup]
+    ]:
+        """Compute KFAC's Kronecker factors with module parameters swapped in.
 
         Returns:
-            Context manager that temporarily replaces the module's parameters.
+            Tuple of ``(input_covariances, gradient_covariances, mapping)``.
         """
-        return _use_params(self._model_module, self._params)
+        with _use_params(self._model_module, self._params):
+            return self._compute_kronecker_factors()
 
     def _get_module(self, group: ParamGroup) -> Module:
         """Get the module corresponding to a parameter group.
