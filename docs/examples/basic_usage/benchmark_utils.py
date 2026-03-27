@@ -161,6 +161,27 @@ if "__file__" not in globals():
 HEREDIR = path.dirname(path.abspath(__file__))
 
 
+def save_environment_info(result_dir: str):
+    """Save PyTorch version and GPU info to a metadata file.
+
+    Args:
+        result_dir: Directory where ``environment.json`` is written.
+    """
+    import torch
+
+    info = {"pytorch_version": torch.__version__}
+    if cuda.is_available():
+        info["gpu"] = cuda.get_device_name(0)
+        info["cuda_version"] = torch.version.cuda
+
+    info_path = path.join(result_dir, "environment.json")
+    with open(info_path, "w") as f:
+        json.dump(info, f, indent=2)
+
+    for key, value in info.items():
+        print(f"  {key}: {value}")
+
+
 def maybe_download_nanogpt():
     """Download the nanoGPT model definition."""
     commit = "f08abb45bd2285627d17da16daea14dda7e7253e"

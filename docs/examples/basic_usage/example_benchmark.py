@@ -29,6 +29,7 @@ import matplotlib.pyplot as plt
 from benchmark_utils import (
     GPTWrapper,
     TimeBenchmark,
+    save_environment_info,
     setup_synthetic_cifar10_resnet18,
     setup_synthetic_imagenet_resnet50,
     setup_synthetic_shakespeare_nanogpt,
@@ -98,24 +99,7 @@ DEVICE_STRS = ["cuda"] if cuda.is_available() else ["cpu"]
 SKIP_EXISTING = True
 
 
-def save_environment_info():
-    """Save PyTorch version and GPU info to a metadata file in the results directory."""
-    import torch
-
-    info = {"pytorch_version": torch.__version__}
-    if cuda.is_available():
-        info["gpu"] = cuda.get_device_name(0)
-        info["cuda_version"] = torch.version.cuda
-
-    info_path = path.join(RESULTDIR, "environment.json")
-    with open(info_path, "w") as f:
-        json.dump(info, f, indent=2)
-
-    for key, value in info.items():
-        print(f"  {key}: {value}")
-
-
-save_environment_info()
+save_environment_info(RESULTDIR)
 
 # %%
 #
@@ -433,38 +417,43 @@ def setup_computer(
 # the benchmark results will be stored and later plotted.
 
 
+def _problem_dir(problem_str: str) -> str:
+    """Get the problem-specific subdirectory, creating it if needed.
+
+    Args:
+        problem_str: The problem.
+
+    Returns:
+        Absolute path to the problem subdirectory.
+    """
+    d = path.join(RESULTDIR, problem_str)
+    makedirs(d, exist_ok=True)
+    return d
+
+
 def benchpath(
     linop_str: str,
     problem_str: str,
     device_str: str,
     op_str: str | None = None,
-    metric: str | None = None,
 ) -> str:
     """Get the path to save benchmark results.
 
-    Without ``op_str``, returns the single-file path for all measurements of
-    one operator on one problem: ``{linop}_{problem}_{device}.json``.
-
-    With ``op_str`` and/or ``metric``, returns legacy paths for backward
-    compatibility during migration.
+    Results are stored under ``benchmark/{problem}/{linop}_{device}.json``.
 
     Args:
         linop_str: The linear operator.
         problem_str: The problem.
         device_str: The device.
-        op_str: Operation name (legacy). If ``None``, uses single-file format.
-        metric: Metric prefix (legacy). If ``None``, no prefix.
+        op_str: If given, appended before the extension (e.g. ``"peakmem"``
+            produces a temporary file ``{linop}_{device}_peakmem.json``).
 
     Returns:
         The path to save the benchmark results.
     """
     name = linop_str.replace(" ", "-")
-    if op_str is not None:
-        prefix = f"{metric}_" if metric else ""
-        return path.join(
-            RESULTDIR, f"{prefix}{name}_{problem_str}_{device_str}_{op_str}.json"
-        )
-    return path.join(RESULTDIR, f"{name}_{problem_str}_{device_str}.json")
+    suffix = f"_{op_str}" if op_str is not None else ""
+    return path.join(_problem_dir(problem_str), f"{name}_{device_str}{suffix}.json")
 
 
 def reference_benchpath(problem_str: str, device_str: str) -> str:
@@ -479,10 +468,7 @@ def reference_benchpath(problem_str: str, device_str: str) -> str:
     Returns:
         The path to save the reference benchmark results.
     """
-    return path.join(
-        RESULTDIR,
-        f"{REFERENCE_OP}_{problem_str}_{device_str}.json",
-    )
+    return path.join(_problem_dir(problem_str), f"{REFERENCE_OP}_{device_str}.json")
 
 
 # %%
@@ -753,12 +739,14 @@ if __name__ == "__main__":
         is_cuda = "cuda" in device_str
         model, loss_function, params, data = setup_problem(problem_str, linop_str, dev)
 
-        # Build the linop and measure matvec
+        # NOTE Disable deterministic check as it will otherwise compute matvecs
         linop = setup_linop(
             linop_str, model, loss_function, params, data, check_deterministic=False
         )
         v = rand(linop.shape[1], device=dev)
 
+        # Double-backward through efficient attention is unsupported, disable
+        # fused kernels (pytorch/pytorch#116350)
         def _matvec():  # noqa: B023
             attention_db = isinstance(linop, HAS_JVP) and isinstance(  # noqa: B023
                 model,  # noqa: B023
@@ -941,7 +929,7 @@ def figpath(problem_str: str, device_str: str, metric: str = "time") -> str:
     Returns:
         The path to save the figure.
     """
-    return path.join(RESULTDIR, f"{metric}_{problem_str}_{device_str}.pdf")
+    return path.join(_problem_dir(problem_str), f"{metric}_{device_str}.pdf")
 
 
 if __name__ == "__main__":

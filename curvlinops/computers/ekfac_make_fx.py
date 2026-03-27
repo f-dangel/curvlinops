@@ -56,15 +56,14 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
             gradient_covariance_eigenvectors, corrected_eigenvalues, mapping)``.
         """
         traced_io = self._trace_io_functions()
-        with self._computation_context():
-            input_covariances, gradient_covariances, mapping = (
-                self._compute_kronecker_factors(traced_io)
-            )
-            input_covariances = self._eigenvectors_(input_covariances)
-            gradient_covariances = self._eigenvectors_(gradient_covariances)
-            corrected_eigenvalues = self.compute_eigenvalue_correction(
-                input_covariances, gradient_covariances, mapping, traced_io
-            )
+        input_covariances, gradient_covariances, mapping = (
+            self._compute_kronecker_factors(traced_io)
+        )
+        input_covariances = self._eigenvectors_(input_covariances)
+        gradient_covariances = self._eigenvectors_(gradient_covariances)
+        corrected_eigenvalues = self.compute_eigenvalue_correction(
+            input_covariances, gradient_covariances, mapping, traced_io
+        )
         return input_covariances, gradient_covariances, corrected_eigenvalues, mapping
 
     def compute_eigenvalue_correction(
@@ -104,9 +103,8 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
         self._generator = _seed_generator(self._generator, self.device, self._seed)
 
         for X, y in self._loop_over_data(desc="Eigenvalue correction"):
-            batch_size = self._batch_size_fn(X)
-
             # Forward pass with IO collection
+            batch_size = self._batch_size_fn(X)
             io_fn = traced_io_fns[batch_size]
             output, layer_inputs, layer_outputs = io_fn(self._params, X)
 
