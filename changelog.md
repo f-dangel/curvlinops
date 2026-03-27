@@ -90,6 +90,10 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
 
 ### Internal
 
+- Extract `_trace_io_functions` in FX-based KFAC/EKFAC computers to separate
+  FX tracing from factor computation
+  ([PR #284](https://github.com/f-dangel/curvlinops/pull/284))
+
 - Add `_use_params` context manager to temporarily set module parameters
   during hooks-based KFAC/EKFAC computation, enabling correct behavior
   when `params` dict values differ from the module's own parameters
