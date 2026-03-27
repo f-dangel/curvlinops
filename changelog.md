@@ -90,6 +90,9 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
 
 ### Internal
 
+- Add test documenting `torch.compile` graph breaks for `HessianLinearOperator`
+  ([PR #285](https://github.com/f-dangel/curvlinops/pull/285))
+
 - Add `_use_params` context manager to temporarily set module parameters
   during hooks-based KFAC/EKFAC computation, enabling correct behavior
   when `params` dict values differ from the module's own parameters

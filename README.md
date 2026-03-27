@@ -65,7 +65,8 @@ If you find `curvlinops` useful for your work, consider citing our [position pap
 ## Future ideas
 
 - Refactor the back-end for curvature-matrix multiplication into pure functions
-  to improve recycle-ability and ease the use of `torch.compile`.
+  to improve recycle-ability and ease the use of `torch.compile`
+  (see [PR #285](https://github.com/f-dangel/curvlinops/pull/285) for current status).
 
 - Multi-GPU support.
 
