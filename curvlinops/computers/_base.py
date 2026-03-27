@@ -1,12 +1,11 @@
 """Base class for KFAC/EKFAC computers.
 
 Provides ``_BaseKFACComputer`` with shared validation, setup logic, and utility
-methods. Subclasses implement ``_compute_kronecker_factors`` for their specific
-backend (hooks or FX graph tracing).
+methods. Subclasses implement ``compute`` for their specific backend (hooks or
+FX graph tracing).
 """
 
 from collections.abc import Callable, Iterable, MutableMapping
-from contextlib import AbstractContextManager, nullcontext
 from typing import Any
 
 from einops import rearrange
@@ -35,7 +34,7 @@ ParamGroupKey = tuple[str, ...]
 class _BaseKFACComputer(_EmpiricalRiskMixin):
     r"""Base class for KFAC computers with shared validation and setup logic.
 
-    Subclasses must implement :meth:`_compute_kronecker_factors`.
+    Subclasses must implement :meth:`compute`.
 
     Attributes:
         _SUPPORTED_LOSSES: Tuple of supported loss functions.
@@ -180,43 +179,18 @@ class _BaseKFACComputer(_EmpiricalRiskMixin):
             batch_size_fn=batch_size_fn,
         )
 
-    def _computation_context(self) -> AbstractContextManager:
-        """Return a context manager for the computation.
-
-        By default returns ``nullcontext``. Subclasses can override to
-        temporarily modify state during computation (e.g. setting module
-        parameters from ``self._params``).
-
-        Returns:
-            A context manager.
-        """
-        return nullcontext()
-
     def compute(
         self,
     ) -> tuple[
         dict[ParamGroupKey, Tensor], dict[ParamGroupKey, Tensor], list[ParamGroup]
     ]:
-        """Compute the Kronecker factors.
+        """Compute the Kronecker factors. Must be overridden by subclasses.
 
         Returns:
             Tuple of ``(input_covariances, gradient_covariances, mapping)`` where the
             first two are dictionaries mapping parameter group keys
             (``tuple[str, ...]``) to covariance matrices and ``mapping`` is a
             list of parameter groups.
-        """
-        with self._computation_context():
-            return self._compute_kronecker_factors()
-
-    def _compute_kronecker_factors(
-        self,
-    ) -> tuple[
-        dict[ParamGroupKey, Tensor], dict[ParamGroupKey, Tensor], list[ParamGroup]
-    ]:
-        """Compute KFAC's Kronecker factors. Must be implemented by subclasses.
-
-        Returns:
-            Tuple of (input_covariances, gradient_covariances, mapping).
 
         Raises:
             NotImplementedError: Always, unless overridden by a subclass.
@@ -317,8 +291,8 @@ class _BaseKFACComputer(_EmpiricalRiskMixin):
 class _EKFACMixin:
     """Mixin for EKFAC computers with shared eigenvalue correction logic.
 
-    Subclasses must implement :meth:`compute_eigenvalue_correction` and inherit
-    from a KFAC computer (``HooksKFACComputer`` or ``MakeFxKFACComputer``).
+    Subclasses must implement :meth:`compute` and inherit from a KFAC computer
+    (``HooksKFACComputer`` or ``MakeFxKFACComputer``).
     """
 
     _SUPPORTED_FISHER_TYPE: tuple[FisherType, ...] = (
@@ -337,23 +311,19 @@ class _EKFACMixin:
     ]:
         """Compute eigenvalue-corrected Kronecker factors.
 
+        Must be overridden by subclasses.
+
         Returns:
             Tuple of ``(input_covariance_eigenvectors, gradient_covariance_eigenvectors,
             corrected_eigenvalues, mapping)`` where the first two are dictionaries
             mapping parameter group keys (``tuple[str, ...]``) to eigenvector
             matrices, the third maps group keys to eigenvalue corrections, and
             ``mapping`` is a list of parameter groups.
+
+        Raises:
+            NotImplementedError: Always, unless overridden by a subclass.
         """
-        with self._computation_context():
-            input_covariances, gradient_covariances, mapping = (
-                self._compute_kronecker_factors()
-            )
-            input_covariances = self._eigenvectors_(input_covariances)
-            gradient_covariances = self._eigenvectors_(gradient_covariances)
-            corrected_eigenvalues = self.compute_eigenvalue_correction(
-                input_covariances, gradient_covariances, mapping
-            )
-        return input_covariances, gradient_covariances, corrected_eigenvalues, mapping
+        raise NotImplementedError
 
     @staticmethod
     def _rearrange_for_larger_than_2d_output(
@@ -394,24 +364,3 @@ class _EKFACMixin:
         for key, value in dictionary.items():
             dictionary[key] = eigh(value).eigenvectors
         return dictionary
-
-    def compute_eigenvalue_correction(
-        self,
-        input_covariances_eigenvectors: dict[ParamGroupKey, Tensor],
-        gradient_covariances_eigenvectors: dict[ParamGroupKey, Tensor],
-        mapping: list[ParamGroup],
-    ) -> dict[ParamGroupKey, Tensor]:
-        """Compute eigenvalue corrections. Must be implemented by subclasses.
-
-        Args:
-            input_covariances_eigenvectors: Input covariance eigenvectors.
-            gradient_covariances_eigenvectors: Gradient covariance eigenvectors.
-            mapping: List of parameter groups.
-
-        Returns:
-            Dictionary mapping parameter group keys to corrected eigenvalues.
-
-        Raises:
-            NotImplementedError: Always, unless overridden by a subclass.
-        """
-        raise NotImplementedError

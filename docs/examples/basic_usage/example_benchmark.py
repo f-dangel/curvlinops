@@ -16,6 +16,7 @@ Let's get the imports out of the way.
 
 import inspect
 import json
+import sys
 from collections.abc import Iterable
 from contextlib import nullcontext
 from itertools import product
@@ -23,11 +24,12 @@ from math import floor
 from os import environ, makedirs, path
 from shutil import which
 from subprocess import CalledProcessError, CompletedProcess, run
-from time import perf_counter
 
 import matplotlib.pyplot as plt
 from benchmark_utils import (
     GPTWrapper,
+    TimeBenchmark,
+    save_environment_info,
     setup_synthetic_cifar10_resnet18,
     setup_synthetic_imagenet_resnet50,
     setup_synthetic_shakespeare_nanogpt,
@@ -36,9 +38,7 @@ from torch import Tensor, arange, cuda, device, manual_seed, rand, randint
 from torch.nn import (
     Conv2d,
     CrossEntropyLoss,
-    Flatten,
     Linear,
-    MaxPool2d,
     Module,
     ReLU,
     Sequential,
@@ -54,6 +54,11 @@ from curvlinops import (
     KFACLinearOperator,
 )
 from curvlinops._torch_base import PyTorchLinearOperator
+from curvlinops.computers._base import _EKFACMixin
+from curvlinops.computers.ekfac_hooks import HooksEKFACComputer
+from curvlinops.computers.ekfac_make_fx import MakeFxEKFACComputer
+from curvlinops.computers.kfac_hooks import HooksKFACComputer, _use_params
+from curvlinops.computers.kfac_make_fx import MakeFxKFACComputer
 from curvlinops.examples import gradient_and_loss
 
 # %%
@@ -93,6 +98,9 @@ DEVICE_STRS = ["cuda"] if cuda.is_available() else ["cpu"]
 # Whether to skip runs for which measurements already exists
 SKIP_EXISTING = True
 
+
+save_environment_info(RESULTDIR)
+
 # %%
 #
 # Setup
@@ -107,20 +115,20 @@ SKIP_EXISTING = True
 
 # Supported problems
 if ON_RTD:
-    PROBLEM_STRS = ["synthetic_mnist_cnn"]
+    PROBLEM_STRS = ["synthetic_mnist_mlp"]
 else:
     PROBLEM_STRS = [
-        "synthetic_mnist_cnn",
+        "synthetic_mnist_mlp",
         "synthetic_cifar10_resnet18",
         "synthetic_imagenet_resnet50",
         "synthetic_shakespeare_nanogpt",
     ]
 
 
-def setup_synthetic_mnist_cnn(
+def setup_synthetic_mnist_mlp(
     batch_size: int = 512,
 ) -> tuple[Sequential, CrossEntropyLoss, list[tuple[Tensor, Tensor]]]:
-    """Set up a synthetic MNIST CNN problem for the benchmark.
+    """Set up a synthetic MNIST MLP problem for the benchmark.
 
     Args:
         batch_size: The batch size to use. Default is ``512``.
@@ -128,21 +136,19 @@ def setup_synthetic_mnist_cnn(
     Returns:
         The neural net, loss function, and data.
     """
-    X = rand(batch_size, 1, 28, 28)
+    X = rand(batch_size, 784)
     y = randint(0, 10, (batch_size,))
     data = [(X, y)]
     model = Sequential(
-        Conv2d(1, 16, 3, padding=1),
-        MaxPool2d(2),
+        Linear(784, 1024),
         ReLU(),
-        Conv2d(16, 16, 3, padding=1),
-        MaxPool2d(2),
+        Linear(1024, 512),
         ReLU(),
-        Conv2d(16, 16, 3, padding=1),
-        MaxPool2d(2),
+        Linear(512, 256),
         ReLU(),
-        Flatten(),
-        Linear(144, 64),
+        Linear(256, 128),
+        ReLU(),
+        Linear(128, 64),
         ReLU(),
         Linear(64, 10),
     )
@@ -165,7 +171,7 @@ def setup_problem(
         The neural net, loss function, parameters, and data.
     """
     setup_func = {
-        "synthetic_mnist_cnn": setup_synthetic_mnist_cnn,
+        "synthetic_mnist_mlp": setup_synthetic_mnist_mlp,
         "synthetic_cifar10_resnet18": setup_synthetic_cifar10_resnet18,
         "synthetic_imagenet_resnet50": setup_synthetic_imagenet_resnet50,
         "synthetic_shakespeare_nanogpt": setup_synthetic_shakespeare_nanogpt,
@@ -178,7 +184,7 @@ def setup_problem(
     loss_function = loss_function.to(dev)
 
     # Only use parameters of supported layers for KFAC
-    if linop_str in {"KFAC", "KFAC inverse", "EKFAC", "EKFAC inverse"}:
+    if linop_str in _KFAC_LIKE:
         params = {}
         for mod_name, mod in model.named_modules():
             if not isinstance(mod, (Linear, Conv2d)):
@@ -205,18 +211,86 @@ LINOP_STRS = [
     "Generalized Gauss-Newton",
     "Empirical Fisher",
     "Monte-Carlo Fisher",
-    "EKFAC",
-    "EKFAC inverse",
-    "KFAC",
-    "KFAC inverse",
+    "EKFAC (hooks)",
+    "EKFAC inverse (hooks)",
+    "EKFAC (fx)",
+    "EKFAC inverse (fx)",
+    "KFAC (hooks)",
+    "KFAC inverse (hooks)",
+    "KFAC (fx)",
+    "KFAC inverse (fx)",
 ]
+
+# For matvec, backend doesn't matter — use hooks as the representative
+MATVEC_LINOP_STRS = [
+    "Hessian",
+    "Generalized Gauss-Newton",
+    "Empirical Fisher",
+    "Monte-Carlo Fisher",
+    "EKFAC (hooks)",
+    "EKFAC inverse (hooks)",
+    "KFAC (hooks)",
+    "KFAC inverse (hooks)",
+]
+
+# Names that use KFAC-style parameter selection (only supported layers)
+_KFAC_LIKE = {
+    "KFAC (hooks)",
+    "KFAC inverse (hooks)",
+    "KFAC (fx)",
+    "KFAC inverse (fx)",
+    "EKFAC (hooks)",
+    "EKFAC inverse (hooks)",
+    "EKFAC (fx)",
+    "EKFAC inverse (fx)",
+}
+
+# Names that show precompute + matvec bars in visualization
+_HAS_PRECOMPUTE = _KFAC_LIKE
+
+# Names that are EKFAC (precompute is split into factors + eigh + correction)
+_IS_EKFAC = {
+    "EKFAC (hooks)",
+    "EKFAC inverse (hooks)",
+    "EKFAC (fx)",
+    "EKFAC inverse (fx)",
+}
+
+# Names that are KFAC inverse (precompute includes inverse computation)
+_IS_INVERSE = {
+    "KFAC inverse (hooks)",
+    "KFAC inverse (fx)",
+    "EKFAC inverse (hooks)",
+    "EKFAC inverse (fx)",
+}
 
 # %%
 #
 # And we are interested in the following sub-routines:
 
-# Operations we are interested in
-OP_STRS = ["gradient_and_loss", "precompute", "matvec"]
+# EKFAC precompute is split into sub-phases for detailed analysis
+# Order: factors first, then correction, then decomposition (eigh dominates, shown last)
+EKFAC_PRECOMPUTE_OPS = ["kfac_factors", "eigenvalue_correction", "eigh"]
+
+# KFAC inverse precompute is split into factors + Cholesky inverse
+KFAC_INVERSE_PRECOMPUTE_OPS = ["kfac_factors", "cholesky_inverse"]
+
+# FX backend precompute is split into tracing + factor computation
+FX_PRECOMPUTE_OPS = ["kfac_factors", "tracing"]
+
+# Names that are KFAC inverse hooks (precompute split into factors + Cholesky)
+_IS_KFAC_INVERSE_HOOKS = {"KFAC inverse (hooks)"}
+
+# Names that use the FX backend
+_IS_FX = {
+    "KFAC (fx)",
+    "KFAC inverse (fx)",
+    "EKFAC (fx)",
+    "EKFAC inverse (fx)",
+}
+
+# The gradient_and_loss reference is measured once per problem (not per linop)
+REFERENCE_OP = "gradient_and_loss"
 
 # %%
 #
@@ -256,11 +330,25 @@ def setup_linop(
         "Generalized Gauss-Newton": GGNLinearOperator,
         "Empirical Fisher": EFLinearOperator,
         "Monte-Carlo Fisher": GGNLinearOperator,
-        "KFAC": KFACLinearOperator,
-        "KFAC inverse": KFACLinearOperator,
-        "EKFAC": EKFACLinearOperator,
-        "EKFAC inverse": EKFACLinearOperator,
+        "KFAC (hooks)": KFACLinearOperator,
+        "KFAC inverse (hooks)": KFACLinearOperator,
+        "KFAC (fx)": KFACLinearOperator,
+        "KFAC inverse (fx)": KFACLinearOperator,
+        "EKFAC (hooks)": EKFACLinearOperator,
+        "EKFAC inverse (hooks)": EKFACLinearOperator,
+        "EKFAC (fx)": EKFACLinearOperator,
+        "EKFAC inverse (fx)": EKFACLinearOperator,
     }[linop_str]
+
+    # Select backend for KFAC/EKFAC and pass num_per_example_loss_terms
+    if "(fx)" in linop_str:
+        kwargs["backend"] = "make_fx"
+    elif "(hooks)" in linop_str:
+        kwargs["backend"] = "hooks"
+    if linop_str in _KFAC_LIKE:
+        X0, y0 = next(iter(data))
+        kwargs["num_per_example_loss_terms"] = y0.numel() // X0.shape[0]
+        kwargs["separate_weight_and_bias"] = False
 
     # Double-backward through efficient attention is unsupported, disable fused kernels
     # (https://github.com/pytorch/pytorch/issues/116350#issuecomment-1954667011)
@@ -268,7 +356,7 @@ def setup_linop(
     with sdpa_kernel(SDPBackend.MATH) if attention_double_backward else nullcontext():
         linop = linop_cls(*args, **kwargs)
 
-    is_inverse = linop_str in {"KFAC inverse", "EKFAC inverse"}
+    is_inverse = "inverse" in linop_str
     if is_inverse:
         linop = linop.inverse(damping=1e-3)
 
@@ -277,34 +365,110 @@ def setup_linop(
 
 # %%
 #
+# For EKFAC operators, we also want to measure the sub-phases of precomputation
+# (Kronecker factors, eigendecomposition, eigenvalue correction) separately.
+# To do so, we construct the computer object directly.
+
+
+def setup_computer(
+    linop_str: str,
+    model: Module,
+    loss_function: Module,
+    params: dict[str, Tensor],
+    data: Iterable[tuple[Tensor, Tensor]],
+):
+    """Set up the KFAC/EKFAC computer for sub-phase benchmarking.
+
+    Args:
+        linop_str: The linear operator.
+        model: The neural net.
+        loss_function: The loss function.
+        params: The parameters.
+        data: The data.
+
+    Returns:
+        The computer instance.
+    """
+    num_data = sum(X.shape[0] for (X, _) in data)
+    X0, y0 = next(iter(data))
+    num_per_example_loss_terms = y0.numel() // X0.shape[0]
+    kwargs = dict(
+        check_deterministic=False,
+        num_data=num_data,
+        num_per_example_loss_terms=num_per_example_loss_terms,
+        separate_weight_and_bias=False,
+    )
+    computer_cls = {
+        "EKFAC (hooks)": HooksEKFACComputer,
+        "EKFAC inverse (hooks)": HooksEKFACComputer,
+        "EKFAC (fx)": MakeFxEKFACComputer,
+        "EKFAC inverse (fx)": MakeFxEKFACComputer,
+        "KFAC (hooks)": HooksKFACComputer,
+        "KFAC inverse (hooks)": HooksKFACComputer,
+        "KFAC (fx)": MakeFxKFACComputer,
+        "KFAC inverse (fx)": MakeFxKFACComputer,
+    }[linop_str]
+    return computer_cls(model, loss_function, params, data, **kwargs)
+
+
+# %%
+#
 # Last, we define a convenience function that generates the output files where
 # the benchmark results will be stored and later plotted.
 
 
+def _problem_dir(problem_str: str) -> str:
+    """Get the problem-specific subdirectory, creating it if needed.
+
+    Args:
+        problem_str: The problem.
+
+    Returns:
+        Absolute path to the problem subdirectory.
+    """
+    d = path.join(RESULTDIR, problem_str)
+    makedirs(d, exist_ok=True)
+    return d
+
+
 def benchpath(
     linop_str: str,
-    problem_str,
+    problem_str: str,
     device_str: str,
-    op_str: str,
-    metric: str = "time",
+    op_str: str | None = None,
 ) -> str:
-    """Get the path to save the benchmark results.
+    """Get the path to save benchmark results.
+
+    Results are stored under ``benchmark/{problem}/{linop}_{device}.json``.
 
     Args:
         linop_str: The linear operator.
         problem_str: The problem.
         device_str: The device.
-        op_str: Operation name that is benchmarked.
-        metric: The metric to save. Default is ``'time'``.
+        op_str: If given, appended before the extension (e.g. ``"peakmem"``
+            produces a temporary file ``{linop}_{device}_peakmem.json``).
 
     Returns:
         The path to save the benchmark results.
     """
-    return path.join(
-        RESULTDIR,
-        f"{metric}_{linop_str.replace(' ', '-')}_{problem_str}_{device_str}"
-        + f"_{op_str}.json",
-    )
+    name = linop_str.replace(" ", "-")
+    suffix = f"_{op_str}" if op_str is not None else ""
+    return path.join(_problem_dir(problem_str), f"{name}_{device_str}{suffix}.json")
+
+
+def reference_benchpath(problem_str: str, device_str: str) -> str:
+    """Get the path to save the reference gradient_and_loss benchmark.
+
+    This is measured once per problem (not per linop).
+
+    Args:
+        problem_str: The problem.
+        device_str: The device.
+
+    Returns:
+        The path to save the reference benchmark results.
+    """
+    return path.join(_problem_dir(problem_str), f"{REFERENCE_OP}_{device_str}.json")
 
 
 # %%
@@ -312,191 +476,311 @@ def benchpath(
 # Run time benchmark
 # ------------------
 #
-# We are interested in comparing a gradient computation with a linear operator's
-# matrix-vector multiplication. For operators with an internal pre-computed
-# representation (e.g. KFAC), we also want to disentangle the cost of pre-computation
-# versus applying a matrix-vector product.
+# We split the time benchmark into two parts:
 #
-# For each linear operator, we measure the execution times of different routines and
-# store them for later visualization. To account for warm-up, we repeat each measurement
-# multiple times, then use the minimum value as proxy for run time.
+# 1. **Matvec benchmark**: measures the time of a single matrix-vector product for
+#    all linear operators. This includes KFAC/EKFAC variants whose matvec is cheap
+#    after pre-computation.
 #
-# Collection
-# ^^^^^^^^^^
+# 2. **Precompute benchmark**: measures the pre-computation cost for KFAC/EKFAC
+#    operators, broken down into sub-phases (Kronecker factors, eigendecomposition,
+#    eigenvalue correction, Cholesky inverse, FX tracing).
 #
-# The function that executes the profiling and extracts the run times looks as follows:
+# Both use the :class:`TimeBenchmark` utility from ``benchmark_utils`` for timing,
+# skip-if-exists, and JSON persistence.
 
 
-def run_time_benchmark(  # noqa: C901
-    linop_str: str, problem_str: str, device_str: str, op_str: str, num_repeats: int = 1
-):
-    """Execute the benchmark for a given linear operator class and save results.
+def _get_precompute_ops(linop_str: str) -> list[str]:
+    """Return the sub-phase operation names for a given linop.
 
     Args:
-        linop_str: The linear operator.
-        problem_str: The problem.
-        device_str: The device.
-        op_str: The operation to benchmark.
-        num_repeats: The number of repeats. Default is ``1``. Will use the smallest
-            run time of all repeats as proxy for run time.
+        linop_str: The linear operator name.
+
+    Returns:
+        List of sub-phase operation names.
     """
-    savepath = benchpath(linop_str, problem_str, device_str, op_str)
-    if SKIP_EXISTING and path.exists(savepath):
-        print(
-            f"[Time] Skipping {linop_str} on {problem_str} and {device_str} for "
-            + f"{op_str}"
-        )
-        return
+    if linop_str in _IS_EKFAC and linop_str in _IS_FX:
+        return EKFAC_PRECOMPUTE_OPS + ["tracing"]
+    elif linop_str in _IS_EKFAC:
+        return EKFAC_PRECOMPUTE_OPS
+    elif linop_str in _IS_KFAC_INVERSE_HOOKS:
+        return KFAC_INVERSE_PRECOMPUTE_OPS
+    elif linop_str in _IS_FX:
+        return FX_PRECOMPUTE_OPS
+    else:
+        return ["kfac_factors"]
 
-    manual_seed(0)  # make deterministic
 
-    # Set up the problem
-    dev = device(device_str)
-    is_cuda = "cuda" in str(dev)
-    model, loss_function, params, data = setup_problem(problem_str, linop_str, dev)
+def make_precompute_phases(  # noqa: C901, PLR0915
+    linop_str: str,
+    model: Module,
+    loss_function: Module,
+    params: dict[str, Tensor],
+    data,
+) -> dict[str, callable]:
+    """Build an ordered dict of phase_name -> callable for precompute sub-phases.
 
-    # Select function that will be profiled
-    def f_gradient_and_loss():
-        _ = gradient_and_loss(model, loss_function, params, data)
+    Phases run in order. Later phases can depend on results of earlier ones
+    via the shared ``state`` dict captured by closures.
 
-    def f_precompute():
-        _ = setup_linop(
-            linop_str, model, loss_function, params, data, check_deterministic=False
-        )
+    Args:
+        linop_str: The linear operator name.
+        model: The neural net.
+        loss_function: The loss function.
+        params: The parameters.
+        data: The data.
 
-    # Generate one linear operator and vector for multiplication
-    linop = setup_linop(
-        linop_str, model, loss_function, params, data, check_deterministic=False
+    Returns:
+        Ordered dict mapping sub-phase names to timing callables.
+    """
+    from curvlinops.computers.io_collector import with_kfac_io
+    from curvlinops.kfac_utils import FisherType
+    from curvlinops.utils import make_functional_call
+
+    num_data = sum(X.shape[0] for (X, _) in data)
+    X0, y0 = next(iter(data))
+    num_per_example_loss_terms = y0.numel() // X0.shape[0]
+    common_kwargs = dict(
+        check_deterministic=False,
+        num_data=num_data,
+        num_per_example_loss_terms=num_per_example_loss_terms,
+        separate_weight_and_bias=False,
     )
-    v = rand(linop.shape[1], device=dev)
+    dev = next(iter(params.values())).device
+    state = {}  # shared mutable state between phases
+    phases = {}
 
-    def f_matvec():
-        # Double-backward through efficient attention is unsupported, disable fused kernels
-        # (https://github.com/pytorch/pytorch/issues/116350#issuecomment-1954667011)
-        attention_double_backward = isinstance(linop, HAS_JVP) and isinstance(
-            model, GPTWrapper
-        )
-        with (
-            sdpa_kernel(SDPBackend.MATH) if attention_double_backward else nullcontext()
-        ):
-            _ = linop @ v
+    if linop_str in _IS_EKFAC and linop_str not in _IS_FX:
+        # EKFAC hooks: factors → correction → eigh
+        computer = setup_computer(linop_str, model, loss_function, params, data)
 
-    # carry out pre-computation if we want to perform matvecs, because we don't
-    # want them to be included in the measurement.
-    if op_str == "matvec":
-        f_precompute()
+        def ekfac_factors():
+            with _use_params(computer._model_module, computer._params):
+                state["ic"], state["gc"], state["m"] = (
+                    computer._compute_kronecker_factors()
+                )
 
-    func = {
-        "gradient_and_loss": f_gradient_and_loss,
-        "precompute": f_precompute,
-        "matvec": f_matvec,
-    }[op_str]
+        def ekfac_correction():
+            with _use_params(computer._model_module, computer._params):
+                computer.compute_eigenvalue_correction(
+                    state["ic"], state["gc"], state["m"]
+                )
 
-    times = []
-    for _ in range(num_repeats):
-        # Wait until all operations on the GPU are done
-        if is_cuda:
-            cuda.synchronize()
+        def ekfac_eigh():
+            ic = {k: v.clone() for k, v in state["ic"].items()}
+            gc = {k: v.clone() for k, v in state["gc"].items()}
+            state["ic"] = _EKFACMixin._eigenvectors_(ic)
+            state["gc"] = _EKFACMixin._eigenvectors_(gc)
 
-        # Measure execution time and write to file
-        start = perf_counter()
-        _ = func()
-        if is_cuda:
-            cuda.synchronize()
-        end = perf_counter()
-        times.append(end - start)
+        phases["kfac_factors"] = ekfac_factors
+        phases["eigenvalue_correction"] = ekfac_correction
+        phases["eigh"] = ekfac_eigh
 
-    best = min(times)
-    print(
-        f"[Time] {linop_str}'s {op_str} on {problem_str} and {device_str}:"
-        + f"\n\tBest: {best:.4f} s\n\tRepeats: {[round(t, 5) for t in times]}"
-    )
+    elif linop_str in _IS_KFAC_INVERSE_HOOKS:
+        # KFAC inverse hooks: factors → Cholesky inverse
+        def kfac_inv_factors():
+            state["linop"] = KFACLinearOperator(
+                model, loss_function, params, data, **common_kwargs
+            )
 
-    with open(savepath, "w") as f:
-        json.dump({"time": best}, f)
+        def cholesky_inverse():
+            state["linop"].inverse(damping=1e-3)
+
+        phases["kfac_factors"] = kfac_inv_factors
+        phases["cholesky_inverse"] = cholesky_inverse
+
+    elif linop_str in _IS_FX and linop_str in _IS_EKFAC:
+        # EKFAC FX: factors → correction → eigh → tracing
+        computer = setup_computer(linop_str, model, loss_function, params, data)
+
+        def ekfac_fx_factors():
+            # Measure total precompute, subtract other phases later
+            total, _ = TimeBenchmark(is_cuda="cuda" in str(dev), num_repeats=1).time(
+                lambda: setup_linop(
+                    linop_str,
+                    model,
+                    loss_function,
+                    params,
+                    data,
+                    check_deterministic=False,
+                ),
+            )
+            state["total"] = total
+            # Also compute factors for eigh/correction dependencies
+            state["traced_io"] = computer._trace_io_functions()
+            state["ic"], state["gc"], state["m"] = computer._compute_kronecker_factors(
+                state["traced_io"]
+            )
+
+        def ekfac_fx_correction():
+            computer.compute_eigenvalue_correction(
+                state["ic"], state["gc"], state["m"], state["traced_io"]
+            )
+
+        def ekfac_fx_eigh():
+            ic = {k: v.clone() for k, v in state["ic"].items()}
+            gc = {k: v.clone() for k, v in state["gc"].items()}
+            state["ic"] = _EKFACMixin._eigenvectors_(ic)
+            state["gc"] = _EKFACMixin._eigenvectors_(gc)
+
+        def ekfac_fx_tracing():
+            model_func = make_functional_call(model)
+            X_example = next(iter(data))[0].to(dev)
+            with_kfac_io(model_func, X_example, params, FisherType.MC)
+
+        phases["kfac_factors"] = ekfac_fx_factors
+        phases["eigenvalue_correction"] = ekfac_fx_correction
+        phases["eigh"] = ekfac_fx_eigh
+        phases["tracing"] = ekfac_fx_tracing
+
+    elif linop_str in _IS_FX:
+        # KFAC FX: factors → tracing
+        def kfac_fx_tracing():
+            model_func = make_functional_call(model)
+            X_example = next(iter(data))[0].to(dev)
+            with_kfac_io(model_func, X_example, params, FisherType.MC)
+
+        def kfac_fx_factors():
+            # Measure total precompute, subtract tracing later
+            total, _ = TimeBenchmark(is_cuda="cuda" in str(dev), num_repeats=1).time(
+                lambda: setup_linop(
+                    linop_str,
+                    model,
+                    loss_function,
+                    params,
+                    data,
+                    check_deterministic=False,
+                ),
+                is_cuda="cuda" in str(dev),
+            )
+            state["total"] = total
+
+        phases["kfac_factors"] = kfac_fx_factors
+        phases["tracing"] = kfac_fx_tracing
+
+    else:
+        # Plain KFAC hooks: single phase
+        def kfac_factors():
+            KFACLinearOperator(model, loss_function, params, data, **common_kwargs)
+
+        phases["kfac_factors"] = kfac_factors
+
+    return phases
+
+
+def _postprocess_fx_factors(results: dict[str, float]) -> dict[str, float]:
+    """For FX operators, derive kfac_factors = total - tracing - other phases.
+
+    Args:
+        results: Raw timing results from run_phases.
+
+    Returns:
+        Adjusted results with kfac_factors derived by subtraction.
+    """
+    if "tracing" in results and results.get("kfac_factors", 0) > 0:
+        # kfac_factors was measured as total; subtract all other timed phases
+        other = sum(v for k, v in results.items() if k != "kfac_factors")
+        results["kfac_factors"] = max(results["kfac_factors"] - other, 0.0)
+    return results
 
 
 # %%
 #
-# Now we can run the benchmark for each linear operator and visualize the results.
+# Main benchmark execution
+# ^^^^^^^^^^^^^^^^^^^^^^^^
 
 if __name__ == "__main__":
-    for device_str, problem_str, linop_str, op_str in product(
-        DEVICE_STRS, PROBLEM_STRS, LINOP_STRS, OP_STRS
+    # Reference baselines (once per problem)
+    for device_str, problem_str in product(DEVICE_STRS, PROBLEM_STRS):
+        bench = TimeBenchmark(
+            is_cuda="cuda" in device_str,
+            num_repeats=10,
+            skip_existing=SKIP_EXISTING,
+        )
+        manual_seed(0)
+        dev = device(device_str)
+        model, loss_function, params, data = setup_problem(problem_str, "Hessian", dev)
+        bench.run(
+            reference_benchpath(problem_str, device_str),
+            f"Reference on {problem_str} and {device_str}",
+            lambda: gradient_and_loss(model, loss_function, params, data),  # noqa: B023
+        )
+
+    # Per-linop benchmarks: matvec time (+ precompute sub-phases for KFAC-like)
+    # All results for one linop on one problem go into a single JSON file.
+    for device_str, problem_str, linop_str in product(
+        DEVICE_STRS, PROBLEM_STRS, MATVEC_LINOP_STRS
     ):
-        run_time_benchmark(linop_str, problem_str, device_str, op_str, num_repeats=10)
+        bench = TimeBenchmark(
+            is_cuda="cuda" in device_str,
+            num_repeats=10,
+            skip_existing=SKIP_EXISTING,
+        )
+        save_path = benchpath(linop_str, problem_str, device_str)
+        label = f"{linop_str} on {problem_str} and {device_str}"
+        if bench.skip_existing and path.exists(save_path):
+            print(f"[Time] Skipping {label}")
+            continue
+
+        manual_seed(0)
+        dev = device(device_str)
+        model, loss_function, params, data = setup_problem(problem_str, linop_str, dev)
+
+        # NOTE Disable deterministic check as it will otherwise compute matvecs
+        linop = setup_linop(
+            linop_str, model, loss_function, params, data, check_deterministic=False
+        )
+        v = rand(linop.shape[1], device=dev)
+
+        # Double-backward through efficient attention is unsupported, disable
+        # fused kernels (pytorch/pytorch#116350)
+        def _matvec():  # noqa: B023
+            attention_db = isinstance(linop, HAS_JVP) and isinstance(  # noqa: B023
+                model,  # noqa: B023
+                GPTWrapper,
+            )
+            with sdpa_kernel(SDPBackend.MATH) if attention_db else nullcontext():
+                _ = linop @ v  # noqa: B023
+
+        matvec_time, _ = bench.time(_matvec)
+        results = {"matvec": matvec_time}
+        print(f"[Time] {label} / matvec: {matvec_time:.4f} s")
+
+        # Precompute sub-phases (KFAC-like only)
+        if linop_str in _KFAC_LIKE:
+            phases = make_precompute_phases(
+                linop_str, model, loss_function, params, data
+            )
+            for phase_name, func in phases.items():
+                t, _ = bench.time(func)
+                results[phase_name] = t
+                print(f"[Time] {label} / {phase_name}: {t:.4f} s")
+
+            # For FX operators, derive kfac_factors by subtraction
+            if linop_str in _IS_FX:
+                results = _postprocess_fx_factors(results)
+
+        with open(save_path, "w") as f:
+            json.dump(results, f)
+        print(f"[Time] Saved {label}")
 
 # %%
 #
 # Visualization
 # ^^^^^^^^^^^^^
-#
-# At this point, we have collected the run time data for each linear operator and can
-# visualize the results. We will plot the run time of the gradient computation and the
-# matrix-vector product for each linear operator. For KFAC, we will also show the
-# pre-computation time.
-#
-# Here is the plotting function:
 
 
-def visualize_time_benchmark(
-    linop_strs: list[str], problem_str: str, device_str: str
-) -> tuple[plt.Figure, plt.Axes]:
-    """Visualize the run time benchmark results.
+def _add_gradient_reference_axis(ax, reference: float):
+    """Add a dashed reference line and a top axis showing multiples of gradient time.
 
     Args:
-        linop_strs: The linear operators.
-        problem_str: The problem.
-        device_str: The device.
-
-    Returns:
-        The figure and axes of the plot.
+        ax: The matplotlib axes.
+        reference: The gradient computation time in seconds.
     """
-    fig, ax = plt.subplots()
-    ax.set_xlabel("Time [s]")
-
-    # Visualize the run time of each linear operator
-    for idx, name in enumerate(linop_strs):
-        # gather results:
-        results = {}
-        for op_str in OP_STRS:
-            with open(benchpath(name, problem_str, device_str, op_str), "r") as f:
-                results[op_str] = json.load(f)["time"]
-
-        if name in {"KFAC", "KFAC inverse", "EKFAC", "EKFAC inverse"}:
-            ax.barh(
-                idx - 0.2,
-                width=results["precompute"],
-                color="green",
-                label="precompute" if name == "KFAC" else None,
-                height=0.4,
-            )
-            ax.barh(
-                idx + 0.2,
-                width=results["matvec"],
-                color="blue",
-                label="matvec" if name == "KFAC" else None,
-                height=0.4,
-            )
-        else:
-            ax.barh(idx, width=results["matvec"], color="blue")
-
-    ax.set_yticks(list(range(len(linop_strs))))
-    ax.set_yticklabels(linop_strs)
-
-    # Add an additional axis that shows run time in multiples of gradients
-    with open(
-        benchpath(linop_strs[0], problem_str, device_str, "gradient_and_loss"), "r"
-    ) as f:
-        reference = json.load(f)["time"]
     ax.axvline(reference, color="black", linestyle="--")
-
-    # Make the top x axis show multiples of the reference time
     ax2 = ax.twiny()
     ax2.set_xlim(ax.get_xlim())
     ax2.set_xlabel("Relative to gradient computation")
-
-    # Choose a reasonable number of ticks
     _, x_max = ax.get_xlim()
     num_gradients = x_max / reference
     spacing = 1 / 4
@@ -504,18 +788,116 @@ def visualize_time_benchmark(
     while num_ticks > 8:
         spacing *= 2
         num_ticks = 1 + floor(num_gradients / spacing)
-
     ax2.set_xticks(arange(0, num_ticks) * spacing * reference)
     ax2.set_xticklabels(arange(0, num_ticks * spacing, spacing).tolist())
 
-    ax.legend()
 
+def visualize_matvec_benchmark(
+    linop_strs: list[str], problem_str: str, device_str: str
+) -> tuple[plt.Figure, plt.Axes]:
+    """Visualize matvec times for all operators.
+
+    Args:
+        linop_strs: The linear operators.
+        problem_str: The problem.
+        device_str: The device.
+
+    Returns:
+        The figure and axes.
+    """
+    fig, ax = plt.subplots()
+
+    for idx, name in enumerate(linop_strs):
+        with open(benchpath(name, problem_str, device_str), "r") as f:
+            matvec_time = json.load(f)["matvec"]
+        ax.barh(idx, width=matvec_time, color="tab:blue")
+
+    ax.set_yticks(list(range(len(linop_strs))))
+    # Strip backend suffix — matvec is backend-independent
+    ax.set_yticklabels([n.replace(" (hooks)", "") for n in linop_strs])
+    ax.set_xlabel("Time [s]")
+
+    with open(reference_benchpath(problem_str, device_str), "r") as f:
+        reference = json.load(f)["time"]
+    _add_gradient_reference_axis(ax, reference)
+
+    return fig, ax
+
+
+def visualize_precompute_benchmark(
+    linop_strs: list[str], problem_str: str, device_str: str
+) -> tuple[plt.Figure, plt.Axes]:
+    """Visualize precompute sub-phase breakdown for KFAC/EKFAC operators.
+
+    Args:
+        linop_strs: The KFAC/EKFAC linear operators to plot.
+        problem_str: The problem.
+        device_str: The device.
+
+    Returns:
+        The figure and axes.
+    """
+    kfac = [linop for linop in linop_strs if linop in _KFAC_LIKE]
+    fig, ax = plt.subplots()
+
+    precompute_colors = {
+        "kfac_factors": "tab:green",
+        "eigenvalue_correction": "tab:red",
+        "eigh": "tab:orange",
+        "cholesky_inverse": "tab:purple",
+        "tracing": "tab:brown",
+    }
+    precompute_labels = {
+        "kfac_factors": "Kronecker factors",
+        "eigenvalue_correction": "Eigen-correction",
+        "eigh": "Eigen-decomposition",
+        "cholesky_inverse": "Cholesky inverse",
+        "tracing": "FX tracing",
+    }
+    labels_shown = set()
+
+    for idx, name in enumerate(kfac):
+        sub_ops = _get_precompute_ops(name)
+
+        # Read sub-phases from the operator's benchmark file
+        fpath = benchpath(name, problem_str, device_str)
+        if not path.exists(fpath):
+            continue
+        with open(fpath, "r") as f:
+            precompute_data = json.load(f)
+
+        left = 0.0
+        for op in sub_ops:
+            if op not in precompute_data:
+                continue
+            t = precompute_data[op]
+            label = precompute_labels[op] if op not in labels_shown else None
+            ax.barh(
+                idx,
+                width=t,
+                left=left,
+                color=precompute_colors[op],
+                label=label,
+                height=0.6,
+            )
+            labels_shown.add(op)
+            left += t
+
+    ax.set_yticks(list(range(len(kfac))))
+    ax.set_yticklabels(kfac)
+    ax.set_xlabel("Time [s]")
+
+    with open(reference_benchpath(problem_str, device_str), "r") as f:
+        reference = json.load(f)["time"]
+    _add_gradient_reference_axis(ax, reference)
+
+    ax.legend()
     return fig, ax
 
 
 # %%
 #
-# And a convenience function to produce save paths for figures.
+# Figure paths and plotting
 
 
 def figpath(problem_str: str, device_str: str, metric: str = "time") -> str:
@@ -529,20 +911,33 @@ def figpath(problem_str: str, device_str: str, metric: str = "time") -> str:
     Returns:
         The path to save the figure.
     """
-    return path.join(RESULTDIR, f"{metric}_{problem_str}_{device_str}.pdf")
+    return path.join(_problem_dir(problem_str), f"{metric}_{device_str}.pdf")
 
-
-# %%
-#
-# Let's take a look at the results:
 
 if __name__ == "__main__":
     plot_config = bundles.icml2024(column="full" if ON_RTD else "half", usetex=USETEX)
 
     for problem_str, device_str in product(PROBLEM_STRS, DEVICE_STRS):
         with plt.rc_context(plot_config):
-            fig, ax = visualize_time_benchmark(LINOP_STRS, problem_str, device_str)
-            plt.savefig(figpath(problem_str, device_str), bbox_inches="tight")
+            fig, ax = visualize_matvec_benchmark(
+                MATVEC_LINOP_STRS, problem_str, device_str
+            )
+            plt.savefig(
+                figpath(problem_str, device_str, metric="time_matvec"),
+                bbox_inches="tight",
+            )
+            plt.close()
+
+        kfac_linops = [linop for linop in LINOP_STRS if linop in _KFAC_LIKE]
+        with plt.rc_context(plot_config):
+            fig, ax = visualize_precompute_benchmark(
+                kfac_linops, problem_str, device_str
+            )
+            plt.savefig(
+                figpath(problem_str, device_str, metric="time_precompute"),
+                bbox_inches="tight",
+            )
+            plt.close()
 
 # %%
 #
@@ -613,19 +1008,57 @@ if cuda.is_available():
 if __name__ == "__main__":
     # measure memory consumption in individual Python sessions to avoid memory
     # allocations from previous operations into the currently benchmarked operation.
-    for device_str, problem_str, linop_str, op_str in product(
-        DEVICE_STRS, PROBLEM_STRS, LINOP_STRS, OP_STRS
-    ):
+
+    # Reference gradient_and_loss (once per problem)
+    for device_str, problem_str in product(DEVICE_STRS, PROBLEM_STRS):
         cmd = [
-            "python",
+            sys.executable,
+            path.join(path.dirname(__file__), "memory_benchmark.py"),
+            f"--problem={problem_str}",
+            f"--device={device_str}",
+            "--reference",
+        ]
+        print(f"Running command: {' '.join(cmd)}")
+        run_verbose(cmd)
+
+    # Per-linop: measure peak memory and merge into the operator's JSON file
+    for device_str, problem_str, linop_str in product(
+        DEVICE_STRS, PROBLEM_STRS, MATVEC_LINOP_STRS
+    ):
+        operator_path = benchpath(linop_str, problem_str, device_str)
+        # Skip if the file already has peakmem
+        if path.exists(operator_path):
+            with open(operator_path) as f:
+                existing = json.load(f)
+            if "peakmem" in existing:
+                print(f"[Memory] Skipping {linop_str} on {problem_str}")
+                continue
+
+        # Run memory measurement in subprocess (writes to a temp file)
+        mem_path = benchpath(linop_str, problem_str, device_str, op_str="peakmem")
+        cmd = [
+            sys.executable,
             path.join(path.dirname(__file__), "memory_benchmark.py"),
             f"--linop={linop_str}",
             f"--problem={problem_str}",
             f"--device={device_str}",
-            f"--op={op_str}",
         ]
         print(f"Running command: {' '.join(cmd)}")
         run_verbose(cmd)
+
+        # Merge peakmem into the operator's single file
+        if path.exists(mem_path) and path.exists(operator_path):
+            with open(mem_path) as f:
+                peakmem = json.load(f)["peakmem"]
+            with open(operator_path) as f:
+                data = json.load(f)
+            data["peakmem"] = peakmem
+            with open(operator_path, "w") as f:
+                json.dump(data, f)
+            # Remove the temp file
+            from os import remove
+
+            remove(mem_path)
 
 # %%
 #
@@ -649,23 +1082,18 @@ def visualize_peakmem_benchmark(
     fig, ax = plt.subplots()
     ax.set_xlabel("Peak memory [GiB]")
 
-    # Visualize the peak memory consumption of each linear operator's matvec
-    for name in linop_strs:
-        with open(
-            benchpath(name, problem_str, device_str, "matvec", metric="peakmem"), "r"
-        ) as f:
+    # Visualize the peak memory consumption of each linear operator
+    labels = [n.replace(" (hooks)", "") for n in linop_strs]
+    for idx, name in enumerate(linop_strs):
+        fpath = benchpath(name, problem_str, device_str)
+        with open(fpath, "r") as f:
             mem = json.load(f)["peakmem"]
-        ax.barh(name, mem, color="blue")
+        ax.barh(idx, mem, color="blue")
+    ax.set_yticks(list(range(len(linop_strs))))
+    ax.set_yticklabels(labels)
 
     # Get memory consumption of gradient computation
-    reference_savepath = benchpath(
-        linop_strs[0],
-        problem_str,
-        device_str,
-        "gradient_and_loss",
-        metric="peakmem",
-    )
-    with open(reference_savepath, "r") as f:
+    with open(reference_benchpath(problem_str, device_str), "r") as f:
         reference = json.load(f)["peakmem"]
 
     # Add an additional axis that shows memory in multiples of gradients
@@ -694,7 +1122,9 @@ if __name__ == "__main__":
 
     for problem_str, device_str in product(PROBLEM_STRS, DEVICE_STRS):
         with plt.rc_context(plot_config):
-            fig, ax = visualize_peakmem_benchmark(LINOP_STRS, problem_str, device_str)
+            fig, ax = visualize_peakmem_benchmark(
+                MATVEC_LINOP_STRS, problem_str, device_str
+            )
             plt.savefig(
                 figpath(problem_str, device_str, metric="peakmem"), bbox_inches="tight"
             )

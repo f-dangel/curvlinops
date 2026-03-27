@@ -90,6 +90,10 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
 
 ### Internal
 
+- Extract `_trace_io_functions` in FX-based KFAC/EKFAC computers to separate
+  FX tracing from factor computation
+  ([PR #284](https://github.com/f-dangel/curvlinops/pull/284))
+
 - Add test documenting `torch.compile` graph breaks for `HessianLinearOperator`
   ([PR #285](https://github.com/f-dangel/curvlinops/pull/285))
 

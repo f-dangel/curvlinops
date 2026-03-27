@@ -8,7 +8,11 @@ from torch.nn import Module
 from torch.utils.hooks import RemovableHandle
 
 from curvlinops.computers._base import ParamGroup, ParamGroupKey, _EKFACMixin
-from curvlinops.computers.kfac_hooks import HooksKFACComputer, _module_hyperparams
+from curvlinops.computers.kfac_hooks import (
+    HooksKFACComputer,
+    _module_hyperparams,
+    _use_params,
+)
 from curvlinops.computers.kfac_math import (
     compute_loss_correction,
     grad_to_weight_sharing_format,
@@ -254,6 +258,31 @@ class HooksEKFACComputer(_EKFACMixin, HooksKFACComputer):
       forgetting (ICPR).
 
     """
+
+    def compute(
+        self,
+    ) -> tuple[
+        dict[ParamGroupKey, Tensor],
+        dict[ParamGroupKey, Tensor],
+        dict[ParamGroupKey, Tensor],
+        list[ParamGroup],
+    ]:
+        """Compute eigenvalue-corrected Kronecker factors with params swapped in.
+
+        Returns:
+            Tuple of ``(input_covariance_eigenvectors,
+            gradient_covariance_eigenvectors, corrected_eigenvalues, mapping)``.
+        """
+        with _use_params(self._model_module, self._params):
+            input_covariances, gradient_covariances, mapping = (
+                self._compute_kronecker_factors()
+            )
+            input_covariances = self._eigenvectors_(input_covariances)
+            gradient_covariances = self._eigenvectors_(gradient_covariances)
+            corrected_eigenvalues = self.compute_eigenvalue_correction(
+                input_covariances, gradient_covariances, mapping
+            )
+        return input_covariances, gradient_covariances, corrected_eigenvalues, mapping
 
     def compute_eigenvalue_correction(
         self,
