@@ -38,6 +38,35 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
     backward pass and eigenvalue correction computation run eagerly.
     """
 
+    def compute(
+        self,
+    ) -> tuple[
+        dict[ParamGroupKey, Tensor],
+        dict[ParamGroupKey, Tensor],
+        dict[ParamGroupKey, Tensor],
+        list[ParamGroup],
+    ]:
+        """Compute eigenvalue-corrected Kronecker factors, tracing IO functions first.
+
+        Overrides the base class to trace IO functions once and reuse them for
+        both factor computation and eigenvalue correction.
+
+        Returns:
+            Tuple of ``(input_covariance_eigenvectors,
+            gradient_covariance_eigenvectors, corrected_eigenvalues, mapping)``.
+        """
+        traced_io = self._trace_io_functions()
+        with self._computation_context():
+            input_covariances, gradient_covariances, mapping = (
+                self._compute_kronecker_factors(traced_io)
+            )
+            input_covariances = self._eigenvectors_(input_covariances)
+            gradient_covariances = self._eigenvectors_(gradient_covariances)
+            corrected_eigenvalues = self.compute_eigenvalue_correction(
+                input_covariances, gradient_covariances, mapping, traced_io
+            )
+        return input_covariances, gradient_covariances, corrected_eigenvalues, mapping
+
     def compute_eigenvalue_correction(
         self,
         input_covariances_eigenvectors: dict[ParamGroupKey, Tensor],
@@ -47,10 +76,9 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
             dict[int, Callable],
             dict[str, dict[str, str]],
             dict[str, dict[str, Any]],
-        ]
-        | None = None,
+        ],
     ) -> dict[ParamGroupKey, Tensor]:
-        """Compute eigenvalue corrections using FX graph tracing.
+        """Compute eigenvalue corrections using pre-traced IO functions.
 
         Args:
             input_covariances_eigenvectors: Input covariance eigenvectors
@@ -59,13 +87,10 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
                 per parameter group.
             mapping: List of parameter groups.
             traced_io: Pre-traced IO functions from :meth:`_trace_io_functions`.
-                If ``None``, tracing is performed automatically.
 
         Returns:
             Dictionary mapping parameter group keys to corrected eigenvalues.
         """
-        if traced_io is None:
-            traced_io = self._trace_io_functions()
         traced_io_fns, io_param_names, layer_hparams = traced_io
 
         io_groups: dict[ParamGroupKey, list[str]] | None = None

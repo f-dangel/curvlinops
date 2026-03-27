@@ -156,18 +156,33 @@ class MakeFxKFACComputer(_BaseKFACComputer):
 
         return traced_io_fns, io_param_names, layer_hparams
 
+    def compute(
+        self,
+    ) -> tuple[
+        dict[ParamGroupKey, Tensor], dict[ParamGroupKey, Tensor], list[ParamGroup]
+    ]:
+        """Compute KFAC's Kronecker factors, tracing IO functions first.
+
+        Overrides the base class to separate FX tracing from factor computation.
+
+        Returns:
+            Tuple of ``(input_covariances, gradient_covariances, mapping)``.
+        """
+        traced_io = self._trace_io_functions()
+        with self._computation_context():
+            return self._compute_kronecker_factors(traced_io)
+
     def _compute_kronecker_factors(
         self,
         traced_io: tuple[
             dict[int, Callable],
             dict[str, dict[str, str]],
             dict[str, dict[str, Any]],
-        ]
-        | None = None,
+        ],
     ) -> tuple[
         dict[ParamGroupKey, Tensor], dict[ParamGroupKey, Tensor], list[ParamGroup]
     ]:
-        """Compute KFAC's Kronecker factors using FX graph tracing.
+        """Compute KFAC's Kronecker factors from pre-traced IO functions.
 
         The IO-collecting forward pass (from ``with_kfac_io``) is cached by
         batch size. Input covariances are computed from the collected layer
@@ -176,13 +191,10 @@ class MakeFxKFACComputer(_BaseKFACComputer):
 
         Args:
             traced_io: Pre-traced IO functions from :meth:`_trace_io_functions`.
-                If ``None``, tracing is performed automatically.
 
         Returns:
             Tuple of (input_covariances, gradient_covariances, mapping).
         """
-        if traced_io is None:
-            traced_io = self._trace_io_functions()
         traced_io_fns, io_param_names, layer_hparams = traced_io
 
         # N_data normalization is applied eagerly here, outside the traced forward
