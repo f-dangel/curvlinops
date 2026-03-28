@@ -21,7 +21,7 @@ from collections.abc import Iterable
 from contextlib import nullcontext
 from itertools import product
 from math import floor
-from os import environ, makedirs, path
+from os import environ, makedirs, path, remove
 from shutil import which
 from subprocess import CalledProcessError, CompletedProcess, run
 
@@ -72,9 +72,7 @@ if "__file__" not in globals():
 
 # Define paths where results are stored and paths we must parse for in the
 # output of PyTorch's profiler.
-SCRIPTNAME = path.basename(__file__)
-HERE = path.abspath(__file__)
-HEREDIR = path.dirname(HERE)
+HEREDIR = path.dirname(path.abspath(__file__))
 RESULTDIR = path.join(HEREDIR, "benchmark")
 makedirs(RESULTDIR, exist_ok=True)
 
@@ -245,9 +243,6 @@ _KFAC_LIKE = {
     "EKFAC inverse (fx)",
 }
 
-# Names that show precompute + matvec bars in visualization
-_HAS_PRECOMPUTE = _KFAC_LIKE
-
 # Names that are EKFAC (precompute is split into factors + eigh + correction)
 _IS_EKFAC = {
     "EKFAC (hooks)",
@@ -255,28 +250,6 @@ _IS_EKFAC = {
     "EKFAC (fx)",
     "EKFAC inverse (fx)",
 }
-
-# Names that are KFAC inverse (precompute includes inverse computation)
-_IS_INVERSE = {
-    "KFAC inverse (hooks)",
-    "KFAC inverse (fx)",
-    "EKFAC inverse (hooks)",
-    "EKFAC inverse (fx)",
-}
-
-# %%
-#
-# And we are interested in the following sub-routines:
-
-# EKFAC precompute is split into sub-phases for detailed analysis
-# Order: factors first, then correction, then decomposition (eigh dominates, shown last)
-EKFAC_PRECOMPUTE_OPS = ["kfac_factors", "eigenvalue_correction", "eigh"]
-
-# KFAC inverse precompute is split into factors + Cholesky inverse
-KFAC_INVERSE_PRECOMPUTE_OPS = ["kfac_factors", "cholesky_inverse"]
-
-# FX backend precompute is split into tracing + factor computation
-FX_PRECOMPUTE_OPS = ["kfac_factors", "tracing"]
 
 # Names that are KFAC inverse hooks (precompute split into factors + Cholesky)
 _IS_KFAC_INVERSE_HOOKS = {"KFAC inverse (hooks)"}
@@ -500,13 +473,13 @@ def _get_precompute_ops(linop_str: str) -> list[str]:
         List of sub-phase operation names.
     """
     if linop_str in _IS_EKFAC and linop_str in _IS_FX:
-        return EKFAC_PRECOMPUTE_OPS + ["tracing"]
+        return ["kfac_factors", "eigenvalue_correction", "eigh", "tracing"]
     elif linop_str in _IS_EKFAC:
-        return EKFAC_PRECOMPUTE_OPS
+        return ["kfac_factors", "eigenvalue_correction", "eigh"]
     elif linop_str in _IS_KFAC_INVERSE_HOOKS:
-        return KFAC_INVERSE_PRECOMPUTE_OPS
+        return ["kfac_factors", "cholesky_inverse"]
     elif linop_str in _IS_FX:
-        return FX_PRECOMPUTE_OPS
+        return ["kfac_factors", "tracing"]
     else:
         return ["kfac_factors"]
 
@@ -651,7 +624,6 @@ def make_precompute_phases(  # noqa: C901, PLR0915
                     data,
                     check_deterministic=False,
                 ),
-                is_cuda="cuda" in str(dev),
             )
             state["total"] = total
 
@@ -1055,9 +1027,6 @@ if __name__ == "__main__":
             data["peakmem"] = peakmem
             with open(operator_path, "w") as f:
                 json.dump(data, f)
-            # Remove the temp file
-            from os import remove
-
             remove(mem_path)
 
 # %%
@@ -1092,27 +1061,9 @@ def visualize_peakmem_benchmark(
     ax.set_yticks(list(range(len(linop_strs))))
     ax.set_yticklabels(labels)
 
-    # Get memory consumption of gradient computation
     with open(reference_benchpath(problem_str, device_str), "r") as f:
         reference = json.load(f)["peakmem"]
-
-    # Add an additional axis that shows memory in multiples of gradients
-    ax.axvline(reference, color="black", linestyle="--")
-    ax2 = ax.twiny()
-    ax2.set_xlim(ax.get_xlim())
-    ax2.set_xlabel("Relative to gradient computation")
-
-    # Choose a reasonable number of ticks
-    _, x_max = ax.get_xlim()
-    num_gradients = x_max / reference
-    spacing = 1 / 4
-    num_ticks = 1 + floor(num_gradients / spacing)
-    while num_ticks > 8:
-        spacing *= 2
-        num_ticks = 1 + floor(num_gradients / spacing)
-
-    ax2.set_xticks(arange(0, num_ticks) * spacing * reference)
-    ax2.set_xticklabels(arange(0, num_ticks * spacing, spacing).tolist())
+    _add_gradient_reference_axis(ax, reference)
 
     return fig, ax
 
