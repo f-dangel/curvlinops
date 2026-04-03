@@ -112,7 +112,7 @@ _IS_FX = {
 }
 
 # Sub-phase operation names for precompute breakdown
-EKFAC_PRECOMPUTE_OPS = ["kfac_factors", "eigenvalue_correction", "eigh"]
+EKFAC_PRECOMPUTE_OPS = ["kfac_factors", "eigh", "eigenvalue_correction"]
 KFAC_INVERSE_PRECOMPUTE_OPS = ["kfac_factors", "cholesky_inverse"]
 FX_PRECOMPUTE_OPS = ["kfac_factors", "tracing"]
 

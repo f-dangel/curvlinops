@@ -471,27 +471,31 @@ def make_precompute_phases(  # noqa: C901
     )
 
     if linop_str in _IS_EKFAC and linop_str not in _IS_FX:
-        # EKFAC hooks: factors → correction → eigh
+        # EKFAC hooks: factors → eigh → correction
         computer = setup_computer(linop_str, model, loss_function, params, data)
 
         def ekfac_factors():
             return computer._compute_kronecker_factors()
 
-        def ekfac_correction(state):
-            ic, gc, m = state
-            computer.compute_eigenvalue_correction(ic, gc, m)
-            return (ic, gc, m)
-
         def ekfac_eigh(state):
-            ic, gc, _m = state
-            ic = _EKFACMixin._eigenvectors_({k: v.clone() for k, v in ic.items()})
-            gc = _EKFACMixin._eigenvectors_({k: v.clone() for k, v in gc.items()})
-            return (ic, gc)
+            input_cov, grad_cov, mapping = state
+            input_cov = _EKFACMixin._eigenvectors_({
+                k: v.clone() for k, v in input_cov.items()
+            })
+            grad_cov = _EKFACMixin._eigenvectors_({
+                k: v.clone() for k, v in grad_cov.items()
+            })
+            return (input_cov, grad_cov, mapping)
+
+        def ekfac_correction(state):
+            input_cov, grad_cov, mapping = state
+            computer.compute_eigenvalue_correction(input_cov, grad_cov, mapping)
+            return (input_cov, grad_cov, mapping)
 
         phases = [
             ("kfac_factors", ekfac_factors),
-            ("eigenvalue_correction", ekfac_correction),
             ("eigh", ekfac_eigh),
+            ("eigenvalue_correction", ekfac_correction),
         ]
 
         def context():
@@ -516,32 +520,40 @@ def make_precompute_phases(  # noqa: C901
         ], None
 
     if linop_str in _IS_FX and linop_str in _IS_EKFAC:
-        # EKFAC FX: tracing → factors → correction → eigh
+        # EKFAC FX: tracing → factors → eigh → correction
         computer = setup_computer(linop_str, model, loss_function, params, data)
 
         def ekfac_fx_tracing():
             return computer._trace_io_functions()
 
         def ekfac_fx_factors(traced_io):
-            ic, gc, m = computer._compute_kronecker_factors(traced_io)
-            return (ic, gc, m, traced_io)
-
-        def ekfac_fx_correction(state):
-            ic, gc, m, traced_io = state
-            computer.compute_eigenvalue_correction(ic, gc, m, traced_io)
-            return (ic, gc, m)
+            input_cov, grad_cov, mapping = computer._compute_kronecker_factors(
+                traced_io
+            )
+            return (input_cov, grad_cov, mapping, traced_io)
 
         def ekfac_fx_eigh(state):
-            ic, gc, _m = state
-            ic = _EKFACMixin._eigenvectors_({k: v.clone() for k, v in ic.items()})
-            gc = _EKFACMixin._eigenvectors_({k: v.clone() for k, v in gc.items()})
-            return (ic, gc)
+            input_cov, grad_cov, mapping, traced_io = state
+            input_cov = _EKFACMixin._eigenvectors_({
+                k: v.clone() for k, v in input_cov.items()
+            })
+            grad_cov = _EKFACMixin._eigenvectors_({
+                k: v.clone() for k, v in grad_cov.items()
+            })
+            return (input_cov, grad_cov, mapping, traced_io)
+
+        def ekfac_fx_correction(state):
+            input_cov, grad_cov, mapping, traced_io = state
+            computer.compute_eigenvalue_correction(
+                input_cov, grad_cov, mapping, traced_io
+            )
+            return (input_cov, grad_cov, mapping)
 
         return [
             ("tracing", ekfac_fx_tracing),
             ("kfac_factors", ekfac_fx_factors),
-            ("eigenvalue_correction", ekfac_fx_correction),
             ("eigh", ekfac_fx_eigh),
+            ("eigenvalue_correction", ekfac_fx_correction),
         ], None
 
     if linop_str in _IS_FX:
