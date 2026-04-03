@@ -507,8 +507,7 @@ def make_precompute_phases(  # noqa: C901
             )
 
         def cholesky_inverse(linop):
-            linop.inverse(damping=1e-3)
-            return linop
+            return linop.inverse(damping=1e-3)
 
         return [
             ("kfac_factors", kfac_inv_factors),
