@@ -479,12 +479,8 @@ def make_precompute_phases(  # noqa: C901
 
         def ekfac_eigh(state):
             input_cov, grad_cov, mapping = state
-            input_cov = _EKFACMixin._eigenvectors_({
-                k: v.clone() for k, v in input_cov.items()
-            })
-            grad_cov = _EKFACMixin._eigenvectors_({
-                k: v.clone() for k, v in grad_cov.items()
-            })
+            input_cov = _EKFACMixin._eigenvectors_(input_cov)
+            grad_cov = _EKFACMixin._eigenvectors_(grad_cov)
             return (input_cov, grad_cov, mapping)
 
         def ekfac_correction(state):
@@ -534,12 +530,8 @@ def make_precompute_phases(  # noqa: C901
 
         def ekfac_fx_eigh(state):
             input_cov, grad_cov, mapping, traced_io = state
-            input_cov = _EKFACMixin._eigenvectors_({
-                k: v.clone() for k, v in input_cov.items()
-            })
-            grad_cov = _EKFACMixin._eigenvectors_({
-                k: v.clone() for k, v in grad_cov.items()
-            })
+            input_cov = _EKFACMixin._eigenvectors_(input_cov)
+            grad_cov = _EKFACMixin._eigenvectors_(grad_cov)
             return (input_cov, grad_cov, mapping, traced_io)
 
         def ekfac_fx_correction(state):
