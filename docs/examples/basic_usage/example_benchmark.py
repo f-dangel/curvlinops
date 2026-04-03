@@ -78,7 +78,7 @@ if __name__ == "__main__":
     for problem_str, device_str in product(PROBLEM_STRS, DEVICE_STRS):
         bench = Benchmark(problem_str, device_str, skip_existing=SKIP_EXISTING)
         bench.run_reference()
-        for linop_str in MATVEC_LINOP_STRS:
+        for linop_str in LINOP_STRS:
             bench.run_operator(linop_str)
 
 # %%
@@ -153,10 +153,7 @@ def visualize_precompute_benchmark(
     for idx, name in enumerate(kfac):
         sub_ops = _get_precompute_ops(name)
 
-        try:
-            precompute_data = bench.load_operator(name)
-        except FileNotFoundError:
-            continue
+        precompute_data = bench.load_operator(name)
 
         left = 0.0
         for op in sub_ops:
