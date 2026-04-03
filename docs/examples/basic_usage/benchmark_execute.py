@@ -226,19 +226,10 @@ class Benchmark:
             ``(float, Any)`` for a single callable, or
             ``(dict[str, float], Any)`` for a pipeline.
         """
-        if callable(func):
-            times = []
-            for _ in range(self.num_repeats):
-                if self.is_cuda:
-                    cuda.synchronize()
-                start = perf_counter()
-                result = func()
-                if self.is_cuda:
-                    cuda.synchronize()
-                times.append(perf_counter() - start)
-            return min(times), result
+        single = callable(func)
+        if single:
+            func = [("_", func)]
 
-        # Pipeline: list of (name, callable)
         phase_times = {name: [] for name, _ in func}
         result = None
         for _ in range(self.num_repeats):
@@ -252,7 +243,11 @@ class Benchmark:
                     cuda.synchronize()
                 phase_times[name].append(perf_counter() - start)
             result = state
-        return {name: min(t) for name, t in phase_times.items()}, result
+
+        min_times = {name: min(t) for name, t in phase_times.items()}
+        if single:
+            return min_times["_"], result
+        return min_times, result
 
     def memory(self, func: Callable) -> float:
         """Measure peak memory of a function call in GiB.
