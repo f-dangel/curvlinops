@@ -13,7 +13,6 @@ from collections.abc import Callable, Iterable
 from os import path, remove
 from subprocess import CalledProcessError, CompletedProcess, run
 from time import perf_counter
-from typing import Any
 
 from benchmark_utils import (
     _IS_EKFAC,
@@ -208,25 +207,52 @@ class Benchmark:
 
     # -- Low-level measurement --
 
-    def time(self, func: Callable) -> tuple[float, Any]:
-        """Time a function and return (min_time, last_result).
+    def time(self, func):
+        """Time a function or pipeline of functions.
+
+        For a single callable, returns ``(min_time, last_result)``.
+
+        For a pipeline (list of ``(name, callable)`` pairs), the first callable
+        takes no arguments; each subsequent callable receives the return value
+        of the previous one. The repeat loop is the **outer** loop so that each
+        repeat runs the full pipeline from scratch, avoiding issues with
+        in-place operations on intermediate state.
+        Returns ``(dict_of_min_times, last_result)``.
 
         Args:
-            func: The function to time.
+            func: A callable, or a list of ``(name, callable)`` pairs.
 
         Returns:
-            Tuple of (minimum time across repeats, last return value).
+            ``(float, Any)`` for a single callable, or
+            ``(dict[str, float], Any)`` for a pipeline.
         """
-        times = []
+        if callable(func):
+            times = []
+            for _ in range(self.num_repeats):
+                if self.is_cuda:
+                    cuda.synchronize()
+                start = perf_counter()
+                result = func()
+                if self.is_cuda:
+                    cuda.synchronize()
+                times.append(perf_counter() - start)
+            return min(times), result
+
+        # Pipeline: list of (name, callable)
+        phase_times = {name: [] for name, _ in func}
+        result = None
         for _ in range(self.num_repeats):
-            if self.is_cuda:
-                cuda.synchronize()
-            start = perf_counter()
-            result = func()
-            if self.is_cuda:
-                cuda.synchronize()
-            times.append(perf_counter() - start)
-        return min(times), result
+            state = None
+            for name, phase_fn in func:
+                if self.is_cuda:
+                    cuda.synchronize()
+                start = perf_counter()
+                state = phase_fn() if state is None else phase_fn(state)
+                if self.is_cuda:
+                    cuda.synchronize()
+                phase_times[name].append(perf_counter() - start)
+            result = state
+        return {name: min(t) for name, t in phase_times.items()}, result
 
     def memory(self, func: Callable) -> float:
         """Measure peak memory of a function call in GiB.
@@ -300,8 +326,8 @@ class Benchmark:
             phases = make_precompute_phases(
                 linop_str, model, loss_function, params, data
             )
-            for phase_name, func in phases.items():
-                t, _ = self.time(func)
+            phase_times, _ = self.time(phases)
+            for phase_name, t in phase_times.items():
                 results[phase_name] = t
                 print(f"[Time] {label} / {phase_name}: {t:.4f} s")
 
@@ -405,17 +431,18 @@ def setup_computer(
     return computer_cls(model, loss_function, params, data, **kwargs)
 
 
-def make_precompute_phases(  # noqa: C901, PLR0915
+def make_precompute_phases(  # noqa: C901
     linop_str: str,
     model: Module,
     loss_function: Module,
     params: dict[str, Tensor],
     data,
-) -> dict[str, callable]:
-    """Build an ordered dict of phase_name -> callable for precompute sub-phases.
+) -> list[tuple[str, callable]]:
+    """Build a pipeline of precompute sub-phases for timing.
 
-    Phases run in order. Later phases can depend on results of earlier ones
-    via the shared ``state`` dict captured by closures.
+    Returns a list of ``(name, callable)`` pairs. The first callable takes no
+    arguments; each subsequent callable receives the return value of the
+    previous one. This pipeline is passed to :meth:`Benchmark.time`.
 
     Args:
         linop_str: The linear operator name.
@@ -425,7 +452,7 @@ def make_precompute_phases(  # noqa: C901, PLR0915
         data: The data.
 
     Returns:
-        Ordered dict mapping sub-phase names to timing callables.
+        List of ``(phase_name, callable)`` pairs forming a pipeline.
     """
     num_data = sum(X.shape[0] for (X, _) in data)
     X0, y0 = next(iter(data))
@@ -436,8 +463,6 @@ def make_precompute_phases(  # noqa: C901, PLR0915
         num_per_example_loss_terms=num_per_example_loss_terms,
         separate_weight_and_bias=False,
     )
-    state = {}  # shared mutable state between phases
-    phases = {}
 
     if linop_str in _IS_EKFAC and linop_str not in _IS_FX:
         # EKFAC hooks: factors → correction → eigh
@@ -445,88 +470,91 @@ def make_precompute_phases(  # noqa: C901, PLR0915
 
         def ekfac_factors():
             with _use_params(computer._model_module, computer._params):
-                state["ic"], state["gc"], state["m"] = (
-                    computer._compute_kronecker_factors()
-                )
+                return computer._compute_kronecker_factors()
 
-        def ekfac_correction():
+        def ekfac_correction(state):
+            ic, gc, m = state
             with _use_params(computer._model_module, computer._params):
-                computer.compute_eigenvalue_correction(
-                    state["ic"], state["gc"], state["m"]
-                )
+                computer.compute_eigenvalue_correction(ic, gc, m)
+            return (ic, gc, m)
 
-        def ekfac_eigh():
-            ic = {k: v.clone() for k, v in state["ic"].items()}
-            gc = {k: v.clone() for k, v in state["gc"].items()}
-            state["ic"] = _EKFACMixin._eigenvectors_(ic)
-            state["gc"] = _EKFACMixin._eigenvectors_(gc)
+        def ekfac_eigh(state):
+            ic, gc, _m = state
+            ic = _EKFACMixin._eigenvectors_({k: v.clone() for k, v in ic.items()})
+            gc = _EKFACMixin._eigenvectors_({k: v.clone() for k, v in gc.items()})
+            return (ic, gc)
 
-        phases["kfac_factors"] = ekfac_factors
-        phases["eigenvalue_correction"] = ekfac_correction
-        phases["eigh"] = ekfac_eigh
+        return [
+            ("kfac_factors", ekfac_factors),
+            ("eigenvalue_correction", ekfac_correction),
+            ("eigh", ekfac_eigh),
+        ]
 
-    elif linop_str in _IS_KFAC_INVERSE_HOOKS:
+    if linop_str in _IS_KFAC_INVERSE_HOOKS:
         # KFAC inverse hooks: factors → Cholesky inverse
         def kfac_inv_factors():
-            state["linop"] = KFACLinearOperator(
+            return KFACLinearOperator(
                 model, loss_function, params, data, **common_kwargs
             )
 
-        def cholesky_inverse():
-            state["linop"].inverse(damping=1e-3)
+        def cholesky_inverse(linop):
+            linop.inverse(damping=1e-3)
+            return linop
 
-        phases["kfac_factors"] = kfac_inv_factors
-        phases["cholesky_inverse"] = cholesky_inverse
+        return [
+            ("kfac_factors", kfac_inv_factors),
+            ("cholesky_inverse", cholesky_inverse),
+        ]
 
-    elif linop_str in _IS_FX and linop_str in _IS_EKFAC:
+    if linop_str in _IS_FX and linop_str in _IS_EKFAC:
         # EKFAC FX: tracing → factors → correction → eigh
         computer = setup_computer(linop_str, model, loss_function, params, data)
 
         def ekfac_fx_tracing():
-            state["traced_io"] = computer._trace_io_functions()
+            return computer._trace_io_functions()
 
-        def ekfac_fx_factors():
-            state["ic"], state["gc"], state["m"] = computer._compute_kronecker_factors(
-                state["traced_io"]
-            )
+        def ekfac_fx_factors(traced_io):
+            ic, gc, m = computer._compute_kronecker_factors(traced_io)
+            return (ic, gc, m, traced_io)
 
-        def ekfac_fx_correction():
-            computer.compute_eigenvalue_correction(
-                state["ic"], state["gc"], state["m"], state["traced_io"]
-            )
+        def ekfac_fx_correction(state):
+            ic, gc, m, traced_io = state
+            computer.compute_eigenvalue_correction(ic, gc, m, traced_io)
+            return (ic, gc, m)
 
-        def ekfac_fx_eigh():
-            ic = {k: v.clone() for k, v in state["ic"].items()}
-            gc = {k: v.clone() for k, v in state["gc"].items()}
-            state["ic"] = _EKFACMixin._eigenvectors_(ic)
-            state["gc"] = _EKFACMixin._eigenvectors_(gc)
+        def ekfac_fx_eigh(state):
+            ic, gc, _m = state
+            ic = _EKFACMixin._eigenvectors_({k: v.clone() for k, v in ic.items()})
+            gc = _EKFACMixin._eigenvectors_({k: v.clone() for k, v in gc.items()})
+            return (ic, gc)
 
-        phases["tracing"] = ekfac_fx_tracing
-        phases["kfac_factors"] = ekfac_fx_factors
-        phases["eigenvalue_correction"] = ekfac_fx_correction
-        phases["eigh"] = ekfac_fx_eigh
+        return [
+            ("tracing", ekfac_fx_tracing),
+            ("kfac_factors", ekfac_fx_factors),
+            ("eigenvalue_correction", ekfac_fx_correction),
+            ("eigh", ekfac_fx_eigh),
+        ]
 
-    elif linop_str in _IS_FX:
+    if linop_str in _IS_FX:
         # KFAC FX: tracing → factors
         computer = setup_computer(linop_str, model, loss_function, params, data)
 
         def kfac_fx_tracing():
-            state["traced_io"] = computer._trace_io_functions()
+            return computer._trace_io_functions()
 
-        def kfac_fx_factors():
-            computer._compute_kronecker_factors(state["traced_io"])
+        def kfac_fx_factors(traced_io):
+            return computer._compute_kronecker_factors(traced_io)
 
-        phases["tracing"] = kfac_fx_tracing
-        phases["kfac_factors"] = kfac_fx_factors
+        return [
+            ("tracing", kfac_fx_tracing),
+            ("kfac_factors", kfac_fx_factors),
+        ]
 
-    else:
-        # Plain KFAC hooks: single phase
-        def kfac_factors():
-            KFACLinearOperator(model, loss_function, params, data, **common_kwargs)
+    # Plain KFAC hooks: single phase
+    def kfac_factors():
+        return KFACLinearOperator(model, loss_function, params, data, **common_kwargs)
 
-        phases["kfac_factors"] = kfac_factors
-
-    return phases
+    return [("kfac_factors", kfac_factors)]
 
 
 # -- Subprocess entry points for memory measurement --
