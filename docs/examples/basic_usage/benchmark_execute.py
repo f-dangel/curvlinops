@@ -20,7 +20,7 @@ from benchmark_utils import (
     _IS_FX,
     _IS_KFAC_INVERSE_HOOKS,
     _KFAC_LIKE,
-    MATVEC_LINOP_STRS,
+    LINOP_STRS,
     PROBLEM_STRS,
     attention_context,
     benchpath,
@@ -639,7 +639,7 @@ if __name__ == "__main__":
         "--linop",
         type=str,
         help="The linear operator class to benchmark.",
-        choices=MATVEC_LINOP_STRS,
+        choices=LINOP_STRS,
     )
     parser.add_argument(
         "--problem",
