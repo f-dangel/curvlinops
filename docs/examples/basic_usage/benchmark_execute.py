@@ -10,6 +10,7 @@ import json
 import sys
 from argparse import ArgumentParser
 from collections.abc import Callable, Iterable
+from contextlib import nullcontext
 from os import path, remove
 from subprocess import CalledProcessError, CompletedProcess, run
 from time import perf_counter
@@ -207,20 +208,26 @@ class Benchmark:
 
     # -- Low-level measurement --
 
-    def time(self, func):
+    def time(self, func, context=None):
         """Time a function or pipeline of functions.
 
         For a single callable, returns ``(min_time, last_result)``.
 
-        For a pipeline (list of ``(name, callable)`` pairs), the first callable
-        takes no arguments; each subsequent callable receives the return value
-        of the previous one. The repeat loop is the **outer** loop so that each
-        repeat runs the full pipeline from scratch, avoiding issues with
-        in-place operations on intermediate state.
-        Returns ``(dict_of_min_times, last_result)``.
+        For a pipeline (list of tuples), the first callable takes no arguments;
+        each subsequent callable receives the return value of the previous one.
+        The repeat loop is the **outer** loop so that each repeat runs the full
+        pipeline from scratch, avoiding issues with in-place operations on
+        intermediate state. Returns ``(dict_of_min_times, last_result)``.
+
+        Pipeline tuples are ``(name, callable)`` pairs. An optional ``context``
+        callable can be passed that returns a context manager; the entire pipeline
+        (all phases) runs inside it each repeat. A fresh context manager is
+        created per repeat to support generator-based context managers.
 
         Args:
             func: A callable, or a list of ``(name, callable)`` pairs.
+            context: Optional callable returning a context manager that wraps
+                the full pipeline per repeat. Defaults to ``nullcontext``.
 
         Returns:
             ``(float, Any)`` for a single callable, or
@@ -229,19 +236,22 @@ class Benchmark:
         single = callable(func)
         if single:
             func = [("_", func)]
+        if context is None:
+            context = nullcontext
 
         phase_times = {name: [] for name, _ in func}
         result = None
         for _ in range(self.num_repeats):
             state = None
-            for name, phase_fn in func:
-                if self.is_cuda:
-                    cuda.synchronize()
-                start = perf_counter()
-                state = phase_fn() if state is None else phase_fn(state)
-                if self.is_cuda:
-                    cuda.synchronize()
-                phase_times[name].append(perf_counter() - start)
+            with context():
+                for name, phase_fn in func:
+                    if self.is_cuda:
+                        cuda.synchronize()
+                    start = perf_counter()
+                    state = phase_fn() if state is None else phase_fn(state)
+                    if self.is_cuda:
+                        cuda.synchronize()
+                    phase_times[name].append(perf_counter() - start)
             result = state
 
         min_times = {name: min(t) for name, t in phase_times.items()}
@@ -316,10 +326,10 @@ class Benchmark:
         print(f"[Time] {label} / matvec: {matvec_time:.4f} s")
 
         if linop_str in _KFAC_LIKE:
-            phases = make_precompute_phases(
+            phases, ctx = make_precompute_phases(
                 linop_str, model, loss_function, params, data
             )
-            phase_times, _ = self.time(phases)
+            phase_times, _ = self.time(phases, context=ctx)
             for phase_name, t in phase_times.items():
                 results[phase_name] = t
                 print(f"[Time] {label} / {phase_name}: {t:.4f} s")
@@ -445,7 +455,10 @@ def make_precompute_phases(  # noqa: C901
         data: The data.
 
     Returns:
-        List of ``(phase_name, callable)`` pairs forming a pipeline.
+        Tuple of ``(phases, context)`` where ``phases`` is a list of
+        ``(name, callable)`` pairs forming a pipeline, and ``context`` is
+        an optional callable returning a context manager that wraps the
+        full pipeline (or ``None``).
     """
     num_data = sum(X.shape[0] for (X, _) in data)
     X0, y0 = next(iter(data))
@@ -462,13 +475,11 @@ def make_precompute_phases(  # noqa: C901
         computer = setup_computer(linop_str, model, loss_function, params, data)
 
         def ekfac_factors():
-            with _use_params(computer._model_module, computer._params):
-                return computer._compute_kronecker_factors()
+            return computer._compute_kronecker_factors()
 
         def ekfac_correction(state):
             ic, gc, m = state
-            with _use_params(computer._model_module, computer._params):
-                computer.compute_eigenvalue_correction(ic, gc, m)
+            computer.compute_eigenvalue_correction(ic, gc, m)
             return (ic, gc, m)
 
         def ekfac_eigh(state):
@@ -477,11 +488,16 @@ def make_precompute_phases(  # noqa: C901
             gc = _EKFACMixin._eigenvectors_({k: v.clone() for k, v in gc.items()})
             return (ic, gc)
 
-        return [
+        phases = [
             ("kfac_factors", ekfac_factors),
             ("eigenvalue_correction", ekfac_correction),
             ("eigh", ekfac_eigh),
         ]
+
+        def context():
+            return _use_params(computer._model_module, computer._params)
+
+        return phases, context
 
     if linop_str in _IS_KFAC_INVERSE_HOOKS:
         # KFAC inverse hooks: factors → Cholesky inverse
@@ -497,7 +513,7 @@ def make_precompute_phases(  # noqa: C901
         return [
             ("kfac_factors", kfac_inv_factors),
             ("cholesky_inverse", cholesky_inverse),
-        ]
+        ], None
 
     if linop_str in _IS_FX and linop_str in _IS_EKFAC:
         # EKFAC FX: tracing → factors → correction → eigh
@@ -526,7 +542,7 @@ def make_precompute_phases(  # noqa: C901
             ("kfac_factors", ekfac_fx_factors),
             ("eigenvalue_correction", ekfac_fx_correction),
             ("eigh", ekfac_fx_eigh),
-        ]
+        ], None
 
     if linop_str in _IS_FX:
         # KFAC FX: tracing → factors
@@ -541,13 +557,13 @@ def make_precompute_phases(  # noqa: C901
         return [
             ("tracing", kfac_fx_tracing),
             ("kfac_factors", kfac_fx_factors),
-        ]
+        ], None
 
     # Plain KFAC hooks: single phase
     def kfac_factors():
         return KFACLinearOperator(model, loss_function, params, data, **common_kwargs)
 
-    return [("kfac_factors", kfac_factors)]
+    return [("kfac_factors", kfac_factors)], None
 
 
 # -- Subprocess entry points for memory measurement --
