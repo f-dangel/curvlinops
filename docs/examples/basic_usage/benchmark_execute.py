@@ -245,9 +245,7 @@ class Benchmark:
             result = state
 
         min_times = {name: min(t) for name, t in phase_times.items()}
-        if single:
-            return min_times["_"], result
-        return min_times, result
+        return min_times["_"] if single else min_times, result
 
     def memory(self, func: Callable) -> float:
         """Measure peak memory of a function call in GiB.
