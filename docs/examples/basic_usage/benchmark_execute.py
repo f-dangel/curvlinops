@@ -440,7 +440,7 @@ def make_precompute_phases(  # noqa: C901
     loss_function: Module,
     params: dict[str, Tensor],
     data,
-) -> list[tuple[str, callable]]:
+) -> tuple[list[tuple[str, callable]], callable | None]:
     """Build a pipeline of precompute sub-phases for timing.
 
     Returns a list of ``(name, callable)`` pairs. The first callable takes no
