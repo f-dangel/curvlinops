@@ -28,6 +28,7 @@ from benchmark_utils import (
     setup_linop,
     setup_problem,
 )
+from memory_profiler import memory_usage
 from torch import Tensor, cuda, device, manual_seed, rand
 from torch.nn import Module
 
@@ -205,8 +206,6 @@ class Benchmark:
             cuda.synchronize()
             return cuda.max_memory_allocated() / 2**30
         else:
-            from memory_profiler import memory_usage
-
             # memory_usage with max_usage=True returns peak MiB
             return memory_usage(func, interval=1e-4, max_usage=True) / 2**10
 
