@@ -6,6 +6,8 @@ measurements launched by :meth:`Benchmark.run_reference` and
 :meth:`Benchmark.run_operator`.
 """
 
+from __future__ import annotations
+
 import json
 import sys
 from argparse import ArgumentParser
