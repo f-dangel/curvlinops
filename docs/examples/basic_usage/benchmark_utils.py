@@ -1,126 +1,33 @@
-"""Utility functions for benchmark setup and timing."""
+"""Utility functions for benchmark problem setup and configuration."""
 
 import inspect
 import json
-from collections.abc import Callable
-from os import path
-from time import perf_counter
-from typing import Any
+from collections.abc import Iterable
+from contextlib import nullcontext
+from os import makedirs, path
 
 import requests
 import torch
 from torch import Tensor, cuda, rand, randint, stack, zeros_like
-from torch.nn import CrossEntropyLoss, Module, Parameter
+from torch.nn import (
+    CrossEntropyLoss,
+    Linear,
+    Module,
+    Parameter,
+    ReLU,
+    Sequential,
+)
+from torch.nn.attention import SDPBackend, sdpa_kernel
 from torchvision.models import ResNet50_Weights, resnet18, resnet50
 
-
-class TimeBenchmark:
-    """Utility for timing functions and saving results to JSON.
-
-    Handles skip-if-exists, CUDA synchronization, multi-repeat timing,
-    and JSON persistence.
-
-    Args:
-        is_cuda: Whether to synchronize CUDA before/after each measurement.
-        num_repeats: Number of repeats per measurement. Uses the minimum.
-        skip_existing: Whether to skip measurements whose result file exists.
-    """
-
-    def __init__(
-        self,
-        is_cuda: bool,
-        num_repeats: int = 10,
-        skip_existing: bool = True,
-    ):
-        """Set up the benchmark timer.
-
-        Args:
-            is_cuda: Whether to synchronize CUDA before/after each measurement.
-            num_repeats: Number of repeats per measurement. Uses the minimum.
-            skip_existing: Whether to skip measurements whose result file exists.
-        """
-        self.is_cuda = is_cuda
-        self.num_repeats = num_repeats
-        self.skip_existing = skip_existing
-
-    def time(self, func: Callable) -> tuple[float, Any]:
-        """Time a function and return (min_time, last_result).
-
-        Args:
-            func: The function to time.
-
-        Returns:
-            Tuple of (minimum time across repeats, last return value).
-        """
-        times = []
-        for _ in range(self.num_repeats):
-            if self.is_cuda:
-                cuda.synchronize()
-            start = perf_counter()
-            result = func()
-            if self.is_cuda:
-                cuda.synchronize()
-            times.append(perf_counter() - start)
-        return min(times), result
-
-    def run(self, save_path: str, label: str, func: Callable) -> float | None:
-        """Skip-if-exists, time, save to JSON, and print.
-
-        Saves ``{"time": best}`` to ``save_path``.
-
-        Args:
-            save_path: Path to the JSON result file.
-            label: Description for printing.
-            func: The function to time.
-
-        Returns:
-            The best time, or ``None`` if skipped.
-        """
-        if self.skip_existing and path.exists(save_path):
-            print(f"[Time] Skipping {label}")
-            return None
-
-        best, _ = self.time(func)
-        print(f"[Time] {label}: {best:.4f} s")
-        with open(save_path, "w") as f:
-            json.dump({"time": best}, f)
-        return best
-
-    def run_phases(
-        self,
-        save_path: str,
-        label: str,
-        phase_fns: dict[str, Callable],
-    ) -> dict[str, float] | None:
-        """Time multiple phases and save all to a single JSON file.
-
-        Each phase is timed independently. Phases run in order, so later
-        phases can depend on side effects of earlier ones (e.g. via shared
-        mutable state).
-
-        Args:
-            save_path: Path to the JSON result file.
-            label: Description for printing.
-            phase_fns: Ordered dict mapping phase names to callables.
-
-        Returns:
-            Dict of ``{phase_name: best_time}``, or ``None`` if skipped.
-        """
-        if self.skip_existing and path.exists(save_path):
-            print(f"[Time] Skipping {label}")
-            return None
-
-        results = {}
-        for phase_name, func in phase_fns.items():
-            best, _ = self.time(func)
-            results[phase_name] = best
-            print(f"[Time] {label} / {phase_name}: {best:.4f} s")
-
-        with open(save_path, "w") as f:
-            json.dump(results, f)
-        print(f"[Time] Saved {label}")
-        return results
-
+from curvlinops import (
+    EFLinearOperator,
+    EKFACLinearOperator,
+    GGNLinearOperator,
+    HessianLinearOperator,
+    KFACLinearOperator,
+)
+from curvlinops._torch_base import PyTorchLinearOperator
 
 # In the execution with sphinx-gallery, __file__ is not defined and we need
 # to set it manually using the trick from https://stackoverflow.com/a/53293924
@@ -128,6 +35,160 @@ if "__file__" not in globals():
     __file__ = inspect.getfile(lambda: None)
 
 HEREDIR = path.dirname(path.abspath(__file__))
+RESULTDIR = path.join(HEREDIR, "benchmark")
+makedirs(RESULTDIR, exist_ok=True)
+REFERENCE_OP = "gradient_and_loss"
+
+# -- Problem/linop constants --
+
+PROBLEM_STRS = [
+    "synthetic_mnist_mlp",
+    "synthetic_cifar10_resnet18",
+    "synthetic_imagenet_resnet50",
+    "synthetic_shakespeare_nanogpt",
+]
+
+LINOP_STRS = [
+    "Hessian",
+    "Generalized Gauss-Newton",
+    "Empirical Fisher",
+    "Monte-Carlo Fisher",
+    "EKFAC (hooks)",
+    "EKFAC inverse (hooks)",
+    "EKFAC (fx)",
+    "EKFAC inverse (fx)",
+    "KFAC (hooks)",
+    "KFAC inverse (hooks)",
+    "KFAC (fx)",
+    "KFAC inverse (fx)",
+]
+
+# For matvec, backend doesn't matter — use hooks as the representative
+MATVEC_LINOP_STRS = [
+    "Hessian",
+    "Generalized Gauss-Newton",
+    "Empirical Fisher",
+    "Monte-Carlo Fisher",
+    "EKFAC (hooks)",
+    "EKFAC inverse (hooks)",
+    "KFAC (hooks)",
+    "KFAC inverse (hooks)",
+]
+
+# Names that use KFAC-style parameter selection (only supported layers)
+_KFAC_LIKE = {
+    "KFAC (hooks)",
+    "KFAC inverse (hooks)",
+    "KFAC (fx)",
+    "KFAC inverse (fx)",
+    "EKFAC (hooks)",
+    "EKFAC inverse (hooks)",
+    "EKFAC (fx)",
+    "EKFAC inverse (fx)",
+}
+
+# Linear operators that use JVPs need to handle attention differently because
+# PyTorch's efficient attention does not implement double-backward yet.
+# See https://github.com/pytorch/pytorch/issues/116350
+HAS_JVP = (
+    HessianLinearOperator,
+    GGNLinearOperator,
+    EFLinearOperator,
+)
+
+# Linop category sets for precompute sub-phase dispatch
+_IS_EKFAC = {
+    "EKFAC (hooks)",
+    "EKFAC inverse (hooks)",
+    "EKFAC (fx)",
+    "EKFAC inverse (fx)",
+}
+_IS_KFAC_INVERSE_HOOKS = {"KFAC inverse (hooks)"}
+_IS_FX = {
+    "KFAC (fx)",
+    "KFAC inverse (fx)",
+    "EKFAC (fx)",
+    "EKFAC inverse (fx)",
+}
+
+# Sub-phase operation names for precompute breakdown
+EKFAC_PRECOMPUTE_OPS = ["kfac_factors", "eigenvalue_correction", "eigh"]
+KFAC_INVERSE_PRECOMPUTE_OPS = ["kfac_factors", "cholesky_inverse"]
+FX_PRECOMPUTE_OPS = ["kfac_factors", "tracing"]
+
+
+# -- Path helpers --
+
+
+def _problem_dir(problem_str: str) -> str:
+    """Get the problem-specific subdirectory, creating it if needed.
+
+    Args:
+        problem_str: The problem.
+
+    Returns:
+        Absolute path to the problem subdirectory.
+    """
+    d = path.join(RESULTDIR, problem_str)
+    makedirs(d, exist_ok=True)
+    return d
+
+
+def reference_benchpath(problem_str: str, device_str: str) -> str:
+    """Get the path to save the reference gradient_and_loss benchmark.
+
+    This is measured once per problem (not per linop).
+
+    Args:
+        problem_str: The problem.
+        device_str: The device.
+
+    Returns:
+        The path to save the reference benchmark results.
+    """
+    return path.join(_problem_dir(problem_str), f"{REFERENCE_OP}_{device_str}.json")
+
+
+def benchpath(
+    linop_str: str,
+    problem_str: str,
+    device_str: str,
+    op_str: str | None = None,
+) -> str:
+    """Get the path to save benchmark results.
+
+    Results are stored under ``benchmark/{problem}/{linop}_{device}.json``.
+
+    Args:
+        linop_str: The linear operator.
+        problem_str: The problem.
+        device_str: The device.
+        op_str: If given, appended before the extension (e.g. ``"peakmem"``
+            produces a temporary file ``{linop}_{device}_peakmem.json``).
+
+    Returns:
+        The path to save the benchmark results.
+    """
+    name = linop_str.replace(" ", "-")
+    suffix = f"_{op_str}" if op_str is not None else ""
+    return path.join(_problem_dir(problem_str), f"{name}_{device_str}{suffix}.json")
+
+
+def figpath(problem_str: str, device_str: str, metric: str = "time") -> str:
+    """Get the path to save the figure.
+
+    Args:
+        problem_str: The problem.
+        device_str: The device.
+        metric: The metric to save. Default is ``'time'``.
+
+    Returns:
+        The path to save the figure.
+    """
+    return path.join(_problem_dir(problem_str), f"{metric}_{device_str}.pdf")
+
+
+# -- Misc helpers --
 
 
 def save_environment_info(result_dir: str):
@@ -147,6 +208,66 @@ def save_environment_info(result_dir: str):
 
     for key, value in info.items():
         print(f"  {key}: {value}")
+
+
+def add_gradient_reference(ax, reference: float):
+    """Add a dashed reference line and a top axis showing multiples of gradient time.
+
+    Args:
+        ax: The matplotlib axes.
+        reference: The reference value (e.g. gradient computation time or memory).
+    """
+    ax.axvline(reference, color="black", linestyle="--")
+    ax.secondary_xaxis(
+        "top",
+        functions=(lambda x: x / reference, lambda x: x * reference),
+    ).set_xlabel("Relative to gradient computation")
+
+
+def _get_precompute_ops(linop_str: str) -> list[str]:
+    """Return the sub-phase operation names for a given linop.
+
+    Args:
+        linop_str: The linear operator name.
+
+    Returns:
+        List of sub-phase operation names.
+    """
+    if linop_str in _IS_EKFAC and linop_str in _IS_FX:
+        return EKFAC_PRECOMPUTE_OPS + ["tracing"]
+    elif linop_str in _IS_EKFAC:
+        return EKFAC_PRECOMPUTE_OPS
+    elif linop_str in _IS_KFAC_INVERSE_HOOKS:
+        return KFAC_INVERSE_PRECOMPUTE_OPS
+    elif linop_str in _IS_FX:
+        return FX_PRECOMPUTE_OPS
+    else:
+        return ["kfac_factors"]
+
+
+def attention_context(linop_or_cls, model: Module):
+    """Context manager for the attention double-backward workaround.
+
+    Efficient attention does not support double-backward. Returns
+    ``sdpa_kernel(SDPBackend.MATH)`` when needed, otherwise ``nullcontext()``.
+
+    Args:
+        linop_or_cls: A linear operator instance or class.
+        model: The neural net (checked for :class:`GPTWrapper`).
+
+    Returns:
+        A context manager.
+    """
+    if isinstance(linop_or_cls, type):
+        has_jvp = issubclass(linop_or_cls, HAS_JVP)
+    else:
+        has_jvp = isinstance(linop_or_cls, HAS_JVP)
+    if has_jvp and isinstance(model, GPTWrapper):
+        return sdpa_kernel(SDPBackend.MATH)
+    return nullcontext()
+
+
+# -- Model helpers --
 
 
 def maybe_download_nanogpt():
@@ -270,3 +391,101 @@ def setup_synthetic_cifar10_resnet18(
     loss_function = CrossEntropyLoss()
 
     return model, loss_function, data
+
+
+def setup_synthetic_mnist_mlp(
+    batch_size: int = 512,
+) -> tuple[Sequential, CrossEntropyLoss, list[tuple[Tensor, Tensor]]]:
+    """Set up a synthetic MNIST MLP problem for the benchmark.
+
+    Args:
+        batch_size: The batch size to use. Default is ``512``.
+
+    Returns:
+        The neural net, loss function, and data.
+    """
+    X = rand(batch_size, 784)
+    y = randint(0, 10, (batch_size,))
+    data = [(X, y)]
+    model = Sequential(
+        Linear(784, 1024),
+        ReLU(),
+        Linear(1024, 512),
+        ReLU(),
+        Linear(512, 256),
+        ReLU(),
+        Linear(256, 128),
+        ReLU(),
+        Linear(128, 64),
+        ReLU(),
+        Linear(64, 10),
+    )
+    loss_function = CrossEntropyLoss()
+
+    return model, loss_function, data
+
+
+# -- Problem/linop setup --
+
+
+def setup_linop(
+    linop_str: str,
+    model: Module,
+    loss_function: Module,
+    params: dict[str, Tensor],
+    data: Iterable[tuple[Tensor, Tensor]],
+    check_deterministic: bool = True,
+) -> PyTorchLinearOperator:
+    """Set up the linear operator.
+
+    Args:
+        linop_str: The linear operator to set up.
+        model: The neural net.
+        loss_function: The loss function.
+        params: The parameters.
+        data: The data.
+        check_deterministic: Whether to check for determinism. Default is ``True``.
+
+    Returns:
+        The linear operator.
+    """
+    num_data = sum(X.shape[0] for (X, _) in data)
+    args = (model, loss_function, params, data)
+    kwargs = {"check_deterministic": check_deterministic, "num_data": num_data}
+
+    if linop_str == "Monte-Carlo Fisher":
+        kwargs["mc_samples"] = 1
+
+    linop_cls = {
+        "Hessian": HessianLinearOperator,
+        "Generalized Gauss-Newton": GGNLinearOperator,
+        "Empirical Fisher": EFLinearOperator,
+        "Monte-Carlo Fisher": GGNLinearOperator,
+        "KFAC (hooks)": KFACLinearOperator,
+        "KFAC inverse (hooks)": KFACLinearOperator,
+        "KFAC (fx)": KFACLinearOperator,
+        "KFAC inverse (fx)": KFACLinearOperator,
+        "EKFAC (hooks)": EKFACLinearOperator,
+        "EKFAC inverse (hooks)": EKFACLinearOperator,
+        "EKFAC (fx)": EKFACLinearOperator,
+        "EKFAC inverse (fx)": EKFACLinearOperator,
+    }[linop_str]
+
+    # Select backend for KFAC/EKFAC and pass num_per_example_loss_terms
+    if "(fx)" in linop_str:
+        kwargs["backend"] = "make_fx"
+    elif "(hooks)" in linop_str:
+        kwargs["backend"] = "hooks"
+    if linop_str in _KFAC_LIKE:
+        X0, y0 = next(iter(data))
+        kwargs["num_per_example_loss_terms"] = y0.numel() // X0.shape[0]
+        kwargs["separate_weight_and_bias"] = False
+
+    with attention_context(linop_cls, model):
+        linop = linop_cls(*args, **kwargs)
+
+    is_inverse = "inverse" in linop_str
+    if is_inverse:
+        linop = linop.inverse(damping=1e-3)
+
+    return linop
