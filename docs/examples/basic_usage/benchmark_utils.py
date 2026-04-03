@@ -10,7 +10,6 @@ import requests
 import torch
 from torch import Tensor, cuda, rand, randint, stack, zeros_like
 from torch.nn import (
-    Conv2d,
     CrossEntropyLoss,
     Linear,
     Module,
@@ -427,51 +426,6 @@ def setup_synthetic_mnist_mlp(
 
 
 # -- Problem/linop setup --
-
-
-def setup_problem(
-    problem_str: str, linop_str: str, dev: torch.device
-) -> tuple[Module, Module, dict[str, Tensor], Iterable[tuple[Tensor, Tensor]]]:
-    """Set up the neural net, loss function, parameters, and data.
-
-    Args:
-        problem_str: The problem to set up.
-        linop_str: The linear operator that is investigated.
-        dev: The device to use.
-
-    Returns:
-        The neural net, loss function, parameters, and data.
-    """
-    setup_func = {
-        "synthetic_mnist_mlp": setup_synthetic_mnist_mlp,
-        "synthetic_cifar10_resnet18": setup_synthetic_cifar10_resnet18,
-        "synthetic_imagenet_resnet50": setup_synthetic_imagenet_resnet50,
-        "synthetic_shakespeare_nanogpt": setup_synthetic_shakespeare_nanogpt,
-    }[problem_str]
-    model, loss_function, data = setup_func()
-
-    # Put model in evaluation mode so curvature matrices are well-defined
-    # even on data sets
-    model = model.eval().to(dev)
-    loss_function = loss_function.to(dev)
-
-    # Only use parameters of supported layers for KFAC
-    if linop_str in _KFAC_LIKE:
-        params = {}
-        for mod_name, mod in model.named_modules():
-            if not isinstance(mod, (Linear, Conv2d)):
-                continue
-            # ignore the last layer of GPT because it has 50k outputs, which
-            # will yield an extremely large Kronecker factor
-            if all(d <= 50_000 for d in mod.weight.shape):
-                for p_name, p in mod.named_parameters(recurse=False):
-                    full_name = f"{mod_name}.{p_name}" if mod_name else p_name
-                    if p.requires_grad:
-                        params[full_name] = p
-    else:
-        params = {n: p for n, p in model.named_parameters() if p.requires_grad}
-
-    return model, loss_function, params, data
 
 
 def setup_linop(

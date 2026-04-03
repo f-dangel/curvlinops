@@ -26,11 +26,14 @@ from benchmark_utils import (
     benchpath,
     reference_benchpath,
     setup_linop,
-    setup_problem,
+    setup_synthetic_cifar10_resnet18,
+    setup_synthetic_imagenet_resnet50,
+    setup_synthetic_mnist_mlp,
+    setup_synthetic_shakespeare_nanogpt,
 )
 from memory_profiler import memory_usage
 from torch import Tensor, cuda, device, manual_seed, rand
-from torch.nn import Module
+from torch.nn import Conv2d, Linear, Module
 
 from curvlinops import KFACLinearOperator
 from curvlinops.computers._base import _EKFACMixin
@@ -120,6 +123,44 @@ class Benchmark:
         self.is_cuda = "cuda" in device_str
         self.skip_existing = skip_existing
         self.num_repeats = num_repeats
+
+    def setup_problem(self, linop_str: str):
+        """Seed RNG, create device, and set up the problem.
+
+        Args:
+            linop_str: The linear operator that is investigated.
+
+        Returns:
+            The neural net, loss function, parameters, and data.
+        """
+        manual_seed(0)
+        dev = device(self.device_str)
+
+        setup_func = {
+            "synthetic_mnist_mlp": setup_synthetic_mnist_mlp,
+            "synthetic_cifar10_resnet18": setup_synthetic_cifar10_resnet18,
+            "synthetic_imagenet_resnet50": setup_synthetic_imagenet_resnet50,
+            "synthetic_shakespeare_nanogpt": setup_synthetic_shakespeare_nanogpt,
+        }[self.problem_str]
+        model, loss_function, data = setup_func()
+
+        model = model.eval().to(dev)
+        loss_function = loss_function.to(dev)
+
+        if linop_str in _KFAC_LIKE:
+            params = {}
+            for mod_name, mod in model.named_modules():
+                if not isinstance(mod, (Linear, Conv2d)):
+                    continue
+                if all(d <= 50_000 for d in mod.weight.shape):
+                    for p_name, p in mod.named_parameters(recurse=False):
+                        full_name = f"{mod_name}.{p_name}" if mod_name else p_name
+                        if p.requires_grad:
+                            params[full_name] = p
+        else:
+            params = {n: p for n, p in model.named_parameters() if p.requires_grad}
+
+        return model, loss_function, params, data
 
     # -- High-level API --
 
@@ -223,11 +264,7 @@ class Benchmark:
                 print(f"[Time] Skipping {label}")
                 return
 
-        manual_seed(0)
-        dev = device(self.device_str)
-        model, loss_function, params, data = setup_problem(
-            self.problem_str, "Hessian", dev
-        )
+        model, loss_function, params, data = self.setup_problem("Hessian")
         best, _ = self.time(
             lambda: gradient_and_loss(model, loss_function, params, data)
         )
@@ -244,16 +281,12 @@ class Benchmark:
             print(f"[Time] Skipping {label}")
             return
 
-        manual_seed(0)
-        dev = device(self.device_str)
-        model, loss_function, params, data = setup_problem(
-            self.problem_str, linop_str, dev
-        )
+        model, loss_function, params, data = self.setup_problem(linop_str)
         # NOTE Disable deterministic check as it will otherwise compute matvecs
         linop = setup_linop(
             linop_str, model, loss_function, params, data, check_deterministic=False
         )
-        v = rand(linop.shape[1], device=dev)
+        v = rand(linop.shape[1], device=linop.device)
 
         def _matvec():
             with attention_context(linop, model):
@@ -508,12 +541,10 @@ def _run_reference_peakmem(problem_str: str, device_str: str):
         problem_str: The problem.
         device_str: The device.
     """
-    dev = device(device_str)
     bench = Benchmark(problem_str, device_str)
 
     def func():
-        manual_seed(0)
-        model, loss_function, params, data = setup_problem(problem_str, "Hessian", dev)
+        model, loss_function, params, data = bench.setup_problem("Hessian")
         _ = gradient_and_loss(model, loss_function, params, data)
         if bench.is_cuda:
             cuda.synchronize()
@@ -539,16 +570,14 @@ def _run_operator_peakmem(linop_str: str, problem_str: str, device_str: str):
         device_str: The device.
     """
     savepath = benchpath(linop_str, problem_str, device_str, op_str="peakmem")
-    dev = device(device_str)
     bench = Benchmark(problem_str, device_str)
 
     def func():
-        manual_seed(0)
-        model, loss_function, params, data = setup_problem(problem_str, linop_str, dev)
+        model, loss_function, params, data = bench.setup_problem(linop_str)
         linop = setup_linop(
             linop_str, model, loss_function, params, data, check_deterministic=False
         )
-        v = rand(linop.shape[1], device=dev)
+        v = rand(linop.shape[1], device=linop.device)
         with attention_context(linop, model):
             _ = linop @ v
         if bench.is_cuda:
