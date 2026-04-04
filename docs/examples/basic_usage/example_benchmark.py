@@ -295,7 +295,7 @@ def _visualize_compiled(
     ref_eager_key: str,
     ref_compiled_key: str,
     xlabel: str,
-) -> tuple[plt.Figure, plt.Axes] | None:
+) -> tuple[plt.Figure, plt.Axes]:
     """Visualize eager vs compiled measurements for compilable operators.
 
     Args:
@@ -307,19 +307,15 @@ def _visualize_compiled(
         xlabel: X-axis label.
 
     Returns:
-        The figure and axes, or ``None`` if data is missing.
+        The figure and axes.
     """
     reference = bench.load_reference()
-    if ref_compiled_key not in reference:
-        return None
 
     fig, ax = plt.subplots()
 
     labels = []
     for idx, name in enumerate(COMPILABLE_LINOPS):
         data = bench.load_operator(name)
-        if compiled_key not in data:
-            continue
         y_pos = idx * 2
         ax.barh(
             y_pos,
@@ -362,7 +358,7 @@ def visualize_compiled_matvec(bench):
     """Visualize eager vs compiled matvec times.
 
     Returns:
-        The figure and axes, or ``None`` if data is missing.
+        The figure and axes.
     """
     return _visualize_compiled(
         bench, "matvec", "matvec_compiled", "time", "time_compiled", "Time [s]"
@@ -373,7 +369,7 @@ def visualize_compiled_peakmem(bench):
     """Visualize eager vs compiled peak memory.
 
     Returns:
-        The figure and axes, or ``None`` if data is missing.
+        The figure and axes.
     """
     return _visualize_compiled(
         bench,
@@ -392,13 +388,11 @@ def visualize_compiled_peakmem(bench):
 for problem_str, device_str in product(PROBLEM_STRS, DEVICE_STRS):
     bench = Benchmark(problem_str, device_str)
     with plt.rc_context(plot_config):
-        result = visualize_compiled_matvec(bench)
-        if result is not None:
-            fig, ax = result
-            plt.savefig(
-                figpath(problem_str, device_str, metric="time_compiled"),
-                bbox_inches="tight",
-            )
+        fig, ax = visualize_compiled_matvec(bench)
+        plt.savefig(
+            figpath(problem_str, device_str, metric="time_compiled"),
+            bbox_inches="tight",
+        )
 
 # %%
 #
@@ -407,13 +401,11 @@ for problem_str, device_str in product(PROBLEM_STRS, DEVICE_STRS):
 for problem_str, device_str in product(PROBLEM_STRS, DEVICE_STRS):
     bench = Benchmark(problem_str, device_str)
     with plt.rc_context(plot_config):
-        result = visualize_compiled_peakmem(bench)
-        if result is not None:
-            fig, ax = result
-            plt.savefig(
-                figpath(problem_str, device_str, metric="peakmem_compiled"),
-                bbox_inches="tight",
-            )
+        fig, ax = visualize_compiled_peakmem(bench)
+        plt.savefig(
+            figpath(problem_str, device_str, metric="peakmem_compiled"),
+            bbox_inches="tight",
+        )
 
 # %%
 #
@@ -482,10 +474,8 @@ for problem_str in ALL_PROBLEM_STRS:
 for problem_str in ALL_PROBLEM_STRS:
     gpu_bench = Benchmark(problem_str, "cuda")
     with plt.rc_context(plot_config):
-        result = visualize_compiled_matvec(gpu_bench)
-        if result is not None:
-            fig, ax = result
-            ax.set_title(PROBLEM_TITLES[problem_str])
+        fig, ax = visualize_compiled_matvec(gpu_bench)
+        ax.set_title(PROBLEM_TITLES[problem_str])
 
 # %%
 #
@@ -495,7 +485,5 @@ for problem_str in ALL_PROBLEM_STRS:
 for problem_str in ALL_PROBLEM_STRS:
     gpu_bench = Benchmark(problem_str, "cuda")
     with plt.rc_context(plot_config):
-        result = visualize_compiled_peakmem(gpu_bench)
-        if result is not None:
-            fig, ax = result
-            ax.set_title(PROBLEM_TITLES[problem_str])
+        fig, ax = visualize_compiled_peakmem(gpu_bench)
+        ax.set_title(PROBLEM_TITLES[problem_str])
