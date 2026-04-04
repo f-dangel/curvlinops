@@ -1,8 +1,10 @@
 """Mixin for classes that iterate over data to compute empirical risk quantities."""
 
 from collections.abc import Callable, Iterable, Iterator, MutableMapping
+from contextlib import contextmanager
 
 from torch import Tensor, device, dtype, tensor, zeros_like
+from torch.autograd import grad
 from torch.func import grad_and_value
 from torch.nn import CrossEntropyLoss, Module
 from tqdm import tqdm
@@ -13,6 +15,26 @@ from curvlinops.utils import (
     allclose_report,
     make_functional_call,
 )
+
+
+@contextmanager
+def _enable_requires_grad(tensors: list[Tensor]):
+    """Temporarily enable ``requires_grad`` on tensors, restoring original state after.
+
+    Args:
+        tensors: List of tensors to enable gradients on.
+
+    Yields:
+        None.
+    """
+    original = [t.requires_grad for t in tensors]
+    for t in tensors:
+        t.requires_grad_(True)
+    try:
+        yield
+    finally:
+        for t, rg in zip(tensors, original):
+            t.requires_grad_(rg)
 
 
 class _EmpiricalRiskMixin:
@@ -407,6 +429,10 @@ class _EmpiricalRiskMixin:
     def _gradient_and_loss(self) -> tuple[list[Tensor], Tensor]:
         """Evaluate the gradient and loss on the data.
 
+        Uses ``autograd.grad`` instead of ``torch.func.grad_and_value`` to avoid
+        the ~2x memory overhead of the functional API
+        (see `pytorch#134612 <https://github.com/pytorch/pytorch/issues/134612>`_).
+
         Returns:
             Gradient and loss on the data set.
 
@@ -418,12 +444,16 @@ class _EmpiricalRiskMixin:
 
         total_loss = tensor([0.0], device=self.device, dtype=self.dtype).squeeze()
         total_grad = [zeros_like(p) for p in self._params.values()]
+        params_list = list(self._params.values())
 
-        for _, _, loss, grad_params in self._data_prediction_loss_gradient(
-            desc="gradient_and_loss"
-        ):
-            total_loss.add_(loss)
-            for total_g, g in zip(total_grad, grad_params):
-                total_g.add_(g)
+        with _enable_requires_grad(params_list):
+            for X, y in self._loop_over_data(desc="gradient_and_loss"):
+                normalization_factor = self._get_normalization_factor(X, y)
+                prediction = self._model_func(self._params, X)
+                loss = self._loss_func(prediction, y).mul_(normalization_factor)
+                grad_params = grad(loss, params_list)
+                total_loss.add_(loss.detach())
+                for total_g, g in zip(total_grad, grad_params):
+                    total_g.add_(g.detach())
 
         return total_grad, total_loss
