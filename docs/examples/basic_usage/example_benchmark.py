@@ -188,6 +188,7 @@ def visualize_precompute_benchmark(
 # Let's now visualize the results. We first show the matrix-vector product times.
 
 plot_config = bundles.icml2024(column="full" if ON_RTD else "half", usetex=USETEX)
+plt.rcParams["savefig.bbox"] = "tight"
 kfac_linops = [linop for linop in LINOP_STRS if linop in _KFAC_LIKE]
 
 for problem_str, device_str in product(PROBLEM_STRS, DEVICE_STRS):
@@ -299,8 +300,6 @@ PROBLEM_TITLES = {
     "synthetic_imagenet_resnet50": "ImageNet ResNet-50",
     "synthetic_shakespeare_nanogpt": "Shakespeare nanoGPT",
 }
-gpu_plot_config = bundles.icml2024(column="half", usetex=USETEX)
-
 # %%
 #
 # Matvec times (GPU)
@@ -308,7 +307,7 @@ gpu_plot_config = bundles.icml2024(column="half", usetex=USETEX)
 
 for problem_str in ALL_PROBLEM_STRS:
     gpu_bench = Benchmark(problem_str, "cuda")
-    with plt.rc_context(gpu_plot_config):
+    with plt.rc_context(plot_config):
         fig, ax = visualize_matvec_benchmark(gpu_bench, MATVEC_LINOP_STRS)
         ax.set_title(PROBLEM_TITLES[problem_str])
 
@@ -319,7 +318,7 @@ for problem_str in ALL_PROBLEM_STRS:
 
 for problem_str in ALL_PROBLEM_STRS:
     gpu_bench = Benchmark(problem_str, "cuda")
-    with plt.rc_context(gpu_plot_config):
+    with plt.rc_context(plot_config):
         fig, ax = visualize_precompute_benchmark(gpu_bench, kfac_linops)
         ax.set_title(PROBLEM_TITLES[problem_str])
 
@@ -330,6 +329,6 @@ for problem_str in ALL_PROBLEM_STRS:
 
 for problem_str in ALL_PROBLEM_STRS:
     gpu_bench = Benchmark(problem_str, "cuda")
-    with plt.rc_context(gpu_plot_config):
+    with plt.rc_context(plot_config):
         fig, ax = visualize_peakmem_benchmark(gpu_bench, LINOP_STRS)
         ax.set_title(PROBLEM_TITLES[problem_str])
