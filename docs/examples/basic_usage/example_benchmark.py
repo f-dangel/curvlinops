@@ -175,6 +175,7 @@ def visualize_precompute_benchmark(
     ax.set_yticks(list(range(len(kfac))))
     ax.set_yticklabels(kfac)
     ax.set_xlabel("Time [s]")
+    ax.set_xscale("log")
 
     reference = bench.load_reference()["time"]
     add_gradient_reference(ax, reference)
@@ -243,12 +244,11 @@ def visualize_peakmem_benchmark(
     ax.set_xlabel("Peak memory [GiB]")
 
     # Visualize the peak memory consumption of each linear operator
-    labels = [n.replace(" (hooks)", "") for n in linop_strs]
     for idx, name in enumerate(linop_strs):
         data = bench.load_operator(name)
         ax.barh(idx, data["peakmem"], color="blue")
     ax.set_yticks(list(range(len(linop_strs))))
-    ax.set_yticklabels(labels)
+    ax.set_yticklabels(linop_strs)
 
     # Get memory consumption of gradient computation
     reference = bench.load_reference()["peakmem"]
@@ -264,7 +264,7 @@ if __name__ == "__main__":
         bench = Benchmark(problem_str, device_str)
 
         with plt.rc_context(plot_config):
-            fig, ax = visualize_peakmem_benchmark(bench, MATVEC_LINOP_STRS)
+            fig, ax = visualize_peakmem_benchmark(bench, LINOP_STRS)
             plt.savefig(
                 figpath(problem_str, device_str, metric="peakmem"), bbox_inches="tight"
             )
