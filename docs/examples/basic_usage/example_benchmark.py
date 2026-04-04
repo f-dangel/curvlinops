@@ -313,36 +313,28 @@ def _visualize_compiled(
 
     fig, ax = plt.subplots()
 
-    labels = []
     for idx, name in enumerate(COMPILABLE_LINOPS):
         data = bench.load_operator(name)
-        y_pos = idx * 2
+        # Eager bar behind (full opacity), compiled bar on top (semi-transparent)
         ax.barh(
-            y_pos,
+            idx,
             data[eager_key],
             color="tab:blue",
             label="eager" if idx == 0 else None,
-            height=0.7,
         )
         ax.barh(
-            y_pos + 1,
+            idx,
             data[compiled_key],
             color="tab:cyan",
+            alpha=0.7,
             label="compiled" if idx == 0 else None,
-            height=0.7,
         )
-        labels.extend([name, f"{name} (compiled)"])
 
-    ax.set_yticks(list(range(len(labels))))
-    ax.set_yticklabels(labels)
+    ax.set_yticks(list(range(len(COMPILABLE_LINOPS))))
+    ax.set_yticklabels(COMPILABLE_LINOPS)
     ax.set_xlabel(xlabel)
 
-    ax.axvline(
-        reference[ref_eager_key],
-        color="black",
-        linestyle="--",
-        label="gradient (eager)",
-    )
+    add_gradient_reference(ax, reference[ref_eager_key])
     ax.axvline(
         reference[ref_compiled_key],
         color="gray",
