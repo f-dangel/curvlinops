@@ -16,6 +16,20 @@ from curvlinops import HessianLinearOperator
 from curvlinops.examples import trace_gradient_and_loss
 
 
+def _setup_problem():
+    """Create a small test problem with two batches of different size.
+
+    Returns:
+        Tuple of (model, loss_fn, params, data).
+    """
+    manual_seed(0)
+    model = Sequential(Linear(4, 3), Linear(3, 2))
+    loss_fn = MSELoss()
+    params = dict(model.named_parameters())
+    data = [(rand(2, 4), rand(2, 2)), (rand(3, 4), rand(3, 2))]
+    return model, loss_fn, params, data
+
+
 def _assert_no_graph_breaks(fn, *args):
     """Assert that ``fn(*args)`` compiles with zero graph breaks.
 
@@ -42,24 +56,15 @@ def _assert_no_graph_breaks(fn, *args):
 
 def test_gradient_and_loss_no_graph_breaks():
     """Per-batch gradient+loss traced with ``make_fx`` compiles with 0 graph breaks."""
-    manual_seed(0)
-    model = Sequential(Linear(4, 3), Linear(3, 2))
-    loss_fn = MSELoss()
-    params = dict(model.named_parameters())
-    X = rand(2, 4)
-    y = rand(2, 2)
-
+    model, loss_fn, params, data = _setup_problem()
+    X, y = data[0]
     traced = trace_gradient_and_loss(model, loss_fn, params, X, y)
     _assert_no_graph_breaks(traced, params, X, y)
 
 
 def test_hessian_matvec_no_graph_breaks():
     """``HessianLinearOperator @ v`` compiles with zero graph breaks."""
-    manual_seed(0)
-    model = Sequential(Linear(4, 3), Linear(3, 2))
-    loss_fn = MSELoss()
-    params = dict(model.named_parameters())
-    data = [(rand(2, 4), rand(2, 2)), (rand(3, 4), rand(3, 2))]
+    model, loss_fn, params, data = _setup_problem()
     H = HessianLinearOperator(model, loss_fn, params, data, check_deterministic=False)
     v = rand(H.shape[1])
     _assert_no_graph_breaks(lambda op, vec: op @ vec, H, v)
