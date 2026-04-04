@@ -90,8 +90,12 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
 
 ### Internal
 
-- Extract `_trace_io_functions` in FX-based KFAC/EKFAC computers to separate
-  FX tracing from factor computation
+- Restructure benchmark tutorial: add both backends (hooks, `make_fx`) for
+  KFAC/EKFAC, break down precompute into sub-phases (Kronecker factors,
+  Eigen-decomposition, Eigen-correction, Cholesky inverse, FX tracing),
+  show all plots in sphinx-gallery, and add GPU results gallery for all problems.
+  Fix `gradient_and_loss` using ~2x peak GPU memory (now uses `torch.autograd.grad`
+  instead of `torch.func.grad_and_value`)
   ([PR #284](https://github.com/f-dangel/curvlinops/pull/284))
 
 - Add test documenting `torch.compile` graph breaks for `HessianLinearOperator`
