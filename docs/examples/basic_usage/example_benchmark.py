@@ -22,6 +22,7 @@ from shutil import which
 import matplotlib.pyplot as plt
 from benchmark_execute import Benchmark
 from benchmark_utils import (
+    _IS_COMPILABLE,
     _KFAC_LIKE,
     LINOP_STRS,
     MATVEC_LINOP_STRS,
@@ -276,6 +277,130 @@ for problem_str, device_str in product(PROBLEM_STRS, DEVICE_STRS):
 # As hinted at in the introduction, the numbers we observe in this pedagogical example
 # may not reflect the relative memory consumption on larger problems and GPUs.
 #
+# Compiled operator visualization
+# ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+#
+# For operators that support ``torch.compile``, we compare eager and compiled
+# performance. The reference gradient computation is also shown in both modes
+# (traced with ``make_fx``, then compiled).
+
+# Operators that support torch.compile
+COMPILABLE_LINOPS = [name for name in MATVEC_LINOP_STRS if name in _IS_COMPILABLE]
+
+
+def _visualize_compiled(
+    bench: Benchmark,
+    eager_key: str,
+    compiled_key: str,
+    ref_eager_key: str,
+    ref_compiled_key: str,
+    xlabel: str,
+) -> tuple[plt.Figure, plt.Axes]:
+    """Visualize eager vs compiled measurements for compilable operators.
+
+    Args:
+        bench: The benchmark instance (for loading results).
+        eager_key: JSON key for the eager measurement (e.g. ``"matvec"``).
+        compiled_key: JSON key for the compiled measurement.
+        ref_eager_key: JSON key for the eager reference.
+        ref_compiled_key: JSON key for the compiled reference.
+        xlabel: X-axis label.
+
+    Returns:
+        The figure and axes.
+    """
+    reference = bench.load_reference()
+
+    fig, ax = plt.subplots()
+
+    for idx, name in enumerate(COMPILABLE_LINOPS):
+        data = bench.load_operator(name)
+        # Eager bar behind (full opacity), compiled bar on top (semi-transparent)
+        ax.barh(
+            idx,
+            data[eager_key],
+            color="tab:blue",
+            label="eager" if idx == 0 else None,
+        )
+        ax.barh(
+            idx,
+            data[compiled_key],
+            color="tab:cyan",
+            alpha=0.7,
+            label="compiled" if idx == 0 else None,
+        )
+
+    ax.set_yticks(list(range(len(COMPILABLE_LINOPS))))
+    ax.set_yticklabels(COMPILABLE_LINOPS)
+    ax.set_xlabel(xlabel)
+
+    add_gradient_reference(ax, reference[ref_eager_key])
+    ax.axvline(
+        reference[ref_compiled_key],
+        color="gray",
+        linestyle=":",
+        label="gradient (compiled)",
+    )
+
+    ax.legend(fontsize="small")
+    return fig, ax
+
+
+def visualize_compiled_matvec(bench):
+    """Visualize eager vs compiled matvec times.
+
+    Returns:
+        The figure and axes.
+    """
+    return _visualize_compiled(
+        bench, "matvec", "matvec_compiled", "time", "time_compiled", "Time [s]"
+    )
+
+
+def visualize_compiled_peakmem(bench):
+    """Visualize eager vs compiled peak memory.
+
+    Returns:
+        The figure and axes.
+    """
+    return _visualize_compiled(
+        bench,
+        "peakmem",
+        "peakmem_compiled",
+        "peakmem",
+        "peakmem_compiled",
+        "Peak memory [GiB]",
+    )
+
+
+# %%
+#
+# Compiled matvec comparison.
+
+for problem_str, device_str in product(PROBLEM_STRS, DEVICE_STRS):
+    bench = Benchmark(problem_str, device_str)
+    with plt.rc_context(plot_config):
+        fig, ax = visualize_compiled_matvec(bench)
+        plt.savefig(
+            figpath(problem_str, device_str, metric="time_compiled"),
+            bbox_inches="tight",
+        )
+
+# %%
+#
+# Compiled peak memory comparison.
+
+for problem_str, device_str in product(PROBLEM_STRS, DEVICE_STRS):
+    bench = Benchmark(problem_str, device_str)
+    with plt.rc_context(plot_config):
+        fig, ax = visualize_compiled_peakmem(bench)
+        plt.savefig(
+            figpath(problem_str, device_str, metric="peakmem_compiled"),
+            bbox_inches="tight",
+        )
+
+# %%
+#
 # Conclusion
 # ==========
 #
@@ -331,4 +456,26 @@ for problem_str in ALL_PROBLEM_STRS:
     gpu_bench = Benchmark(problem_str, "cuda")
     with plt.rc_context(plot_config):
         fig, ax = visualize_peakmem_benchmark(gpu_bench, LINOP_STRS)
+        ax.set_title(PROBLEM_TITLES[problem_str])
+
+# %%
+#
+# Compiled matvec comparison (GPU)
+# --------------------------------
+
+for problem_str in ALL_PROBLEM_STRS:
+    gpu_bench = Benchmark(problem_str, "cuda")
+    with plt.rc_context(plot_config):
+        fig, ax = visualize_compiled_matvec(gpu_bench)
+        ax.set_title(PROBLEM_TITLES[problem_str])
+
+# %%
+#
+# Compiled peak memory comparison (GPU)
+# --------------------------------------
+
+for problem_str in ALL_PROBLEM_STRS:
+    gpu_bench = Benchmark(problem_str, "cuda")
+    with plt.rc_context(plot_config):
+        fig, ax = visualize_compiled_peakmem(gpu_bench)
         ax.set_title(PROBLEM_TITLES[problem_str])

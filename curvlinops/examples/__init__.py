@@ -4,7 +4,20 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, MutableMapping
 
-from torch import Tensor, device, dtype, einsum, ones
+import torch
+from torch import (
+    Tensor,
+    autograd,
+    device,
+    dtype,
+    einsum,
+    ones,
+)
+from torch import (
+    compile as torch_compile,
+)
+from torch.func import functional_call
+from torch.fx.experimental.proxy_tensor import make_fx
 from torch.nn import Module
 
 from curvlinops._empirical_risk import _EmpiricalRiskMixin
@@ -53,6 +66,83 @@ def gradient_and_loss(
         check_deterministic=False,
     )
     return mixin._gradient_and_loss()
+
+
+def trace_gradient_and_loss(
+    model: Module,
+    loss_func: Module,
+    params: dict[str, Tensor],
+    example_X: Tensor | MutableMapping,
+    example_y: Tensor,
+) -> torch.fx.GraphModule:
+    """Trace per-batch gradient+loss into an FX graph via ``make_fx``.
+
+    The tracing captures the backward pass (``autograd.grad``) as explicit
+    forward ops. The resulting ``GraphModule`` contains no autograd calls.
+
+    Args:
+        model: Neural network module.
+        loss_func: Loss function module.
+        params: Parameter dict at which to evaluate.
+        example_X: Example input for tracing (determines batch shape).
+        example_y: Example target for tracing.
+
+    Returns:
+        Traced ``GraphModule`` with signature ``(params, X, y) -> (grads, loss)``.
+    """
+    dev = next(model.parameters()).device
+    if isinstance(example_X, Tensor):
+        example_X = example_X.to(dev)
+    example_y = example_y.to(dev)
+
+    param_keys = tuple(params.keys())
+
+    def grad_and_loss(
+        params: dict[str, Tensor], X: Tensor | MutableMapping, y: Tensor
+    ) -> tuple[tuple[Tensor, ...], Tensor]:
+        prediction = functional_call(model, params, X)
+        loss = loss_func(prediction, y)
+        grads = autograd.grad(loss, tuple(params[k] for k in param_keys))
+        return grads, loss.detach()
+
+    return make_fx(grad_and_loss)(params, example_X, example_y)
+
+
+def make_compiled_gradient_and_loss(
+    model: Module,
+    loss_func: Module,
+    params: dict[str, Tensor],
+    example_X: Tensor | MutableMapping,
+    example_y: Tensor,
+) -> Callable[[dict[str, Tensor], Tensor | MutableMapping, Tensor], tuple]:
+    """Trace gradient+loss with ``make_fx``, then compile.
+
+    Args:
+        model: Neural network module.
+        loss_func: Loss function module.
+        params: Parameter dict at which to evaluate.
+        example_X: Example input for tracing (determines batch shape).
+        example_y: Example target for tracing.
+
+    Returns:
+        Compiled function ``(params, X, y) -> (grads_tuple, loss)``.
+    """
+    traced = trace_gradient_and_loss(model, loss_func, params, example_X, example_y)
+    compiled = torch_compile(traced)
+
+    dev = next(model.parameters()).device
+
+    def compiled_grad_and_loss(
+        params: dict[str, Tensor], X: Tensor | MutableMapping, y: Tensor
+    ) -> tuple[tuple[Tensor, ...], Tensor]:
+        # Detach params so aot_autograd does not try to differentiate through
+        # the already-traced backward ops (would require double-backward).
+        params_detached = {k: v.detach() for k, v in params.items()}
+        if isinstance(X, Tensor):
+            X = X.to(dev)
+        return compiled(params_detached, X, y.to(dev))
+
+    return compiled_grad_and_loss
 
 
 class TensorLinearOperator(PyTorchLinearOperator):

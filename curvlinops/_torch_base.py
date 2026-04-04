@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, MutableMapping
-from functools import cached_property
 
 import numpy
 from scipy.sparse.linalg import LinearOperator
@@ -900,6 +899,7 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
         PyTorchLinearOperator.__init__(
             self, self._get_in_shape(), self._get_out_shape()
         )
+        self._init_mp()
 
         if check_deterministic:
             self._check_deterministic_matvec()
@@ -943,14 +943,13 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
 
         return AM
 
-    @cached_property
-    def _mp(self) -> Callable:
-        """Cached vmap wrapper that parallelizes :meth:`_matvec_batch` over columns.
+    def _init_mp(self):
+        """Build the vmap wrapper that parallelizes :meth:`_matvec_batch`.
 
-        Returns:
-            Function ``(X, y, M) -> result`` that applies the mini-batch matrix to
-            a matrix ``M`` in tensor list format by vmapping the single-vector
-            :meth:`_matvec_batch` over the trailing dimension.
+        Called at the end of ``__init__``. Sets ``self._mp`` to a function
+        ``(X, y, M) -> result``. Subclasses that override ``_matmat`` entirely
+        (e.g. Jacobian operators) should override this to set up their own
+        ``_mp`` or leave it as a no-op.
         """
         keys = list(self._params.keys())
 
@@ -961,7 +960,7 @@ class CurvatureLinearOperator(_EmpiricalRiskMixin, PyTorchLinearOperator):
             result_dict = self._matvec_batch(X, y, v_dict)
             return tuple(result_dict[k] for k in keys)
 
-        return vmap(
+        self._mp = vmap(
             _matvec_batch_tuple,
             in_dims=(None, None, -1),
             out_dims=-1,

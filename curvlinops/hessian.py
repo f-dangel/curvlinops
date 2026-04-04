@@ -1,7 +1,6 @@
 """Contains a linear operator implementation of the Hessian."""
 
 from collections.abc import Callable, MutableMapping
-from functools import cached_property
 
 from torch import Tensor, no_grad
 from torch.func import jacrev, jvp
@@ -125,20 +124,10 @@ class HessianLinearOperator(CurvatureLinearOperator):
 
     SELF_ADJOINT: bool = True
 
-    @cached_property
-    def _vp(
-        self,
-    ) -> Callable[
-        [dict[str, Tensor], Tensor | MutableMapping, tuple, dict[str, Tensor]],
-        dict[str, Tensor],
-    ]:
-        """Lazy initialization of batch-Hessian vector product function.
-
-        Returns:
-            Function that computes mini-batch Hessian-vector products with signature
-            ``(params_dict, X, loss_args, v_dict) -> Hv_dict``.
-        """
-        return make_batch_hessian_vector_product(self._model_func, self._loss_func)
+    def _init_mp(self):
+        """Set up the batch Hessian-vector product function, then build vmap."""
+        self._vp = make_batch_hessian_vector_product(self._model_func, self._loss_func)
+        super()._init_mp()
 
     def _matvec_batch(
         self, X: Tensor | MutableMapping, y: Tensor, v: dict[str, Tensor]
