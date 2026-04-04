@@ -307,7 +307,7 @@ class Benchmark:
         _merge_json(savepath, "time", best)
 
         # Compiled (make_fx traces autograd.grad, then torch.compile)
-        (X, y) = data[0]
+        ((X, y),) = data
         compiled_fn = make_compiled_gradient_and_loss(
             model, loss_function, params, X, y
         )
@@ -628,7 +628,7 @@ def _run_reference_peakmem(problem_str: str, device_str: str):
 
     def func_compiled():
         model, loss_function, params, data = bench.setup_problem("Hessian")
-        (X, y) = data[0]
+        ((X, y),) = data
         compiled_fn = make_compiled_gradient_and_loss(
             model, loss_function, params, X, y
         )
