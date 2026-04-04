@@ -90,13 +90,15 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
 
 ### Internal
 
-- Eliminate `torch.compile` graph breaks for `HessianLinearOperator` matvecs:
-  replace `cached_property` with eager `_init_mp()` initialization in
-  `CurvatureLinearOperator` and all subclasses (Hessian, GGN, EF, Jacobian).
-  Add `make_compiled_gradient_and_loss` to `curvlinops.examples`.
-  Benchmark measures both eager and compiled matvec/memory for compilable
-  operators. Tests verify zero graph breaks.
-  ([PR #286](https://github.com/f-dangel/curvlinops/pull/286))
+- ``torch.compile`` support for matvecs:
+  - `HessianLinearOperator`: replace `cached_property` with eager `_init_mp()`
+    in `CurvatureLinearOperator` and all subclasses. Add
+    `make_compiled_gradient_and_loss` to `curvlinops.examples`. Benchmark
+    measures both eager and compiled matvec/memory for compilable operators.
+    ([PR #286](https://github.com/f-dangel/curvlinops/pull/286))
+  - `GGNLinearOperator` (exact and MC): replace `torch.Generator` with global
+    RNG seeded via `fork_rng` + `manual_seed` in `_matmat`.
+    ([PR #287](https://github.com/f-dangel/curvlinops/pull/287))
 
 - Restructure benchmark tutorial: add both backends (hooks, `make_fx`) for
   KFAC/EKFAC, break down precompute into sub-phases (Kronecker factors,
