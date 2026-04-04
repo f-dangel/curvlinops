@@ -5,11 +5,12 @@ These tests verify that curvlinops operators can be compiled with
 the ``torch.compile`` compiler.
 """
 
-from torch import Tensor, allclose, manual_seed, rand
 from torch import compile as torch_compile
+from torch import manual_seed, rand
 from torch._dynamo import explain
 from torch._dynamo import reset as dynamo_reset
 from torch.nn import Linear, MSELoss, Sequential
+from torch.testing import assert_close
 
 from curvlinops import HessianLinearOperator
 from curvlinops.examples import trace_gradient_and_loss
@@ -34,21 +35,9 @@ def _assert_no_graph_breaks(fn, *args):
 
         r_eager = fn(*args)
         r_compiled = torch_compile(fn)(*args)
-        _assert_allclose(r_eager, r_compiled)
+        assert_close(r_eager, r_compiled, atol=1e-5, rtol=1e-5)
     finally:
         dynamo_reset()
-
-
-def _assert_allclose(a, b, atol=1e-5):
-    """Recursively assert allclose for tensors, dicts, tuples, and lists."""
-    if isinstance(a, Tensor):
-        assert allclose(a, b, atol=atol)
-    elif isinstance(a, dict):
-        for k in a:
-            _assert_allclose(a[k], b[k], atol=atol)
-    elif isinstance(a, (tuple, list)):
-        for ai, bi in zip(a, b):
-            _assert_allclose(ai, bi, atol=atol)
 
 
 def test_gradient_and_loss_no_graph_breaks():
