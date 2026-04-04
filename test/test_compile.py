@@ -59,9 +59,7 @@ def test_hessian_matvec_no_graph_breaks():
     model = Sequential(Linear(4, 3), Linear(3, 2))
     loss_fn = MSELoss()
     params = dict(model.named_parameters())
-    X = rand(2, 4)
-    y = rand(2, 2)
-    data = [(X, y)]
+    data = [(rand(2, 4), rand(2, 2)), (rand(3, 4), rand(3, 2))]
     H = HessianLinearOperator(model, loss_fn, params, data, check_deterministic=False)
     v = rand(H.shape[1])
     _assert_no_graph_breaks(lambda op, vec: op @ vec, H, v)
