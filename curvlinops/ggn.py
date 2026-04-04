@@ -1,7 +1,6 @@
 """Contains LinearOperator implementation of the GGN."""
 
 from collections.abc import Callable, Iterable, MutableMapping
-from functools import cached_property
 
 from einops import einsum
 from torch import Generator, Tensor, no_grad
@@ -334,21 +333,15 @@ class GGNLinearOperator(CurvatureLinearOperator):
             self._generator = _seed_generator(self._generator, self.device, self._seed)
         return super()._matmat(M)
 
-    @cached_property
-    def _vp(self) -> Callable:
-        """Lazy initialization of batch-GGN vector product function.
-
-        Returns:
-            Function that computes mini-batch GGN-vector products with signature
-            ``(params_dict, X, loss_args, v_dict) -> Gv_dict``, where
-            ``loss_args`` is ``(y,)`` in exact mode or ``(y, generator)`` in MC
-            mode. Both ``v`` and the result are dicts matching the param structure.
-        """
+    def _init_mp(self):
+        """Set up the batch GGN-vector product function, then build vmap."""
         if self._mc_samples > 0:
-            return make_batch_ggn_mc_vector_product(
+            self._vp = make_batch_ggn_mc_vector_product(
                 self._model_func, self._loss_func, self._mc_samples
             )
-        return make_batch_ggn_vector_product(self._model_func, self._loss_func)
+        else:
+            self._vp = make_batch_ggn_vector_product(self._model_func, self._loss_func)
+        super()._init_mp()
 
     def _matvec_batch(
         self, X: Tensor | MutableMapping, y: Tensor, v: dict[str, Tensor]

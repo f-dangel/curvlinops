@@ -1,7 +1,6 @@
 """Contains linear operator implementation of gradient moment matrices."""
 
 from collections.abc import Callable, MutableMapping
-from functools import cached_property
 
 from einops import einsum
 from torch import Tensor
@@ -123,18 +122,8 @@ class EFLinearOperator(CurvatureLinearOperator):
     SUPPORTED_LOSSES = (MSELoss, CrossEntropyLoss, BCEWithLogitsLoss)
     SELF_ADJOINT: bool = True
 
-    @cached_property
-    def _vp(
-        self,
-    ) -> Callable[
-        [dict[str, Tensor], Tensor | MutableMapping, tuple, dict[str, Tensor]],
-        dict[str, Tensor],
-    ]:
-        """Lazy initialization of the batch empirical Fisher vector product function.
-
-        Returns:
-            Function that computes mini-batch EF-vector products with signature
-            ``(params_dict, X, loss_args, v_dict) -> EFv_dict``.
+    def _init_mp(self):
+        """Set up the batch empirical Fisher vector product function, then build vmap.
 
         Raises:
             NotImplementedError: If the loss function is not supported.
@@ -143,7 +132,8 @@ class EFLinearOperator(CurvatureLinearOperator):
             raise NotImplementedError(
                 f"Loss must be one of {self.SUPPORTED_LOSSES}. Got: {self._loss_func}."
             )
-        return make_batch_ef_vector_product(self._model_func, self._loss_func)
+        self._vp = make_batch_ef_vector_product(self._model_func, self._loss_func)
+        super()._init_mp()
 
     def _matvec_batch(
         self, X: Tensor | MutableMapping, y: Tensor, v: dict[str, Tensor]

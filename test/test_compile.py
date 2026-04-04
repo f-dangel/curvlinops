@@ -1,22 +1,71 @@
 """Tests for ``torch.compile`` compatibility.
 
-These tests document the current state of ``torch.compile`` support and serve as
-a starting point for making curvlinops operators compile-friendly.
+These tests verify that curvlinops operators can be compiled with
+``torch.compile`` without graph breaks, enabling potential speedups from
+the ``torch.compile`` compiler.
 """
 
-import torch
-from torch import manual_seed, rand
+from torch import Tensor, allclose, manual_seed, rand
+from torch import compile as torch_compile
+from torch._dynamo import explain
+from torch._dynamo import reset as dynamo_reset
 from torch.nn import Linear, MSELoss, Sequential
 
 from curvlinops import HessianLinearOperator
+from curvlinops.examples import trace_gradient_and_loss
 
 
-def _setup_hessian():
-    """Create a small HessianLinearOperator for testing.
+def _assert_no_graph_breaks(fn, *args):
+    """Assert that ``fn(*args)`` compiles with zero graph breaks.
 
-    Returns:
-        Tuple of (operator, random_vector).
+    Also verifies that the compiled result matches eager execution.
+
+    Args:
+        fn: Function to compile.
+        *args: Arguments to pass to ``fn``.
     """
+    dynamo_reset()
+    try:
+        explanation = explain(fn)(*args)
+        assert explanation.graph_break_count == 0, (
+            f"Expected 0 graph breaks, got {explanation.graph_break_count}.\n"
+            f"Break reasons: {explanation.break_reasons}"
+        )
+
+        r_eager = fn(*args)
+        r_compiled = torch_compile(fn)(*args)
+        _assert_allclose(r_eager, r_compiled)
+    finally:
+        dynamo_reset()
+
+
+def _assert_allclose(a, b, atol=1e-5):
+    """Recursively assert allclose for tensors, dicts, tuples, and lists."""
+    if isinstance(a, Tensor):
+        assert allclose(a, b, atol=atol)
+    elif isinstance(a, dict):
+        for k in a:
+            _assert_allclose(a[k], b[k], atol=atol)
+    elif isinstance(a, (tuple, list)):
+        for ai, bi in zip(a, b):
+            _assert_allclose(ai, bi, atol=atol)
+
+
+def test_gradient_and_loss_no_graph_breaks():
+    """Per-batch gradient+loss traced with ``make_fx`` compiles with 0 graph breaks."""
+    manual_seed(0)
+    model = Sequential(Linear(4, 3), Linear(3, 2))
+    loss_fn = MSELoss()
+    params = dict(model.named_parameters())
+    X = rand(2, 4)
+    y = rand(2, 2)
+
+    traced = trace_gradient_and_loss(model, loss_fn, params, X, y)
+    _assert_no_graph_breaks(traced, params, X, y)
+
+
+def test_hessian_matvec_no_graph_breaks():
+    """``HessianLinearOperator @ v`` compiles with zero graph breaks."""
     manual_seed(0)
     model = Sequential(Linear(4, 3), Linear(3, 2))
     loss_fn = MSELoss()
@@ -26,35 +75,4 @@ def _setup_hessian():
     data = [(X, y)]
     H = HessianLinearOperator(model, loss_fn, params, data, check_deterministic=False)
     v = rand(H.shape[1])
-    return H, v
-
-
-def test_hessian_matvec_has_graph_breaks():
-    """Compiling ``HessianLinearOperator @ v`` produces graph breaks.
-
-    ``torch.compile`` encounters graph breaks (``cached_property``'s ``RLock``,
-    ``vmap`` + compile incompatibility) and silently falls back to eager
-    execution. The result is correct but there is no speedup.
-
-    This test documents the current incompatibility. When ``torch.compile``
-    support is added, this test should be updated to assert zero graph breaks.
-    """
-    H, v = _setup_hessian()
-
-    def matvec(op, vec):
-        return op @ vec
-
-    torch._dynamo.reset()
-    try:
-        explanation = torch._dynamo.explain(matvec)(H, v)
-
-        # torch.compile cannot fully trace the operator (e.g. due to
-        # cached_property's RLock, vmap interaction, or other internals)
-        assert explanation.graph_break_count > 0
-
-        # Despite graph breaks, the result is correct (falls back to eager)
-        r_eager = H @ v
-        r_compiled = torch.compile(matvec)(H, v)
-        assert torch.allclose(r_eager, r_compiled, atol=1e-5)
-    finally:
-        torch._dynamo.reset()
+    _assert_no_graph_breaks(lambda op, vec: op @ vec, H, v)

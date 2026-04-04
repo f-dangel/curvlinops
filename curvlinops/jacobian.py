@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, MutableMapping
-from functools import cached_property
 
 from torch import Tensor, cat, no_grad, zeros_like
 from torch.func import jvp, vjp, vmap
@@ -115,19 +114,9 @@ class JacobianLinearOperator(CurvatureLinearOperator):
 
     FIXED_DATA_ORDER: bool = True
 
-    @cached_property
-    def _mp(
-        self,
-    ) -> Callable[
-        [dict[str, Tensor], Tensor | MutableMapping, dict[str, Tensor]], Tensor
-    ]:
-        """Lazy initialization of batch-Jacobian matrix product function.
-
-        Returns:
-            Function that computes mini-batch Jacobian-matrix products, given
-            parameters as a dict, input ``X``, and a matrix ``M`` as a dict.
-        """
-        return make_batch_jacobian_matrix_product(self._model_func)
+    def _init_mp(self):
+        """Set up the batch Jacobian-matrix product function."""
+        self._mp = make_batch_jacobian_matrix_product(self._model_func)
 
     def __init__(
         self,
@@ -243,17 +232,9 @@ class TransposedJacobianLinearOperator(CurvatureLinearOperator):
 
     FIXED_DATA_ORDER: bool = True
 
-    @cached_property
-    def _mp(
-        self,
-    ) -> Callable[[dict[str, Tensor], Tensor, Tensor], dict[str, Tensor]]:
-        """Lazy initialization of batch-transposed-Jacobian matrix product function.
-
-        Returns:
-            Function that computes mini-batch transposed Jacobian-matrix products,
-            given parameters as a dict, input ``X``, and a matrix ``M``.
-        """
-        return make_batch_transposed_jacobian_matrix_product(self._model_func)
+    def _init_mp(self):
+        """Set up the batch transposed Jacobian-matrix product function."""
+        self._mp = make_batch_transposed_jacobian_matrix_product(self._model_func)
 
     def __init__(
         self,

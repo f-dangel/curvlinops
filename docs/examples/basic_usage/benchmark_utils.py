@@ -110,6 +110,11 @@ _IS_FX = {
     "EKFAC (fx)",
     "EKFAC inverse (fx)",
 }
+# Operators whose matvec supports torch.compile (0 graph breaks).
+# run_operator will also measure compiled matvec and memory for these.
+_IS_COMPILABLE = {
+    "Hessian",
+}
 
 # Sub-phase operation names for precompute breakdown
 EKFAC_PRECOMPUTE_OPS = ["kfac_factors", "eigenvalue_correction", "eigh"]
