@@ -5,7 +5,7 @@ These tests verify that curvlinops operators can be compiled with
 the ``torch.compile`` compiler.
 """
 
-import pytest
+from pytest import mark
 from torch import compile as torch_compile
 from torch import manual_seed, rand
 from torch._dynamo import explain
@@ -71,7 +71,7 @@ def test_hessian_matvec_no_graph_breaks():
     _assert_no_graph_breaks(lambda op, vec: op @ vec, H, v)
 
 
-@pytest.mark.parametrize("mc_samples", [0, 1], ids=["exact", "mc"])
+@mark.parametrize("mc_samples", [0, 1], ids=["exact", "mc"])
 def test_ggn_matvec_no_graph_breaks(mc_samples):
     """``GGNLinearOperator @ v`` compiles with zero graph breaks."""
     model, loss_fn, params, data = _setup_problem()
