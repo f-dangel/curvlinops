@@ -116,8 +116,10 @@ def make_batch_ggn_mc_vector_product(
     :func:`curvlinops.ggn_utils.make_grad_output_fn`.
 
     Note:
-        Uses the global random number generator (``torch.manual_seed``) instead of
-        an explicit ``Generator`` for ``torch.compile`` compatibility.
+        Samples from the global RNG (no explicit ``torch.Generator``) so that
+        the returned function is ``torch.compile``-compatible. The caller is
+        responsible for seeding, e.g. via ``fork_rng`` + ``manual_seed``
+        (see :meth:`GGNLinearOperator.__matmul__`).
 
     Args:
         f: Functional model with signature ``(params_dict, X) -> prediction``.
