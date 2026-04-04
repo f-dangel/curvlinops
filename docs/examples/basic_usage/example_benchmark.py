@@ -74,12 +74,11 @@ save_environment_info(RESULTDIR)
 # multiple repeats), while peak memory is measured in isolated subprocesses to
 # avoid allocation artifacts.
 
-if __name__ == "__main__":
-    for problem_str, device_str in product(PROBLEM_STRS, DEVICE_STRS):
-        bench = Benchmark(problem_str, device_str, skip_existing=SKIP_EXISTING)
-        bench.run_reference()
-        for linop_str in LINOP_STRS:
-            bench.run_operator(linop_str)
+for problem_str, device_str in product(PROBLEM_STRS, DEVICE_STRS):
+    bench = Benchmark(problem_str, device_str, skip_existing=SKIP_EXISTING)
+    bench.run_reference()
+    for linop_str in LINOP_STRS:
+        bench.run_operator(linop_str)
 
 # %%
 #
@@ -186,30 +185,32 @@ def visualize_precompute_benchmark(
 
 # %%
 #
-# Figure paths and plotting
+# Let's now visualize the results. We first show the matrix-vector product times.
 
-if __name__ == "__main__":
-    plot_config = bundles.icml2024(column="full" if ON_RTD else "half", usetex=USETEX)
+plot_config = bundles.icml2024(column="full" if ON_RTD else "half", usetex=USETEX)
+kfac_linops = [linop for linop in LINOP_STRS if linop in _KFAC_LIKE]
 
-    for problem_str, device_str in product(PROBLEM_STRS, DEVICE_STRS):
-        bench = Benchmark(problem_str, device_str)
+for problem_str, device_str in product(PROBLEM_STRS, DEVICE_STRS):
+    bench = Benchmark(problem_str, device_str)
+    with plt.rc_context(plot_config):
+        fig, ax = visualize_matvec_benchmark(bench, MATVEC_LINOP_STRS)
+        plt.savefig(
+            figpath(problem_str, device_str, metric="time_matvec"),
+            bbox_inches="tight",
+        )
 
-        with plt.rc_context(plot_config):
-            fig, ax = visualize_matvec_benchmark(bench, MATVEC_LINOP_STRS)
-            plt.savefig(
-                figpath(problem_str, device_str, metric="time_matvec"),
-                bbox_inches="tight",
-            )
-            plt.close()
+# %%
+#
+# And the precompute sub-phase breakdown for KFAC-like operators.
 
-        kfac_linops = [linop for linop in LINOP_STRS if linop in _KFAC_LIKE]
-        with plt.rc_context(plot_config):
-            fig, ax = visualize_precompute_benchmark(bench, kfac_linops)
-            plt.savefig(
-                figpath(problem_str, device_str, metric="time_precompute"),
-                bbox_inches="tight",
-            )
-            plt.close()
+for problem_str, device_str in product(PROBLEM_STRS, DEVICE_STRS):
+    bench = Benchmark(problem_str, device_str)
+    with plt.rc_context(plot_config):
+        fig, ax = visualize_precompute_benchmark(bench, kfac_linops)
+        plt.savefig(
+            figpath(problem_str, device_str, metric="time_precompute"),
+            bbox_inches="tight",
+        )
 
 # %%
 #
@@ -257,17 +258,17 @@ def visualize_peakmem_benchmark(
     return fig, ax
 
 
-if __name__ == "__main__":
-    plot_config = bundles.icml2024(column="full" if ON_RTD else "half", usetex=USETEX)
+# %%
+#
+# Let's visualize the peak memory consumption.
 
-    for problem_str, device_str in product(PROBLEM_STRS, DEVICE_STRS):
-        bench = Benchmark(problem_str, device_str)
-
-        with plt.rc_context(plot_config):
-            fig, ax = visualize_peakmem_benchmark(bench, LINOP_STRS)
-            plt.savefig(
-                figpath(problem_str, device_str, metric="peakmem"), bbox_inches="tight"
-            )
+for problem_str, device_str in product(PROBLEM_STRS, DEVICE_STRS):
+    bench = Benchmark(problem_str, device_str)
+    with plt.rc_context(plot_config):
+        fig, ax = visualize_peakmem_benchmark(bench, LINOP_STRS)
+        plt.savefig(
+            figpath(problem_str, device_str, metric="peakmem"), bbox_inches="tight"
+        )
 
 # %%
 #
@@ -282,4 +283,53 @@ if __name__ == "__main__":
 # operator is, compared to a gradient computation.
 #
 # While we only looked at a small synthetic problem, the same methodology can be applied
-# to larger problems.
+# to larger problems, as shown below.
+
+# %%
+#
+# GPU benchmark results
+# =====================
+#
+# The plots above were generated on CPU for a small MLP on synthetic MNIST. Below, we
+# show benchmark results that were pre-computed on a GPU for all supported problems.
+
+PROBLEM_TITLES = {
+    "synthetic_mnist_mlp": "MNIST MLP",
+    "synthetic_cifar10_resnet18": "CIFAR-10 ResNet-18",
+    "synthetic_imagenet_resnet50": "ImageNet ResNet-50",
+    "synthetic_shakespeare_nanogpt": "Shakespeare nanoGPT",
+}
+gpu_plot_config = bundles.icml2024(column="half", usetex=USETEX)
+
+# %%
+#
+# Matvec times (GPU)
+# ------------------
+
+for problem_str in ALL_PROBLEM_STRS:
+    gpu_bench = Benchmark(problem_str, "cuda")
+    with plt.rc_context(gpu_plot_config):
+        fig, ax = visualize_matvec_benchmark(gpu_bench, MATVEC_LINOP_STRS)
+        ax.set_title(PROBLEM_TITLES[problem_str])
+
+# %%
+#
+# Precompute breakdown (GPU)
+# --------------------------
+
+for problem_str in ALL_PROBLEM_STRS:
+    gpu_bench = Benchmark(problem_str, "cuda")
+    with plt.rc_context(gpu_plot_config):
+        fig, ax = visualize_precompute_benchmark(gpu_bench, kfac_linops)
+        ax.set_title(PROBLEM_TITLES[problem_str])
+
+# %%
+#
+# Peak memory (GPU)
+# -----------------
+
+for problem_str in ALL_PROBLEM_STRS:
+    gpu_bench = Benchmark(problem_str, "cuda")
+    with plt.rc_context(gpu_plot_config):
+        fig, ax = visualize_peakmem_benchmark(gpu_bench, LINOP_STRS)
+        ax.set_title(PROBLEM_TITLES[problem_str])
