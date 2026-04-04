@@ -321,8 +321,8 @@ class GGNLinearOperator(CurvatureLinearOperator):
     def __matmul__(self, X):
         """Multiply the GGN onto a vector or matrix.
 
-        Seeds the global RNG before entering the compiled region when using
-        MC sampling.
+        Uses ``fork_rng`` to isolate the global RNG state for MC sampling,
+        avoiding side effects on the caller's RNG.
 
         Args:
             X: Vector or matrix to multiply.
@@ -331,7 +331,9 @@ class GGNLinearOperator(CurvatureLinearOperator):
             Result of the multiplication.
         """
         if self._mc_samples > 0:
-            torch.manual_seed(self._seed)
+            with torch.random.fork_rng():
+                torch.manual_seed(self._seed)
+                return super().__matmul__(X)
         return super().__matmul__(X)
 
     def _init_mp(self):
