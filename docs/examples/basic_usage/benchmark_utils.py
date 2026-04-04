@@ -114,6 +114,8 @@ _IS_FX = {
 # run_operator will also measure compiled matvec and memory for these.
 _IS_COMPILABLE = {
     "Hessian",
+    "Generalized Gauss-Newton",
+    "Monte-Carlo Fisher",
 }
 
 # Sub-phase operation names for precompute breakdown
