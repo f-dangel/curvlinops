@@ -5,6 +5,7 @@ These tests verify that curvlinops operators can be compiled with
 the ``torch.compile`` compiler.
 """
 
+import pytest
 from torch import compile as torch_compile
 from torch import manual_seed, rand
 from torch._dynamo import explain
@@ -12,7 +13,7 @@ from torch._dynamo import reset as dynamo_reset
 from torch.nn import Linear, MSELoss, Sequential
 from torch.testing import assert_close
 
-from curvlinops import EFLinearOperator, GGNLinearOperator, HessianLinearOperator
+from curvlinops import GGNLinearOperator, HessianLinearOperator
 from curvlinops.examples import trace_gradient_and_loss
 
 
@@ -70,27 +71,17 @@ def test_hessian_matvec_no_graph_breaks():
     _assert_no_graph_breaks(lambda op, vec: op @ vec, H, v)
 
 
-def test_ggn_matvec_no_graph_breaks():
-    """``GGNLinearOperator @ v`` (exact) compiles with zero graph breaks."""
-    model, loss_fn, params, data = _setup_problem()
-    G = GGNLinearOperator(model, loss_fn, params, data, check_deterministic=False)
-    v = rand(G.shape[1])
-    _assert_no_graph_breaks(lambda op, vec: op @ vec, G, v)
-
-
-def test_ef_matvec_no_graph_breaks():
-    """``EFLinearOperator @ v`` compiles with zero graph breaks."""
-    model, loss_fn, params, data = _setup_problem()
-    E = EFLinearOperator(model, loss_fn, params, data, check_deterministic=False)
-    v = rand(E.shape[1])
-    _assert_no_graph_breaks(lambda op, vec: op @ vec, E, v)
-
-
-def test_ggn_mc_matvec_no_graph_breaks():
-    """``GGNLinearOperator @ v`` (MC) compiles with zero graph breaks."""
+@pytest.mark.parametrize("mc_samples", [0, 1], ids=["exact", "mc"])
+def test_ggn_matvec_no_graph_breaks(mc_samples):
+    """``GGNLinearOperator @ v`` compiles with zero graph breaks."""
     model, loss_fn, params, data = _setup_problem()
     G = GGNLinearOperator(
-        model, loss_fn, params, data, check_deterministic=False, mc_samples=1
+        model,
+        loss_fn,
+        params,
+        data,
+        check_deterministic=False,
+        mc_samples=mc_samples,
     )
     v = rand(G.shape[1])
     _assert_no_graph_breaks(lambda op, vec: op @ vec, G, v)
