@@ -130,13 +130,17 @@ def make_compiled_gradient_and_loss(
     traced = trace_gradient_and_loss(model, loss_func, params, example_X, example_y)
     compiled = torch_compile(traced)
 
+    dev = next(model.parameters()).device
+
     def compiled_grad_and_loss(
         params: dict[str, Tensor], X: Tensor | MutableMapping, y: Tensor
     ) -> tuple[tuple[Tensor, ...], Tensor]:
         # Detach params so aot_autograd does not try to differentiate through
         # the already-traced backward ops (would require double-backward).
         params_detached = {k: v.detach() for k, v in params.items()}
-        return compiled(params_detached, X, y)
+        if isinstance(X, Tensor):
+            X = X.to(dev)
+        return compiled(params_detached, X, y.to(dev))
 
     return compiled_grad_and_loss
 

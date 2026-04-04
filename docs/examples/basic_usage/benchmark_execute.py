@@ -308,12 +308,10 @@ class Benchmark:
 
         # Compiled (make_fx traces autograd.grad, then torch.compile)
         (X, y) = data[0]
-        dev = device(self.device_str)
-        X_dev, y_dev = X.to(dev), y.to(dev)
         compiled_fn = make_compiled_gradient_and_loss(
             model, loss_function, params, X, y
         )
-        compiled_best, _ = self.time(lambda: compiled_fn(params, X_dev, y_dev))
+        compiled_best, _ = self.time(lambda: compiled_fn(params, X, y))
         print(f"[Time] {label} (compiled): {compiled_best:.4f} s")
         _merge_json(savepath, "time_compiled", compiled_best)
 
@@ -631,17 +629,15 @@ def _run_reference_peakmem(problem_str: str, device_str: str):
     def func_compiled():
         model, loss_function, params, data = bench.setup_problem("Hessian")
         (X, y) = data[0]
-        dev = device(device_str)
-        X_dev, y_dev = X.to(dev), y.to(dev)
         compiled_fn = make_compiled_gradient_and_loss(
             model, loss_function, params, X, y
         )
         # Warmup: trigger compilation so we measure steady-state memory
-        _ = compiled_fn(params, X_dev, y_dev)
+        _ = compiled_fn(params, X, y)
         if bench.is_cuda:
             cuda.synchronize()
             cuda.reset_peak_memory_stats()
-        _ = compiled_fn(params, X_dev, y_dev)
+        _ = compiled_fn(params, X, y)
         if bench.is_cuda:
             cuda.synchronize()
 
