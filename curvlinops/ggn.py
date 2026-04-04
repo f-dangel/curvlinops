@@ -132,11 +132,7 @@ def make_batch_ggn_mc_vector_product(
     """
     _grad_output_fn = make_grad_output_fn(loss_func, FisherType.MC, mc_samples)
     # vmap over batch: per-datum grad outputs → batched
-    batched_grad_output_fn = vmap(
-        _grad_output_fn,
-        in_dims=(0, 0),
-        randomness="different",
-    )
+    batched_grad_output_fn = vmap(_grad_output_fn, (0, 0), randomness="different")
 
     def c_pseudo(prediction: Tensor, loss_args: tuple) -> Tensor:
         r"""Pseudo-loss whose GGN equals the MC-approximated GGN.
