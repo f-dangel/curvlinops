@@ -180,7 +180,9 @@ def visualize_precompute_benchmark(
     reference = bench.load_reference()["time"]
     add_gradient_reference(ax, reference)
 
-    ax.legend(bbox_to_anchor=(1.02, 1), loc="upper left", borderaxespad=0)
+    ax.legend(
+        bbox_to_anchor=(0.5, -0.35), loc="upper center", borderaxespad=0, ncol=3
+    )
     return fig, ax
 
 
