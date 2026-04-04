@@ -115,6 +115,7 @@ _IS_FX = {
 _IS_COMPILABLE = {
     "Hessian",
     "Generalized Gauss-Newton",
+    "Empirical Fisher",
     "Monte-Carlo Fisher",
 }
 
