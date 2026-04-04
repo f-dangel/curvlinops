@@ -119,7 +119,7 @@ def make_batch_ggn_mc_vector_product(
         Samples from the global RNG (no explicit ``torch.Generator``) so that
         the returned function is ``torch.compile``-compatible. The caller is
         responsible for seeding, e.g. via ``fork_rng`` + ``manual_seed``
-        (see :meth:`GGNLinearOperator.__matmul__`).
+        (see :meth:`GGNLinearOperator._matmat`).
 
     Args:
         f: Functional model with signature ``(params_dict, X) -> prediction``.
@@ -320,23 +320,25 @@ class GGNLinearOperator(CurvatureLinearOperator):
             batch_size_fn=batch_size_fn,
         )
 
-    def __matmul__(self, X):
-        """Multiply the GGN onto a vector or matrix.
+    def _matmat(self, M):
+        """Multiply the GGN onto a matrix.
 
         Uses ``fork_rng`` to isolate the global RNG state for MC sampling,
-        avoiding side effects on the caller's RNG.
+        avoiding side effects on the caller's RNG. Seeding is placed here
+        (not in ``__matmul__``) so that internal callers like
+        ``_ChainPyTorchLinearOperator`` also get deterministic MC samples.
 
         Args:
-            X: Vector or matrix to multiply.
+            M: Matrix for multiplication in tensor list format.
 
         Returns:
-            Result of the multiplication.
+            Matrix-multiplication result ``mat @ M`` in tensor list format.
         """
         if self._mc_samples > 0:
             with fork_rng():
                 manual_seed(self._seed)
-                return super().__matmul__(X)
-        return super().__matmul__(X)
+                return super()._matmat(M)
+        return super()._matmat(M)
 
     def _init_mp(self):
         """Set up the batch GGN-vector product function, then build vmap."""

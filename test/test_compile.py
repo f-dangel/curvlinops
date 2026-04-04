@@ -5,7 +5,6 @@ These tests verify that curvlinops operators can be compiled with
 the ``torch.compile`` compiler.
 """
 
-from pytest import mark
 from torch import compile as torch_compile
 from torch import manual_seed, rand
 from torch._dynamo import explain
@@ -71,17 +70,34 @@ def test_hessian_matvec_no_graph_breaks():
     _assert_no_graph_breaks(lambda op, vec: op @ vec, H, v)
 
 
-@mark.parametrize("mc_samples", [0, 1], ids=["exact", "mc"])
-def test_ggn_matvec_no_graph_breaks(mc_samples):
-    """``GGNLinearOperator @ v`` compiles with zero graph breaks."""
+def test_ggn_matvec_no_graph_breaks():
+    """``GGNLinearOperator @ v`` (exact) compiles with zero graph breaks."""
     model, loss_fn, params, data = _setup_problem()
-    G = GGNLinearOperator(
-        model,
-        loss_fn,
-        params,
-        data,
-        check_deterministic=False,
-        mc_samples=mc_samples,
-    )
+    G = GGNLinearOperator(model, loss_fn, params, data, check_deterministic=False)
     v = rand(G.shape[1])
     _assert_no_graph_breaks(lambda op, vec: op @ vec, G, v)
+
+
+def test_ggn_mc_matvec_compiles_correctly():
+    """``GGNLinearOperator @ v`` (MC) compiles correctly.
+
+    ``fork_rng`` in ``_matmat`` causes graph breaks (context manager not
+    traceable by dynamo), but the per-batch computation is still compiled.
+    """
+    model, loss_fn, params, data = _setup_problem()
+    G = GGNLinearOperator(
+        model, loss_fn, params, data, check_deterministic=False, mc_samples=1
+    )
+    v = rand(G.shape[1])
+
+    dynamo_reset()
+    try:
+        explanation = explain(lambda op, vec: op @ vec)(G, v)
+        # Graph breaks are from fork_rng (context manager), not the computation
+        assert all("fork_rng" in str(br.reason) for br in explanation.break_reasons)
+
+        r_eager = G @ v
+        r_compiled = torch_compile(lambda op, vec: op @ vec)(G, v)
+        assert_close(r_eager, r_compiled, atol=1e-5, rtol=1e-5)
+    finally:
+        dynamo_reset()
