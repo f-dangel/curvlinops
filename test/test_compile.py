@@ -5,6 +5,8 @@ These tests verify that curvlinops operators can be compiled with
 the ``torch.compile`` compiler.
 """
 
+from contextlib import contextmanager
+
 from torch import compile as torch_compile
 from torch import manual_seed, rand
 from torch._dynamo import explain
@@ -30,22 +32,23 @@ def _setup_problem():
     return model, loss_fn, params, data
 
 
-def _assert_no_graph_breaks(fn, *args):
-    """Assert that ``fn(*args)`` compiles with zero graph breaks.
+@contextmanager
+def _dynamo_explain(fn, *args):
+    """Run ``torch._dynamo.explain`` on ``fn`` and yield the explanation.
 
-    Also verifies that the compiled result matches eager execution.
+    Resets dynamo state before and after. Also verifies that the compiled
+    result matches eager execution.
 
     Args:
-        fn: Function to compile.
+        fn: Function to explain/compile.
         *args: Arguments to pass to ``fn``.
+
+    Yields:
+        The ``ExplainOutput`` from ``torch._dynamo.explain``.
     """
     dynamo_reset()
     try:
-        explanation = explain(fn)(*args)
-        assert explanation.graph_break_count == 0, (
-            f"Expected 0 graph breaks, got {explanation.graph_break_count}.\n"
-            f"Break reasons: {explanation.break_reasons}"
-        )
+        yield explain(fn)(*args)
 
         r_eager = fn(*args)
         r_compiled = torch_compile(fn)(*args)
@@ -59,7 +62,8 @@ def test_gradient_and_loss_no_graph_breaks():
     model, loss_fn, params, data = _setup_problem()
     X, y = data[0]
     traced = trace_gradient_and_loss(model, loss_fn, params, X, y)
-    _assert_no_graph_breaks(traced, params, X, y)
+    with _dynamo_explain(traced, params, X, y) as result:
+        assert result.graph_break_count == 0
 
 
 def test_hessian_matvec_no_graph_breaks():
@@ -67,7 +71,8 @@ def test_hessian_matvec_no_graph_breaks():
     model, loss_fn, params, data = _setup_problem()
     H = HessianLinearOperator(model, loss_fn, params, data, check_deterministic=False)
     v = rand(H.shape[1])
-    _assert_no_graph_breaks(lambda op, vec: op @ vec, H, v)
+    with _dynamo_explain(lambda op, vec: op @ vec, H, v) as result:
+        assert result.graph_break_count == 0
 
 
 def test_ggn_matvec_no_graph_breaks():
@@ -75,7 +80,8 @@ def test_ggn_matvec_no_graph_breaks():
     model, loss_fn, params, data = _setup_problem()
     G = GGNLinearOperator(model, loss_fn, params, data, check_deterministic=False)
     v = rand(G.shape[1])
-    _assert_no_graph_breaks(lambda op, vec: op @ vec, G, v)
+    with _dynamo_explain(lambda op, vec: op @ vec, G, v) as result:
+        assert result.graph_break_count == 0
 
 
 def test_ggn_mc_matvec_compiles_correctly():
@@ -89,15 +95,5 @@ def test_ggn_mc_matvec_compiles_correctly():
         model, loss_fn, params, data, check_deterministic=False, mc_samples=1
     )
     v = rand(G.shape[1])
-
-    dynamo_reset()
-    try:
-        explanation = explain(lambda op, vec: op @ vec)(G, v)
-        # Graph breaks are from fork_rng (context manager), not the computation
-        assert all("fork_rng" in str(br.reason) for br in explanation.break_reasons)
-
-        r_eager = G @ v
-        r_compiled = torch_compile(lambda op, vec: op @ vec)(G, v)
-        assert_close(r_eager, r_compiled, atol=1e-5, rtol=1e-5)
-    finally:
-        dynamo_reset()
+    with _dynamo_explain(lambda op, vec: op @ vec, G, v) as result:
+        assert all("fork_rng" in str(br.reason) for br in result.break_reasons)
