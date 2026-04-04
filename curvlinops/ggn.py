@@ -2,11 +2,11 @@
 
 from collections.abc import Callable, Iterable, MutableMapping
 
-import torch
 from einops import einsum
-from torch import Tensor, no_grad
+from torch import Tensor, manual_seed, no_grad
 from torch.func import jacrev, jvp, vjp, vmap
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, Module, MSELoss
+from torch.random import fork_rng
 
 from curvlinops._torch_base import CurvatureLinearOperator
 from curvlinops.ggn_utils import make_grad_output_fn
@@ -331,8 +331,8 @@ class GGNLinearOperator(CurvatureLinearOperator):
             Result of the multiplication.
         """
         if self._mc_samples > 0:
-            with torch.random.fork_rng():
-                torch.manual_seed(self._seed)
+            with fork_rng():
+                manual_seed(self._seed)
                 return super().__matmul__(X)
         return super().__matmul__(X)
 
