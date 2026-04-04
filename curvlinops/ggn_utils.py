@@ -173,7 +173,7 @@ def loss_hessian_matrix_sqrt(
 
 def _make_single_datum_sampler(
     loss_func: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
-) -> Callable[[Tensor, int, Tensor, Generator], Tensor]:
+) -> Callable[[Tensor, int, Tensor, Generator | None], Tensor]:
     """Create a function that samples gradients w.r.t. a single datum's output.
 
     The expectation of the sampled gradient outer product is the loss function's
@@ -184,31 +184,27 @@ def _make_single_datum_sampler(
 
     Returns:
         A function that samples gradients w.r.t. the model prediction for one datum.
-        Signature: ``(output, num_samples, target, generator) -> grad_samples``.
+        Signature: ``(output, num_samples, target, generator=None) -> grad_samples``.
         The returned gradient samples have shape ``[num_samples, *output.shape]``.
+        When ``generator`` is ``None``, the global RNG is used (``torch.compile``
+        compatible).
     """
 
     def sample_grad_output(
         output_one_datum: Tensor,
         num_samples: int,
         target_one_datum: Tensor,
-        generator: Generator,
+        generator: Generator | None = None,
     ) -> Tensor:
-        """Draw would-be gradients ``nabla_f log p(.|f)`` with explicit generator.
+        """Draw would-be gradients ``nabla_f log p(.|f)``.
 
-        Handles a single data point.
-        The would-be gradient's outer product equals the Hessian ``nabla^2_f log p(.|f)``
-        in expectation.
-        Currently supports ``MSELoss``, ``CrossEntropyLoss``, and
-        ``BCEWithLogitsLoss`` with arbitrary output dimensions.
-        The returned gradients include proper scaling based on the loss function's
-        reduction type over the feature dimensions.
+        Uses the given generator, or the global RNG if ``None``.
 
         Args:
             output_one_datum: model prediction ``f`` for one datum. Has no batch axis.
             num_samples: Number of samples to draw.
             target_one_datum: Labels of the datum. Has no batch axis.
-            generator: Random generator for sampling.
+            generator: Random generator. ``None`` uses the global RNG.
 
         Returns:
             Samples of the gradient w.r.t. the model prediction for one datum.
@@ -304,6 +300,8 @@ def make_grad_output_fn(
         operating on a single datum (no batch axis). ``num_vectors`` is
         ``output.numel()`` for ``TYPE2``, ``mc_samples`` for ``MC``, ``1``
         for ``EMPIRICAL``, or ``0`` for ``FORWARD_ONLY``.
+        When ``generator`` is ``None``, the global RNG is used
+        (``torch.compile`` compatible).
 
     Raises:
         ValueError: If ``fisher_type`` is not a valid ``FisherType``.
@@ -358,7 +356,7 @@ def make_grad_output_fn(
         Args:
             output: Model prediction for one datum (no batch axis).
             target: Label for the datum (no batch axis).
-            generator: Random generator (used for MC mode, ignored otherwise).
+            generator: Random generator for MC mode. ``None`` uses the global RNG.
 
         Returns:
             Gradient vectors of shape ``[num_vectors, *output.shape]``.

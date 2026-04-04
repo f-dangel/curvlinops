@@ -2,15 +2,16 @@
 
 from collections.abc import Callable, Iterable, MutableMapping
 
+import torch
 from einops import einsum
-from torch import Generator, Tensor, no_grad
+from torch import Tensor, no_grad
 from torch.func import jacrev, jvp, vjp, vmap
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, Module, MSELoss
 
 from curvlinops._torch_base import CurvatureLinearOperator
 from curvlinops.ggn_utils import make_grad_output_fn
 from curvlinops.kfac_utils import FisherType
-from curvlinops.utils import _seed_generator, make_functional_loss
+from curvlinops.utils import make_functional_loss
 
 
 def make_ggn_vector_product(
@@ -114,6 +115,10 @@ def make_batch_ggn_mc_vector_product(
     using sampled gradient output vectors from
     :func:`curvlinops.ggn_utils.make_grad_output_fn`.
 
+    Note:
+        Uses the global random number generator (``torch.manual_seed``) instead of
+        an explicit ``Generator`` for ``torch.compile`` compatibility.
+
     Args:
         f: Functional model with signature ``(params_dict, X) -> prediction``.
         loss_func: The loss function :math:`\ell`.
@@ -122,14 +127,14 @@ def make_batch_ggn_mc_vector_product(
     Returns:
         A function ``(params_dict, X, loss_args, v_dict) -> Gv`` that takes
         parameters as a dict, model input ``X``, loss arguments
-        ``loss_args = (y, generator)``, and a vector ``v`` as a dict, and returns
+        ``loss_args = (y,)``, and a vector ``v`` as a dict, and returns
         the mini-batch MC-GGN applied to ``v`` as a dict.
     """
     _grad_output_fn = make_grad_output_fn(loss_func, FisherType.MC, mc_samples)
     # vmap over batch: per-datum grad outputs → batched
     batched_grad_output_fn = vmap(
         _grad_output_fn,
-        in_dims=(0, 0, None),
+        in_dims=(0, 0),
         randomness="different",
     )
 
@@ -143,15 +148,15 @@ def make_batch_ggn_mc_vector_product(
 
         Args:
             prediction: Batched model predictions.
-            loss_args: Tuple of ``(y, generator)`` with labels and random generator.
+            loss_args: Tuple of ``(y,)`` with labels.
 
         Returns:
             Scalar pseudo-loss.
         """
-        y, generator = loss_args
+        (y,) = loss_args
 
         # [batch, mc_samples, *output_shape], scaled by 1/sqrt(mc_samples)
-        grad_outputs = batched_grad_output_fn(prediction.detach(), y, generator)
+        grad_outputs = batched_grad_output_fn(prediction.detach(), y)
 
         # Inner products: [batch, mc_samples]
         ip = einsum(grad_outputs, prediction, "n k ..., n ... -> n k")
@@ -306,7 +311,6 @@ class GGNLinearOperator(CurvatureLinearOperator):
                 )
             self.FIXED_DATA_ORDER = True
             self._seed = seed
-            self._generator: None | Generator = None
         super().__init__(
             model_func,
             loss_func,
@@ -318,20 +322,21 @@ class GGNLinearOperator(CurvatureLinearOperator):
             batch_size_fn=batch_size_fn,
         )
 
-    def _matmat(self, M: list[Tensor]) -> list[Tensor]:
-        """Multiply the GGN onto a matrix.
+    def __matmul__(self, X):
+        """Multiply the GGN onto a vector or matrix.
 
-        Seeds the random number generator when using MC sampling.
+        Seeds the global RNG before entering the compiled region when using
+        MC sampling.
 
         Args:
-            M: Matrix for multiplication in tensor list format.
+            X: Vector or matrix to multiply.
 
         Returns:
-            Matrix-multiplication result ``mat @ M`` in tensor list format.
+            Result of the multiplication.
         """
         if self._mc_samples > 0:
-            self._generator = _seed_generator(self._generator, self.device, self._seed)
-        return super()._matmat(M)
+            torch.manual_seed(self._seed)
+        return super().__matmul__(X)
 
     def _init_mp(self):
         """Set up the batch GGN-vector product function, then build vmap."""
@@ -356,5 +361,4 @@ class GGNLinearOperator(CurvatureLinearOperator):
         Returns:
             Result of GGN-vector multiplication as a dict.
         """
-        loss_args = (y, self._generator) if self._mc_samples > 0 else (y,)
-        return self._vp(self._params, X, loss_args, v)
+        return self._vp(self._params, X, (y,), v)
