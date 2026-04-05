@@ -99,6 +99,9 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
   - `GGNLinearOperator` (exact and MC): replace `torch.Generator` with global
     RNG seeded via `fork_rng` + `manual_seed` in `_matmat`.
     ([PR #287](https://github.com/f-dangel/curvlinops/pull/287))
+  - `EFLinearOperator`: no code changes needed (already compile-friendly after
+    PR #286). Add test and benchmark.
+    ([PR #288](https://github.com/f-dangel/curvlinops/pull/288))
 
 - Restructure benchmark tutorial: add both backends (hooks, `make_fx`) for
   KFAC/EKFAC, break down precompute into sub-phases (Kronecker factors,
