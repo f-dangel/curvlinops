@@ -99,6 +99,9 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
   - `GGNLinearOperator` (exact and MC): replace `torch.Generator` with global
     RNG seeded via `fork_rng` + `manual_seed` in `_matmat`.
     ([PR #287](https://github.com/f-dangel/curvlinops/pull/287))
+  - `EFLinearOperator`: no code changes needed (already compile-friendly after
+    PR #286). Add test and benchmark.
+    ([PR #288](https://github.com/f-dangel/curvlinops/pull/288))
   - `KFACLinearOperator` (hooks and fx): replace `einops.einsum` with
     `torch.einsum` in `KroneckerProductLinearOperator`, call `_matmat`
     instead of `@` in `BlockDiagonalLinearOperator`, remove numpy dependency
