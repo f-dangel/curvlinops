@@ -3,6 +3,11 @@
 These tests verify that curvlinops operators can be compiled with
 ``torch.compile`` without graph breaks, enabling potential speedups from
 the ``torch.compile`` compiler.
+
+Note: We use ``torch._dynamo.explain`` rather than ``torch.compile(fullgraph=True)``
+because ``fullgraph=True`` cannot proxy user-defined types (like our operators) at the
+graph boundary. ``explain`` correctly traces *into* the operator's ``__matmul__`` and
+confirms that all internal tensor ops are captured in a single graph without breaks.
 """
 
 from contextlib import contextmanager

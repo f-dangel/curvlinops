@@ -85,6 +85,15 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
         self._einsum_equation = f"{x_sub},{','.join(S_subs)}->{result_sub}"
         self._in_dims = [S.shape[1] for S in self._factors]
 
+        # Adjoint equation: input uses output chars, result uses input chars.
+        # Computes (S_1^T ⊗ S_2^T ⊗ ...) @ x using the same factor tensors.
+        adj_x_sub = "".join(out_chars) + "K"
+        adj_result_sub = "".join(in_chars) + "K"
+        self._adjoint_einsum_equation = (
+            f"{adj_x_sub},{','.join(S_subs)}->{adj_result_sub}"
+        )
+        self._out_dims = [S.shape[0] for S in self._factors]
+
         super().__init__(in_shapes, out_shapes)
 
     def __iter__(self) -> Iterator[Tensor]:
@@ -143,6 +152,24 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
         (x,) = X
         x = x.reshape(*self._in_dims, x.shape[-1])
         return [einsum(self._einsum_equation, x, *self._factors).flatten(end_dim=-2)]
+
+    def _adjoint_matmat(self, X: list[Tensor]) -> list[Tensor]:
+        """Apply the adjoint Kronecker product without creating a new operator.
+
+        This avoids instantiating a new ``KroneckerProductLinearOperator``,
+        which ``torch.compile`` cannot trace.
+
+        Args:
+            X: List with a single tensor.
+
+        Returns:
+            List with a single tensor.
+        """
+        (x,) = X
+        x = x.reshape(*self._out_dims, x.shape[-1])
+        return [
+            einsum(self._adjoint_einsum_equation, x, *self._factors).flatten(end_dim=-2)
+        ]
 
     def _adjoint(self) -> KroneckerProductLinearOperator:
         """Return the adjoint of the Kronecker product.

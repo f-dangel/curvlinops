@@ -93,9 +93,15 @@ class EighDecomposedLinearOperator(PyTorchLinearOperator):
             List with single tensor of shape (n, k).
         """
         (x,) = X
-        result = self._eigenvectors @ (
-            self._eigenvalues.unsqueeze(1) * (self._eigenvectors.adjoint() @ x)
-        )
+        Q = self._eigenvectors
+        if isinstance(Q, Tensor):
+            QTx = Q.T @ x
+            return [Q @ (self._eigenvalues.unsqueeze(1) * QTx)]
+        # For KroneckerProductLinearOperator: call _matmat / _adjoint_matmat
+        # directly because torch.compile can't trace __matmul__ on user-defined
+        # types, and _adjoint() would instantiate a new operator during tracing.
+        (QTx,) = Q._adjoint_matmat([x])
+        (result,) = Q._matmat([self._eigenvalues.unsqueeze(1) * QTx])
         return [result]
 
     @property

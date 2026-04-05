@@ -121,6 +121,10 @@ _IS_COMPILABLE = {
     "KFAC inverse (hooks)",
     "KFAC (fx)",
     "KFAC inverse (fx)",
+    "EKFAC (hooks)",
+    "EKFAC inverse (hooks)",
+    "EKFAC (fx)",
+    "EKFAC inverse (fx)",
 }
 
 # Sub-phase operation names for precompute breakdown
