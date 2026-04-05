@@ -14,7 +14,7 @@ from torch._dynamo import reset as dynamo_reset
 from torch.nn import Linear, MSELoss, Sequential
 from torch.testing import assert_close
 
-from curvlinops import GGNLinearOperator, HessianLinearOperator
+from curvlinops import GGNLinearOperator, HessianLinearOperator, KFACLinearOperator
 from curvlinops.examples import trace_gradient_and_loss
 
 
@@ -97,3 +97,38 @@ def test_ggn_mc_matvec_compiles_correctly():
     v = rand(G.shape[1])
     with _dynamo_explain(lambda op, vec: op @ vec, G, v) as result:
         assert all("fork_rng" in str(br.reason) for br in result.break_reasons)
+
+
+def test_kfac_matvec_no_graph_breaks():
+    """``KFACLinearOperator @ v`` compiles with zero graph breaks."""
+    model, loss_fn, params, data = _setup_problem()
+    K = KFACLinearOperator(
+        model,
+        loss_fn,
+        params,
+        data,
+        check_deterministic=False,
+        separate_weight_and_bias=False,
+        num_per_example_loss_terms=1,
+    )
+    v = rand(K.shape[1])
+    with _dynamo_explain(lambda op, vec: op @ vec, K, v) as result:
+        assert result.graph_break_count == 0
+
+
+def test_kfac_fx_matvec_no_graph_breaks():
+    """``KFACLinearOperator @ v`` (fx backend) compiles with zero graph breaks."""
+    model, loss_fn, params, data = _setup_problem()
+    K = KFACLinearOperator(
+        model,
+        loss_fn,
+        params,
+        data,
+        check_deterministic=False,
+        separate_weight_and_bias=False,
+        num_per_example_loss_terms=1,
+        backend="make_fx",
+    )
+    v = rand(K.shape[1])
+    with _dynamo_explain(lambda op, vec: op @ vec, K, v) as result:
+        assert result.graph_break_count == 0

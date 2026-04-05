@@ -99,6 +99,11 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
   - `GGNLinearOperator` (exact and MC): replace `torch.Generator` with global
     RNG seeded via `fork_rng` + `manual_seed` in `_matmat`.
     ([PR #287](https://github.com/f-dangel/curvlinops/pull/287))
+  - `KFACLinearOperator` (hooks and fx): replace `einops.einsum` with
+    `torch.einsum` in `KroneckerProductLinearOperator`, call `_matmat`
+    instead of `@` in `BlockDiagonalLinearOperator`, remove numpy dependency
+    from `split_list`.
+    ([PR](https://github.com/f-dangel/curvlinops/pull/))
 
 - Restructure benchmark tutorial: add both backends (hooks, `make_fx`) for
   KFAC/EKFAC, break down precompute into sub-phases (Kronecker factors,

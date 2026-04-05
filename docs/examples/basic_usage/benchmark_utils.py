@@ -116,6 +116,10 @@ _IS_COMPILABLE = {
     "Hessian",
     "Generalized Gauss-Newton",
     "Monte-Carlo Fisher",
+    "KFAC (hooks)",
+    "KFAC inverse (hooks)",
+    "KFAC (fx)",
+    "KFAC inverse (fx)",
 }
 
 # Sub-phase operation names for precompute breakdown

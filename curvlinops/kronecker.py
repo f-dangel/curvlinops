@@ -6,13 +6,13 @@ from collections.abc import Iterator
 from math import prod, sqrt
 from warnings import warn
 
-from einops import einsum
 from torch import (
     Tensor,
     cholesky_inverse,
     device,
     diagonal_scatter,
     dtype,
+    einsum,
     float64,
     kron,
     stack,
@@ -72,14 +72,18 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
         D_out = prod(S.shape[0] for S in self._factors)
         in_shapes, out_shapes = [(D_in,)], [(D_out,)]
 
-        # Assemble the einsum equation for matrix multiplication
+        # Assemble the torch.einsum equation for matrix multiplication.
+        # Uses single-char subscripts: a-z for input dims, A-Z for output dims,
+        # K for the column dim.
         num_dims = len(self._factors)
-        S_strs = [f"out{i} in{i}" for i in range(num_dims)]
-        x_str = " ".join([f"in{i}" for i in range(num_dims)]) + " k"
-        result_str = " ".join([f"out{i}" for i in range(num_dims)]) + " k"
-        # For two Kronecker factors: 'in0 in1, out0 in0, out1 in1 -> out0 out1'
-        equation = f"{x_str}, {','.join(S_strs)} -> {result_str}"
-        self._einsum_equation = equation
+        in_chars = [chr(ord("a") + i) for i in range(num_dims)]
+        out_chars = [chr(ord("A") + i) for i in range(num_dims)]
+        x_sub = "".join(in_chars) + "K"
+        S_subs = [f"{o}{i}" for o, i in zip(out_chars, in_chars)]
+        result_sub = "".join(out_chars) + "K"
+        # For two factors: 'abK,Aa,Bb->ABK'
+        self._einsum_equation = f"{x_sub},{','.join(S_subs)}->{result_sub}"
+        self._in_dims = [S.shape[1] for S in self._factors]
 
         super().__init__(in_shapes, out_shapes)
 
@@ -137,8 +141,8 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
             List with a single tensor of shape (m_1 * m_2 * ... * m_k, K).
         """
         (x,) = X
-        x = x.reshape(*[S.shape[1] for S in self._factors], x.shape[-1])
-        return [einsum(x, *self._factors, self._einsum_equation).flatten(end_dim=-2)]
+        x = x.reshape(*self._in_dims, x.shape[-1])
+        return [einsum(self._einsum_equation, x, *self._factors).flatten(end_dim=-2)]
 
     def _adjoint(self) -> KroneckerProductLinearOperator:
         """Return the adjoint of the Kronecker product.
