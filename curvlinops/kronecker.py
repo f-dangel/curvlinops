@@ -74,21 +74,22 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
 
         # Assemble the torch.einsum equation for matrix multiplication.
         # Uses single-char subscripts: a-z for input dims, A-Z for output dims,
-        # K for the column dim.
+        # Z for the column dim.
         num_dims = len(self._factors)
+        assert num_dims <= 25, f"At most 25 Kronecker factors supported, got {num_dims}"
         in_chars = [chr(ord("a") + i) for i in range(num_dims)]
         out_chars = [chr(ord("A") + i) for i in range(num_dims)]
-        x_sub = "".join(in_chars) + "K"
+        x_sub = "".join(in_chars) + "Z"
         S_subs = [f"{o}{i}" for o, i in zip(out_chars, in_chars)]
-        result_sub = "".join(out_chars) + "K"
-        # For two factors: 'abK,Aa,Bb->ABK'
+        result_sub = "".join(out_chars) + "Z"
+        # For two factors: 'abZ,Aa,Bb->ABZ'
         self._einsum_equation = f"{x_sub},{','.join(S_subs)}->{result_sub}"
         self._in_dims = [S.shape[1] for S in self._factors]
 
         # Adjoint equation: input uses output chars, result uses input chars.
         # Computes (S_1^T ⊗ S_2^T ⊗ ...) @ x using the same factor tensors.
-        adj_x_sub = "".join(out_chars) + "K"
-        adj_result_sub = "".join(in_chars) + "K"
+        adj_x_sub = "".join(out_chars) + "Z"
+        adj_result_sub = "".join(in_chars) + "Z"
         self._adjoint_einsum_equation = (
             f"{adj_x_sub},{','.join(S_subs)}->{adj_result_sub}"
         )
