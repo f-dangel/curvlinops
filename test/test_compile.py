@@ -12,6 +12,7 @@ confirms that all internal tensor ops are captured in a single graph without bre
 
 from contextlib import contextmanager
 
+from pytest import mark
 from torch import compile as torch_compile
 from torch import manual_seed, rand
 from torch._dynamo import explain
@@ -119,10 +120,19 @@ def test_ef_matvec_no_graph_breaks():
         assert result.graph_break_count == 0
 
 
-def test_kfac_matvec_no_graph_breaks():
-    """``KFACLinearOperator @ v`` compiles with zero graph breaks."""
+KFAC_LIKE = [
+    (KFACLinearOperator, "hooks"),
+    (KFACLinearOperator, "make_fx"),
+    (EKFACLinearOperator, "hooks"),
+    (EKFACLinearOperator, "make_fx"),
+]
+
+
+@mark.parametrize("cls,backend", KFAC_LIKE, ids=lambda x: x if isinstance(x, str) else x.__name__)
+def test_kfac_like_matvec_no_graph_breaks(cls, backend):
+    """(E)KFAC matvec compiles with zero graph breaks for both backends."""
     model, loss_fn, params, data = _setup_problem()
-    K = KFACLinearOperator(
+    K = cls(
         model,
         loss_fn,
         params,
@@ -130,59 +140,7 @@ def test_kfac_matvec_no_graph_breaks():
         check_deterministic=False,
         separate_weight_and_bias=False,
         num_per_example_loss_terms=2,
-    )
-    v = rand(K.shape[1])
-    with _dynamo_explain(lambda op, vec: op @ vec, K, v) as result:
-        assert result.graph_break_count == 0
-
-
-def test_kfac_fx_matvec_no_graph_breaks():
-    """``KFACLinearOperator @ v`` (fx backend) compiles with zero graph breaks."""
-    model, loss_fn, params, data = _setup_problem()
-    K = KFACLinearOperator(
-        model,
-        loss_fn,
-        params,
-        data,
-        check_deterministic=False,
-        separate_weight_and_bias=False,
-        num_per_example_loss_terms=2,
-        backend="make_fx",
-    )
-    v = rand(K.shape[1])
-    with _dynamo_explain(lambda op, vec: op @ vec, K, v) as result:
-        assert result.graph_break_count == 0
-
-
-def test_ekfac_matvec_no_graph_breaks():
-    """``EKFACLinearOperator @ v`` compiles with zero graph breaks."""
-    model, loss_fn, params, data = _setup_problem()
-    K = EKFACLinearOperator(
-        model,
-        loss_fn,
-        params,
-        data,
-        check_deterministic=False,
-        separate_weight_and_bias=False,
-        num_per_example_loss_terms=2,
-    )
-    v = rand(K.shape[1])
-    with _dynamo_explain(lambda op, vec: op @ vec, K, v) as result:
-        assert result.graph_break_count == 0
-
-
-def test_ekfac_fx_matvec_no_graph_breaks():
-    """``EKFACLinearOperator @ v`` (fx backend) compiles with zero graph breaks."""
-    model, loss_fn, params, data = _setup_problem()
-    K = EKFACLinearOperator(
-        model,
-        loss_fn,
-        params,
-        data,
-        check_deterministic=False,
-        separate_weight_and_bias=False,
-        num_per_example_loss_terms=2,
-        backend="make_fx",
+        backend=backend,
     )
     v = rand(K.shape[1])
     with _dynamo_explain(lambda op, vec: op @ vec, K, v) as result:
