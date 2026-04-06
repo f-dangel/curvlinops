@@ -129,7 +129,7 @@ def test_kfac_matvec_no_graph_breaks():
         data,
         check_deterministic=False,
         separate_weight_and_bias=False,
-        num_per_example_loss_terms=1,
+        num_per_example_loss_terms=2,
     )
     v = rand(K.shape[1])
     with _dynamo_explain(lambda op, vec: op @ vec, K, v) as result:
@@ -146,7 +146,7 @@ def test_kfac_fx_matvec_no_graph_breaks():
         data,
         check_deterministic=False,
         separate_weight_and_bias=False,
-        num_per_example_loss_terms=1,
+        num_per_example_loss_terms=2,
         backend="make_fx",
     )
     v = rand(K.shape[1])
@@ -164,7 +164,7 @@ def test_ekfac_matvec_no_graph_breaks():
         data,
         check_deterministic=False,
         separate_weight_and_bias=False,
-        num_per_example_loss_terms=1,
+        num_per_example_loss_terms=2,
     )
     v = rand(K.shape[1])
     with _dynamo_explain(lambda op, vec: op @ vec, K, v) as result:
@@ -181,7 +181,7 @@ def test_ekfac_fx_matvec_no_graph_breaks():
         data,
         check_deterministic=False,
         separate_weight_and_bias=False,
-        num_per_example_loss_terms=1,
+        num_per_example_loss_terms=2,
         backend="make_fx",
     )
     v = rand(K.shape[1])

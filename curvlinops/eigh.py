@@ -95,7 +95,7 @@ class EighDecomposedLinearOperator(PyTorchLinearOperator):
         (x,) = X
         Q = self._eigenvectors
         if isinstance(Q, Tensor):
-            QTx = Q.T @ x
+            QTx = Q.mH @ x
             return [Q @ (self._eigenvalues.unsqueeze(1) * QTx)]
         # For KroneckerProductLinearOperator: call _matmat / _adjoint_matmat
         # directly because torch.compile can't trace __matmul__ on user-defined
