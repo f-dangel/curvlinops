@@ -120,15 +120,12 @@ def test_ef_matvec_no_graph_breaks():
         assert result.graph_break_count == 0
 
 
-KFAC_LIKE = [
-    (KFACLinearOperator, "hooks"),
-    (KFACLinearOperator, "make_fx"),
-    (EKFACLinearOperator, "hooks"),
-    (EKFACLinearOperator, "make_fx"),
-]
+KFAC_LIKE_CLS = [KFACLinearOperator, EKFACLinearOperator]
+BACKENDS = ["hooks", "make_fx"]
 
 
-@mark.parametrize("cls,backend", KFAC_LIKE, ids=lambda x: x if isinstance(x, str) else x.__name__)
+@mark.parametrize("cls", KFAC_LIKE_CLS, ids=lambda c: c.__name__)
+@mark.parametrize("backend", BACKENDS)
 def test_kfac_like_matvec_no_graph_breaks(cls, backend):
     """(E)KFAC matvec compiles with zero graph breaks for both backends."""
     model, loss_fn, params, data = _setup_problem()
