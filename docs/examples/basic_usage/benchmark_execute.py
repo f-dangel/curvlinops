@@ -632,11 +632,6 @@ def _run_reference_peakmem(problem_str: str, device_str: str):
         compiled_fn = make_compiled_gradient_and_loss(
             model, loss_function, params, X, y
         )
-        # Warmup: trigger compilation so we measure steady-state memory
-        _ = compiled_fn(params, X, y)
-        if bench.is_cuda:
-            cuda.synchronize()
-            cuda.reset_peak_memory_stats()
         _ = compiled_fn(params, X, y)
         if bench.is_cuda:
             cuda.synchronize()
@@ -699,12 +694,6 @@ def _run_operator_peakmem(linop_str: str, problem_str: str, device_str: str):
             )
             v = rand(linop.shape[1], device=linop.device)
             compiled_matvec = torch_compile(lambda: linop @ v)
-            # Warmup: trigger compilation so we measure steady-state memory
-            with attention_context(linop, model):
-                _ = compiled_matvec()
-            if bench.is_cuda:
-                cuda.synchronize()
-                cuda.reset_peak_memory_stats()
             with attention_context(linop, model):
                 _ = compiled_matvec()
             if bench.is_cuda:
