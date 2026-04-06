@@ -4,7 +4,7 @@ from collections.abc import Callable, Iterable, MutableMapping
 from functools import partial
 
 from einops import rearrange
-from numpy import cumsum, ndarray
+from numpy import ndarray
 from torch import Generator, Tensor, as_tensor, device, dtype
 from torch.func import functional_call
 from torch.nn import CrossEntropyLoss, Module
@@ -85,8 +85,12 @@ def split_list(x: list | tuple, sizes: list[int]) -> list[list]:
             f"List to be split has length {len(x)}, but requested sub-list with a total"
             + f" of {sum(sizes)} entries."
         )
-    boundaries = cumsum([0] + sizes)
-    return [list(x[boundaries[i] : boundaries[i + 1]]) for i in range(len(sizes))]
+    start = 0
+    result = []
+    for s in sizes:
+        result.append(list(x[start : start + s]))
+        start += s
+    return result
 
 
 def allclose_report(

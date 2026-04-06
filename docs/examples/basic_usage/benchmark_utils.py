@@ -117,6 +117,14 @@ _IS_COMPILABLE = {
     "Generalized Gauss-Newton",
     "Empirical Fisher",
     "Monte-Carlo Fisher",
+    "KFAC (hooks)",
+    "KFAC inverse (hooks)",
+    "KFAC (fx)",
+    "KFAC inverse (fx)",
+    "EKFAC (hooks)",
+    "EKFAC inverse (hooks)",
+    "EKFAC (fx)",
+    "EKFAC inverse (fx)",
 }
 
 # Sub-phase operation names for precompute breakdown

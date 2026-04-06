@@ -3,10 +3,16 @@
 These tests verify that curvlinops operators can be compiled with
 ``torch.compile`` without graph breaks, enabling potential speedups from
 the ``torch.compile`` compiler.
+
+Note: We use ``torch._dynamo.explain`` rather than ``torch.compile(fullgraph=True)``
+because ``fullgraph=True`` cannot proxy user-defined types (like our operators) at the
+graph boundary. ``explain`` correctly traces *into* the operator's ``__matmul__`` and
+confirms that all internal tensor ops are captured in a single graph without breaks.
 """
 
 from contextlib import contextmanager
 
+from pytest import mark
 from torch import compile as torch_compile
 from torch import manual_seed, rand
 from torch._dynamo import explain
@@ -14,7 +20,13 @@ from torch._dynamo import reset as dynamo_reset
 from torch.nn import Linear, MSELoss, Sequential
 from torch.testing import assert_close
 
-from curvlinops import EFLinearOperator, GGNLinearOperator, HessianLinearOperator
+from curvlinops import (
+    EFLinearOperator,
+    EKFACLinearOperator,
+    GGNLinearOperator,
+    HessianLinearOperator,
+    KFACLinearOperator,
+)
 from curvlinops.examples import trace_gradient_and_loss
 
 
@@ -57,6 +69,13 @@ def _dynamo_explain(fn, *args):
         dynamo_reset()
 
 
+def _assert_no_graph_breaks(linop):
+    """Assert that ``linop @ v`` compiles with zero graph breaks."""
+    v = rand(linop.shape[1])
+    with _dynamo_explain(lambda op, vec: op @ vec, linop, v) as result:
+        assert result.graph_break_count == 0
+
+
 def test_gradient_and_loss_no_graph_breaks():
     """Per-batch gradient+loss traced with ``make_fx`` compiles with 0 graph breaks."""
     model, loss_fn, params, data = _setup_problem()
@@ -70,18 +89,14 @@ def test_hessian_matvec_no_graph_breaks():
     """``HessianLinearOperator @ v`` compiles with zero graph breaks."""
     model, loss_fn, params, data = _setup_problem()
     H = HessianLinearOperator(model, loss_fn, params, data, check_deterministic=False)
-    v = rand(H.shape[1])
-    with _dynamo_explain(lambda op, vec: op @ vec, H, v) as result:
-        assert result.graph_break_count == 0
+    _assert_no_graph_breaks(H)
 
 
 def test_ggn_matvec_no_graph_breaks():
     """``GGNLinearOperator @ v`` (exact) compiles with zero graph breaks."""
     model, loss_fn, params, data = _setup_problem()
     G = GGNLinearOperator(model, loss_fn, params, data, check_deterministic=False)
-    v = rand(G.shape[1])
-    with _dynamo_explain(lambda op, vec: op @ vec, G, v) as result:
-        assert result.graph_break_count == 0
+    _assert_no_graph_breaks(G)
 
 
 def test_ggn_mc_matvec_compiles_correctly():
@@ -103,6 +118,26 @@ def test_ef_matvec_no_graph_breaks():
     """``EFLinearOperator @ v`` compiles with zero graph breaks."""
     model, loss_fn, params, data = _setup_problem()
     E = EFLinearOperator(model, loss_fn, params, data, check_deterministic=False)
-    v = rand(E.shape[1])
-    with _dynamo_explain(lambda op, vec: op @ vec, E, v) as result:
-        assert result.graph_break_count == 0
+    _assert_no_graph_breaks(E)
+
+
+KFAC_LIKE_CLS = [KFACLinearOperator, EKFACLinearOperator]
+BACKENDS = ["hooks", "make_fx"]
+
+
+@mark.parametrize("cls", KFAC_LIKE_CLS, ids=lambda c: c.__name__)
+@mark.parametrize("backend", BACKENDS)
+def test_kfac_like_matvec_no_graph_breaks(cls, backend):
+    """(E)KFAC matvec compiles with zero graph breaks for both backends."""
+    model, loss_fn, params, data = _setup_problem()
+    K = cls(
+        model,
+        loss_fn,
+        params,
+        data,
+        check_deterministic=False,
+        separate_weight_and_bias=False,
+        num_per_example_loss_terms=2,
+        backend=backend,
+    )
+    _assert_no_graph_breaks(K)

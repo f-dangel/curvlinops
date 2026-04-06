@@ -284,12 +284,17 @@ for problem_str, device_str in product(PROBLEM_STRS, DEVICE_STRS):
 # performance. The reference gradient computation is also shown in both modes
 # (traced with ``make_fx``, then compiled).
 
-# Operators that support torch.compile
-COMPILABLE_LINOPS = [name for name in MATVEC_LINOP_STRS if name in _IS_COMPILABLE]
+# Compilable operators for matvec (backend-independent, hooks only)
+COMPILABLE_MATVEC_LINOPS = [
+    name for name in MATVEC_LINOP_STRS if name in _IS_COMPILABLE
+]
+# Compilable operators for peakmem (backend matters, show all)
+COMPILABLE_LINOPS = [name for name in LINOP_STRS if name in _IS_COMPILABLE]
 
 
 def _visualize_compiled(
     bench: Benchmark,
+    linop_strs: list[str],
     eager_key: str,
     compiled_key: str,
     ref_eager_key: str,
@@ -300,6 +305,7 @@ def _visualize_compiled(
 
     Args:
         bench: The benchmark instance (for loading results).
+        linop_strs: The linear operators to plot.
         eager_key: JSON key for the eager measurement (e.g. ``"matvec"``).
         compiled_key: JSON key for the compiled measurement.
         ref_eager_key: JSON key for the eager reference.
@@ -313,7 +319,7 @@ def _visualize_compiled(
 
     fig, ax = plt.subplots()
 
-    for idx, name in enumerate(COMPILABLE_LINOPS):
+    for idx, name in enumerate(linop_strs):
         data = bench.load_operator(name)
         # Eager bar behind (full opacity), compiled bar on top (semi-transparent)
         ax.barh(
@@ -330,8 +336,8 @@ def _visualize_compiled(
             label="compiled" if idx == 0 else None,
         )
 
-    ax.set_yticks(list(range(len(COMPILABLE_LINOPS))))
-    ax.set_yticklabels(COMPILABLE_LINOPS)
+    ax.set_yticks(list(range(len(linop_strs))))
+    ax.set_yticklabels(linop_strs)
     ax.set_xlabel(xlabel)
 
     add_gradient_reference(ax, reference[ref_eager_key])
@@ -353,7 +359,13 @@ def visualize_compiled_matvec(bench):
         The figure and axes.
     """
     return _visualize_compiled(
-        bench, "matvec", "matvec_compiled", "time", "time_compiled", "Time [s]"
+        bench,
+        COMPILABLE_MATVEC_LINOPS,
+        "matvec",
+        "matvec_compiled",
+        "time",
+        "time_compiled",
+        "Time [s]",
     )
 
 
@@ -365,6 +377,7 @@ def visualize_compiled_peakmem(bench):
     """
     return _visualize_compiled(
         bench,
+        COMPILABLE_LINOPS,
         "peakmem",
         "peakmem_compiled",
         "peakmem",

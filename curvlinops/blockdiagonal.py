@@ -107,8 +107,9 @@ class BlockDiagonalLinearOperator(PyTorchLinearOperator):
         """
         # split tensor list into per-block lists
         X_blocks = split_list(X, [len(B._in_shape) for B in self._blocks])
-        # Multiply per-block and concatenate the resulting lists into the result
-        return sum([B @ X_B for B, X_B in zip(self._blocks, X_blocks)], start=[])
+        # Multiply per-block via _matmat (not @, which dynamo can't trace on
+        # user-defined objects) and concatenate into the result
+        return sum([B._matmat(X_B) for B, X_B in zip(self._blocks, X_blocks)], start=[])
 
     def _adjoint(self) -> BlockDiagonalLinearOperator:
         """Return the adjoint of the block-diagonal linear operator.
