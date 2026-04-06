@@ -71,23 +71,24 @@ def run_verbose(cmd: list[str]) -> CompletedProcess:
         raise e
 
 
-def _merge_json(filepath: str, key: str, value):
-    """Read a JSON file, set ``key`` to ``value``, and write back.
+def _merge_json(filepath: str, category: str, key: str, value):
+    """Read a JSON file, set ``data[category][key]`` to ``value``, and write back.
 
     Creates the file if it does not exist. Preserves existing keys.
 
     Args:
         filepath: Path to the JSON file.
-        key: The key to set.
+        category: Top-level category (``"eager"`` or ``"compiled"``).
+        key: The key to set inside the category.
         value: The value to assign.
     """
     existing = {}
     if path.exists(filepath):
         with open(filepath) as f:
             existing = json.load(f)
-    existing[key] = value
+    existing.setdefault(category, {})[key] = value
     with open(filepath, "w") as f:
-        json.dump(existing, f)
+        json.dump(existing, f, indent=2)
 
 
 class Benchmark:
@@ -193,7 +194,8 @@ class Benchmark:
         """Load reference benchmark results.
 
         Returns:
-            Dict with keys ``"time"`` and/or ``"peakmem"``.
+            Dict with keys ``"eager"`` and ``"compiled"``, each
+            containing ``"time"`` and/or ``"peakmem"``.
         """
         with open(reference_benchpath(self.problem_str, self.device_str)) as f:
             return json.load(f)
@@ -205,7 +207,8 @@ class Benchmark:
             linop_str: The linear operator name.
 
         Returns:
-            Dict with keys like ``"matvec"``, ``"kfac_factors"``, ``"peakmem"``, etc.
+            Dict with keys ``"eager"`` and optionally ``"compiled"``,
+            each containing keys like ``"matvec"``, ``"peakmem"``, etc.
         """
         with open(benchpath(linop_str, self.problem_str, self.device_str)) as f:
             return json.load(f)
@@ -293,7 +296,9 @@ class Benchmark:
         if self.skip_existing and path.exists(savepath):
             with open(savepath) as f:
                 existing = json.load(f)
-            if "time" in existing and "time_compiled" in existing:
+            if "time" in existing.get("eager", {}) and "time" in existing.get(
+                "compiled", {}
+            ):
                 print(f"[Time] Skipping {label}")
                 return
 
@@ -304,7 +309,7 @@ class Benchmark:
             lambda: gradient_and_loss(model, loss_function, params, data)
         )
         print(f"[Time] {label}: {best:.4f} s")
-        _merge_json(savepath, "time", best)
+        _merge_json(savepath, "eager", "time", best)
 
         # Compiled (make_fx traces autograd.grad, then torch.compile)
         ((X, y),) = data
@@ -313,7 +318,7 @@ class Benchmark:
         )
         compiled_best, _ = self.time(lambda: compiled_fn(params, X, y))
         print(f"[Time] {label} (compiled): {compiled_best:.4f} s")
-        _merge_json(savepath, "time_compiled", compiled_best)
+        _merge_json(savepath, "compiled", "time", compiled_best)
 
     def _run_operator_time(self, linop_str: str):
         """Time matvec (and compiled matvec if supported), save to operator JSON."""
@@ -336,7 +341,7 @@ class Benchmark:
                 _ = linop @ v
 
         matvec_time, _ = self.time(_matvec)
-        results = {"matvec": matvec_time}
+        results = {"eager": {"matvec": matvec_time}}
         print(f"[Time] {label} / matvec: {matvec_time:.4f} s")
 
         # Also measure compiled matvec for operators that support it
@@ -348,7 +353,7 @@ class Benchmark:
                     _ = compiled_matvec()
 
             compiled_time, _ = self.time(_compiled_matvec)
-            results["matvec_compiled"] = compiled_time
+            results["compiled"] = {"matvec": compiled_time}
             print(f"[Time] {label} / matvec_compiled: {compiled_time:.4f} s")
 
         if linop_str in _KFAC_LIKE:
@@ -357,11 +362,11 @@ class Benchmark:
             )
             phase_times, _ = self.time(phases, context=ctx)
             for phase_name, t in phase_times.items():
-                results[phase_name] = t
+                results["eager"][phase_name] = t
                 print(f"[Time] {label} / {phase_name}: {t:.4f} s")
 
         with open(savepath, "w") as f:
-            json.dump(results, f)
+            json.dump(results, f, indent=2)
         print(f"[Time] Saved {label}")
 
     # -- Internal: memory measurements (subprocess) --
@@ -374,7 +379,9 @@ class Benchmark:
         if self.skip_existing and path.exists(savepath):
             with open(savepath) as f:
                 existing = json.load(f)
-            if "peakmem" in existing and "peakmem_compiled" in existing:
+            if "peakmem" in existing.get("eager", {}) and "peakmem" in existing.get(
+                "compiled", {}
+            ):
                 print(f"[Memory] Skipping {label}")
                 return
 
@@ -389,8 +396,10 @@ class Benchmark:
             with open(savepath) as f:
                 existing = json.load(f)
             need_compiled = linop_str in _IS_COMPILABLE
-            has_compiled = "peakmem_compiled" in existing
-            if "peakmem" in existing and (has_compiled or not need_compiled):
+            has_compiled = "peakmem" in existing.get("compiled", {})
+            if "peakmem" in existing.get("eager", {}) and (
+                has_compiled or not need_compiled
+            ):
                 print(f"[Memory] Skipping {label}")
                 return
 
@@ -402,8 +411,9 @@ class Benchmark:
         if path.exists(mem_path) and path.exists(savepath):
             with open(mem_path) as f:
                 mem_data = json.load(f)
-            for key, value in mem_data.items():
-                _merge_json(savepath, key, value)
+            for category, sub in mem_data.items():
+                for key, value in sub.items():
+                    _merge_json(savepath, category, key, value)
             remove(mem_path)
 
     def _run_subprocess(self, *extra_args: str):
@@ -624,7 +634,12 @@ def _run_reference_peakmem(problem_str: str, device_str: str):
         f"[Memory] Reference gradient_and_loss on {problem_str} and {device_str}:"
         f" {peakmem_gib:.2f} GiB"
     )
-    _merge_json(reference_benchpath(problem_str, device_str), "peakmem", peakmem_gib)
+    _merge_json(
+        reference_benchpath(problem_str, device_str),
+        "eager",
+        "peakmem",
+        peakmem_gib,
+    )
 
     def func_compiled():
         model, loss_function, params, data = bench.setup_problem("Hessian")
@@ -643,7 +658,8 @@ def _run_reference_peakmem(problem_str: str, device_str: str):
     )
     _merge_json(
         reference_benchpath(problem_str, device_str),
-        "peakmem_compiled",
+        "compiled",
+        "peakmem",
         peakmem_compiled_gib,
     )
 
@@ -678,7 +694,7 @@ def _run_operator_peakmem(linop_str: str, problem_str: str, device_str: str):
     print(
         f"[Memory] {linop_str} on {problem_str} and {device_str}: {peakmem_gib:.2f} GiB"
     )
-    results = {"peakmem": peakmem_gib}
+    results = {"eager": {"peakmem": peakmem_gib}}
 
     if linop_str in _IS_COMPILABLE:
 
@@ -704,10 +720,10 @@ def _run_operator_peakmem(linop_str: str, problem_str: str, device_str: str):
             f"[Memory] {linop_str} (compiled) on {problem_str}"
             f" and {device_str}: {peakmem_compiled_gib:.2f} GiB"
         )
-        results["peakmem_compiled"] = peakmem_compiled_gib
+        results["compiled"] = {"peakmem": peakmem_compiled_gib}
 
     with open(savepath, "w") as f:
-        json.dump(results, f)
+        json.dump(results, f, indent=2)
 
 
 if __name__ == "__main__":
