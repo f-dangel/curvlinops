@@ -21,6 +21,7 @@ from torch.testing import assert_close
 
 from curvlinops import (
     EFLinearOperator,
+    EKFACLinearOperator,
     GGNLinearOperator,
     HessianLinearOperator,
     KFACLinearOperator,
@@ -139,6 +140,41 @@ def test_kfac_fx_matvec_no_graph_breaks():
     """``KFACLinearOperator @ v`` (fx backend) compiles with zero graph breaks."""
     model, loss_fn, params, data = _setup_problem()
     K = KFACLinearOperator(
+        model,
+        loss_fn,
+        params,
+        data,
+        check_deterministic=False,
+        separate_weight_and_bias=False,
+        num_per_example_loss_terms=1,
+        backend="make_fx",
+    )
+    v = rand(K.shape[1])
+    with _dynamo_explain(lambda op, vec: op @ vec, K, v) as result:
+        assert result.graph_break_count == 0
+
+
+def test_ekfac_matvec_no_graph_breaks():
+    """``EKFACLinearOperator @ v`` compiles with zero graph breaks."""
+    model, loss_fn, params, data = _setup_problem()
+    K = EKFACLinearOperator(
+        model,
+        loss_fn,
+        params,
+        data,
+        check_deterministic=False,
+        separate_weight_and_bias=False,
+        num_per_example_loss_terms=1,
+    )
+    v = rand(K.shape[1])
+    with _dynamo_explain(lambda op, vec: op @ vec, K, v) as result:
+        assert result.graph_break_count == 0
+
+
+def test_ekfac_fx_matvec_no_graph_breaks():
+    """``EKFACLinearOperator @ v`` (fx backend) compiles with zero graph breaks."""
+    model, loss_fn, params, data = _setup_problem()
+    K = EKFACLinearOperator(
         model,
         loss_fn,
         params,
