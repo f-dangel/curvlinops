@@ -103,9 +103,9 @@ def _plot_eager_compiled_bars(ax, bench, linop_strs, key):
     for idx, name in enumerate(linop_strs):
         data = bench.load_operator(name)
         eager_val = data["eager"][key]
-        compiled_val = data["compiled"][key] if "compiled" in data else None
+        compiled_val = data.get("compiled", {}).get(key)
 
-        # Build (value, color, label_key) pairs; sort descending so the longer
+        # Build (label, value, color) tuples; sort descending so the longer
         # bar is drawn first and the shorter one stays visible on top.
         bars = [("eager", eager_val, "tab:blue")]
         if compiled_val is not None:
