@@ -69,6 +69,13 @@ def _dynamo_explain(fn, *args):
         dynamo_reset()
 
 
+def _assert_no_graph_breaks(linop):
+    """Assert that ``linop @ v`` compiles with zero graph breaks."""
+    v = rand(linop.shape[1])
+    with _dynamo_explain(lambda op, vec: op @ vec, linop, v) as result:
+        assert result.graph_break_count == 0
+
+
 def test_gradient_and_loss_no_graph_breaks():
     """Per-batch gradient+loss traced with ``make_fx`` compiles with 0 graph breaks."""
     model, loss_fn, params, data = _setup_problem()
@@ -82,18 +89,14 @@ def test_hessian_matvec_no_graph_breaks():
     """``HessianLinearOperator @ v`` compiles with zero graph breaks."""
     model, loss_fn, params, data = _setup_problem()
     H = HessianLinearOperator(model, loss_fn, params, data, check_deterministic=False)
-    v = rand(H.shape[1])
-    with _dynamo_explain(lambda op, vec: op @ vec, H, v) as result:
-        assert result.graph_break_count == 0
+    _assert_no_graph_breaks(H)
 
 
 def test_ggn_matvec_no_graph_breaks():
     """``GGNLinearOperator @ v`` (exact) compiles with zero graph breaks."""
     model, loss_fn, params, data = _setup_problem()
     G = GGNLinearOperator(model, loss_fn, params, data, check_deterministic=False)
-    v = rand(G.shape[1])
-    with _dynamo_explain(lambda op, vec: op @ vec, G, v) as result:
-        assert result.graph_break_count == 0
+    _assert_no_graph_breaks(G)
 
 
 def test_ggn_mc_matvec_compiles_correctly():
@@ -115,9 +118,7 @@ def test_ef_matvec_no_graph_breaks():
     """``EFLinearOperator @ v`` compiles with zero graph breaks."""
     model, loss_fn, params, data = _setup_problem()
     E = EFLinearOperator(model, loss_fn, params, data, check_deterministic=False)
-    v = rand(E.shape[1])
-    with _dynamo_explain(lambda op, vec: op @ vec, E, v) as result:
-        assert result.graph_break_count == 0
+    _assert_no_graph_breaks(E)
 
 
 KFAC_LIKE_CLS = [KFACLinearOperator, EKFACLinearOperator]
@@ -139,6 +140,4 @@ def test_kfac_like_matvec_no_graph_breaks(cls, backend):
         num_per_example_loss_terms=2,
         backend=backend,
     )
-    v = rand(K.shape[1])
-    with _dynamo_explain(lambda op, vec: op @ vec, K, v) as result:
-        assert result.graph_break_count == 0
+    _assert_no_graph_breaks(K)
