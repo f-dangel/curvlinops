@@ -102,6 +102,12 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
   - `EFLinearOperator`: no code changes needed (already compile-friendly after
     PR #286). Add test and benchmark.
     ([PR #288](https://github.com/f-dangel/curvlinops/pull/288))
+  - `KFACLinearOperator` and `EKFACLinearOperator`: replace `einops.einsum`
+    with `torch.einsum` in `KroneckerProductLinearOperator`, call `_matmat`
+    instead of `@` in `BlockDiagonalLinearOperator`, add `_adjoint_matmat`
+    to avoid operator instantiation during tracing, remove numpy from
+    `split_list`.
+    ([PR #290](https://github.com/f-dangel/curvlinops/pull/290))
   - Fix compiled peak memory benchmark measuring only the matvec slice instead
     of the full pipeline (setup + compilation + matvec)
     ([PR #289](https://github.com/f-dangel/curvlinops/pull/289))
