@@ -285,7 +285,9 @@ for problem_str, device_str in product(PROBLEM_STRS, DEVICE_STRS):
 # (traced with ``make_fx``, then compiled).
 
 # Compilable operators for matvec (backend-independent, hooks only)
-COMPILABLE_MATVEC_LINOPS = [name for name in MATVEC_LINOP_STRS if name in _IS_COMPILABLE]
+COMPILABLE_MATVEC_LINOPS = [
+    name for name in MATVEC_LINOP_STRS if name in _IS_COMPILABLE
+]
 # Compilable operators for peakmem (backend matters, show all)
 COMPILABLE_LINOPS = [name for name in LINOP_STRS if name in _IS_COMPILABLE]
 
