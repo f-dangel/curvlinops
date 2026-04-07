@@ -677,11 +677,12 @@ def _run_reference_peakmem(problem_str: str, device_str: str, compiled: bool):
 
     def func():
         model, loss_function, params, data = bench.setup_problem("Hessian")
-        fn = torch_compile(gradient_and_loss) if compiled else gradient_and_loss
-        fn(model, loss_function, params, data)
+        gradient_and_loss(model, loss_function, params, data)
         if bench.is_cuda:
             cuda.synchronize()
 
+    if compiled:
+        func = torch_compile(func)
     peakmem_gib = bench.memory(func)
     print(
         f"[Memory] Reference gradient_and_loss ({category}) on {problem_str}"
@@ -714,12 +715,13 @@ def _run_operator_peakmem(
             linop_str, model, loss_function, params, data, check_deterministic=False
         )
         v = rand(linop.shape[1], device=linop.device)
-        matvec_fn = torch_compile(lambda: linop @ v) if compiled else lambda: linop @ v
         with attention_context(linop, model):
-            _ = matvec_fn()
+            _ = linop @ v
         if bench.is_cuda:
             cuda.synchronize()
 
+    if compiled:
+        func = torch_compile(func)
     peakmem_gib = bench.memory(func)
     print(
         f"[Memory] {linop_str} ({category}) on {problem_str}"
