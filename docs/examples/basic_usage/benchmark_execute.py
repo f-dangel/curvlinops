@@ -285,6 +285,31 @@ class Benchmark:
             # memory_usage with max_usage=True returns peak MiB
             return memory_usage(func, interval=1e-4, max_usage=True) / 2**10
 
+    # -- Internal: skip logic --
+
+    def _should_skip(self, savepath: str, key: str, label: str) -> bool:
+        """Check if a measurement can be skipped because results already exist.
+
+        Skips only if ``key`` is present in both ``eager`` and ``compiled``
+        categories of the existing JSON file.
+
+        Args:
+            savepath: Path to the JSON results file.
+            key: The measurement key to check (e.g. ``"matvec"``, ``"peakmem"``).
+            label: Display label for the skip message.
+
+        Returns:
+            ``True`` if the measurement should be skipped.
+        """
+        if not self.skip_existing or not path.exists(savepath):
+            return False
+        with open(savepath) as f:
+            existing = json.load(f)
+        if key in existing.get("eager", {}) and key in existing.get("compiled", {}):
+            print(f"Skipping {label}")
+            return True
+        return False
+
     # -- Internal: time measurements (in-process) --
 
     def _run_reference_time(self):
@@ -292,14 +317,8 @@ class Benchmark:
         savepath = reference_benchpath(self.problem_str, self.device_str)
         label = f"Reference on {self.problem_str} and {self.device_str}"
 
-        if self.skip_existing and path.exists(savepath):
-            with open(savepath) as f:
-                existing = json.load(f)
-            if "time" in existing.get("eager", {}) and "time" in existing.get(
-                "compiled", {}
-            ):
-                print(f"[Time] Skipping {label}")
-                return
+        if self._should_skip(savepath, "time", label):
+            return
 
         model, loss_function, params, data = self.setup_problem("Hessian")
 
@@ -316,8 +335,7 @@ class Benchmark:
         savepath = benchpath(linop_str, self.problem_str, self.device_str)
         label = f"{linop_str} on {self.problem_str} and {self.device_str}"
 
-        if self.skip_existing and path.exists(savepath):
-            print(f"[Time] Skipping {label}")
+        if self._should_skip(savepath, "matvec", label):
             return
 
         results = {}
@@ -380,14 +398,8 @@ class Benchmark:
         savepath = reference_benchpath(self.problem_str, self.device_str)
         label = f"reference on {self.problem_str} and {self.device_str}"
 
-        if self.skip_existing and path.exists(savepath):
-            with open(savepath) as f:
-                existing = json.load(f)
-            if "peakmem" in existing.get("eager", {}) and "peakmem" in existing.get(
-                "compiled", {}
-            ):
-                print(f"[Memory] Skipping {label}")
-                return
+        if self._should_skip(savepath, "peakmem", label):
+            return
 
         self._run_subprocess("--reference")
 
@@ -396,14 +408,8 @@ class Benchmark:
         savepath = benchpath(linop_str, self.problem_str, self.device_str)
         label = f"{linop_str} on {self.problem_str}"
 
-        if self.skip_existing and path.exists(savepath):
-            with open(savepath) as f:
-                existing = json.load(f)
-            if "peakmem" in existing.get("eager", {}) and "peakmem" in existing.get(
-                "compiled", {}
-            ):
-                print(f"[Memory] Skipping {label}")
-                return
+        if self._should_skip(savepath, "peakmem", label):
+            return
 
         mem_path = benchpath(
             linop_str, self.problem_str, self.device_str, op_str="peakmem"
