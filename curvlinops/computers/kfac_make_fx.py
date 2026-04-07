@@ -316,18 +316,21 @@ class MakeFxKFACComputer(_BaseKFACComputer):
         for p in self._params.values():
             p.requires_grad_(True)
 
-    def compute(
+    def _trace_batch_functions(
         self,
     ) -> tuple[
-        dict[ParamGroupKey, Tensor], dict[ParamGroupKey, Tensor], list[ParamGroup]
+        dict[int, Callable],
+        list[ParamGroup],
+        list[ParamGroupKey],
+        list[ParamGroupKey],
     ]:
-        """Compute KFAC's Kronecker factors.
+        """Trace per-batch KFAC computation for all batch sizes in the data.
 
-        Traces IO collection and batch computation in a single data pass,
-        then accumulates factors in a second pass.
+        Iterates over the data once, calling :func:`trace_kfac_batch` for each
+        unique batch size.
 
         Returns:
-            Tuple of ``(input_covariances, gradient_covariances, mapping)``.
+            Tuple of ``(traced_fns, mapping, weight_group_keys, all_group_keys)``.
         """
         traced_fns: dict[int, Callable] = {}
         mapping: list[ParamGroup] | None = None
@@ -358,12 +361,22 @@ class MakeFxKFACComputer(_BaseKFACComputer):
                     self._rearrange_for_larger_than_2d_output,
                 )
 
-        return self._compute_kronecker_factors((
-            traced_fns,
-            mapping,
-            weight_group_keys,
-            all_group_keys,
-        ))
+        return traced_fns, mapping, weight_group_keys, all_group_keys
+
+    def compute(
+        self,
+    ) -> tuple[
+        dict[ParamGroupKey, Tensor], dict[ParamGroupKey, Tensor], list[ParamGroup]
+    ]:
+        """Compute KFAC's Kronecker factors.
+
+        Traces IO collection and batch computation in a single data pass,
+        then accumulates factors in a second pass.
+
+        Returns:
+            Tuple of ``(input_covariances, gradient_covariances, mapping)``.
+        """
+        return self._compute_kronecker_factors(self._trace_batch_functions())
 
     def _compute_kronecker_factors(
         self,

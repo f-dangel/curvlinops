@@ -44,7 +44,7 @@ from curvlinops.computers._base import _EKFACMixin
 from curvlinops.computers.ekfac_hooks import HooksEKFACComputer
 from curvlinops.computers.ekfac_make_fx import MakeFxEKFACComputer
 from curvlinops.computers.kfac_hooks import HooksKFACComputer, _use_params
-from curvlinops.computers.kfac_make_fx import MakeFxKFACComputer, trace_kfac_batch
+from curvlinops.computers.kfac_make_fx import MakeFxKFACComputer
 from curvlinops.examples import gradient_and_loss, make_compiled_gradient_and_loss
 
 
@@ -388,27 +388,7 @@ class Benchmark:
             Best compiled factors time in seconds.
         """
         computer = setup_computer(linop_str, model, loss_function, params, data)
-        traced_fns = {}
-        mapping = weight_group_keys = all_group_keys = None
-        for X, y in computer._loop_over_data(desc="FX tracing"):
-            bs = computer._batch_size_fn(X)
-            if bs not in traced_fns:
-                traced_fns[bs], mapping, weight_group_keys, all_group_keys = (
-                    trace_kfac_batch(
-                        computer._model_func,
-                        computer._params,
-                        X,
-                        y,
-                        computer._fisher_type,
-                        computer._separate_weight_and_bias,
-                        computer._kfac_approx,
-                        computer._loss_func.reduction,
-                        computer._num_per_example_loss_terms,
-                        computer._grad_outputs_computer,
-                        computer._rearrange_for_larger_than_2d_output,
-                    )
-                )
-        traced_batch = (traced_fns, mapping, weight_group_keys, all_group_keys)
+        traced_batch = computer._trace_batch_functions()
         compiled_factors = torch_compile(computer._compute_kronecker_factors)
 
         def _compiled_factors():
@@ -641,30 +621,7 @@ def make_precompute_phases(  # noqa: C901
         computer = setup_computer(linop_str, model, loss_function, params, data)
 
         def kfac_fx_tracing():
-            traced_fns = {}
-            mapping = weight_group_keys = all_group_keys = None
-            for X, y in computer._loop_over_data(desc="FX tracing"):
-                batch_size = computer._batch_size_fn(X)
-                if batch_size not in traced_fns:
-                    (
-                        traced_fns[batch_size],
-                        mapping,
-                        weight_group_keys,
-                        all_group_keys,
-                    ) = trace_kfac_batch(
-                        computer._model_func,
-                        computer._params,
-                        X,
-                        y,
-                        computer._fisher_type,
-                        computer._separate_weight_and_bias,
-                        computer._kfac_approx,
-                        computer._loss_func.reduction,
-                        computer._num_per_example_loss_terms,
-                        computer._grad_outputs_computer,
-                        computer._rearrange_for_larger_than_2d_output,
-                    )
-            return (traced_fns, mapping, weight_group_keys, all_group_keys)
+            return computer._trace_batch_functions()
 
         def kfac_fx_factors(traced_batch):
             return computer._compute_kronecker_factors(traced_batch)
