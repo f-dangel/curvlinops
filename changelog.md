@@ -116,6 +116,9 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
   - Fix compiled peak memory benchmark measuring only the matvec slice instead
     of the full pipeline (setup + compilation + matvec)
     ([PR #289](https://github.com/f-dangel/curvlinops/pull/289))
+  - Benchmark: always measure compiled performance (matvec, precompute phases,
+    peak memory) for all operators. Remove `_IS_COMPILABLE` gate.
+    ([PR #292](https://github.com/f-dangel/curvlinops/pull/292))
 
 - Restructure benchmark tutorial: add both backends (hooks, `make_fx`) for
   KFAC/EKFAC, break down precompute into sub-phases (Kronecker factors,
