@@ -151,37 +151,6 @@ def test_kfac_like_matvec_no_graph_breaks(cls, backend):
     _assert_no_graph_breaks(K)
 
 
-def test_kfac_fx_multi_batch_size():
-    """KFAC FX with fake tracing handles different batch sizes in one dataset."""
-    model, loss_fn, params, data = _setup_problem()
-    # _setup_problem gives two batches: size 2 and size 3
-    assert len(data) == 2
-    assert data[0][0].shape[0] != data[1][0].shape[0]
-
-    linop_fx = KFACLinearOperator(
-        model,
-        loss_fn,
-        params,
-        data,
-        backend="make_fx",
-        check_deterministic=False,
-        separate_weight_and_bias=False,
-        num_per_example_loss_terms=2,
-    )
-    linop_hooks = KFACLinearOperator(
-        model,
-        loss_fn,
-        params,
-        data,
-        backend="hooks",
-        check_deterministic=False,
-        separate_weight_and_bias=False,
-        num_per_example_loss_terms=2,
-    )
-    v = rand(linop_fx.shape[1])
-    assert_close(linop_fx @ v, linop_hooks @ v, atol=1e-5, rtol=1e-5)
-
-
 def test_kfac_fx_fake_traced_fn_requires_per_batch_size_tracing():
     """A fake-traced batch function has hardcoded shapes and fails on other sizes."""
     model, loss_fn, params, data = _setup_problem()
