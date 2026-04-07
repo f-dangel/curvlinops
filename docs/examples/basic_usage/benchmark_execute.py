@@ -25,6 +25,7 @@ from benchmark_utils import (
     _KFAC_LIKE,
     LINOP_STRS,
     PROBLEM_STRS,
+    _get_precompute_ops,
     attention_context,
     benchpath,
     reference_benchpath,
@@ -338,26 +339,35 @@ class Benchmark:
         for category, compiled in [("eager", False), ("compiled", True)]:
             existing = self._has_result(savepath, category, "matvec")
             if existing is not None:
-                print(f"[Time] Skipping {label} ({category}): {existing:.4f} s")
-                continue
-
-            matvec_fn = (
-                torch_compile(lambda: linop @ v) if compiled else lambda: linop @ v
-            )
-            matvec_time, _ = self.time(matvec_fn, context=ctx)
-            _merge_json(savepath, category, "matvec", matvec_time)
-            print(f"[Time] {label} / matvec ({category}): {matvec_time:.4f} s")
+                print(
+                    f"[Time] Skipping {label} / matvec ({category}): {existing:.4f} s"
+                )
+            else:
+                matvec_fn = (
+                    torch_compile(lambda: linop @ v) if compiled else lambda: linop @ v
+                )
+                matvec_time, _ = self.time(matvec_fn, context=ctx)
+                _merge_json(savepath, category, "matvec", matvec_time)
+                print(f"[Time] {label} / matvec ({category}): {matvec_time:.4f} s")
 
             if linop_str in _KFAC_LIKE:
-                phases, ctx = make_precompute_phases(
-                    linop_str, model, loss_function, params, data
+                expected_ops = _get_precompute_ops(linop_str)
+                all_exist = all(
+                    self._has_result(savepath, category, op) is not None
+                    for op in expected_ops
                 )
-                if compiled:
-                    phases = [(name, torch_compile(fn)) for name, fn in phases]
-                phase_times, _ = self.time(phases, context=ctx)
-                for phase_name, t in phase_times.items():
-                    _merge_json(savepath, category, phase_name, t)
-                    print(f"[Time] {label} / {phase_name} ({category}): {t:.4f} s")
+                if all_exist:
+                    print(f"[Time] Skipping {label} / precompute ({category})")
+                else:
+                    phases, phase_ctx = make_precompute_phases(
+                        linop_str, model, loss_function, params, data
+                    )
+                    if compiled:
+                        phases = [(name, torch_compile(fn)) for name, fn in phases]
+                    phase_times, _ = self.time(phases, context=phase_ctx)
+                    for phase_name, t in phase_times.items():
+                        _merge_json(savepath, category, phase_name, t)
+                        print(f"[Time] {label} / {phase_name} ({category}): {t:.4f} s")
 
     # -- Internal: memory measurements (subprocess) --
 
