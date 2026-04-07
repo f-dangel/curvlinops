@@ -13,6 +13,7 @@ import sys
 from argparse import ArgumentParser
 from collections.abc import Callable, Iterable
 from contextlib import nullcontext
+from functools import partial
 from os import path, remove
 from subprocess import CalledProcessError, CompletedProcess, run
 from time import perf_counter
@@ -287,7 +288,7 @@ class Benchmark:
 
     # -- Internal: skip logic --
 
-    def _has_result(self, savepath: str, category: str, key: str) -> bool:
+    def _has_result(self, savepath: str, category: str, key: str):
         """Check if a specific result already exists in a JSON file.
 
         Args:
@@ -296,12 +297,13 @@ class Benchmark:
             key: The measurement key (e.g. ``"matvec"``, ``"peakmem"``).
 
         Returns:
-            ``True`` if the result exists and ``skip_existing`` is enabled.
+            The existing value if found and ``skip_existing`` is enabled,
+            ``None`` otherwise.
         """
         if not self.skip_existing or not path.exists(savepath):
-            return False
+            return None
         with open(savepath) as f:
-            return key in json.load(f).get(category, {})
+            return json.load(f).get(category, {}).get(key)
 
     # -- Internal: time measurements (in-process) --
 
@@ -309,17 +311,15 @@ class Benchmark:
         """Time gradient_and_loss (eager + compiled) and save to reference JSON."""
         savepath = reference_benchpath(self.problem_str, self.device_str)
         label = f"Reference on {self.problem_str} and {self.device_str}"
-        model, loss_function, params, data = None, None, None, None
+        model, loss_function, params, data = self.setup_problem("Hessian")
 
         for category, compiled in [("eager", False), ("compiled", True)]:
-            if self._has_result(savepath, category, "time"):
-                print(f"[Time] Skipping {label} ({category})")
+            existing = self._has_result(savepath, category, "time")
+            if existing is not None:
+                print(f"[Time] Skipping {label} ({category}): {existing:.4f} s")
                 continue
-            if model is None:
-                model, loss_function, params, data = self.setup_problem("Hessian")
-            maybe_compile = torch_compile if compiled else lambda fn: fn
-            fn = maybe_compile(gradient_and_loss)  # noqa: B023
-            best, _ = self.time(lambda: fn(model, loss_function, params, data))  # noqa: B023
+            fn = torch_compile(gradient_and_loss) if compiled else gradient_and_loss
+            best, _ = self.time(partial(fn, model, loss_function, params, data))
             print(f"[Time] {label} ({category}): {best:.4f} s")
             _merge_json(savepath, category, "time", best)
 
@@ -329,8 +329,9 @@ class Benchmark:
         label = f"{linop_str} on {self.problem_str} and {self.device_str}"
 
         for category, compiled in [("eager", False), ("compiled", True)]:
-            if self._has_result(savepath, category, "matvec"):
-                print(f"[Time] Skipping {label} ({category})")
+            existing = self._has_result(savepath, category, "matvec")
+            if existing is not None:
+                print(f"[Time] Skipping {label} ({category}): {existing:.4f} s")
                 continue
             results = self._time_operator(linop_str, label, compiled=compiled)
             for key, value in results.items():
@@ -349,7 +350,6 @@ class Benchmark:
         Returns:
             Dict mapping phase names to best times in seconds.
         """
-        maybe_compile = torch_compile if compiled else lambda fn: fn
         suffix = "_compiled" if compiled else ""
 
         model, loss_function, params, data = self.setup_problem(linop_str)
@@ -357,7 +357,7 @@ class Benchmark:
             linop_str, model, loss_function, params, data, check_deterministic=False
         )
         v = rand(linop.shape[1], device=linop.device)
-        matvec_fn = maybe_compile(lambda: linop @ v)
+        matvec_fn = torch_compile(lambda: linop @ v) if compiled else lambda: linop @ v
 
         def _matvec():
             with attention_context(linop, model):
@@ -386,11 +386,13 @@ class Benchmark:
         """Spawn subprocess to measure reference peak memory."""
         savepath = reference_benchpath(self.problem_str, self.device_str)
         label = f"reference on {self.problem_str} and {self.device_str}"
-
-        if all(
-            self._has_result(savepath, cat, "peakmem") for cat in ("eager", "compiled")
-        ):
-            print(f"[Memory] Skipping {label}")
+        existing = {
+            cat: self._has_result(savepath, cat, "peakmem")
+            for cat in ("eager", "compiled")
+        }
+        if all(v is not None for v in existing.values()):
+            for cat, v in existing.items():
+                print(f"[Memory] Skipping {label} ({cat}): {v:.2f} GiB")
             return
 
         self._run_subprocess("--reference")
@@ -399,11 +401,13 @@ class Benchmark:
         """Spawn subprocess for operator peak memory, merge into operator JSON."""
         savepath = benchpath(linop_str, self.problem_str, self.device_str)
         label = f"{linop_str} on {self.problem_str}"
-
-        if all(
-            self._has_result(savepath, cat, "peakmem") for cat in ("eager", "compiled")
-        ):
-            print(f"[Memory] Skipping {label}")
+        existing = {
+            cat: self._has_result(savepath, cat, "peakmem")
+            for cat in ("eager", "compiled")
+        }
+        if all(v is not None for v in existing.values()):
+            for cat, v in existing.items():
+                print(f"[Memory] Skipping {label} ({cat}): {v:.2f} GiB")
             return
 
         mem_path = benchpath(
@@ -629,12 +633,11 @@ def _run_reference_peakmem(problem_str: str, device_str: str):
 
     for compiled in [False, True]:
         category = "compiled" if compiled else "eager"
-        maybe_compile = torch_compile if compiled else lambda fn: fn
 
-        def func(maybe_compile=maybe_compile):
+        def func(compiled=compiled):
             model, loss_function, params, data = bench.setup_problem("Hessian")
-            fn = maybe_compile(gradient_and_loss)
-            _ = fn(model, loss_function, params, data)
+            fn = torch_compile(gradient_and_loss) if compiled else gradient_and_loss
+            fn(model, loss_function, params, data)
             if bench.is_cuda:
                 cuda.synchronize()
 
@@ -663,9 +666,8 @@ def _run_operator_peakmem(linop_str: str, problem_str: str, device_str: str):
 
     for compiled in [False, True]:
         category = "compiled" if compiled else "eager"
-        maybe_compile = torch_compile if compiled else lambda fn: fn
 
-        def func(maybe_compile=maybe_compile):
+        def func(compiled=compiled):
             model, loss_function, params, data = bench.setup_problem(linop_str)
             linop = setup_linop(
                 linop_str,
@@ -676,7 +678,9 @@ def _run_operator_peakmem(linop_str: str, problem_str: str, device_str: str):
                 check_deterministic=False,
             )
             v = rand(linop.shape[1], device=linop.device)
-            matvec_fn = maybe_compile(lambda: linop @ v)
+            matvec_fn = (
+                torch_compile(lambda: linop @ v) if compiled else lambda: linop @ v
+            )
             with attention_context(linop, model):
                 _ = matvec_fn()
             if bench.is_cuda:
