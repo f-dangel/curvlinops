@@ -18,7 +18,6 @@ from subprocess import CalledProcessError, CompletedProcess, run
 from time import perf_counter
 
 from benchmark_utils import (
-    _IS_COMPILABLE,
     _IS_EKFAC,
     _IS_FX,
     _IS_KFAC_INVERSE_HOOKS,
@@ -321,7 +320,7 @@ class Benchmark:
         _merge_json(savepath, "compiled", "time", compiled_best)
 
     def _run_operator_time(self, linop_str: str):
-        """Time matvec (and compiled matvec if supported), save to operator JSON."""
+        """Time matvec (eager + compiled) and precompute phases, save to JSON."""
         savepath = benchpath(linop_str, self.problem_str, self.device_str)
         label = f"{linop_str} on {self.problem_str} and {self.device_str}"
 
@@ -344,17 +343,16 @@ class Benchmark:
         results = {"eager": {"matvec": matvec_time}}
         print(f"[Time] {label} / matvec: {matvec_time:.4f} s")
 
-        # Also measure compiled matvec for operators that support it
-        if linop_str in _IS_COMPILABLE:
-            compiled_matvec = torch_compile(lambda: linop @ v)
+        # Compiled matvec
+        compiled_matvec = torch_compile(lambda: linop @ v)
 
-            def _compiled_matvec():
-                with attention_context(linop, model):
-                    _ = compiled_matvec()
+        def _compiled_matvec():
+            with attention_context(linop, model):
+                _ = compiled_matvec()
 
-            compiled_time, _ = self.time(_compiled_matvec)
-            results["compiled"] = {"matvec": compiled_time}
-            print(f"[Time] {label} / matvec_compiled: {compiled_time:.4f} s")
+        compiled_time, _ = self.time(_compiled_matvec)
+        results["compiled"] = {"matvec": compiled_time}
+        print(f"[Time] {label} / matvec_compiled: {compiled_time:.4f} s")
 
         if linop_str in _KFAC_LIKE:
             phases, ctx = make_precompute_phases(
@@ -364,6 +362,13 @@ class Benchmark:
             for phase_name, t in phase_times.items():
                 results["eager"][phase_name] = t
                 print(f"[Time] {label} / {phase_name}: {t:.4f} s")
+
+            # Re-run the same phases wrapped in torch.compile
+            compiled_phases = [(name, torch_compile(fn)) for name, fn in phases]
+            compiled_times, _ = self.time(compiled_phases, context=ctx)
+            for phase_name, t in compiled_times.items():
+                results.setdefault("compiled", {})[phase_name] = t
+                print(f"[Time] {label} / {phase_name}_compiled: {t:.4f} s")
 
         with open(savepath, "w") as f:
             json.dump(results, f, indent=2)
@@ -395,10 +400,8 @@ class Benchmark:
         if self.skip_existing and path.exists(savepath):
             with open(savepath) as f:
                 existing = json.load(f)
-            need_compiled = linop_str in _IS_COMPILABLE
-            has_compiled = "peakmem" in existing.get("compiled", {})
-            if "peakmem" in existing.get("eager", {}) and (
-                has_compiled or not need_compiled
+            if "peakmem" in existing.get("eager", {}) and "peakmem" in existing.get(
+                "compiled", {}
             ):
                 print(f"[Memory] Skipping {label}")
                 return
@@ -665,11 +668,10 @@ def _run_reference_peakmem(problem_str: str, device_str: str):
 
 
 def _run_operator_peakmem(linop_str: str, problem_str: str, device_str: str):
-    """Measure peak memory for the full pipeline (called in subprocess).
+    """Measure peak memory for eager and compiled matvec (called in subprocess).
 
-    Measures eager matvec memory. For compilable operators, also measures
-    compiled matvec memory (with warmup). Writes results to a temporary
-    peakmem JSON file that will be merged by the parent process.
+    Writes results to a temporary peakmem JSON file that will be merged
+    by the parent process.
 
     Args:
         linop_str: The linear operator.
@@ -696,31 +698,29 @@ def _run_operator_peakmem(linop_str: str, problem_str: str, device_str: str):
     )
     results = {"eager": {"peakmem": peakmem_gib}}
 
-    if linop_str in _IS_COMPILABLE:
-
-        def func_compiled():
-            model, loss_function, params, data = bench.setup_problem(linop_str)
-            linop = setup_linop(
-                linop_str,
-                model,
-                loss_function,
-                params,
-                data,
-                check_deterministic=False,
-            )
-            v = rand(linop.shape[1], device=linop.device)
-            compiled_matvec = torch_compile(lambda: linop @ v)
-            with attention_context(linop, model):
-                _ = compiled_matvec()
-            if bench.is_cuda:
-                cuda.synchronize()
-
-        peakmem_compiled_gib = bench.memory(func_compiled)
-        print(
-            f"[Memory] {linop_str} (compiled) on {problem_str}"
-            f" and {device_str}: {peakmem_compiled_gib:.2f} GiB"
+    def func_compiled():
+        model, loss_function, params, data = bench.setup_problem(linop_str)
+        linop = setup_linop(
+            linop_str,
+            model,
+            loss_function,
+            params,
+            data,
+            check_deterministic=False,
         )
-        results["compiled"] = {"peakmem": peakmem_compiled_gib}
+        v = rand(linop.shape[1], device=linop.device)
+        compiled_matvec = torch_compile(lambda: linop @ v)
+        with attention_context(linop, model):
+            _ = compiled_matvec()
+        if bench.is_cuda:
+            cuda.synchronize()
+
+    peakmem_compiled_gib = bench.memory(func_compiled)
+    print(
+        f"[Memory] {linop_str} (compiled) on {problem_str}"
+        f" and {device_str}: {peakmem_compiled_gib:.2f} GiB"
+    )
+    results["compiled"] = {"peakmem": peakmem_compiled_gib}
 
     with open(savepath, "w") as f:
         json.dump(results, f, indent=2)

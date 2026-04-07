@@ -110,22 +110,6 @@ _IS_FX = {
     "EKFAC (fx)",
     "EKFAC inverse (fx)",
 }
-# Operators whose matvec supports torch.compile (0 graph breaks).
-# run_operator will also measure compiled matvec and memory for these.
-_IS_COMPILABLE = {
-    "Hessian",
-    "Generalized Gauss-Newton",
-    "Empirical Fisher",
-    "Monte-Carlo Fisher",
-    "KFAC (hooks)",
-    "KFAC inverse (hooks)",
-    "KFAC (fx)",
-    "KFAC inverse (fx)",
-    "EKFAC (hooks)",
-    "EKFAC inverse (hooks)",
-    "EKFAC (fx)",
-    "EKFAC inverse (fx)",
-}
 
 # Short display names for plots (internal strings stay unchanged for data compatibility)
 _DISPLAY_REPLACEMENTS = [
