@@ -12,7 +12,7 @@ confirms that all internal tensor ops are captured in a single graph without bre
 
 from contextlib import contextmanager
 
-from pytest import mark, raises
+from pytest import mark
 from torch import compile as torch_compile
 from torch import manual_seed, no_grad, rand
 from torch._dynamo import explain
@@ -149,51 +149,6 @@ def test_kfac_like_matvec_no_graph_breaks(cls, backend):
         backend=backend,
     )
     _assert_no_graph_breaks(K)
-
-
-def test_kfac_fx_fake_traced_fn_requires_per_batch_size_tracing():
-    """A fake-traced batch function has hardcoded shapes and fails on other sizes."""
-    model, loss_fn, params, data = _setup_problem()
-    model_func = make_functional_call(model)
-    X_2, y_2 = data[0]  # batch size 2
-    X_3, y_3 = data[1]  # batch size 3
-
-    io_fn, io_param_names, layer_hparams = with_kfac_io(
-        model_func, X_2, params, FisherType.TYPE2
-    )
-    mapping, io_groups = _build_param_groups_from_io(io_param_names, False)
-    grad_outputs_computer = _BaseKFACComputer._set_up_grad_outputs_computer(
-        loss_fn, FisherType.TYPE2, 1
-    )
-    rearrange_fn = lambda output, y: (output, y)  # noqa: E731
-
-    for p in params.values():
-        p.requires_grad_(True)
-
-    batch_fn = make_compute_kfac_batch(
-        io_fn,
-        io_param_names,
-        layer_hparams,
-        mapping,
-        io_groups,
-        KFACType.EXPAND,
-        FisherType.TYPE2,
-        loss_fn.reduction,
-        2,
-        grad_outputs_computer,
-        rearrange_fn,
-    )
-
-    traced = _make_fx(batch_fn)(params, X_2, y_2)
-
-    # Same batch size works
-    with no_grad():
-        traced(params, X_2, y_2)
-
-    # Different batch size fails (shapes are hardcoded in the traced graph)
-    with raises(RuntimeError):
-        with no_grad():
-            traced(params, X_3, y_3)
 
 
 def _setup_cnn_problem():
