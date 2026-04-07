@@ -127,6 +127,29 @@ _IS_COMPILABLE = {
     "EKFAC inverse (fx)",
 }
 
+# Short display names for plots (internal strings stay unchanged for data compatibility)
+_DISPLAY_REPLACEMENTS = [
+    ("Generalized Gauss-Newton", "GGN"),
+    ("Monte-Carlo Fisher", "MC Fisher"),
+    (" inverse", r"$^{-1}$"),
+]
+
+
+def display_name(linop_str: str) -> str:
+    """Convert an internal linear operator string to a short display label.
+
+    Args:
+        linop_str: The internal linear operator name.
+
+    Returns:
+        The shortened display name for plots.
+    """
+    name = linop_str
+    for old, new in _DISPLAY_REPLACEMENTS:
+        name = name.replace(old, new)
+    return name
+
+
 # Sub-phase operation names for precompute breakdown
 EKFAC_PRECOMPUTE_OPS = ["kfac_factors", "eigenvalue_correction", "eigh"]
 KFAC_INVERSE_PRECOMPUTE_OPS = ["kfac_factors", "cholesky_inverse"]

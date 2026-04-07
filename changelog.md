@@ -90,6 +90,11 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
 
 ### Internal
 
+- Benchmark tutorial: shorten plot labels (GGN, MC Fisher, ^{-1}), nest JSON
+  data under `eager`/`compiled` keys, merge compiled overlay into main plots
+  (5 plot types down to 3), remove stale compiled peakmem for (E)KFAC
+  ([PR #291](https://github.com/f-dangel/curvlinops/pull/291))
+
 - ``torch.compile`` support for matvecs:
   - `HessianLinearOperator`: replace `cached_property` with eager `_init_mp()`
     in `CurvatureLinearOperator` and all subclasses. Add
