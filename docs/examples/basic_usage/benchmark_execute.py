@@ -36,7 +36,7 @@ from benchmark_utils import (
     setup_synthetic_shakespeare_nanogpt,
 )
 from memory_profiler import memory_usage
-from torch import Tensor, cuda, device, manual_seed, rand
+from torch import Tensor, cuda, device, manual_seed, nan, rand
 from torch import compile as torch_compile
 from torch.nn import Conv2d, Linear, Module
 
@@ -289,8 +289,25 @@ class Benchmark:
 
     # -- Internal: skip logic --
 
+    @staticmethod
+    def _read_result(savepath: str, category: str, key: str):
+        """Read a specific result from a JSON file.
+
+        Args:
+            savepath: Path to the JSON results file.
+            category: The category (``"eager"`` or ``"compiled"``).
+            key: The measurement key (e.g. ``"matvec"``, ``"peakmem"``).
+
+        Returns:
+            The value if found, ``None`` otherwise.
+        """
+        if not path.exists(savepath):
+            return None
+        with open(savepath) as f:
+            return json.load(f).get(category, {}).get(key)
+
     def _has_result(self, savepath: str, category: str, key: str):
-        """Check if a specific result already exists in a JSON file.
+        """Check if a result exists and should be skipped.
 
         Args:
             savepath: Path to the JSON results file.
@@ -301,12 +318,29 @@ class Benchmark:
             The existing value if found and ``skip_existing`` is enabled,
             ``None`` otherwise.
         """
-        if not self.skip_existing or not path.exists(savepath):
+        if not self.skip_existing:
             return None
-        with open(savepath) as f:
-            return json.load(f).get(category, {}).get(key)
+        return self._read_result(savepath, category, key)
 
     # -- Internal: time measurements (in-process) --
+
+    def _time_or_nan(self, func, **kwargs):
+        """Like :meth:`time`, but return NaN on ``RuntimeError``.
+
+        Args:
+            func: Passed to :meth:`time`.
+            **kwargs: Passed to :meth:`time`.
+
+        Returns:
+            Same as :meth:`time`, but with NaN values on failure.
+        """
+        try:
+            return self.time(func, **kwargs)
+        except RuntimeError as e:
+            print(f"  torch.compile RuntimeError: {e}")
+            if callable(func):
+                return float(nan), None
+            return {name: float(nan) for name, _ in func}, None
 
     def _run_reference_time(self):
         """Time gradient_and_loss (eager + compiled) and save to reference JSON."""
@@ -320,7 +354,8 @@ class Benchmark:
                 print(f"[Time] Skipping {label} ({category}): {existing:.4f} s")
                 continue
             fn = torch_compile(gradient_and_loss) if compiled else gradient_and_loss
-            best, _ = self.time(partial(fn, model, loss_function, params, data))
+            timer = self._time_or_nan if compiled else self.time
+            best, _ = timer(partial(fn, model, loss_function, params, data))
             print(f"[Time] {label} ({category}): {best:.4f} s")
             _merge_json(savepath, category, "time", best)
 
@@ -346,7 +381,8 @@ class Benchmark:
                 matvec_fn = (
                     torch_compile(lambda: linop @ v) if compiled else lambda: linop @ v
                 )
-                matvec_time, _ = self.time(matvec_fn, context=ctx)
+                timer = self._time_or_nan if compiled else self.time
+                matvec_time, _ = timer(matvec_fn, context=ctx)
                 _merge_json(savepath, category, "matvec", matvec_time)
                 print(f"[Time] {label} / matvec ({category}): {matvec_time:.4f} s")
 
@@ -364,7 +400,8 @@ class Benchmark:
                     )
                     if compiled:
                         phases = [(name, torch_compile(fn)) for name, fn in phases]
-                    phase_times, _ = self.time(phases, context=phase_ctx)
+                    timer = self._time_or_nan if compiled else self.time
+                    phase_times, _ = timer(phases, context=phase_ctx)
                     for phase_name, t in phase_times.items():
                         _merge_json(savepath, category, phase_name, t)
                         print(f"[Time] {label} / {phase_name} ({category}): {t:.4f} s")
@@ -381,7 +418,10 @@ class Benchmark:
             if existing is not None:
                 print(f"[Memory] Skipping {label} ({category}): {existing:.2f} GiB")
                 continue
-            self._run_subprocess("--reference", *self._compiled_flag(compiled))
+            self._try_subprocess("--reference", *self._compiled_flag(compiled))
+            if self._read_result(savepath, category, "peakmem") is None:
+                print(f"[Memory] FAILED {label} ({category}), storing NaN")
+                _merge_json(savepath, category, "peakmem", float(nan))
 
     def _run_operator_memory(self, linop_str: str):
         """Spawn subprocess for operator peak memory, merge into operator JSON."""
@@ -396,7 +436,7 @@ class Benchmark:
             mem_path = benchpath(
                 linop_str, self.problem_str, self.device_str, op_str="peakmem"
             )
-            self._run_subprocess(f"--linop={linop_str}", *self._compiled_flag(compiled))
+            self._try_subprocess(f"--linop={linop_str}", *self._compiled_flag(compiled))
             if path.exists(mem_path) and path.exists(savepath):
                 with open(mem_path) as f:
                     mem_data = json.load(f)
@@ -404,6 +444,9 @@ class Benchmark:
                     for key, value in sub.items():
                         _merge_json(savepath, cat, key, value)
                 remove(mem_path)
+            if self._read_result(savepath, category, "peakmem") is None:
+                print(f"[Memory] FAILED {label} ({category}), storing NaN")
+                _merge_json(savepath, category, "peakmem", float(nan))
 
     @staticmethod
     def _compiled_flag(compiled: bool) -> tuple[str, ...]:
@@ -414,8 +457,15 @@ class Benchmark:
         """
         return ("--compiled",) if compiled else ()
 
-    def _run_subprocess(self, *extra_args: str):
-        """Run benchmark_execute.py as a subprocess with given extra arguments."""
+    def _try_subprocess(self, *extra_args: str) -> bool:
+        """Run benchmark_execute.py as a subprocess; return success status.
+
+        Args:
+            *extra_args: Extra CLI arguments.
+
+        Returns:
+            ``True`` if the subprocess succeeded, ``False`` otherwise.
+        """
         cmd = [
             sys.executable,
             path.join(path.dirname(__file__), "benchmark_execute.py"),
@@ -424,7 +474,11 @@ class Benchmark:
             *extra_args,
         ]
         print(f"Running command: {' '.join(cmd)}")
-        run_verbose(cmd)
+        try:
+            run_verbose(cmd)
+            return True
+        except CalledProcessError:
+            return False
 
 
 # -- Helpers for precompute sub-phase timing --
