@@ -320,7 +320,7 @@ class Benchmark:
         _merge_json(savepath, "compiled", "time", compiled_best)
 
     def _run_operator_time(self, linop_str: str):
-        """Time matvec (eager + compiled) and precompute phases, save to JSON."""
+        """Time matvec and precompute phases (eager + compiled), save to JSON."""
         savepath = benchpath(linop_str, self.problem_str, self.device_str)
         label = f"{linop_str} on {self.problem_str} and {self.device_str}"
 
@@ -328,51 +328,58 @@ class Benchmark:
             print(f"[Time] Skipping {label}")
             return
 
+        results = {}
+        for compiled in [False, True]:
+            category = "compiled" if compiled else "eager"
+            results[category] = self._time_operator(linop_str, label, compiled=compiled)
+
+        with open(savepath, "w") as f:
+            json.dump(results, f, indent=2)
+        print(f"[Time] Saved {label}")
+
+    def _time_operator(
+        self, linop_str: str, label: str, compiled: bool = False
+    ) -> dict[str, float]:
+        """Time matvec and precompute phases for one operator.
+
+        Args:
+            linop_str: The linear operator name.
+            label: Display label for logging.
+            compiled: If ``True``, wrap all functions in ``torch.compile``.
+
+        Returns:
+            Dict mapping phase names to best times in seconds.
+        """
+        maybe_compile = torch_compile if compiled else lambda fn: fn
+        suffix = "_compiled" if compiled else ""
+
         model, loss_function, params, data = self.setup_problem(linop_str)
-        # NOTE Disable deterministic check as it will otherwise compute matvecs
         linop = setup_linop(
             linop_str, model, loss_function, params, data, check_deterministic=False
         )
         v = rand(linop.shape[1], device=linop.device)
+        matvec_fn = maybe_compile(lambda: linop @ v)
 
         def _matvec():
             with attention_context(linop, model):
-                _ = linop @ v
+                _ = matvec_fn()
 
         matvec_time, _ = self.time(_matvec)
-        results = {"eager": {"matvec": matvec_time}}
-        print(f"[Time] {label} / matvec: {matvec_time:.4f} s")
-
-        # Compiled matvec
-        compiled_matvec = torch_compile(lambda: linop @ v)
-
-        def _compiled_matvec():
-            with attention_context(linop, model):
-                _ = compiled_matvec()
-
-        compiled_time, _ = self.time(_compiled_matvec)
-        results["compiled"] = {"matvec": compiled_time}
-        print(f"[Time] {label} / matvec_compiled: {compiled_time:.4f} s")
+        results = {"matvec": matvec_time}
+        print(f"[Time] {label} / matvec{suffix}: {matvec_time:.4f} s")
 
         if linop_str in _KFAC_LIKE:
             phases, ctx = make_precompute_phases(
                 linop_str, model, loss_function, params, data
             )
+            if compiled:
+                phases = [(name, torch_compile(fn)) for name, fn in phases]
             phase_times, _ = self.time(phases, context=ctx)
             for phase_name, t in phase_times.items():
-                results["eager"][phase_name] = t
-                print(f"[Time] {label} / {phase_name}: {t:.4f} s")
+                results[phase_name] = t
+                print(f"[Time] {label} / {phase_name}{suffix}: {t:.4f} s")
 
-            # Re-run the same phases wrapped in torch.compile
-            compiled_phases = [(name, torch_compile(fn)) for name, fn in phases]
-            compiled_times, _ = self.time(compiled_phases, context=ctx)
-            for phase_name, t in compiled_times.items():
-                results.setdefault("compiled", {})[phase_name] = t
-                print(f"[Time] {label} / {phase_name}_compiled: {t:.4f} s")
-
-        with open(savepath, "w") as f:
-            json.dump(results, f, indent=2)
-        print(f"[Time] Saved {label}")
+        return results
 
     # -- Internal: memory measurements (subprocess) --
 
