@@ -44,7 +44,7 @@ from curvlinops.computers.ekfac_hooks import HooksEKFACComputer
 from curvlinops.computers.ekfac_make_fx import MakeFxEKFACComputer
 from curvlinops.computers.kfac_hooks import HooksKFACComputer, _use_params
 from curvlinops.computers.kfac_make_fx import MakeFxKFACComputer
-from curvlinops.examples import gradient_and_loss, make_compiled_gradient_and_loss
+from curvlinops.examples import gradient_and_loss
 
 
 def run_verbose(cmd: list[str]) -> CompletedProcess:
@@ -302,18 +302,12 @@ class Benchmark:
                 return
 
         model, loss_function, params, data = self.setup_problem("Hessian")
-        ((X, y),) = data
-        compiled_fn = make_compiled_gradient_and_loss(
-            model, loss_function, params, X, y
-        )
 
         for compiled in [False, True]:
             category = "compiled" if compiled else "eager"
-            if compiled:
-                fn = lambda: compiled_fn(params, X, y)  # noqa: E731
-            else:
-                fn = lambda: gradient_and_loss(model, loss_function, params, data)  # noqa: E731
-            best, _ = self.time(fn)
+            maybe_compile = torch_compile if compiled else lambda fn: fn
+            fn = maybe_compile(gradient_and_loss)
+            best, _ = self.time(lambda fn=fn: fn(model, loss_function, params, data))
             print(f"[Time] {label} ({category}): {best:.4f} s")
             _merge_json(savepath, category, "time", best)
 
@@ -634,15 +628,12 @@ def _run_reference_peakmem(problem_str: str, device_str: str):
 
     for compiled in [False, True]:
         category = "compiled" if compiled else "eager"
+        maybe_compile = torch_compile if compiled else lambda fn: fn
 
-        def func(compiled=compiled):
+        def func(maybe_compile=maybe_compile):
             model, loss_function, params, data = bench.setup_problem("Hessian")
-            if compiled:
-                ((X, y),) = data
-                fn = make_compiled_gradient_and_loss(model, loss_function, params, X, y)
-                _ = fn(params, X, y)
-            else:
-                _ = gradient_and_loss(model, loss_function, params, data)
+            fn = maybe_compile(gradient_and_loss)
+            _ = fn(model, loss_function, params, data)
             if bench.is_cuda:
                 cuda.synchronize()
 
