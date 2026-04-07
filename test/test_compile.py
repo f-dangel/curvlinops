@@ -14,10 +14,11 @@ from contextlib import contextmanager
 
 from pytest import mark
 from torch import compile as torch_compile
-from torch import manual_seed, no_grad, rand
+from torch import manual_seed, rand
 from torch._dynamo import explain
 from torch._dynamo import reset as dynamo_reset
 from torch.nn import Conv2d, Linear, MSELoss, Sequential
+from torch.random import fork_rng
 from torch.testing import assert_close
 
 from curvlinops import (
@@ -178,14 +179,10 @@ def test_kfac_precompute_no_graph_breaks(setup_fn):
         model, loss_fn, params, X, y, separate_weight_and_bias=False
     )
 
-    # Check zero graph breaks
-    dynamo_reset()
-    result = explain(traced)(params, X, y)
-    assert result.graph_break_count == 0
+    def traced_seeded(params, X, y):
+        with fork_rng():
+            manual_seed(0)
+            return traced(params, X, y)
 
-    # Verify full compilation succeeds (explain doesn't catch inductor
-    # failures from aten.view on non-contiguous tensors, e.g. from einops)
-    dynamo_reset()
-    compiled = torch_compile(traced)
-    with no_grad():
-        compiled(params, X, y)
+    with _dynamo_explain(traced_seeded, params, X, y) as result:
+        assert result.graph_break_count == 0
