@@ -13,7 +13,6 @@ from collections.abc import Callable
 from typing import Any
 
 from torch import Tensor, autograd, cat, einsum, manual_seed, no_grad
-from torch._subclasses.fake_tensor import FakeTensorMode
 from torch.fx.experimental.proxy_tensor import make_fx
 
 from curvlinops._checks import _register_userdict_as_pytree
@@ -231,6 +230,73 @@ def make_compute_kfac_batch(
     return compute_batch
 
 
+def trace_kfac_batch(
+    model_func: Callable,
+    params: dict[str, Tensor],
+    X: Tensor,
+    y: Tensor,
+    fisher_type: FisherType,
+    separate_weight_and_bias: bool,
+    kfac_approx: Any,
+    loss_reduction: str,
+    num_per_example_loss_terms: int | None,
+    grad_outputs_computer: Callable,
+    rearrange_fn: Callable,
+) -> tuple[Callable, list[ParamGroup], list[ParamGroupKey], list[ParamGroupKey]]:
+    """Trace the full per-batch KFAC computation for one batch size.
+
+    Combines IO collection tracing and batch factor computation tracing into
+    a single step. Analogous to ``make_batch_hessian_vector_product`` but for
+    KFAC: sets up and FX-traces the per-batch Kronecker factor computation.
+
+    Args:
+        model_func: Functional model ``(params, X) -> prediction``.
+        params: Parameter dict.
+        X: Example input tensor (determines the traced batch shape).
+        y: Example target tensor.
+        fisher_type: Type of Fisher information.
+        separate_weight_and_bias: Whether to treat weight and bias separately.
+        kfac_approx: KFAC approximation type.
+        loss_reduction: Loss reduction mode (``"sum"`` or ``"mean"``).
+        num_per_example_loss_terms: Number of loss terms per example.
+        grad_outputs_computer: Function computing batched gradient outputs.
+        rearrange_fn: Function for >2d output rearrangement.
+
+    Returns:
+        Tuple of ``(traced_fn, mapping, weight_group_keys, all_group_keys)`` where
+        ``traced_fn`` is ``(params, X, y) -> (input_covs, grad_covs)``,
+        ``mapping`` is the list of parameter groups, and the keys index
+        the covariance lists.
+    """
+    io_fn, io_param_names, layer_hparams = with_kfac_io(
+        model_func, X, params, fisher_type
+    )
+    mapping, io_groups = _build_param_groups_from_io(
+        io_param_names, separate_weight_and_bias
+    )
+    weight_group_keys = [tuple(g.values()) for g in mapping if "W" in g]
+    all_group_keys = [tuple(g.values()) for g in mapping]
+
+    batch_fn = make_compute_kfac_batch(
+        io_fn,
+        io_param_names,
+        layer_hparams,
+        mapping,
+        io_groups,
+        kfac_approx,
+        fisher_type,
+        loss_reduction,
+        num_per_example_loss_terms,
+        grad_outputs_computer,
+        rearrange_fn,
+    )
+    traced_fn = make_fx(batch_fn, tracing_mode="fake", _allow_non_fake_inputs=True)(
+        params, X, y
+    )
+
+    return traced_fn, mapping, weight_group_keys, all_group_keys
+
+
 class MakeFxKFACComputer(_BaseKFACComputer):
     """KFAC computer that uses FX graph tracing instead of hooks.
 
@@ -250,154 +316,54 @@ class MakeFxKFACComputer(_BaseKFACComputer):
         for p in self._params.values():
             p.requires_grad_(True)
 
-    def _trace_io_functions(
-        self,
-    ) -> tuple[
-        dict[int, Callable],
-        dict[str, dict[str, str]],
-        dict[str, dict[str, Any]],
-    ]:
-        """Pre-trace IO collection functions for all batch sizes in the data.
-
-        Iterates over the data once, calling ``with_kfac_io`` for each unique
-        batch size. This separates the (expensive) FX tracing step from the
-        factor computation, and makes it independently measurable.
-
-        Returns:
-            Tuple of ``(traced_io_fns, io_param_names, layer_hparams)`` where
-            ``traced_io_fns`` maps batch sizes to traced IO-collecting callables,
-            ``io_param_names`` maps layer names to parameter name dicts, and
-            ``layer_hparams`` maps layer names to hyperparameter dicts.
-        """
-        traced_io_fns: dict[int, Callable] = {}
-        io_param_names: dict[str, dict[str, str]] | None = None
-        layer_hparams: dict[str, dict[str, Any]] | None = None
-
-        for X, _ in self._loop_over_data(desc="FX tracing"):
-            batch_size = self._batch_size_fn(X)
-            if batch_size not in traced_io_fns:
-                if isinstance(X, UserDict):
-                    _register_userdict_as_pytree()
-                traced_io_fns[batch_size], io_param_names, layer_hparams = with_kfac_io(
-                    self._model_func, X, self._params, self._fisher_type
-                )
-
-        return traced_io_fns, io_param_names, layer_hparams
-
-    def _compute_layer_output_grads(
-        self,
-        output: Tensor,
-        y: Tensor,
-        layer_outputs: dict[str, Tensor],
-    ) -> dict[str, Tensor]:
-        """Compute scaled batched gradients for all tracked layers.
-
-        Rearranges the output for >2d, computes Fisher-type-specific
-        ``grad_outputs``, scales by loss reduction, then backpropagates all
-        gradient vectors in parallel via ``autograd.grad(is_grads_batched=True)``.
-
-        Used by EKFAC's eigenvalue correction (which runs eagerly, outside
-        the ``make_fx``-traced per-batch computation).
-
-        Args:
-            output: Model output tensor.
-            y: Target tensor.
-            layer_outputs: Collected layer outputs from the IO function.
-
-        Returns:
-            Dictionary mapping IO layer names to batched gradient tensors.
-        """
-        output, y = self._rearrange_for_larger_than_2d_output(output, y)
-
-        grad_outputs = self._grad_outputs_computer(output.detach(), y, self._generator)
-        num_loss_terms = output.shape[0]
-        scale = {"sum": 1.0, "mean": 1.0 / num_loss_terms}[self._loss_func.reduction]
-        grad_outputs.mul_(scale)
-
-        io_layer_names = list(layer_outputs)
-        output_tensors = list(layer_outputs.values())
-        layer_output_grads = autograd.grad(
-            output,
-            output_tensors,
-            grad_outputs=grad_outputs,
-            is_grads_batched=True,
-        )
-        return dict(zip(io_layer_names, layer_output_grads))
-
     def compute(
         self,
     ) -> tuple[
         dict[ParamGroupKey, Tensor], dict[ParamGroupKey, Tensor], list[ParamGroup]
     ]:
-        """Compute KFAC's Kronecker factors, tracing IO functions first.
+        """Compute KFAC's Kronecker factors.
 
-        Overrides the base class to separate FX tracing from factor computation.
+        Traces IO collection and batch computation in a single data pass,
+        then accumulates factors in a second pass.
 
         Returns:
             Tuple of ``(input_covariances, gradient_covariances, mapping)``.
         """
-        traced_io = self._trace_io_functions()
-        traced_batch = self._trace_batch_functions(traced_io)
-        return self._compute_kronecker_factors(traced_batch)
-
-    def _trace_batch_functions(
-        self,
-        traced_io: tuple[
-            dict[int, Callable],
-            dict[str, dict[str, str]],
-            dict[str, dict[str, Any]],
-        ],
-    ) -> tuple[
-        dict[int, Callable],
-        list[ParamGroup],
-        list[ParamGroupKey],
-        list[ParamGroupKey],
-    ]:
-        """Trace the full per-batch KFAC computation for each unique batch size.
-
-        Iterates over the data once, calling ``make_compute_kfac_batch`` and
-        ``make_fx`` for each unique batch size. This separates the (expensive)
-        FX tracing from the factor accumulation.
-
-        Args:
-            traced_io: Pre-traced IO functions from :meth:`_trace_io_functions`.
-
-        Returns:
-            Tuple of ``(traced_fns, mapping, weight_group_keys, all_group_keys)``
-            where ``traced_fns`` maps batch sizes to traced per-batch callables.
-        """
-        traced_io_fns, io_param_names, layer_hparams = traced_io
-
-        mapping, io_groups = _build_param_groups_from_io(
-            io_param_names, self._separate_weight_and_bias
-        )
-        weight_group_keys = [tuple(g.values()) for g in mapping if "W" in g]
-        all_group_keys = [tuple(g.values()) for g in mapping]
-
         traced_fns: dict[int, Callable] = {}
+        mapping: list[ParamGroup] | None = None
+        weight_group_keys: list[ParamGroupKey] | None = None
+        all_group_keys: list[ParamGroupKey] | None = None
 
-        for X, y in self._loop_over_data(desc="Batch tracing"):
+        for X, y in self._loop_over_data(desc="FX tracing"):
             batch_size = self._batch_size_fn(X)
             if batch_size not in traced_fns:
-                batch_fn = make_compute_kfac_batch(
-                    traced_io_fns[batch_size],
-                    io_param_names,
-                    layer_hparams,
+                if isinstance(X, UserDict):
+                    _register_userdict_as_pytree()
+                (
+                    traced_fns[batch_size],
                     mapping,
-                    io_groups,
-                    self._kfac_approx,
+                    weight_group_keys,
+                    all_group_keys,
+                ) = trace_kfac_batch(
+                    self._model_func,
+                    self._params,
+                    X,
+                    y,
                     self._fisher_type,
+                    self._separate_weight_and_bias,
+                    self._kfac_approx,
                     self._loss_func.reduction,
                     self._num_per_example_loss_terms,
                     self._grad_outputs_computer,
                     self._rearrange_for_larger_than_2d_output,
                 )
-                with FakeTensorMode(allow_non_fake_inputs=True):
-                    traced_fns[batch_size] = make_fx(
-                        batch_fn, tracing_mode="fake"
-                    )(self._params, X, y)
 
-        return traced_fns, mapping, weight_group_keys, all_group_keys
+        return self._compute_kronecker_factors((
+            traced_fns,
+            mapping,
+            weight_group_keys,
+            all_group_keys,
+        ))
 
     def _compute_kronecker_factors(
         self,
@@ -417,7 +383,7 @@ class MakeFxKFACComputer(_BaseKFACComputer):
 
         Args:
             traced_batch: Pre-traced batch functions from
-                :meth:`_trace_batch_functions`.
+                :func:`trace_kfac_batch`.
 
         Returns:
             Tuple of (input_covariances, gradient_covariances, mapping).
@@ -439,9 +405,7 @@ class MakeFxKFACComputer(_BaseKFACComputer):
         with no_grad():
             for X, y in self._loop_over_data(desc="KFAC matrices"):
                 batch_size = self._batch_size_fn(X)
-                input_covs, gradient_covs = traced_fns[batch_size](
-                    self._params, X, y
-                )
+                input_covs, gradient_covs = traced_fns[batch_size](self._params, X, y)
 
                 for key, xxT in zip(weight_group_keys, input_covs):
                     self._set_or_add_(input_covariances, key, xxT.div_(self._N_data))

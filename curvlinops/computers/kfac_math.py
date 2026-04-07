@@ -151,9 +151,7 @@ def grad_to_weight_sharing_format(
     has_sharing = g.ndim > num_leading_dims + 1
     if kfac_approx == KFACType.REDUCE:
         if has_sharing:
-            g = g.flatten(num_leading_dims, -2).sum(
-                dim=num_leading_dims, keepdim=True
-            )
+            g = g.flatten(num_leading_dims, -2).sum(dim=num_leading_dims, keepdim=True)
         else:
             g = g.unsqueeze(num_leading_dims)
     elif has_sharing:

@@ -256,9 +256,11 @@ class _BaseKFACComputer(_EmpiricalRiskMixin):
             The rearranged output and target.
         """
         if isinstance(self._loss_func, CrossEntropyLoss):
+            # einops: "batch c ... -> (batch ...) c" and "batch ... -> (batch ...)"
             output = output.movedim(1, -1).flatten(0, -2)
             y = y.flatten()
         else:
+            # einops: "batch ... c -> (batch ...) c" and same for y
             output = output.flatten(0, -2)
             y = y.flatten(0, -2)
         return output, y

@@ -15,9 +15,9 @@ from contextlib import contextmanager
 from pytest import mark, raises
 from torch import compile as torch_compile
 from torch import manual_seed, no_grad, rand
-from torch._subclasses.fake_tensor import FakeTensorMode
 from torch._dynamo import explain
 from torch._dynamo import reset as dynamo_reset
+from torch._subclasses.fake_tensor import FakeTensorMode
 from torch.fx.experimental.proxy_tensor import make_fx
 from torch.nn import Linear, MSELoss, Sequential
 from torch.testing import assert_close
@@ -204,9 +204,17 @@ def test_kfac_fx_fake_traced_fn_requires_per_batch_size_tracing():
         p.requires_grad_(True)
 
     batch_fn = make_compute_kfac_batch(
-        io_fn, io_param_names, layer_hparams, mapping, io_groups,
-        KFACType.EXPAND, FisherType.TYPE2, loss_fn.reduction, 2,
-        grad_outputs_computer, rearrange_fn,
+        io_fn,
+        io_param_names,
+        layer_hparams,
+        mapping,
+        io_groups,
+        KFACType.EXPAND,
+        FisherType.TYPE2,
+        loss_fn.reduction,
+        2,
+        grad_outputs_computer,
+        rearrange_fn,
     )
 
     with FakeTensorMode(allow_non_fake_inputs=True):
