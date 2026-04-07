@@ -27,15 +27,8 @@ from curvlinops import (
     HessianLinearOperator,
     KFACLinearOperator,
 )
-from curvlinops.computers._base import _BaseKFACComputer
-from curvlinops.computers.io_collector import with_kfac_io
-from curvlinops.computers.kfac_make_fx import (
-    _build_param_groups_from_io,
-    make_compute_kfac_batch,
-)
+from curvlinops.computers.kfac_make_fx import MakeFxKFACComputer
 from curvlinops.examples import trace_gradient_and_loss
-from curvlinops.kfac_utils import FisherType, KFACType
-from curvlinops.utils import _make_fx, make_functional_call
 
 
 def _setup_problem():
@@ -180,45 +173,29 @@ def test_kfac_precompute_no_graph_breaks(setup_fn):
     ``aten.view``) were used instead of ``flatten``/``unsqueeze``.
     """
     model, loss_fn, params, data = setup_fn()
+
+    computer = MakeFxKFACComputer(
+        model,
+        loss_fn,
+        params,
+        data,
+        check_deterministic=False,
+        separate_weight_and_bias=False,
+        num_per_example_loss_terms=1,
+    )
+    traced_fns, *_ = computer._trace_batch_functions()
+    traced = next(iter(traced_fns.values()))
+
     X, y = data[0]
-    model_func = make_functional_call(model)
 
-    # Trace IO collection
-    io_fn, io_param_names, layer_hparams = with_kfac_io(
-        model_func, X, params, FisherType.TYPE2
-    )
-    mapping, io_groups = _build_param_groups_from_io(io_param_names, False)
+    # Check zero graph breaks
+    dynamo_reset()
+    result = explain(traced)(computer._params, X, y)
+    assert result.graph_break_count == 0
 
-    # Set up grad_outputs_computer and rearrange_fn
-    grad_outputs_computer = _BaseKFACComputer._set_up_grad_outputs_computer(
-        loss_fn, FisherType.TYPE2, 1
-    )
-    rearrange_fn = lambda output, y: (output, y)  # noqa: E731
-
-    for p in params.values():
-        p.requires_grad_(True)
-
-    batch_fn = make_compute_kfac_batch(
-        io_fn,
-        io_param_names,
-        layer_hparams,
-        mapping,
-        io_groups,
-        KFACType.EXPAND,
-        FisherType.TYPE2,
-        loss_fn.reduction,
-        1,
-        grad_outputs_computer,
-        rearrange_fn,
-    )
-
-    traced = _make_fx(batch_fn)(params, X, y)
-    with _dynamo_explain(traced, params, X, y) as result:
-        assert result.graph_break_count == 0
-
-    # Also verify full compilation succeeds (explain doesn't catch inductor
+    # Verify full compilation succeeds (explain doesn't catch inductor
     # failures from aten.view on non-contiguous tensors, e.g. from einops)
     dynamo_reset()
     compiled = torch_compile(traced)
     with no_grad():
-        compiled(params, X, y)
+        compiled(computer._params, X, y)
