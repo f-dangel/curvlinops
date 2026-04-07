@@ -302,22 +302,20 @@ class Benchmark:
                 return
 
         model, loss_function, params, data = self.setup_problem("Hessian")
-
-        # Eager
-        best, _ = self.time(
-            lambda: gradient_and_loss(model, loss_function, params, data)
-        )
-        print(f"[Time] {label}: {best:.4f} s")
-        _merge_json(savepath, "eager", "time", best)
-
-        # Compiled (make_fx traces autograd.grad, then torch.compile)
         ((X, y),) = data
         compiled_fn = make_compiled_gradient_and_loss(
             model, loss_function, params, X, y
         )
-        compiled_best, _ = self.time(lambda: compiled_fn(params, X, y))
-        print(f"[Time] {label} (compiled): {compiled_best:.4f} s")
-        _merge_json(savepath, "compiled", "time", compiled_best)
+
+        for compiled in [False, True]:
+            category = "compiled" if compiled else "eager"
+            if compiled:
+                fn = lambda: compiled_fn(params, X, y)  # noqa: E731
+            else:
+                fn = lambda: gradient_and_loss(model, loss_function, params, data)  # noqa: E731
+            best, _ = self.time(fn)
+            print(f"[Time] {label} ({category}): {best:.4f} s")
+            _merge_json(savepath, category, "time", best)
 
     def _run_operator_time(self, linop_str: str):
         """Time matvec and precompute phases (eager + compiled), save to JSON."""
@@ -632,46 +630,28 @@ def _run_reference_peakmem(problem_str: str, device_str: str):
         device_str: The device.
     """
     bench = Benchmark(problem_str, device_str)
+    savepath = reference_benchpath(problem_str, device_str)
 
-    def func():
-        model, loss_function, params, data = bench.setup_problem("Hessian")
-        _ = gradient_and_loss(model, loss_function, params, data)
-        if bench.is_cuda:
-            cuda.synchronize()
+    for compiled in [False, True]:
+        category = "compiled" if compiled else "eager"
 
-    peakmem_gib = bench.memory(func)
-    print(
-        f"[Memory] Reference gradient_and_loss on {problem_str} and {device_str}:"
-        f" {peakmem_gib:.2f} GiB"
-    )
-    _merge_json(
-        reference_benchpath(problem_str, device_str),
-        "eager",
-        "peakmem",
-        peakmem_gib,
-    )
+        def func(compiled=compiled):
+            model, loss_function, params, data = bench.setup_problem("Hessian")
+            if compiled:
+                ((X, y),) = data
+                fn = make_compiled_gradient_and_loss(model, loss_function, params, X, y)
+                _ = fn(params, X, y)
+            else:
+                _ = gradient_and_loss(model, loss_function, params, data)
+            if bench.is_cuda:
+                cuda.synchronize()
 
-    def func_compiled():
-        model, loss_function, params, data = bench.setup_problem("Hessian")
-        ((X, y),) = data
-        compiled_fn = make_compiled_gradient_and_loss(
-            model, loss_function, params, X, y
+        peakmem_gib = bench.memory(func)
+        print(
+            f"[Memory] Reference gradient_and_loss ({category}) on {problem_str}"
+            f" and {device_str}: {peakmem_gib:.2f} GiB"
         )
-        _ = compiled_fn(params, X, y)
-        if bench.is_cuda:
-            cuda.synchronize()
-
-    peakmem_compiled_gib = bench.memory(func_compiled)
-    print(
-        f"[Memory] Reference gradient_and_loss (compiled) on {problem_str}"
-        f" and {device_str}: {peakmem_compiled_gib:.2f} GiB"
-    )
-    _merge_json(
-        reference_benchpath(problem_str, device_str),
-        "compiled",
-        "peakmem",
-        peakmem_compiled_gib,
-    )
+        _merge_json(savepath, category, "peakmem", peakmem_gib)
 
 
 def _run_operator_peakmem(linop_str: str, problem_str: str, device_str: str):
@@ -687,47 +667,35 @@ def _run_operator_peakmem(linop_str: str, problem_str: str, device_str: str):
     """
     savepath = benchpath(linop_str, problem_str, device_str, op_str="peakmem")
     bench = Benchmark(problem_str, device_str)
+    results = {}
 
-    def func():
-        model, loss_function, params, data = bench.setup_problem(linop_str)
-        linop = setup_linop(
-            linop_str, model, loss_function, params, data, check_deterministic=False
+    for compiled in [False, True]:
+        category = "compiled" if compiled else "eager"
+        maybe_compile = torch_compile if compiled else lambda fn: fn
+
+        def func(maybe_compile=maybe_compile):
+            model, loss_function, params, data = bench.setup_problem(linop_str)
+            linop = setup_linop(
+                linop_str,
+                model,
+                loss_function,
+                params,
+                data,
+                check_deterministic=False,
+            )
+            v = rand(linop.shape[1], device=linop.device)
+            matvec_fn = maybe_compile(lambda: linop @ v)
+            with attention_context(linop, model):
+                _ = matvec_fn()
+            if bench.is_cuda:
+                cuda.synchronize()
+
+        peakmem_gib = bench.memory(func)
+        print(
+            f"[Memory] {linop_str} ({category}) on {problem_str}"
+            f" and {device_str}: {peakmem_gib:.2f} GiB"
         )
-        v = rand(linop.shape[1], device=linop.device)
-        with attention_context(linop, model):
-            _ = linop @ v
-        if bench.is_cuda:
-            cuda.synchronize()
-
-    peakmem_gib = bench.memory(func)
-    print(
-        f"[Memory] {linop_str} on {problem_str} and {device_str}: {peakmem_gib:.2f} GiB"
-    )
-    results = {"eager": {"peakmem": peakmem_gib}}
-
-    def func_compiled():
-        model, loss_function, params, data = bench.setup_problem(linop_str)
-        linop = setup_linop(
-            linop_str,
-            model,
-            loss_function,
-            params,
-            data,
-            check_deterministic=False,
-        )
-        v = rand(linop.shape[1], device=linop.device)
-        compiled_matvec = torch_compile(lambda: linop @ v)
-        with attention_context(linop, model):
-            _ = compiled_matvec()
-        if bench.is_cuda:
-            cuda.synchronize()
-
-    peakmem_compiled_gib = bench.memory(func_compiled)
-    print(
-        f"[Memory] {linop_str} (compiled) on {problem_str}"
-        f" and {device_str}: {peakmem_compiled_gib:.2f} GiB"
-    )
-    results["compiled"] = {"peakmem": peakmem_compiled_gib}
+        results[category] = {"peakmem": peakmem_gib}
 
     with open(savepath, "w") as f:
         json.dump(results, f, indent=2)
