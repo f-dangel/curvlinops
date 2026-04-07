@@ -287,28 +287,21 @@ class Benchmark:
 
     # -- Internal: skip logic --
 
-    def _should_skip(self, savepath: str, key: str, label: str) -> bool:
-        """Check if a measurement can be skipped because results already exist.
-
-        Skips only if ``key`` is present in both ``eager`` and ``compiled``
-        categories of the existing JSON file.
+    def _has_result(self, savepath: str, category: str, key: str) -> bool:
+        """Check if a specific result already exists in a JSON file.
 
         Args:
             savepath: Path to the JSON results file.
-            key: The measurement key to check (e.g. ``"matvec"``, ``"peakmem"``).
-            label: Display label for the skip message.
+            category: The category (``"eager"`` or ``"compiled"``).
+            key: The measurement key (e.g. ``"matvec"``, ``"peakmem"``).
 
         Returns:
-            ``True`` if the measurement should be skipped.
+            ``True`` if the result exists and ``skip_existing`` is enabled.
         """
         if not self.skip_existing or not path.exists(savepath):
             return False
         with open(savepath) as f:
-            existing = json.load(f)
-        if key in existing.get("eager", {}) and key in existing.get("compiled", {}):
-            print(f"Skipping {label}")
-            return True
-        return False
+            return key in json.load(f).get(category, {})
 
     # -- Internal: time measurements (in-process) --
 
@@ -316,17 +309,17 @@ class Benchmark:
         """Time gradient_and_loss (eager + compiled) and save to reference JSON."""
         savepath = reference_benchpath(self.problem_str, self.device_str)
         label = f"Reference on {self.problem_str} and {self.device_str}"
+        model, loss_function, params, data = None, None, None, None
 
-        if self._should_skip(savepath, "time", label):
-            return
-
-        model, loss_function, params, data = self.setup_problem("Hessian")
-
-        for compiled in [False, True]:
-            category = "compiled" if compiled else "eager"
+        for category, compiled in [("eager", False), ("compiled", True)]:
+            if self._has_result(savepath, category, "time"):
+                print(f"[Time] Skipping {label} ({category})")
+                continue
+            if model is None:
+                model, loss_function, params, data = self.setup_problem("Hessian")
             maybe_compile = torch_compile if compiled else lambda fn: fn
-            fn = maybe_compile(gradient_and_loss)
-            best, _ = self.time(lambda fn=fn: fn(model, loss_function, params, data))
+            fn = maybe_compile(gradient_and_loss)  # noqa: B023
+            best, _ = self.time(lambda: fn(model, loss_function, params, data))  # noqa: B023
             print(f"[Time] {label} ({category}): {best:.4f} s")
             _merge_json(savepath, category, "time", best)
 
@@ -335,17 +328,13 @@ class Benchmark:
         savepath = benchpath(linop_str, self.problem_str, self.device_str)
         label = f"{linop_str} on {self.problem_str} and {self.device_str}"
 
-        if self._should_skip(savepath, "matvec", label):
-            return
-
-        results = {}
-        for compiled in [False, True]:
-            category = "compiled" if compiled else "eager"
-            results[category] = self._time_operator(linop_str, label, compiled=compiled)
-
-        with open(savepath, "w") as f:
-            json.dump(results, f, indent=2)
-        print(f"[Time] Saved {label}")
+        for category, compiled in [("eager", False), ("compiled", True)]:
+            if self._has_result(savepath, category, "matvec"):
+                print(f"[Time] Skipping {label} ({category})")
+                continue
+            results = self._time_operator(linop_str, label, compiled=compiled)
+            for key, value in results.items():
+                _merge_json(savepath, category, key, value)
 
     def _time_operator(
         self, linop_str: str, label: str, compiled: bool = False
@@ -398,7 +387,10 @@ class Benchmark:
         savepath = reference_benchpath(self.problem_str, self.device_str)
         label = f"reference on {self.problem_str} and {self.device_str}"
 
-        if self._should_skip(savepath, "peakmem", label):
+        if all(
+            self._has_result(savepath, cat, "peakmem") for cat in ("eager", "compiled")
+        ):
+            print(f"[Memory] Skipping {label}")
             return
 
         self._run_subprocess("--reference")
@@ -408,7 +400,10 @@ class Benchmark:
         savepath = benchpath(linop_str, self.problem_str, self.device_str)
         label = f"{linop_str} on {self.problem_str}"
 
-        if self._should_skip(savepath, "peakmem", label):
+        if all(
+            self._has_result(savepath, cat, "peakmem") for cat in ("eager", "compiled")
+        ):
+            print(f"[Memory] Skipping {label}")
             return
 
         mem_path = benchpath(
