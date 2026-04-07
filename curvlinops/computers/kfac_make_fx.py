@@ -23,8 +23,8 @@ from curvlinops.computers.kfac_math import (
     grad_to_weight_sharing_format,
     input_to_weight_sharing_format,
 )
-from curvlinops.kfac_utils import FisherType
-from curvlinops.utils import _make_fx
+from curvlinops.kfac_utils import FisherType, KFACType
+from curvlinops.utils import _make_fx, make_functional_call
 
 
 def _build_param_groups_from_io(
@@ -105,7 +105,7 @@ def _bias_pad(has_joint_wb: bool, io_layer_params: dict[str, str]) -> int | None
     return 1 if "b" in io_layer_params else 0
 
 
-def make_compute_kfac_batch(
+def _make_batch_fn(
     io_fn: Callable,
     io_param_names: dict[str, dict[str, str]],
     layer_hparams: dict[str, dict[str, Any]],
@@ -118,10 +118,10 @@ def make_compute_kfac_batch(
     grad_outputs_computer: Callable,
     rearrange_fn: Callable,
 ) -> Callable[[dict[str, Tensor], Tensor, Tensor], tuple[list[Tensor], list[Tensor]]]:
-    """Set up a function that computes KFAC's Kronecker factors for a batch.
+    """Build the per-batch KFAC factor computation function (internal).
 
-    The returned function computes the forward pass (IO collection), backward
-    pass (batched gradients), and covariance einsums for one mini-batch.
+    This is the low-level builder used by :func:`make_compute_kfac_batch` and
+    by the EKFAC backend (which needs separate access to IO functions).
 
     Args:
         io_fn: Traced IO-collecting forward function from ``with_kfac_io``.
@@ -233,44 +233,88 @@ def make_compute_kfac_batch(
     return compute_batch
 
 
-def trace_kfac_batch(
+def make_compute_kfac_batch(
     model_func: Callable,
+    loss_func: Callable,
     params: dict[str, Tensor],
     X: Tensor,
     y: Tensor,
-    fisher_type: FisherType,
-    separate_weight_and_bias: bool,
-    kfac_approx: Any,
-    loss_reduction: str,
-    num_per_example_loss_terms: int | None,
-    grad_outputs_computer: Callable,
-    rearrange_fn: Callable,
-) -> tuple[Callable, list[ParamGroup], list[ParamGroupKey], list[ParamGroupKey]]:
-    """Trace the full per-batch KFAC computation for one batch size.
+    fisher_type: FisherType = FisherType.MC,
+    mc_samples: int = 1,
+    kfac_approx: str = KFACType.EXPAND,
+    separate_weight_and_bias: bool = True,
+) -> tuple[
+    Callable[[dict[str, Tensor], Tensor, Tensor], tuple[list[Tensor], list[Tensor]]],
+    list[ParamGroup],
+    list[ParamGroupKey],
+    list[ParamGroupKey],
+]:
+    """Set up and trace the per-batch KFAC Kronecker factor computation.
 
-    Combines IO collection tracing and batch factor computation tracing into
-    a single step. Analogous to ``make_batch_hessian_vector_product`` but for
-    KFAC: sets up and FX-traces the per-batch Kronecker factor computation.
+    Analogous to :func:`make_batch_hessian_vector_product` but for KFAC:
+    detects affine layers via the IO collector, builds the per-batch Kronecker
+    factor computation, and traces it with ``make_fx`` into a single FX graph
+    with zero graph breaks.
+
+    The interface mirrors :class:`MakeFxKFACComputer` minus the accumulation-
+    related arguments (``data``, ``seed``, ``num_data``, etc.).
+
+    ``params``, ``X``, and ``y`` serve as example inputs for tracing (their
+    shapes and device determine the traced graph). The returned function
+    accepts any tensors with matching shapes.
 
     Args:
-        model_func: Functional model ``(params, X) -> prediction``.
-        params: Parameter dict.
-        X: Example input tensor (determines the traced batch shape).
+        model_func: Functional model ``(params, X) -> prediction``, or an
+            ``nn.Module`` (converted internally via ``make_functional_call``).
+        loss_func: Loss function (``MSELoss``, ``CrossEntropyLoss``, or
+            ``BCEWithLogitsLoss``).
+        params: Named parameter dict.
+        X: Example input tensor.
         y: Example target tensor.
-        fisher_type: Type of Fisher information.
-        separate_weight_and_bias: Whether to treat weight and bias separately.
-        kfac_approx: KFAC approximation type.
-        loss_reduction: Loss reduction mode (``"sum"`` or ``"mean"``).
-        num_per_example_loss_terms: Number of loss terms per example.
-        grad_outputs_computer: Function computing batched gradient outputs.
-        rearrange_fn: Function for >2d output rearrangement.
+        fisher_type: Type of Fisher information. Defaults to
+            ``FisherType.MC``.
+        mc_samples: Number of Monte-Carlo samples (only used when
+            ``fisher_type=FisherType.MC``). Defaults to ``1``.
+        kfac_approx: KFAC approximation type (``KFACType.EXPAND`` or
+            ``KFACType.REDUCE``). Defaults to ``KFACType.EXPAND``.
+        separate_weight_and_bias: Whether to treat weights and biases
+            separately. Defaults to ``True``.
 
     Returns:
-        Tuple of ``(traced_fn, mapping, weight_group_keys, all_group_keys)`` where
-        ``traced_fn`` is ``(params, X, y) -> (input_covs, grad_covs)``,
-        ``mapping`` is the list of parameter groups, and the keys index
-        the covariance lists.
+        Tuple of ``(traced_fn, mapping, weight_group_keys, all_group_keys)``
+        where ``traced_fn`` is a compiled function
+        ``(params, X, y) -> (input_covs, gradient_covs)`` (each a list of
+        tensors), ``mapping`` is the list of parameter groups, and the keys
+        index the covariance lists.
     """
+    from torch.nn import CrossEntropyLoss, Module
+
+    if isinstance(model_func, Module):
+        model_func = make_functional_call(model_func)
+
+    # Infer num_per_example_loss_terms from (y, loss_func)
+    batch_size = y.shape[0]
+    if isinstance(loss_func, CrossEntropyLoss):
+        num_per_example_loss_terms = y.numel() // batch_size
+    else:
+        num_per_example_loss_terms = y.shape[:-1].numel() // batch_size
+
+    # Set up grad_outputs_computer and rearrange_fn from (loss_func, fisher_type)
+    grad_outputs_computer = _BaseKFACComputer._set_up_grad_outputs_computer(
+        loss_func, fisher_type, mc_samples
+    )
+
+    if isinstance(loss_func, CrossEntropyLoss):
+
+        def rearrange_fn(output: Tensor, y: Tensor) -> tuple[Tensor, Tensor]:
+            return output.movedim(1, -1).flatten(0, -2), y.flatten()
+
+    else:
+
+        def rearrange_fn(output: Tensor, y: Tensor) -> tuple[Tensor, Tensor]:
+            return output.flatten(0, -2), y.flatten(0, -2)
+
+    # Trace IO collection and build parameter groups
     io_fn, io_param_names, layer_hparams = with_kfac_io(
         model_func, X, params, fisher_type
     )
@@ -280,7 +324,8 @@ def trace_kfac_batch(
     weight_group_keys = [tuple(g.values()) for g in mapping if "W" in g]
     all_group_keys = [tuple(g.values()) for g in mapping]
 
-    batch_fn = make_compute_kfac_batch(
+    # Build and trace the per-batch computation
+    batch_fn = _make_batch_fn(
         io_fn,
         io_param_names,
         layer_hparams,
@@ -288,7 +333,7 @@ def trace_kfac_batch(
         io_groups,
         kfac_approx,
         fisher_type,
-        loss_reduction,
+        loss_func.reduction,
         num_per_example_loss_terms,
         grad_outputs_computer,
         rearrange_fn,
@@ -327,8 +372,8 @@ class MakeFxKFACComputer(_BaseKFACComputer):
     ]:
         """Trace per-batch KFAC computation for all batch sizes in the data.
 
-        Iterates over the data once, calling :func:`trace_kfac_batch` for each
-        unique batch size.
+        Iterates over the data once, tracing one FX graph per unique batch
+        size.
 
         Returns:
             Tuple of ``(traced_fns, mapping, weight_group_keys, all_group_keys)``.
@@ -343,24 +388,28 @@ class MakeFxKFACComputer(_BaseKFACComputer):
             if batch_size not in traced_fns:
                 if isinstance(X, UserDict):
                     _register_userdict_as_pytree()
-                (
-                    traced_fns[batch_size],
+                io_fn, io_param_names, layer_hparams = with_kfac_io(
+                    self._model_func, X, self._params, self._fisher_type
+                )
+                mapping, io_groups = _build_param_groups_from_io(
+                    io_param_names, self._separate_weight_and_bias
+                )
+                weight_group_keys = [tuple(g.values()) for g in mapping if "W" in g]
+                all_group_keys = [tuple(g.values()) for g in mapping]
+                batch_fn = _make_batch_fn(
+                    io_fn,
+                    io_param_names,
+                    layer_hparams,
                     mapping,
-                    weight_group_keys,
-                    all_group_keys,
-                ) = trace_kfac_batch(
-                    self._model_func,
-                    self._params,
-                    X,
-                    y,
-                    self._fisher_type,
-                    self._separate_weight_and_bias,
+                    io_groups,
                     self._kfac_approx,
+                    self._fisher_type,
                     self._loss_func.reduction,
                     self._num_per_example_loss_terms,
                     self._grad_outputs_computer,
                     self._rearrange_for_larger_than_2d_output,
                 )
+                traced_fns[batch_size] = _make_fx(batch_fn)(self._params, X, y)
 
         return traced_fns, mapping, weight_group_keys, all_group_keys
 

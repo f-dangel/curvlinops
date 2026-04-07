@@ -22,7 +22,7 @@ from curvlinops.computers.kfac_make_fx import (
     MakeFxKFACComputer,
     _bias_pad,
     _build_param_groups_from_io,
-    make_compute_kfac_batch,
+    _make_batch_fn,
 )
 from curvlinops.computers.kfac_math import (
     compute_loss_correction,
@@ -106,7 +106,7 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
         for X, y in self._loop_over_data(desc="Batch tracing"):
             batch_size = self._batch_size_fn(X)
             if batch_size not in traced_fns:
-                batch_fn = make_compute_kfac_batch(
+                batch_fn = _make_batch_fn(
                     traced_io_fns[batch_size],
                     io_param_names,
                     layer_hparams,

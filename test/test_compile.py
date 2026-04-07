@@ -27,7 +27,7 @@ from curvlinops import (
     HessianLinearOperator,
     KFACLinearOperator,
 )
-from curvlinops.computers.kfac_make_fx import MakeFxKFACComputer
+from curvlinops.computers.kfac_make_fx import make_compute_kfac_batch
 from curvlinops.examples import trace_gradient_and_loss
 
 
@@ -173,24 +173,14 @@ def test_kfac_precompute_no_graph_breaks(setup_fn):
     ``aten.view``) were used instead of ``flatten``/``unsqueeze``.
     """
     model, loss_fn, params, data = setup_fn()
-
-    computer = MakeFxKFACComputer(
-        model,
-        loss_fn,
-        params,
-        data,
-        check_deterministic=False,
-        separate_weight_and_bias=False,
-        num_per_example_loss_terms=1,
-    )
-    traced_fns, *_ = computer._trace_batch_functions()
-    traced = next(iter(traced_fns.values()))
-
     X, y = data[0]
+    traced, *_ = make_compute_kfac_batch(
+        model, loss_fn, params, X, y, separate_weight_and_bias=False
+    )
 
     # Check zero graph breaks
     dynamo_reset()
-    result = explain(traced)(computer._params, X, y)
+    result = explain(traced)(params, X, y)
     assert result.graph_break_count == 0
 
     # Verify full compilation succeeds (explain doesn't catch inductor
@@ -198,4 +188,4 @@ def test_kfac_precompute_no_graph_breaks(setup_fn):
     dynamo_reset()
     compiled = torch_compile(traced)
     with no_grad():
-        compiled(computer._params, X, y)
+        compiled(params, X, y)
