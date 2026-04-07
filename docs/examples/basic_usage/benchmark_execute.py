@@ -360,6 +360,25 @@ class Benchmark:
                 results[phase_name] = t
                 print(f"[Time] {label} / {phase_name}: {t:.4f} s")
 
+        # Compiled factors for KFAC FX: trace once, then time compiled accumulation
+        if linop_str in _IS_FX and linop_str not in _IS_EKFAC:
+            computer = setup_computer(
+                linop_str, model, loss_function, params, data
+            )
+            traced_io = computer._trace_io_functions()
+            traced_batch = computer._trace_batch_functions(traced_io)
+            compiled_factors = torch_compile(computer._compute_kronecker_factors)
+
+            def _compiled_factors():
+                compiled_factors(traced_batch)
+
+            compiled_factors_time, _ = self.time(_compiled_factors)
+            results["kfac_factors_compiled"] = compiled_factors_time
+            print(
+                f"[Time] {label} / kfac_factors_compiled:"
+                f" {compiled_factors_time:.4f} s"
+            )
+
         with open(savepath, "w") as f:
             json.dump(results, f)
         print(f"[Time] Saved {label}")
@@ -548,11 +567,13 @@ def make_precompute_phases(  # noqa: C901
         computer = setup_computer(linop_str, model, loss_function, params, data)
 
         def ekfac_fx_tracing():
-            return computer._trace_io_functions()
+            traced_io = computer._trace_io_functions()
+            return computer._trace_batch_functions(traced_io), traced_io
 
-        def ekfac_fx_factors(traced_io):
+        def ekfac_fx_factors(state):
+            traced_batch, traced_io = state
             input_cov, grad_cov, mapping = computer._compute_kronecker_factors(
-                traced_io
+                traced_batch
             )
             return (input_cov, grad_cov, mapping, traced_io)
 
@@ -581,10 +602,11 @@ def make_precompute_phases(  # noqa: C901
         computer = setup_computer(linop_str, model, loss_function, params, data)
 
         def kfac_fx_tracing():
-            return computer._trace_io_functions()
+            traced_io = computer._trace_io_functions()
+            return computer._trace_batch_functions(traced_io)
 
-        def kfac_fx_factors(traced_io):
-            return computer._compute_kronecker_factors(traced_io)
+        def kfac_fx_factors(traced_batch):
+            return computer._compute_kronecker_factors(traced_batch)
 
         return [
             ("tracing", kfac_fx_tracing),
@@ -682,7 +704,7 @@ def _run_operator_peakmem(linop_str: str, problem_str: str, device_str: str):
 
     if linop_str in _IS_COMPILABLE:
 
-        def func_compiled():
+        def _setup_and_matvec():
             model, loss_function, params, data = bench.setup_problem(linop_str)
             linop = setup_linop(
                 linop_str,
@@ -693,11 +715,13 @@ def _run_operator_peakmem(linop_str: str, problem_str: str, device_str: str):
                 check_deterministic=False,
             )
             v = rand(linop.shape[1], device=linop.device)
-            compiled_matvec = torch_compile(lambda: linop @ v)
             with attention_context(linop, model):
-                _ = compiled_matvec()
+                _ = linop @ v
             if bench.is_cuda:
                 cuda.synchronize()
+
+        def func_compiled():
+            torch_compile(_setup_and_matvec)()
 
         peakmem_compiled_gib = bench.memory(func_compiled)
         print(

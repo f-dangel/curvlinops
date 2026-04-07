@@ -12,11 +12,13 @@ confirms that all internal tensor ops are captured in a single graph without bre
 
 from contextlib import contextmanager
 
-from pytest import mark
+from pytest import mark, raises
 from torch import compile as torch_compile
-from torch import manual_seed, rand
+from torch import manual_seed, no_grad, rand
+from torch._subclasses.fake_tensor import FakeTensorMode
 from torch._dynamo import explain
 from torch._dynamo import reset as dynamo_reset
+from torch.fx.experimental.proxy_tensor import make_fx
 from torch.nn import Linear, MSELoss, Sequential
 from torch.testing import assert_close
 
@@ -27,7 +29,15 @@ from curvlinops import (
     HessianLinearOperator,
     KFACLinearOperator,
 )
+from curvlinops.computers._base import _BaseKFACComputer
+from curvlinops.computers.io_collector import with_kfac_io
+from curvlinops.computers.kfac_make_fx import (
+    _build_param_groups_from_io,
+    make_compute_kfac_batch,
+)
 from curvlinops.examples import trace_gradient_and_loss
+from curvlinops.kfac_utils import FisherType, KFACType
+from curvlinops.utils import make_functional_call
 
 
 def _setup_problem():
@@ -141,3 +151,114 @@ def test_kfac_like_matvec_no_graph_breaks(cls, backend):
         backend=backend,
     )
     _assert_no_graph_breaks(K)
+
+
+def test_kfac_fx_multi_batch_size():
+    """KFAC FX with fake tracing handles different batch sizes in one dataset."""
+    model, loss_fn, params, data = _setup_problem()
+    # _setup_problem gives two batches: size 2 and size 3
+    assert len(data) == 2
+    assert data[0][0].shape[0] != data[1][0].shape[0]
+
+    linop_fx = KFACLinearOperator(
+        model,
+        loss_fn,
+        params,
+        data,
+        backend="make_fx",
+        check_deterministic=False,
+        separate_weight_and_bias=False,
+        num_per_example_loss_terms=2,
+    )
+    linop_hooks = KFACLinearOperator(
+        model,
+        loss_fn,
+        params,
+        data,
+        backend="hooks",
+        check_deterministic=False,
+        separate_weight_and_bias=False,
+        num_per_example_loss_terms=2,
+    )
+    v = rand(linop_fx.shape[1])
+    assert_close(linop_fx @ v, linop_hooks @ v, atol=1e-5, rtol=1e-5)
+
+
+def test_kfac_fx_fake_traced_fn_requires_per_batch_size_tracing():
+    """A fake-traced batch function has hardcoded shapes and fails on other sizes."""
+    model, loss_fn, params, data = _setup_problem()
+    model_func = make_functional_call(model)
+    X_2, y_2 = data[0]  # batch size 2
+    X_3, y_3 = data[1]  # batch size 3
+
+    io_fn, io_param_names, layer_hparams = with_kfac_io(
+        model_func, X_2, params, FisherType.TYPE2
+    )
+    mapping, io_groups = _build_param_groups_from_io(io_param_names, False)
+    grad_outputs_computer = _BaseKFACComputer._set_up_grad_outputs_computer(
+        loss_fn, FisherType.TYPE2, 1
+    )
+    rearrange_fn = lambda output, y: (output, y)  # noqa: E731
+
+    for p in params.values():
+        p.requires_grad_(True)
+
+    batch_fn = make_compute_kfac_batch(
+        io_fn, io_param_names, layer_hparams, mapping, io_groups,
+        KFACType.EXPAND, FisherType.TYPE2, loss_fn.reduction, 2,
+        grad_outputs_computer, rearrange_fn,
+    )
+
+    with FakeTensorMode(allow_non_fake_inputs=True):
+        traced = make_fx(batch_fn, tracing_mode="fake")(params, X_2, y_2)
+
+    # Same batch size works
+    with no_grad():
+        traced(params, X_2, y_2)
+
+    # Different batch size fails (shapes are hardcoded in the traced graph)
+    with raises(RuntimeError):
+        with no_grad():
+            traced(params, X_3, y_3)
+
+
+def test_kfac_precompute_no_graph_breaks():
+    """KFAC per-batch factor computation traced with ``make_fx`` compiles correctly."""
+    from torch.fx.experimental.proxy_tensor import make_fx
+
+    model, loss_fn, params, data = _setup_problem()
+    X, y = data[0]
+    model_func = make_functional_call(model)
+
+    # Trace IO collection
+    io_fn, io_param_names, layer_hparams = with_kfac_io(
+        model_func, X, params, FisherType.TYPE2
+    )
+    mapping, io_groups = _build_param_groups_from_io(io_param_names, False)
+
+    # Set up grad_outputs_computer and rearrange_fn
+    grad_outputs_computer = _BaseKFACComputer._set_up_grad_outputs_computer(
+        loss_fn, FisherType.TYPE2, 1
+    )
+    rearrange_fn = lambda output, y: (output, y)  # noqa: E731 (2D output is a no-op)
+
+    for p in params.values():
+        p.requires_grad_(True)
+
+    batch_fn = make_compute_kfac_batch(
+        io_fn,
+        io_param_names,
+        layer_hparams,
+        mapping,
+        io_groups,
+        KFACType.EXPAND,
+        FisherType.TYPE2,
+        loss_fn.reduction,
+        2,
+        grad_outputs_computer,
+        rearrange_fn,
+    )
+
+    traced = make_fx(batch_fn)(params, X, y)
+    with _dynamo_explain(traced, params, X, y) as result:
+        assert result.graph_break_count == 0

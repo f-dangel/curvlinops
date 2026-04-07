@@ -56,8 +56,9 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
             gradient_covariance_eigenvectors, corrected_eigenvalues, mapping)``.
         """
         traced_io = self._trace_io_functions()
+        traced_batch = self._trace_batch_functions(traced_io)
         input_covariances, gradient_covariances, mapping = (
-            self._compute_kronecker_factors(traced_io)
+            self._compute_kronecker_factors(traced_batch)
         )
         input_covariances = self._eigenvectors_(input_covariances)
         gradient_covariances = self._eigenvectors_(gradient_covariances)

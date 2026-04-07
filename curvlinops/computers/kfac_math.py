@@ -35,7 +35,6 @@ Examples of the conversion (expand):
 
 from typing import Any
 
-from einops import rearrange, reduce
 from torch import Tensor, cat
 
 from curvlinops.kfac_utils import (
@@ -97,17 +96,23 @@ def input_to_weight_sharing_format(
             layer_hyperparams["groups"],
         )
 
-    # Step 2: Collapse sharing dimensions into a single axis
+    # Step 2: Collapse sharing dimensions into a single axis [batch, shared, d_in]
     if kfac_approx == KFACType.REDUCE:
-        x = reduce(x, "batch ... d_in -> batch 1 d_in", "mean")
+        if x.ndim > 2:
+            x = x.flatten(1, -2).mean(dim=1, keepdim=True)
+        else:
+            x = x.unsqueeze(1)
+    elif x.ndim > 2:
+        x = x.flatten(1, -2)
     else:
-        x = rearrange(x, "batch ... d_in -> batch (...) d_in")
+        x = x.unsqueeze(1)
 
     # Step 3: Optionally append constant column for joint weight+bias
     if bias_pad is not None:
         x = cat([x, x.new_full((*x.shape[:-1], 1), bias_pad)], dim=-1)
 
-    return x
+    # Ensure contiguous layout so downstream einsums compile without view errors
+    return x.contiguous()
 
 
 def grad_to_weight_sharing_format(
@@ -142,14 +147,22 @@ def grad_to_weight_sharing_format(
         # [leading..., C_out, spatial...] -> [leading..., spatial..., C_out]
         g = g.movedim(num_leading_dims, -1)
 
-    # Step 2: Collapse sharing dimensions into single axis
-    leading = {1: "", 2: "v "}[num_leading_dims]
+    # Step 2: Collapse sharing dimensions [*leading, batch, shared, d_out]
+    has_sharing = g.ndim > num_leading_dims + 1
     if kfac_approx == KFACType.REDUCE:
-        g = reduce(g, f"{leading}batch ... d_out -> {leading}batch 1 d_out", "sum")
+        if has_sharing:
+            g = g.flatten(num_leading_dims, -2).sum(
+                dim=num_leading_dims, keepdim=True
+            )
+        else:
+            g = g.unsqueeze(num_leading_dims)
+    elif has_sharing:
+        g = g.flatten(num_leading_dims, -2)
     else:
-        g = rearrange(g, f"{leading}batch ... d_out -> {leading}batch (...) d_out")
+        g = g.unsqueeze(num_leading_dims)
 
-    return g
+    # Ensure contiguous layout so downstream einsums compile without view errors
+    return g.contiguous()
 
 
 def compute_loss_correction(

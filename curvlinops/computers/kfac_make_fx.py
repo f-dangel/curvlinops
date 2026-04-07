@@ -12,8 +12,8 @@ from collections import UserDict, defaultdict
 from collections.abc import Callable
 from typing import Any
 
-from einops import einsum
-from torch import Tensor, autograd, cat, manual_seed
+from torch import Tensor, autograd, cat, einsum, manual_seed, no_grad
+from torch._subclasses.fake_tensor import FakeTensorMode
 from torch.fx.experimental.proxy_tensor import make_fx
 
 from curvlinops._checks import _register_userdict_as_pytree
@@ -105,6 +105,132 @@ def _bias_pad(has_joint_wb: bool, io_layer_params: dict[str, str]) -> int | None
     return 1 if "b" in io_layer_params else 0
 
 
+def make_compute_kfac_batch(
+    io_fn: Callable,
+    io_param_names: dict[str, dict[str, str]],
+    layer_hparams: dict[str, dict[str, Any]],
+    mapping: list[ParamGroup],
+    io_groups: dict[ParamGroupKey, list[str]],
+    kfac_approx: Any,
+    fisher_type: FisherType,
+    loss_reduction: str,
+    num_per_example_loss_terms: int | None,
+    grad_outputs_computer: Callable,
+    rearrange_fn: Callable,
+) -> Callable[[dict[str, Tensor], Tensor, Tensor], tuple[list[Tensor], list[Tensor]]]:
+    """Set up a function that computes KFAC's Kronecker factors for a batch.
+
+    The returned function computes the forward pass (IO collection), backward
+    pass (batched gradients), and covariance einsums for one mini-batch.
+
+    Args:
+        io_fn: Traced IO-collecting forward function from ``with_kfac_io``.
+        io_param_names: Layer parameter name mappings.
+        layer_hparams: Layer hyperparameter dicts.
+        mapping: List of parameter groups.
+        io_groups: Maps group keys to contributing IO layer names.
+        kfac_approx: KFAC approximation type.
+        fisher_type: Fisher type (``TYPE2``, ``MC``, ``EMPIRICAL``, etc.).
+        loss_reduction: Loss reduction mode (``"sum"`` or ``"mean"``).
+        num_per_example_loss_terms: Number of loss terms per example.
+        grad_outputs_computer: Function computing batched gradient outputs
+            ``(prediction, labels, generator) -> grad_outputs``.
+        rearrange_fn: Function ``(output, y) -> (output_rearranged, y_rearranged)``
+            for larger-than-2d outputs.
+
+    Returns:
+        Function ``(params, X, y) -> (input_covs, gradient_covs)`` where each
+        is a list of tensors (one per group with a weight / one per group).
+    """
+    # Pre-compute group structure as lists for stable ordering in the trace
+    weight_group_info = []
+    for group in mapping:
+        if "W" not in group:
+            continue
+        group_key = tuple(group.values())
+        io_names = io_groups.get(group_key, [])
+        has_joint_wb = "b" in group
+        bias_pads = [_bias_pad(has_joint_wb, io_param_names[n]) for n in io_names]
+        hparams = [layer_hparams[n] for n in io_names]
+        weight_group_info.append((io_names, bias_pads, hparams))
+
+    grad_group_info = []
+    for group in mapping:
+        group_key = tuple(group.values())
+        io_names = io_groups.get(group_key, [])
+        hparams = [layer_hparams[n] for n in io_names]
+        grad_group_info.append((io_names, hparams))
+
+    is_forward_only = fisher_type == FisherType.FORWARD_ONLY
+
+    def compute_batch(
+        params: dict[str, Tensor], X: Tensor, y: Tensor
+    ) -> tuple[list[Tensor], list[Tensor]]:
+        output, layer_inputs, layer_outputs = io_fn(params, X)
+
+        # Input covariances
+        input_covs = []
+        for io_names, bias_pads, hparams in weight_group_info:
+            xs = [
+                input_to_weight_sharing_format(
+                    layer_inputs[n].data.detach(),
+                    kfac_approx,
+                    layer_hyperparams=hp,
+                    bias_pad=bp,
+                )
+                for n, bp, hp in zip(io_names, bias_pads, hparams)
+            ]
+            x = cat(xs, dim=1)
+            scale = x.shape[1]
+            xxT = einsum("bsi,bsj->ij", x, x)
+            input_covs.append(xxT.div_(scale))
+
+        if is_forward_only:
+            return input_covs, []
+
+        # Backward pass
+        output_local, y_local = rearrange_fn(output, y)
+        grad_outputs = grad_outputs_computer(output_local.detach(), y_local, None)
+        num_loss_terms = output_local.shape[0]
+        scale = {"sum": 1.0, "mean": 1.0 / num_loss_terms}[loss_reduction]
+        grad_outputs.mul_(scale)
+
+        io_layer_names = list(layer_outputs)
+        output_tensors = list(layer_outputs.values())
+        layer_output_grads_list = autograd.grad(
+            output_local,
+            output_tensors,
+            grad_outputs=grad_outputs,
+            is_grads_batched=True,
+        )
+        layer_output_grads = dict(zip(io_layer_names, layer_output_grads_list))
+
+        # Gradient covariances
+        gradient_covs = []
+        for io_names, hparams in grad_group_info:
+            gs = [
+                grad_to_weight_sharing_format(
+                    layer_output_grads[n].data.detach(),
+                    kfac_approx,
+                    layer_hyperparams=hp,
+                    num_leading_dims=2,
+                )
+                for n, hp in zip(io_names, hparams)
+            ]
+            g = cat(gs, dim=2)
+            correction = compute_loss_correction(
+                g.shape[1],
+                num_per_example_loss_terms,
+                loss_reduction,
+            )
+            ggT = einsum("vbsi,vbsj->ij", g, g).mul_(correction)
+            gradient_covs.append(ggT)
+
+        return input_covs, gradient_covs
+
+    return compute_batch
+
+
 class MakeFxKFACComputer(_BaseKFACComputer):
     """KFAC computer that uses FX graph tracing instead of hooks.
 
@@ -158,135 +284,45 @@ class MakeFxKFACComputer(_BaseKFACComputer):
 
         return traced_io_fns, io_param_names, layer_hparams
 
-    def _trace_forward_backward_and_covariances(
+    def _compute_layer_output_grads(
         self,
-        io_fn: Callable,
-        io_param_names: dict[str, dict[str, str]],
-        layer_hparams: dict[str, dict[str, Any]],
-        mapping: list[ParamGroup],
-        io_groups: dict[ParamGroupKey, list[str]],
-        X: Tensor,
+        output: Tensor,
         y: Tensor,
-    ) -> Callable:
-        """Trace the full per-batch KFAC computation with ``make_fx``.
+        layer_outputs: dict[str, Tensor],
+    ) -> dict[str, Tensor]:
+        """Compute scaled batched gradients for all tracked layers.
 
-        Traces forward pass (IO collection), backward pass (batched gradients),
-        and covariance einsums into a single FX graph. This captures
-        ``autograd.grad`` as forward ops, enabling ``torch.compile``
-        optimization of the entire per-batch kernel.
+        Rearranges the output for >2d, computes Fisher-type-specific
+        ``grad_outputs``, scales by loss reduction, then backpropagates all
+        gradient vectors in parallel via ``autograd.grad(is_grads_batched=True)``.
+
+        Used by EKFAC's eigenvalue correction (which runs eagerly, outside
+        the ``make_fx``-traced per-batch computation).
 
         Args:
-            io_fn: Traced IO-collecting forward function.
-            io_param_names: Layer parameter name mappings.
-            layer_hparams: Layer hyperparameter dicts.
-            mapping: List of parameter groups.
-            io_groups: Maps group keys to contributing IO layer names.
-            X: Example input for tracing.
-            y: Example target for tracing.
+            output: Model output tensor.
+            y: Target tensor.
+            layer_outputs: Collected layer outputs from the IO function.
 
         Returns:
-            Traced function with signature
-            ``(params, X, y) -> (input_covs, gradient_covs)`` where each
-            is a list of tensors (one per group with a weight / one per group).
+            Dictionary mapping IO layer names to batched gradient tensors.
         """
-        # Pre-compute group structure as lists for stable ordering in the trace
-        weight_group_info = []
-        for group in mapping:
-            if "W" not in group:
-                continue
-            group_key = tuple(group.values())
-            io_names = io_groups.get(group_key, [])
-            has_joint_wb = "b" in group
-            bias_pads = [
-                _bias_pad(has_joint_wb, io_param_names[n]) for n in io_names
-            ]
-            hparams = [layer_hparams[n] for n in io_names]
-            weight_group_info.append((io_names, bias_pads, hparams))
+        output, y = self._rearrange_for_larger_than_2d_output(output, y)
 
-        grad_group_info = []
-        for group in mapping:
-            group_key = tuple(group.values())
-            io_names = io_groups.get(group_key, [])
-            hparams = [layer_hparams[n] for n in io_names]
-            grad_group_info.append((io_names, hparams))
+        grad_outputs = self._grad_outputs_computer(output.detach(), y, self._generator)
+        num_loss_terms = output.shape[0]
+        scale = {"sum": 1.0, "mean": 1.0 / num_loss_terms}[self._loss_func.reduction]
+        grad_outputs.mul_(scale)
 
-        is_forward_only = self._fisher_type == FisherType.FORWARD_ONLY
-        kfac_approx = self._kfac_approx
-        grad_outputs_computer = self._grad_outputs_computer
-        rearrange_fn = self._rearrange_for_larger_than_2d_output
-        loss_reduction = self._loss_func.reduction
-        num_per_example_loss_terms = self._num_per_example_loss_terms
-
-        def forward_backward_and_covariances(
-            params: dict[str, Tensor], X: Tensor, y: Tensor
-        ) -> tuple[list[Tensor], list[Tensor]]:
-            output, layer_inputs, layer_outputs = io_fn(params, X)
-
-            # Input covariances
-            input_covs = []
-            for io_names, bias_pads, hparams in weight_group_info:
-                xs = [
-                    input_to_weight_sharing_format(
-                        layer_inputs[n].data.detach(),
-                        kfac_approx,
-                        layer_hyperparams=hp,
-                        bias_pad=bp,
-                    )
-                    for n, bp, hp in zip(io_names, bias_pads, hparams)
-                ]
-                x = cat(xs, dim=1)
-                scale = x.shape[1]
-                xxT = einsum(x, x, "batch shared i, batch shared j -> i j")
-                input_covs.append(xxT.div_(scale))
-
-            if is_forward_only:
-                return input_covs, []
-
-            # Backward pass
-            output_local, y_local = rearrange_fn(output, y)
-            grad_outputs = grad_outputs_computer(
-                output_local.detach(), y_local, None
-            )
-            num_loss_terms = output_local.shape[0]
-            scale = {"sum": 1.0, "mean": 1.0 / num_loss_terms}[loss_reduction]
-            grad_outputs.mul_(scale)
-
-            io_layer_names = list(layer_outputs)
-            output_tensors = list(layer_outputs.values())
-            layer_output_grads_list = autograd.grad(
-                output_local,
-                output_tensors,
-                grad_outputs=grad_outputs,
-                is_grads_batched=True,
-            )
-            layer_output_grads = dict(zip(io_layer_names, layer_output_grads_list))
-
-            # Gradient covariances
-            gradient_covs = []
-            for io_names, hparams in grad_group_info:
-                gs = [
-                    grad_to_weight_sharing_format(
-                        layer_output_grads[n].data.detach(),
-                        kfac_approx,
-                        layer_hyperparams=hp,
-                        num_leading_dims=2,
-                    )
-                    for n, hp in zip(io_names, hparams)
-                ]
-                g = cat(gs, dim=2)
-                correction = compute_loss_correction(
-                    g.shape[1],
-                    num_per_example_loss_terms,
-                    loss_reduction,
-                )
-                ggT = einsum(
-                    g, g, "v batch shared i, v batch shared j -> i j"
-                ).mul_(correction)
-                gradient_covs.append(ggT)
-
-            return input_covs, gradient_covs
-
-        return make_fx(forward_backward_and_covariances)(self._params, X, y)
+        io_layer_names = list(layer_outputs)
+        output_tensors = list(layer_outputs.values())
+        layer_output_grads = autograd.grad(
+            output,
+            output_tensors,
+            grad_outputs=grad_outputs,
+            is_grads_batched=True,
+        )
+        return dict(zip(io_layer_names, layer_output_grads))
 
     def compute(
         self,
@@ -301,9 +337,10 @@ class MakeFxKFACComputer(_BaseKFACComputer):
             Tuple of ``(input_covariances, gradient_covariances, mapping)``.
         """
         traced_io = self._trace_io_functions()
-        return self._compute_kronecker_factors(traced_io)
+        traced_batch = self._trace_batch_functions(traced_io)
+        return self._compute_kronecker_factors(traced_batch)
 
-    def _compute_kronecker_factors(
+    def _trace_batch_functions(
         self,
         traced_io: tuple[
             dict[int, Callable],
@@ -311,72 +348,108 @@ class MakeFxKFACComputer(_BaseKFACComputer):
             dict[str, dict[str, Any]],
         ],
     ) -> tuple[
-        dict[ParamGroupKey, Tensor], dict[ParamGroupKey, Tensor], list[ParamGroup]
+        dict[int, Callable],
+        list[ParamGroup],
+        list[ParamGroupKey],
+        list[ParamGroupKey],
     ]:
-        """Compute KFAC's Kronecker factors from pre-traced IO functions.
+        """Trace the full per-batch KFAC computation for each unique batch size.
 
-        The full per-batch computation (IO collection, backward pass, and
-        covariance einsums) is traced with ``make_fx`` and cached by batch
-        size. The outer loop accumulates results across batches.
+        Iterates over the data once, calling ``make_compute_kfac_batch`` and
+        ``make_fx`` for each unique batch size. This separates the (expensive)
+        FX tracing from the factor accumulation.
 
         Args:
             traced_io: Pre-traced IO functions from :meth:`_trace_io_functions`.
 
         Returns:
-            Tuple of (input_covariances, gradient_covariances, mapping).
+            Tuple of ``(traced_fns, mapping, weight_group_keys, all_group_keys)``
+            where ``traced_fns`` maps batch sizes to traced per-batch callables.
         """
         traced_io_fns, io_param_names, layer_hparams = traced_io
+
+        mapping, io_groups = _build_param_groups_from_io(
+            io_param_names, self._separate_weight_and_bias
+        )
+        weight_group_keys = [tuple(g.values()) for g in mapping if "W" in g]
+        all_group_keys = [tuple(g.values()) for g in mapping]
+
+        traced_fns: dict[int, Callable] = {}
+
+        for X, y in self._loop_over_data(desc="Batch tracing"):
+            batch_size = self._batch_size_fn(X)
+            if batch_size not in traced_fns:
+                batch_fn = make_compute_kfac_batch(
+                    traced_io_fns[batch_size],
+                    io_param_names,
+                    layer_hparams,
+                    mapping,
+                    io_groups,
+                    self._kfac_approx,
+                    self._fisher_type,
+                    self._loss_func.reduction,
+                    self._num_per_example_loss_terms,
+                    self._grad_outputs_computer,
+                    self._rearrange_for_larger_than_2d_output,
+                )
+                with FakeTensorMode(allow_non_fake_inputs=True):
+                    traced_fns[batch_size] = make_fx(
+                        batch_fn, tracing_mode="fake"
+                    )(self._params, X, y)
+
+        return traced_fns, mapping, weight_group_keys, all_group_keys
+
+    def _compute_kronecker_factors(
+        self,
+        traced_batch: tuple[
+            dict[int, Callable],
+            list[ParamGroup],
+            list[ParamGroupKey],
+            list[ParamGroupKey],
+        ],
+    ) -> tuple[
+        dict[ParamGroupKey, Tensor], dict[ParamGroupKey, Tensor], list[ParamGroup]
+    ]:
+        """Accumulate KFAC's Kronecker factors using pre-traced batch functions.
+
+        Runs the pre-traced per-batch functions and accumulates input and
+        gradient covariances across all batches.
+
+        Args:
+            traced_batch: Pre-traced batch functions from
+                :meth:`_trace_batch_functions`.
+
+        Returns:
+            Tuple of (input_covariances, gradient_covariances, mapping).
+        """
+        traced_fns, mapping, weight_group_keys, all_group_keys = traced_batch
 
         grad_normalization = {
             "sum": 1.0,
             "mean": 1.0 / self._N_data,
         }[self._loss_func.reduction]
 
-        mapping, io_groups = _build_param_groups_from_io(
-            io_param_names, self._separate_weight_and_bias
-        )
-
-        # Build group keys in stable order (matching the traced function's output)
-        weight_group_keys = [
-            tuple(g.values()) for g in mapping if "W" in g
-        ]
-        all_group_keys = [tuple(g.values()) for g in mapping]
-
-        # Trace the full per-batch computation (forward + backward + covariances)
-        # for each unique batch size, cached by batch size.
-        traced_fns: dict[int, Callable] = {}
-
         input_covariances: dict[ParamGroupKey, Tensor] = {}
         gradient_covariances: dict[ParamGroupKey, Tensor] = {}
 
         manual_seed(self._seed)
 
-        for X, y in self._loop_over_data(desc="KFAC matrices"):
-            batch_size = self._batch_size_fn(X)
-            if batch_size not in traced_fns:
-                traced_fns[batch_size] = (
-                    self._trace_forward_backward_and_covariances(
-                        traced_io_fns[batch_size],
-                        io_param_names,
-                        layer_hparams,
-                        mapping,
-                        io_groups,
-                        X,
-                        y,
+        # no_grad: the traced graph already contains explicit backward ops from
+        # make_fx; disabling the outer autograd avoids retaining intermediates.
+        with no_grad():
+            for X, y in self._loop_over_data(desc="KFAC matrices"):
+                batch_size = self._batch_size_fn(X)
+                input_covs, gradient_covs = traced_fns[batch_size](
+                    self._params, X, y
+                )
+
+                for key, xxT in zip(weight_group_keys, input_covs):
+                    self._set_or_add_(input_covariances, key, xxT.div_(self._N_data))
+
+                for key, ggT in zip(all_group_keys, gradient_covs):
+                    self._set_or_add_(
+                        gradient_covariances, key, ggT.mul_(grad_normalization)
                     )
-                )
-
-            input_covs, gradient_covs = traced_fns[batch_size](self._params, X, y)
-
-            for key, xxT in zip(weight_group_keys, input_covs):
-                self._set_or_add_(
-                    input_covariances, key, xxT.div_(self._N_data)
-                )
-
-            for key, ggT in zip(all_group_keys, gradient_covs):
-                self._set_or_add_(
-                    gradient_covariances, key, ggT.mul_(grad_normalization)
-                )
 
         if self._fisher_type == FisherType.FORWARD_ONLY:
             self._set_gradient_covariances_to_identity(gradient_covariances, mapping)

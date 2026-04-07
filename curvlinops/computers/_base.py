@@ -8,7 +8,6 @@ FX graph tracing).
 from collections.abc import Callable, Iterable, MutableMapping
 from typing import Any
 
-from einops import rearrange
 from torch import Generator, Tensor, eye
 from torch.func import vmap
 from torch.linalg import eigh
@@ -257,11 +256,11 @@ class _BaseKFACComputer(_EmpiricalRiskMixin):
             The rearranged output and target.
         """
         if isinstance(self._loss_func, CrossEntropyLoss):
-            output = rearrange(output, "batch c ... -> (batch ...) c")
-            y = rearrange(y, "batch ... -> (batch ...)")
+            output = output.movedim(1, -1).flatten(0, -2)
+            y = y.flatten()
         else:
-            output = rearrange(output, "batch ... c -> (batch ...) c")
-            y = rearrange(y, "batch ... c -> (batch ...) c")
+            output = output.flatten(0, -2)
+            y = y.flatten(0, -2)
         return output, y
 
     @staticmethod

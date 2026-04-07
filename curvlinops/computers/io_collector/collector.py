@@ -21,6 +21,7 @@ from collections.abc import Callable
 from typing import Any, TypeAlias
 
 from torch import Tensor
+from torch._subclasses.fake_tensor import FakeTensorMode
 from torch.func import functionalize
 from torch.fx import GraphModule, Node
 from torch.fx.experimental.proxy_tensor import make_fx
@@ -104,7 +105,8 @@ def with_param_io(
             if not all parameter usage paths are detected by the pattern matchers.
     """
     # Use functionalize to remove inplace operations, then trace the function.
-    gm = make_fx(functionalize(f))(named_params, x)
+    with FakeTensorMode(allow_non_fake_inputs=True):
+        gm = make_fx(functionalize(f), tracing_mode="fake")(named_params, x)
 
     # Find placeholder nodes (inputs to the graph)
     # The first len(named_params) placeholders are parameters, the rest are x
@@ -373,4 +375,6 @@ def with_kfac_io(
 
         return (out, layer_inputs, layer_outputs)
 
-    return make_fx(f_and_kfac_io)(named_params, x), layer_names, layer_hyperparams
+    with FakeTensorMode(allow_non_fake_inputs=True):
+        traced = make_fx(f_and_kfac_io, tracing_mode="fake")(named_params, x)
+    return traced, layer_names, layer_hyperparams
