@@ -94,15 +94,19 @@ def input_to_weight_sharing_format(
             layer_hyperparams["padding"],
             layer_hyperparams["dilation"],
             layer_hyperparams["groups"],
-        )
+        ).contiguous()
 
     # Step 2: Collapse sharing dimensions into a single axis [batch, shared, d_in]
+    # NOTE: Use flatten/unsqueeze (not einops rearrange) because rearrange traces
+    # as aten.view which fails on non-contiguous tensors during torch.compile.
     if kfac_approx == KFACType.REDUCE:
+        # einops: reduce(x, "batch ... d_in -> batch 1 d_in", "mean")
         if x.ndim > 2:
             x = x.flatten(1, -2).mean(dim=1, keepdim=True)
         else:
             x = x.unsqueeze(1)
     elif x.ndim > 2:
+        # einops: rearrange(x, "batch ... d_in -> batch (...) d_in")
         x = x.flatten(1, -2)
     else:
         x = x.unsqueeze(1)
@@ -111,7 +115,6 @@ def input_to_weight_sharing_format(
     if bias_pad is not None:
         x = cat([x, x.new_full((*x.shape[:-1], 1), bias_pad)], dim=-1)
 
-    # Ensure contiguous layout so downstream einsums compile without view errors
     return x.contiguous()
 
 
@@ -148,18 +151,21 @@ def grad_to_weight_sharing_format(
         g = g.movedim(num_leading_dims, -1)
 
     # Step 2: Collapse sharing dimensions [*leading, batch, shared, d_out]
+    # NOTE: Use flatten/unsqueeze (not einops rearrange) because rearrange traces
+    # as aten.view which fails on non-contiguous tensors during torch.compile.
     has_sharing = g.ndim > num_leading_dims + 1
     if kfac_approx == KFACType.REDUCE:
+        # einops: reduce(g, "{leading}batch ... d_out -> {leading}batch 1 d_out", "sum")
         if has_sharing:
             g = g.flatten(num_leading_dims, -2).sum(dim=num_leading_dims, keepdim=True)
         else:
             g = g.unsqueeze(num_leading_dims)
     elif has_sharing:
+        # einops: rearrange(g, "{leading}batch ... d_out -> {leading}batch (...) d_out")
         g = g.flatten(num_leading_dims, -2)
     else:
         g = g.unsqueeze(num_leading_dims)
 
-    # Ensure contiguous layout so downstream einsums compile without view errors
     return g.contiguous()
 
 

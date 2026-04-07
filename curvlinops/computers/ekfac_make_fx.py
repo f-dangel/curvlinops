@@ -11,7 +11,6 @@ from collections.abc import Callable
 from typing import Any
 
 from torch import Tensor, autograd, cat
-from torch.fx.experimental.proxy_tensor import make_fx
 
 from curvlinops._checks import _register_userdict_as_pytree
 from curvlinops.computers._base import ParamGroup, ParamGroupKey, _EKFACMixin
@@ -31,7 +30,7 @@ from curvlinops.computers.kfac_math import (
     input_to_weight_sharing_format,
 )
 from curvlinops.kfac_utils import KFACType
-from curvlinops.utils import _seed_generator
+from curvlinops.utils import _make_fx, _seed_generator
 
 
 class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
@@ -120,11 +119,7 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
                     self._grad_outputs_computer,
                     self._rearrange_for_larger_than_2d_output,
                 )
-                traced_fns[batch_size] = make_fx(
-                    batch_fn,
-                    tracing_mode="fake",
-                    _allow_non_fake_inputs=True,
-                )(self._params, X, y)
+                traced_fns[batch_size] = _make_fx(batch_fn)(self._params, X, y)
 
         return traced_fns, mapping, weight_group_keys, all_group_keys
 

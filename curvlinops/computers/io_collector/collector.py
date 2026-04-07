@@ -23,7 +23,6 @@ from typing import Any, TypeAlias
 from torch import Tensor
 from torch.func import functionalize
 from torch.fx import GraphModule, Node
-from torch.fx.experimental.proxy_tensor import make_fx
 
 from curvlinops.computers.io_collector._base import NOT_A_PARAM, as_tuple
 from curvlinops.computers.io_collector.conv import CONV_STR
@@ -31,6 +30,7 @@ from curvlinops.computers.io_collector.linear import LINEAR_STR
 from curvlinops.computers.io_collector.patterns import match_parameter_usage
 from curvlinops.computers.io_collector.verification import verify_match_complete
 from curvlinops.kfac_utils import FisherType
+from curvlinops.utils import _make_fx
 
 # Type aliases for complex return types
 LayerInfoTuple: TypeAlias = tuple[str, Node, Node, str, str | None, dict[str, Any]]
@@ -104,9 +104,7 @@ def with_param_io(
             if not all parameter usage paths are detected by the pattern matchers.
     """
     # Use functionalize to remove inplace operations, then trace the function.
-    gm = make_fx(functionalize(f), tracing_mode="fake", _allow_non_fake_inputs=True)(
-        named_params, x
-    )
+    gm = _make_fx(functionalize(f))(named_params, x)
 
     # Find placeholder nodes (inputs to the graph)
     # The first len(named_params) placeholders are parameters, the rest are x
@@ -375,7 +373,5 @@ def with_kfac_io(
 
         return (out, layer_inputs, layer_outputs)
 
-    traced = make_fx(f_and_kfac_io, tracing_mode="fake", _allow_non_fake_inputs=True)(
-        named_params, x
-    )
+    traced = _make_fx(f_and_kfac_io)(named_params, x)
     return traced, layer_names, layer_hyperparams

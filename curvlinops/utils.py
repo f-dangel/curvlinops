@@ -7,7 +7,13 @@ from einops import rearrange
 from numpy import ndarray
 from torch import Generator, Tensor, as_tensor, device, dtype
 from torch.func import functional_call
+from torch.fx.experimental.proxy_tensor import make_fx
 from torch.nn import CrossEntropyLoss, Module
+
+#: Standardized ``make_fx`` with fake tensor tracing. All ``make_fx`` calls in
+#: curvlinops should use this to ensure consistent tracing behavior (fake mode
+#: avoids materializing real tensors during tracing, reducing memory usage).
+_make_fx = partial(make_fx, tracing_mode="fake", _allow_non_fake_inputs=True)
 
 
 def _infer_device(objects: Iterable) -> device:

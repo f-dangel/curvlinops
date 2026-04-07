@@ -12,8 +12,8 @@ from collections import UserDict, defaultdict
 from collections.abc import Callable
 from typing import Any
 
-from torch import Tensor, autograd, cat, einsum, manual_seed, no_grad
-from torch.fx.experimental.proxy_tensor import make_fx
+from einops import einsum
+from torch import Tensor, autograd, cat, manual_seed, no_grad
 
 from curvlinops._checks import _register_userdict_as_pytree
 from curvlinops.computers._base import ParamGroup, ParamGroupKey, _BaseKFACComputer
@@ -24,6 +24,7 @@ from curvlinops.computers.kfac_math import (
     input_to_weight_sharing_format,
 )
 from curvlinops.kfac_utils import FisherType
+from curvlinops.utils import _make_fx
 
 
 def _build_param_groups_from_io(
@@ -181,7 +182,7 @@ def make_compute_kfac_batch(
             ]
             x = cat(xs, dim=1)
             scale = x.shape[1]
-            xxT = einsum("bsi,bsj->ij", x, x)
+            xxT = einsum(x, x, "batch shared i, batch shared j -> i j")
             input_covs.append(xxT.div_(scale))
 
         if is_forward_only:
@@ -222,7 +223,9 @@ def make_compute_kfac_batch(
                 num_per_example_loss_terms,
                 loss_reduction,
             )
-            ggT = einsum("vbsi,vbsj->ij", g, g).mul_(correction)
+            ggT = einsum(g, g, "v batch shared i, v batch shared j -> i j").mul_(
+                correction
+            )
             gradient_covs.append(ggT)
 
         return input_covs, gradient_covs
@@ -290,9 +293,7 @@ def trace_kfac_batch(
         grad_outputs_computer,
         rearrange_fn,
     )
-    traced_fn = make_fx(batch_fn, tracing_mode="fake", _allow_non_fake_inputs=True)(
-        params, X, y
-    )
+    traced_fn = _make_fx(batch_fn)(params, X, y)
 
     return traced_fn, mapping, weight_group_keys, all_group_keys
 

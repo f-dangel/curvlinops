@@ -17,9 +17,7 @@ from torch import compile as torch_compile
 from torch import manual_seed, no_grad, rand
 from torch._dynamo import explain
 from torch._dynamo import reset as dynamo_reset
-from torch._subclasses.fake_tensor import FakeTensorMode
-from torch.fx.experimental.proxy_tensor import make_fx
-from torch.nn import Linear, MSELoss, Sequential
+from torch.nn import Conv2d, Linear, MSELoss, Sequential
 from torch.testing import assert_close
 
 from curvlinops import (
@@ -37,7 +35,7 @@ from curvlinops.computers.kfac_make_fx import (
 )
 from curvlinops.examples import trace_gradient_and_loss
 from curvlinops.kfac_utils import FisherType, KFACType
-from curvlinops.utils import make_functional_call
+from curvlinops.utils import _make_fx, make_functional_call
 
 
 def _setup_problem():
@@ -217,8 +215,7 @@ def test_kfac_fx_fake_traced_fn_requires_per_batch_size_tracing():
         rearrange_fn,
     )
 
-    with FakeTensorMode(allow_non_fake_inputs=True):
-        traced = make_fx(batch_fn, tracing_mode="fake")(params, X_2, y_2)
+    traced = _make_fx(batch_fn)(params, X_2, y_2)
 
     # Same batch size works
     with no_grad():
@@ -230,11 +227,35 @@ def test_kfac_fx_fake_traced_fn_requires_per_batch_size_tracing():
             traced(params, X_3, y_3)
 
 
-def test_kfac_precompute_no_graph_breaks():
-    """KFAC per-batch factor computation traced with ``make_fx`` compiles correctly."""
-    from torch.fx.experimental.proxy_tensor import make_fx
+def _setup_cnn_problem():
+    """Create a small CNN test problem (Conv2d triggers non-contiguous tensors).
 
-    model, loss_fn, params, data = _setup_problem()
+    Returns:
+        Tuple of (model, loss_fn, params, data).
+    """
+    manual_seed(0)
+    model = Sequential(Conv2d(3, 4, 3, padding=1), Conv2d(4, 5, 3, padding=1))
+    loss_fn = MSELoss()
+    params = dict(model.named_parameters())
+    X = rand(2, 3, 6, 6)
+    y = rand(2, 5, 6, 6)
+    return model, loss_fn, params, [(X, y)]
+
+
+@mark.parametrize(
+    "setup_fn",
+    [_setup_problem, _setup_cnn_problem],
+    ids=["mlp", "cnn"],
+)
+def test_kfac_precompute_no_graph_breaks(setup_fn):
+    """KFAC per-batch factor computation traced with ``make_fx`` compiles correctly.
+
+    The CNN case is critical: Conv2d layers produce non-contiguous tensors
+    (via ``movedim`` and ``autograd.grad(is_grads_batched=True)``), which would
+    fail during ``torch.compile`` if ``einops.rearrange`` (traces as
+    ``aten.view``) were used instead of ``flatten``/``unsqueeze``.
+    """
+    model, loss_fn, params, data = setup_fn()
     X, y = data[0]
     model_func = make_functional_call(model)
 
@@ -248,7 +269,7 @@ def test_kfac_precompute_no_graph_breaks():
     grad_outputs_computer = _BaseKFACComputer._set_up_grad_outputs_computer(
         loss_fn, FisherType.TYPE2, 1
     )
-    rearrange_fn = lambda output, y: (output, y)  # noqa: E731 (2D output is a no-op)
+    rearrange_fn = lambda output, y: (output, y)  # noqa: E731
 
     for p in params.values():
         p.requires_grad_(True)
@@ -262,11 +283,18 @@ def test_kfac_precompute_no_graph_breaks():
         KFACType.EXPAND,
         FisherType.TYPE2,
         loss_fn.reduction,
-        2,
+        1,
         grad_outputs_computer,
         rearrange_fn,
     )
 
-    traced = make_fx(batch_fn)(params, X, y)
+    traced = _make_fx(batch_fn)(params, X, y)
     with _dynamo_explain(traced, params, X, y) as result:
         assert result.graph_break_count == 0
+
+    # Also verify full compilation succeeds (explain doesn't catch inductor
+    # failures from aten.view on non-contiguous tensors, e.g. from einops)
+    dynamo_reset()
+    compiled = torch_compile(traced)
+    with no_grad():
+        compiled(params, X, y)
