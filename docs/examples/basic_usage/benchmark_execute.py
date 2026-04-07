@@ -365,13 +365,16 @@ class Benchmark:
         """Spawn subprocess to measure reference peak memory."""
         savepath = reference_benchpath(self.problem_str, self.device_str)
         label = f"reference on {self.problem_str} and {self.device_str}"
-        existing = {
-            cat: self._has_result(savepath, cat, "peakmem")
-            for cat in ("eager", "compiled")
-        }
-        if all(v is not None for v in existing.values()):
-            for cat, v in existing.items():
-                print(f"[Memory] Skipping {label} ({cat}): {v:.2f} GiB")
+
+        # Subprocess always measures both; skip only if both exist
+        skip = True
+        for category in ("eager", "compiled"):
+            existing = self._has_result(savepath, category, "peakmem")
+            if existing is not None:
+                print(f"[Memory] Skipping {label} ({category}): {existing:.2f} GiB")
+            else:
+                skip = False
+        if skip:
             return
 
         self._run_subprocess("--reference")
@@ -380,13 +383,16 @@ class Benchmark:
         """Spawn subprocess for operator peak memory, merge into operator JSON."""
         savepath = benchpath(linop_str, self.problem_str, self.device_str)
         label = f"{linop_str} on {self.problem_str}"
-        existing = {
-            cat: self._has_result(savepath, cat, "peakmem")
-            for cat in ("eager", "compiled")
-        }
-        if all(v is not None for v in existing.values()):
-            for cat, v in existing.items():
-                print(f"[Memory] Skipping {label} ({cat}): {v:.2f} GiB")
+
+        # Subprocess always measures both; skip only if both exist
+        skip = True
+        for category in ("eager", "compiled"):
+            existing = self._has_result(savepath, category, "peakmem")
+            if existing is not None:
+                print(f"[Memory] Skipping {label} ({category}): {existing:.2f} GiB")
+            else:
+                skip = False
+        if skip:
             return
 
         mem_path = benchpath(
