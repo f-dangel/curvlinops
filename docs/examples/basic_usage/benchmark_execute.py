@@ -366,47 +366,43 @@ class Benchmark:
         savepath = reference_benchpath(self.problem_str, self.device_str)
         label = f"reference on {self.problem_str} and {self.device_str}"
 
-        # Subprocess always measures both; skip only if both exist
-        skip = True
-        for category in ("eager", "compiled"):
+        for category, compiled in [("eager", False), ("compiled", True)]:
             existing = self._has_result(savepath, category, "peakmem")
             if existing is not None:
                 print(f"[Memory] Skipping {label} ({category}): {existing:.2f} GiB")
-            else:
-                skip = False
-        if skip:
-            return
-
-        self._run_subprocess("--reference")
+                continue
+            self._run_subprocess("--reference", *self._compiled_flag(compiled))
 
     def _run_operator_memory(self, linop_str: str):
         """Spawn subprocess for operator peak memory, merge into operator JSON."""
         savepath = benchpath(linop_str, self.problem_str, self.device_str)
         label = f"{linop_str} on {self.problem_str}"
 
-        # Subprocess always measures both; skip only if both exist
-        skip = True
-        for category in ("eager", "compiled"):
+        for category, compiled in [("eager", False), ("compiled", True)]:
             existing = self._has_result(savepath, category, "peakmem")
             if existing is not None:
                 print(f"[Memory] Skipping {label} ({category}): {existing:.2f} GiB")
-            else:
-                skip = False
-        if skip:
-            return
+                continue
+            mem_path = benchpath(
+                linop_str, self.problem_str, self.device_str, op_str="peakmem"
+            )
+            self._run_subprocess(f"--linop={linop_str}", *self._compiled_flag(compiled))
+            if path.exists(mem_path) and path.exists(savepath):
+                with open(mem_path) as f:
+                    mem_data = json.load(f)
+                for cat, sub in mem_data.items():
+                    for key, value in sub.items():
+                        _merge_json(savepath, cat, key, value)
+                remove(mem_path)
 
-        mem_path = benchpath(
-            linop_str, self.problem_str, self.device_str, op_str="peakmem"
-        )
-        self._run_subprocess(f"--linop={linop_str}")
+    @staticmethod
+    def _compiled_flag(compiled: bool) -> tuple[str, ...]:
+        """Return CLI flags for the subprocess compiled mode.
 
-        if path.exists(mem_path) and path.exists(savepath):
-            with open(mem_path) as f:
-                mem_data = json.load(f)
-            for category, sub in mem_data.items():
-                for key, value in sub.items():
-                    _merge_json(savepath, category, key, value)
-            remove(mem_path)
+        Returns:
+            ``("--compiled",)`` if compiled, else ``()``.
+        """
+        return ("--compiled",) if compiled else ()
 
     def _run_subprocess(self, *extra_args: str):
         """Run benchmark_execute.py as a subprocess with given extra arguments."""
@@ -603,39 +599,37 @@ def make_precompute_phases(  # noqa: C901
 # -- Subprocess entry points for memory measurement --
 
 
-def _run_reference_peakmem(problem_str: str, device_str: str):
+def _run_reference_peakmem(problem_str: str, device_str: str, compiled: bool):
     """Measure peak memory for gradient_and_loss (called in subprocess).
-
-    Measures both eager and compiled variants and merges results into the
-    reference benchmark JSON file.
 
     Args:
         problem_str: The problem.
         device_str: The device.
+        compiled: Whether to measure with ``torch.compile``.
     """
     bench = Benchmark(problem_str, device_str)
     savepath = reference_benchpath(problem_str, device_str)
+    category = "compiled" if compiled else "eager"
 
-    for compiled in [False, True]:
-        category = "compiled" if compiled else "eager"
+    def func():
+        model, loss_function, params, data = bench.setup_problem("Hessian")
+        fn = torch_compile(gradient_and_loss) if compiled else gradient_and_loss
+        fn(model, loss_function, params, data)
+        if bench.is_cuda:
+            cuda.synchronize()
 
-        def func(compiled=compiled):
-            model, loss_function, params, data = bench.setup_problem("Hessian")
-            fn = torch_compile(gradient_and_loss) if compiled else gradient_and_loss
-            fn(model, loss_function, params, data)
-            if bench.is_cuda:
-                cuda.synchronize()
-
-        peakmem_gib = bench.memory(func)
-        print(
-            f"[Memory] Reference gradient_and_loss ({category}) on {problem_str}"
-            f" and {device_str}: {peakmem_gib:.2f} GiB"
-        )
-        _merge_json(savepath, category, "peakmem", peakmem_gib)
+    peakmem_gib = bench.memory(func)
+    print(
+        f"[Memory] Reference gradient_and_loss ({category}) on {problem_str}"
+        f" and {device_str}: {peakmem_gib:.2f} GiB"
+    )
+    _merge_json(savepath, category, "peakmem", peakmem_gib)
 
 
-def _run_operator_peakmem(linop_str: str, problem_str: str, device_str: str):
-    """Measure peak memory for eager and compiled matvec (called in subprocess).
+def _run_operator_peakmem(
+    linop_str: str, problem_str: str, device_str: str, compiled: bool
+):
+    """Measure peak memory for a single matvec variant (called in subprocess).
 
     Writes results to a temporary peakmem JSON file that will be merged
     by the parent process.
@@ -644,40 +638,30 @@ def _run_operator_peakmem(linop_str: str, problem_str: str, device_str: str):
         linop_str: The linear operator.
         problem_str: The problem.
         device_str: The device.
+        compiled: Whether to measure with ``torch.compile``.
     """
     savepath = benchpath(linop_str, problem_str, device_str, op_str="peakmem")
     bench = Benchmark(problem_str, device_str)
-    results = {}
+    category = "compiled" if compiled else "eager"
 
-    for compiled in [False, True]:
-        category = "compiled" if compiled else "eager"
-
-        def func(compiled=compiled):
-            model, loss_function, params, data = bench.setup_problem(linop_str)
-            linop = setup_linop(
-                linop_str,
-                model,
-                loss_function,
-                params,
-                data,
-                check_deterministic=False,
-            )
-            v = rand(linop.shape[1], device=linop.device)
-            matvec_fn = (
-                torch_compile(lambda: linop @ v) if compiled else lambda: linop @ v
-            )
-            with attention_context(linop, model):
-                _ = matvec_fn()
-            if bench.is_cuda:
-                cuda.synchronize()
-
-        peakmem_gib = bench.memory(func)
-        print(
-            f"[Memory] {linop_str} ({category}) on {problem_str}"
-            f" and {device_str}: {peakmem_gib:.2f} GiB"
+    def func():
+        model, loss_function, params, data = bench.setup_problem(linop_str)
+        linop = setup_linop(
+            linop_str, model, loss_function, params, data, check_deterministic=False
         )
-        results[category] = {"peakmem": peakmem_gib}
+        v = rand(linop.shape[1], device=linop.device)
+        matvec_fn = torch_compile(lambda: linop @ v) if compiled else lambda: linop @ v
+        with attention_context(linop, model):
+            _ = matvec_fn()
+        if bench.is_cuda:
+            cuda.synchronize()
 
+    peakmem_gib = bench.memory(func)
+    print(
+        f"[Memory] {linop_str} ({category}) on {problem_str}"
+        f" and {device_str}: {peakmem_gib:.2f} GiB"
+    )
+    results = {category: {"peakmem": peakmem_gib}}
     with open(savepath, "w") as f:
         json.dump(results, f, indent=2)
 
@@ -710,9 +694,14 @@ if __name__ == "__main__":
         action="store_true",
         help="Measure reference gradient_and_loss (ignores --linop).",
     )
+    parser.add_argument(
+        "--compiled",
+        action="store_true",
+        help="Measure with torch.compile (default: eager).",
+    )
 
     args = parser.parse_args()
     if args.reference:
-        _run_reference_peakmem(args.problem, args.device)
+        _run_reference_peakmem(args.problem, args.device, args.compiled)
     else:
-        _run_operator_peakmem(args.linop, args.problem, args.device)
+        _run_operator_peakmem(args.linop, args.problem, args.device, args.compiled)
