@@ -13,6 +13,6 @@
     "kfac_factors": NaN,
     "eigh": NaN,
     "eigenvalue_correction": NaN,
-    "peakmem": 9.287253856658936
+    "peakmem": NaN
   }
 }

@@ -342,6 +342,17 @@ class Benchmark:
                 return float(nan), None
             return {name: float(nan) for name, _ in func}, None
 
+    def _get_timer(self, compiled: bool):
+        """Return :meth:`_time_or_nan` for compiled, :meth:`time` for eager.
+
+        Args:
+            compiled: Whether this is a compiled measurement.
+
+        Returns:
+            The timing callable.
+        """
+        return self._time_or_nan if compiled else self.time
+
     def _run_reference_time(self):
         """Time gradient_and_loss (eager + compiled) and save to reference JSON."""
         savepath = reference_benchpath(self.problem_str, self.device_str)
@@ -354,7 +365,7 @@ class Benchmark:
                 print(f"[Time] Skipping {label} ({category}): {existing:.4f} s")
                 continue
             fn = torch_compile(gradient_and_loss) if compiled else gradient_and_loss
-            timer = self._time_or_nan if compiled else self.time
+            timer = self._get_timer(compiled)
             best, _ = timer(partial(fn, model, loss_function, params, data))
             print(f"[Time] {label} ({category}): {best:.4f} s")
             _merge_json(savepath, category, "time", best)
@@ -381,17 +392,19 @@ class Benchmark:
                 matvec_fn = (
                     torch_compile(lambda: linop @ v) if compiled else lambda: linop @ v
                 )
-                timer = self._time_or_nan if compiled else self.time
+                timer = self._get_timer(compiled)
                 matvec_time, _ = timer(matvec_fn, context=ctx)
                 _merge_json(savepath, category, "matvec", matvec_time)
                 print(f"[Time] {label} / matvec ({category}): {matvec_time:.4f} s")
 
             if linop_str in _KFAC_LIKE:
                 expected_ops = _get_precompute_ops(linop_str)
-                all_exist = all(
-                    self._has_result(savepath, category, op) is not None
-                    for op in expected_ops
-                )
+                if self.skip_existing and path.exists(savepath):
+                    with open(savepath) as f:
+                        existing_cat = json.load(f).get(category, {})
+                    all_exist = all(op in existing_cat for op in expected_ops)
+                else:
+                    all_exist = False
                 if all_exist:
                     print(f"[Time] Skipping {label} / precompute ({category})")
                 else:
@@ -400,7 +413,7 @@ class Benchmark:
                     )
                     if compiled:
                         phases = [(name, torch_compile(fn)) for name, fn in phases]
-                    timer = self._time_or_nan if compiled else self.time
+                    timer = self._get_timer(compiled)
                     phase_times, _ = timer(phases, context=phase_ctx)
                     for phase_name, t in phase_times.items():
                         _merge_json(savepath, category, phase_name, t)
@@ -678,12 +691,16 @@ def _run_reference_peakmem(problem_str: str, device_str: str, compiled: bool):
     def func():
         model, loss_function, params, data = bench.setup_problem("Hessian")
         gradient_and_loss(model, loss_function, params, data)
-        if bench.is_cuda:
-            cuda.synchronize()
 
     if compiled:
         func = torch_compile(func)
-    peakmem_gib = bench.memory(func)
+
+    def func_and_sync():
+        func()
+        if bench.is_cuda:
+            cuda.synchronize()
+
+    peakmem_gib = bench.memory(func_and_sync)
     print(
         f"[Memory] Reference gradient_and_loss ({category}) on {problem_str}"
         f" and {device_str}: {peakmem_gib:.2f} GiB"
@@ -717,12 +734,16 @@ def _run_operator_peakmem(
         v = rand(linop.shape[1], device=linop.device)
         with attention_context(linop, model):
             _ = linop @ v
-        if bench.is_cuda:
-            cuda.synchronize()
 
     if compiled:
         func = torch_compile(func)
-    peakmem_gib = bench.memory(func)
+
+    def func_and_sync():
+        func()
+        if bench.is_cuda:
+            cuda.synchronize()
+
+    peakmem_gib = bench.memory(func_and_sync)
     print(
         f"[Memory] {linop_str} ({category}) on {problem_str}"
         f" and {device_str}: {peakmem_gib:.2f} GiB"

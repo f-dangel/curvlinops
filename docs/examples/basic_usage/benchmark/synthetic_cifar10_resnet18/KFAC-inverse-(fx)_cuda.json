@@ -9,6 +9,6 @@
     "matvec": 0.007788566988892853,
     "tracing": NaN,
     "kfac_factors": NaN,
-    "peakmem": 0.93023681640625
+    "peakmem": NaN
   }
 }
