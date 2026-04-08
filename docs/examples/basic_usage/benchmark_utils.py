@@ -2,6 +2,7 @@
 
 import inspect
 import json
+import platform
 from collections.abc import Iterable
 from contextlib import nullcontext
 from os import makedirs, path
@@ -220,7 +221,7 @@ def save_environment_info(result_dir: str):
     Args:
         result_dir: Directory where ``environment.json`` is written.
     """
-    info = {"pytorch_version": torch.__version__}
+    info = {"pytorch_version": torch.__version__, "hostname": platform.node()}
     if cuda.is_available():
         info["gpu"] = cuda.get_device_name(0)
         info["cuda_version"] = torch.version.cuda

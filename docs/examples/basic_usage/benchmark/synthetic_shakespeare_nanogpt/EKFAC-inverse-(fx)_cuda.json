@@ -1,13 +1,18 @@
 {
   "eager": {
-    "matvec": 0.0736170299933292,
-    "tracing": 5.3880368359969,
-    "kfac_factors": 0.31466886901762336,
-    "eigh": 3.6985528520308435,
-    "eigenvalue_correction": 0.34968246903736144,
+    "matvec": 0.07146332308184355,
+    "tracing": 5.2928943580482155,
+    "kfac_factors": 0.3069230989785865,
+    "eigh": 3.648193772067316,
+    "eigenvalue_correction": 0.34011135098990053,
     "peakmem": 9.009129524230957
   },
   "compiled": {
-    "matvec": 0.06946066400269046
+    "matvec": 0.06825453892815858,
+    "tracing": NaN,
+    "kfac_factors": NaN,
+    "eigh": NaN,
+    "eigenvalue_correction": NaN,
+    "peakmem": NaN
   }
 }
