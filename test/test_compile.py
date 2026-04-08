@@ -148,7 +148,6 @@ BACKENDS = ["hooks", "make_fx"]
 def test_kfac_like_matvec_no_graph_breaks(cls, backend, setup_fn):
     """(E)KFAC matvec compiles with zero graph breaks for both backends."""
     model, loss_fn, params, data = setup_fn()
-    num_per_example_loss_terms = data[0][1][0].numel()
     K = cls(
         model,
         loss_fn,
@@ -156,7 +155,6 @@ def test_kfac_like_matvec_no_graph_breaks(cls, backend, setup_fn):
         data,
         check_deterministic=False,
         separate_weight_and_bias=False,
-        num_per_example_loss_terms=num_per_example_loss_terms,
         backend=backend,
     )
     _assert_no_graph_breaks(K)
