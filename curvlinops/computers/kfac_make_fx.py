@@ -161,11 +161,9 @@ def make_compute_kfac_io_batch(
     grad_outputs_computer = _BaseKFACComputer._set_up_grad_outputs_computer(
         loss_func, fisher_type, mc_samples
     )
-
     io_fn, io_param_names, layer_hparams = with_kfac_io(
         model_func, X, params, fisher_type
     )
-
     mapping, io_groups = _build_param_groups_from_io(
         io_param_names, separate_weight_and_bias
     )
@@ -173,14 +171,29 @@ def make_compute_kfac_io_batch(
     def io_batch(
         params: dict[str, Tensor], X: Tensor, y: Tensor
     ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
+        """Run forward pass with IO collection and backpropagate grad outputs.
+
+        Args:
+            params: Named model parameters.
+            X: Input batch.
+            y: Target batch.
+
+        Returns:
+            ``(layer_inputs, layer_output_grads)`` dicts keyed by IO layer
+            name. ``layer_output_grads`` is empty when the IO collector
+            did not store outputs (e.g. ``FORWARD_ONLY``).
+        """
         output, layer_inputs, layer_outputs = io_fn(params, X)
 
         if output_check_fn is not None:
             output_check_fn(output)
 
-        if fisher_type == FisherType.FORWARD_ONLY:
+        if not layer_outputs:
             return layer_inputs, {}
 
+        # Rearrange >2d output/target into 2d for the loss function.
+        # CrossEntropyLoss expects class dim second: "batch c ... -> (batch ...) c"
+        # Other losses have class dim last: "batch ... c -> (batch ...) c"
         if isinstance(loss_func, CrossEntropyLoss):
             output_local = output.movedim(1, -1).flatten(0, -2)
             y_local = y.flatten()
