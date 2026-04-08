@@ -30,19 +30,32 @@ from curvlinops.utils import _make_fx, make_functional_call
 def _build_param_groups_from_io(
     io_param_names: dict[str, dict[str, str]],
     separate_weight_and_bias: bool,
-) -> tuple[list[ParamGroup], dict[ParamGroupKey, list[str]]]:
-    """Build parameter groups and IO-layer mapping from IO collector detections.
+    layer_hparams: dict[str, dict] | None = None,
+) -> tuple[
+    list[ParamGroup],
+    dict[ParamGroupKey, list[str]],
+    list[ParamGroupKey],
+    list,
+    list[ParamGroupKey],
+    list,
+]:
+    """Build parameter groups, IO-layer mapping, and group info from IO detections.
 
     Groups IO layers by weight name to form virtual modules. Each virtual
     module produces one group (joint) or separate W/b groups (separate).
-    Also maps each group key to its contributing IO layer names.
+
+    When ``layer_hparams`` is provided, also pre-computes the per-group
+    structures needed for covariance computation (bias pads, hyperparameters).
 
     Args:
         io_param_names: Per-IO-layer parameter names from the IO collector.
         separate_weight_and_bias: Whether to treat weight and bias separately.
+        layer_hparams: Layer hyperparameter dicts (for pre-computing group
+            info). ``None`` skips group info computation.
 
     Returns:
-        Tuple of (parameter groups, IO-layer mapping).
+        Tuple of ``(mapping, io_groups, weight_group_keys, weight_group_info,
+        all_group_keys, grad_group_info)``.
 
     Raises:
         ValueError: If joint treatment and a weight has conflicting biases.
@@ -70,9 +83,14 @@ def _build_param_groups_from_io(
             modules[b] = {"b": b}
             module_io[b].append(io_name)
 
-    # Convert virtual modules to parameter groups and IO-layer mapping
+    # Convert virtual modules to parameter groups, IO-layer mapping, and
+    # pre-computed group structures for covariance computation.
     groups: list[ParamGroup] = []
     io_groups: dict[ParamGroupKey, list[str]] = {}
+    weight_group_keys: list[ParamGroupKey] = []
+    weight_group_info: list = []
+    all_group_keys: list[ParamGroupKey] = []
+    grad_group_info: list = []
 
     for mod_key, mod in modules.items():
         io = module_io[mod_key]
@@ -83,11 +101,31 @@ def _build_param_groups_from_io(
             groups.append(pd)
             key = tuple(pd.values())
             # Bias-only groups: only IO layers that actually use the bias
-            io_groups[key] = (
+            io_names = (
                 [n for n in io if "b" in io_param_names[n]] if "W" not in pd else io
             )
+            io_groups[key] = io_names
 
-    return groups, io_groups
+            if layer_hparams is not None:
+                hparams = [layer_hparams[n] for n in io_names]
+                all_group_keys.append(key)
+                grad_group_info.append((io_names, hparams))
+                if "W" in pd:
+                    weight_group_keys.append(key)
+                    has_joint_wb = "b" in pd
+                    bias_pads = [
+                        _bias_pad(has_joint_wb, io_param_names[n]) for n in io_names
+                    ]
+                    weight_group_info.append((io_names, bias_pads, hparams))
+
+    return (
+        groups,
+        io_groups,
+        weight_group_keys,
+        weight_group_info,
+        all_group_keys,
+        grad_group_info,
+    )
 
 
 def _bias_pad(has_joint_wb: bool, io_layer_params: dict[str, str]) -> int | None:
@@ -123,12 +161,19 @@ def make_compute_kfac_io_batch(
     dict[ParamGroupKey, list[str]],
     dict[str, dict[str, str]],
     dict[str, dict],
+    list[ParamGroupKey],
+    list,
+    list[ParamGroupKey],
+    list,
 ]:
     """Set up per-batch IO collection and backward pass for KFAC.
 
     Returns an **untraced** closure that, given ``(params, X, y)``, runs the
     forward pass with IO collection and backpropagates the Fisher-type-specific
     gradient outputs to produce per-layer inputs and batched output gradients.
+
+    Also returns pre-computed group structures for covariance computation
+    (from :func:`_build_param_groups_from_io`).
 
     The closure can be:
 
@@ -156,8 +201,8 @@ def make_compute_kfac_io_batch(
 
     Returns:
         Tuple of ``(io_batch_fn, mapping, io_groups, io_param_names,
-        layer_hparams)`` where ``io_batch_fn(params, X, y)`` returns
-        ``(layer_inputs, layer_output_grads)`` dicts keyed by IO layer name.
+        layer_hparams, weight_group_keys, weight_group_info,
+        all_group_keys, grad_group_info)``.
     """
     if isinstance(model_func, Module):
         model_func = make_functional_call(model_func)
@@ -186,8 +231,15 @@ def make_compute_kfac_io_batch(
     if output_check_fn is not None:
         output_check_fn(model_func(params, X))
 
-    mapping, io_groups = _build_param_groups_from_io(
-        io_param_names, separate_weight_and_bias
+    (
+        mapping,
+        io_groups,
+        weight_group_keys,
+        weight_group_info,
+        all_group_keys,
+        grad_group_info,
+    ) = _build_param_groups_from_io(
+        io_param_names, separate_weight_and_bias, layer_hparams
     )
 
     def io_batch(
@@ -215,7 +267,17 @@ def make_compute_kfac_io_batch(
         layer_output_grads = dict(zip(io_layer_names, layer_output_grads_list))
         return layer_inputs, layer_output_grads
 
-    return io_batch, mapping, io_groups, io_param_names, layer_hparams
+    return (
+        io_batch,
+        mapping,
+        io_groups,
+        io_param_names,
+        layer_hparams,
+        weight_group_keys,
+        weight_group_info,
+        all_group_keys,
+        grad_group_info,
+    )
 
 
 def make_compute_kfac_batch(
@@ -270,20 +332,26 @@ def make_compute_kfac_batch(
         tensors), ``mapping`` is the list of parameter groups, and the keys
         index the covariance lists.
     """
-    io_batch, mapping, io_groups, io_param_names, layer_hparams = (
-        make_compute_kfac_io_batch(
-            model_func,
-            loss_func,
-            params,
-            X,
-            fisher_type,
-            mc_samples,
-            separate_weight_and_bias,
-            output_check_fn,
-        )
+    (
+        io_batch,
+        mapping,
+        _,
+        _,
+        _,
+        weight_group_keys,
+        weight_group_info,
+        all_group_keys,
+        grad_group_info,
+    ) = make_compute_kfac_io_batch(
+        model_func,
+        loss_func,
+        params,
+        X,
+        fisher_type,
+        mc_samples,
+        separate_weight_and_bias,
+        output_check_fn,
     )
-    weight_group_keys = [tuple(g.values()) for g in mapping if "W" in g]
-    all_group_keys = [tuple(g.values()) for g in mapping]
 
     if num_per_example_loss_terms is None:
         batch_size = y.shape[0]
@@ -293,25 +361,6 @@ def make_compute_kfac_batch(
             num_per_example_loss_terms = y.shape[:-1].numel() // batch_size
 
     loss_reduction = loss_func.reduction
-
-    # Pre-compute group structure for stable ordering in the trace
-    weight_group_info = []
-    for group in mapping:
-        if "W" not in group:
-            continue
-        group_key = tuple(group.values())
-        io_names = io_groups.get(group_key, [])
-        has_joint_wb = "b" in group
-        bias_pads = [_bias_pad(has_joint_wb, io_param_names[n]) for n in io_names]
-        hparams = [layer_hparams[n] for n in io_names]
-        weight_group_info.append((io_names, bias_pads, hparams))
-
-    grad_group_info = []
-    for group in mapping:
-        group_key = tuple(group.values())
-        io_names = io_groups.get(group_key, [])
-        hparams = [layer_hparams[n] for n in io_names]
-        grad_group_info.append((io_names, hparams))
 
     def compute_batch(
         params: dict[str, Tensor], X: Tensor, y: Tensor
