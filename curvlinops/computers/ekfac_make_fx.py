@@ -92,48 +92,39 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
 
     def _trace_batch_functions(
         self,
-    ) -> tuple[
-        dict[int, Callable],
-        list[ParamGroup],
-        list[ParamGroupKey],
-        list[ParamGroupKey],
-    ]:
+    ) -> tuple[dict[int, Callable], list[ParamGroup]]:
         """Trace per-batch KFAC computation for all batch sizes in the data.
 
         Delegates to :func:`make_compute_kfac_batch` per unique batch size.
 
         Returns:
-            Tuple of ``(traced_fns, mapping, weight_group_keys, all_group_keys)``.
+            Tuple of ``(traced_fns, mapping)``.
         """
         traced_fns: dict[int, Callable] = {}
         mapping: list[ParamGroup] | None = None
-        weight_group_keys: list[ParamGroupKey] | None = None
-        all_group_keys: list[ParamGroupKey] | None = None
 
         for X, y in self._loop_over_data(desc="Batch tracing"):
             batch_size = self._batch_size_fn(X)
             if batch_size not in traced_fns:
                 if isinstance(X, UserDict):
                     _register_userdict_as_pytree()
-                traced_fns[batch_size], mapping, weight_group_keys, all_group_keys = (
-                    make_compute_kfac_batch(
-                        self._model_func,
-                        self._loss_func,
-                        self._params,
-                        X,
-                        y,
-                        self._fisher_type,
-                        self._mc_samples,
-                        self._kfac_approx,
-                        self._separate_weight_and_bias,
-                        self._batch_size_fn,
-                        output_check_fn=lambda out: (
-                            self._rearrange_for_larger_than_2d_output(out, y)
-                        ),
-                    )
+                traced_fns[batch_size], mapping = make_compute_kfac_batch(
+                    self._model_func,
+                    self._loss_func,
+                    self._params,
+                    X,
+                    y,
+                    self._fisher_type,
+                    self._mc_samples,
+                    self._kfac_approx,
+                    self._separate_weight_and_bias,
+                    self._batch_size_fn,
+                    output_check_fn=lambda out: (
+                        self._rearrange_for_larger_than_2d_output(out, y)
+                    ),
                 )
 
-        return traced_fns, mapping, weight_group_keys, all_group_keys
+        return traced_fns, mapping
 
     def compute(
         self,

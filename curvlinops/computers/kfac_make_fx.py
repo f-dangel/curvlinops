@@ -234,8 +234,6 @@ def make_compute_kfac_batch(
 ) -> tuple[
     Callable[[dict[str, Tensor], Tensor, Tensor], tuple[list[Tensor], list[Tensor]]],
     list[ParamGroup],
-    list[ParamGroupKey],
-    list[ParamGroupKey],
 ]:
     """Set up and trace the per-batch KFAC Kronecker factor computation.
 
@@ -264,11 +262,9 @@ def make_compute_kfac_batch(
         output_check_fn: Passed to :func:`make_compute_kfac_io_batch`.
 
     Returns:
-        Tuple of ``(traced_fn, mapping, weight_group_keys, all_group_keys)``
-        where ``traced_fn`` is a compiled function
-        ``(params, X, y) -> (input_covs, gradient_covs)`` (each a list of
-        tensors), ``mapping`` is the list of parameter groups, and the keys
-        index the covariance lists.
+        Tuple of ``(traced_fn, mapping)`` where ``traced_fn`` is a compiled
+        function ``(params, X, y) -> (input_covs, gradient_covs)`` (each a
+        list of tensors) and ``mapping`` is the list of parameter groups.
     """
     io_batch, mapping, io_groups, io_param_names, layer_hparams = (
         make_compute_kfac_io_batch(
@@ -288,9 +284,6 @@ def make_compute_kfac_batch(
         num_per_example_loss_terms = y.numel() // batch_size
     else:
         num_per_example_loss_terms = y.shape[:-1].numel() // batch_size
-
-    weight_group_keys = [tuple(g.values()) for g in mapping if "W" in g]
-    all_group_keys = [tuple(g.values()) for g in mapping]
 
     def compute_batch(
         params: dict[str, Tensor], X: Tensor, y: Tensor
@@ -349,7 +342,7 @@ def make_compute_kfac_batch(
 
     traced_fn = _make_fx(compute_batch)(params, X, y)
 
-    return traced_fn, mapping, weight_group_keys, all_group_keys
+    return traced_fn, mapping
 
 
 class MakeFxKFACComputer(_BaseKFACComputer):
@@ -373,46 +366,37 @@ class MakeFxKFACComputer(_BaseKFACComputer):
 
     def _trace_batch_functions(
         self,
-    ) -> tuple[
-        dict[int, Callable],
-        list[ParamGroup],
-        list[ParamGroupKey],
-        list[ParamGroupKey],
-    ]:
+    ) -> tuple[dict[int, Callable], list[ParamGroup]]:
         """Trace per-batch KFAC computation for all batch sizes in the data.
 
         Iterates over the data once, tracing one FX graph per unique batch
         size.
 
         Returns:
-            Tuple of ``(traced_fns, mapping, weight_group_keys, all_group_keys)``.
+            Tuple of ``(traced_fns, mapping)``.
         """
         traced_fns: dict[int, Callable] = {}
         mapping: list[ParamGroup] | None = None
-        weight_group_keys: list[ParamGroupKey] | None = None
-        all_group_keys: list[ParamGroupKey] | None = None
 
         for X, y in self._loop_over_data(desc="FX tracing"):
             batch_size = self._batch_size_fn(X)
             if batch_size not in traced_fns:
                 if isinstance(X, UserDict):
                     _register_userdict_as_pytree()
-                traced_fns[batch_size], mapping, weight_group_keys, all_group_keys = (
-                    make_compute_kfac_batch(
-                        self._model_func,
-                        self._loss_func,
-                        self._params,
-                        X,
-                        y,
-                        self._fisher_type,
-                        self._mc_samples,
-                        self._kfac_approx,
-                        self._separate_weight_and_bias,
-                        self._batch_size_fn,
-                    )
+                traced_fns[batch_size], mapping = make_compute_kfac_batch(
+                    self._model_func,
+                    self._loss_func,
+                    self._params,
+                    X,
+                    y,
+                    self._fisher_type,
+                    self._mc_samples,
+                    self._kfac_approx,
+                    self._separate_weight_and_bias,
+                    self._batch_size_fn,
                 )
 
-        return traced_fns, mapping, weight_group_keys, all_group_keys
+        return traced_fns, mapping
 
     def compute(
         self,
@@ -431,12 +415,7 @@ class MakeFxKFACComputer(_BaseKFACComputer):
 
     def _compute_kronecker_factors(
         self,
-        traced_batch: tuple[
-            dict[int, Callable],
-            list[ParamGroup],
-            list[ParamGroupKey],
-            list[ParamGroupKey],
-        ],
+        traced_batch: tuple[dict[int, Callable], list[ParamGroup]],
     ) -> tuple[
         dict[ParamGroupKey, Tensor], dict[ParamGroupKey, Tensor], list[ParamGroup]
     ]:
@@ -452,7 +431,9 @@ class MakeFxKFACComputer(_BaseKFACComputer):
         Returns:
             Tuple of (input_covariances, gradient_covariances, mapping).
         """
-        traced_fns, mapping, weight_group_keys, all_group_keys = traced_batch
+        traced_fns, mapping = traced_batch
+        weight_group_keys = [tuple(g.values()) for g in mapping if "W" in g]
+        all_group_keys = [tuple(g.values()) for g in mapping]
 
         grad_normalization = {
             "sum": 1.0,
