@@ -177,7 +177,6 @@ def visualize_precompute_benchmark(
     """
     kfac = [linop for linop in linop_strs if linop in _KFAC_LIKE]
     fig, ax = plt.subplots()
-    plt.rcParams["hatch.linewidth"] = 2.5
 
     precompute_colors = {
         "kfac_factors": "tab:green",

@@ -111,7 +111,7 @@ def _make_batch_fn(
     layer_hparams: dict[str, dict[str, Any]],
     mapping: list[ParamGroup],
     io_groups: dict[ParamGroupKey, list[str]],
-    kfac_approx: Any,
+    kfac_approx: str,
     fisher_type: FisherType,
     loss_reduction: str,
     num_per_example_loss_terms: int | None,

@@ -94,9 +94,12 @@ def input_to_weight_sharing_format(
             layer_hyperparams["padding"],
             layer_hyperparams["dilation"],
             layer_hyperparams["groups"],
-        ).contiguous()
+        ).contiguous()  # torch.compile needs contiguous tensors for reshape ops
 
     # Step 2: Collapse sharing dimensions into a single axis [batch, shared, d_in]
+    # x is always at least 2D: [batch, d_in] (Linear) or [batch, spatial..., d_in]
+    # (Conv2d after patch extraction). ndim < 2 would be a programming error.
+    assert x.ndim >= 2, f"Expected x.ndim >= 2, got {x.ndim}"
     # NOTE: Use flatten/unsqueeze (not einops rearrange) because rearrange traces
     # as aten.view which fails on non-contiguous tensors during torch.compile.
     if kfac_approx == KFACType.REDUCE:
@@ -115,7 +118,7 @@ def input_to_weight_sharing_format(
     if bias_pad is not None:
         x = cat([x, x.new_full((*x.shape[:-1], 1), bias_pad)], dim=-1)
 
-    return x.contiguous()
+    return x.contiguous()  # torch.compile needs contiguous tensors for reshape ops
 
 
 def grad_to_weight_sharing_format(
@@ -166,7 +169,7 @@ def grad_to_weight_sharing_format(
     else:
         g = g.unsqueeze(num_leading_dims)
 
-    return g.contiguous()
+    return g.contiguous()  # torch.compile needs contiguous tensors for reshape ops
 
 
 def compute_loss_correction(
