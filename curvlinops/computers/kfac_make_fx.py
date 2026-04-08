@@ -19,7 +19,6 @@ from curvlinops._checks import _register_userdict_as_pytree
 from curvlinops.computers._base import ParamGroup, ParamGroupKey, _BaseKFACComputer
 from curvlinops.computers.io_collector import with_kfac_io
 from curvlinops.computers.kfac_math import (
-    compute_loss_correction,
     grad_to_weight_sharing_format,
     input_to_weight_sharing_format,
 )
@@ -334,16 +333,9 @@ def make_compute_kfac_batch(
                 for n in io_names
             ]
             g = cat(gs, dim=2)
-            correction = compute_loss_correction(
-                g.shape[1],
-                num_per_example_loss_terms,
-                loss_func.reduction,
-            )
-            ggT = einsum(g, g, "v batch shared i, v batch shared j -> i j").mul_(
-                correction
-            )
+            ggT = einsum(g, g, "v batch shared i, v batch shared j -> i j")
             if loss_func.reduction == "mean":
-                ggT.div_(batch_size)
+                ggT.mul_(batch_size * num_per_example_loss_terms)
             gradient_covs.append(ggT)
 
         return input_covs, gradient_covs
