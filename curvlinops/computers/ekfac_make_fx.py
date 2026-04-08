@@ -126,7 +126,7 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
                         self._mc_samples,
                         self._kfac_approx,
                         self._separate_weight_and_bias,
-                        self._num_per_example_loss_terms,
+                        self._batch_size_fn,
                         output_check_fn=lambda out: (
                             self._rearrange_for_larger_than_2d_output(out, y)
                         ),

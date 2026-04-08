@@ -229,7 +229,7 @@ def make_compute_kfac_batch(
     mc_samples: int = 1,
     kfac_approx: str = KFACType.EXPAND,
     separate_weight_and_bias: bool = True,
-    num_per_example_loss_terms: int | None = None,
+    batch_size_fn: Callable[[Tensor], int] = lambda X: X.shape[0],
     output_check_fn: Callable[[Tensor], None] | None = None,
 ) -> tuple[
     Callable[[dict[str, Tensor], Tensor, Tensor], tuple[list[Tensor], list[Tensor]]],
@@ -259,8 +259,8 @@ def make_compute_kfac_batch(
             ``KFACType.REDUCE``). Defaults to ``KFACType.EXPAND``.
         separate_weight_and_bias: Whether to treat weights and biases
             separately. Defaults to ``True``.
-        num_per_example_loss_terms: Number of loss terms per example.
-            Inferred from ``y`` and ``loss_func`` if ``None``.
+        batch_size_fn: Function to extract batch size from ``X``.
+            Defaults to ``X.shape[0]``.
         output_check_fn: Passed to :func:`make_compute_kfac_io_batch`.
 
     Returns:
@@ -283,12 +283,11 @@ def make_compute_kfac_batch(
         )
     )
 
-    if num_per_example_loss_terms is None:
-        batch_size = y.shape[0]
-        if isinstance(loss_func, CrossEntropyLoss):
-            num_per_example_loss_terms = y.numel() // batch_size
-        else:
-            num_per_example_loss_terms = y.shape[:-1].numel() // batch_size
+    batch_size = batch_size_fn(X)
+    if isinstance(loss_func, CrossEntropyLoss):
+        num_per_example_loss_terms = y.numel() // batch_size
+    else:
+        num_per_example_loss_terms = y.shape[:-1].numel() // batch_size
 
     weight_group_keys = [tuple(g.values()) for g in mapping if "W" in g]
     all_group_keys = [tuple(g.values()) for g in mapping]
@@ -409,7 +408,7 @@ class MakeFxKFACComputer(_BaseKFACComputer):
                         self._mc_samples,
                         self._kfac_approx,
                         self._separate_weight_and_bias,
-                        self._num_per_example_loss_terms,
+                        self._batch_size_fn,
                     )
                 )
 
