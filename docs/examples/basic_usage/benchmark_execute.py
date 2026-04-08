@@ -604,8 +604,7 @@ def make_precompute_phases(  # noqa: C901
 
         def ekfac_correction(state):
             input_cov, grad_cov, mapping = state
-            computer.compute_eigenvalue_correction(input_cov, grad_cov, mapping)
-            return (input_cov, grad_cov, mapping)
+            return computer.compute_eigenvalue_correction(input_cov, grad_cov, mapping)
 
         phases = [
             ("kfac_factors", ekfac_factors),
@@ -663,10 +662,9 @@ def make_precompute_phases(  # noqa: C901
             input_cov, grad_cov, mapping, io_batch_fns, io_groups, io_pnames, lhp = (
                 state
             )
-            computer.compute_eigenvalue_correction(
+            return computer.compute_eigenvalue_correction(
                 input_cov, grad_cov, mapping, io_batch_fns, io_groups, io_pnames, lhp
             )
-            return (input_cov, grad_cov, mapping)
 
         return [
             ("tracing", ekfac_fx_tracing),
