@@ -678,16 +678,9 @@ def make_precompute_phases(  # noqa: C901
     if linop_str in _IS_FX:
         # KFAC FX: tracing → factors
         computer = setup_computer(linop_str, model, loss_function, params, data)
-
-        def kfac_fx_tracing():
-            return computer._trace_batch_functions()
-
-        def kfac_fx_factors(traced_batch):
-            return computer._compute_kronecker_factors(traced_batch)
-
         return [
-            ("tracing", kfac_fx_tracing),
-            ("kfac_factors", kfac_fx_factors),
+            ("tracing", computer._trace_batch_functions),
+            ("kfac_factors", computer._compute_kronecker_factors),
         ], None
 
     # Plain KFAC hooks: single phase
