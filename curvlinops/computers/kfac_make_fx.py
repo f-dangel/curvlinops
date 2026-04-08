@@ -190,24 +190,31 @@ def make_compute_kfac_io_batch(
         if not layer_outputs:
             return layer_inputs, {}
 
-        # Rearrange >2d output/target into 2d for the loss function.
+        # Scale grad_outputs by 1/num_loss_terms for mean reduction
+        num_loss_terms = (
+            y.numel()
+            if isinstance(loss_func, CrossEntropyLoss)
+            else y.shape[:-1].numel()
+        )
+        scale = {"sum": 1.0, "mean": 1.0 / num_loss_terms}[loss_func.reduction]
+
+        # Rearrange >2d output/target into 2d for grad_outputs_computer.
+        # Needed for empirical Fisher support (assumes 1d per-datum prediction).
         # CrossEntropyLoss expects class dim second: "batch c ... -> (batch ...) c"
         # Other losses have class dim last: "batch ... c -> (batch ...) c"
         if isinstance(loss_func, CrossEntropyLoss):
-            output_local = output.movedim(1, -1).flatten(0, -2)
-            y_local = y.flatten()
+            output_flat = output.movedim(1, -1).flatten(0, -2)
+            y_flat = y.flatten()
         else:
-            output_local = output.flatten(0, -2)
-            y_local = y.flatten(0, -2)
-        grad_outputs = grad_outputs_computer(output_local.detach(), y_local, None)
-        num_loss_terms = output_local.shape[0]
-        scale = {"sum": 1.0, "mean": 1.0 / num_loss_terms}[loss_func.reduction]
+            output_flat = output.flatten(0, -2)
+            y_flat = y.flatten(0, -2)
+        grad_outputs = grad_outputs_computer(output_flat.detach(), y_flat, None)
         grad_outputs.mul_(scale)
 
         io_layer_names = list(layer_outputs)
         output_tensors = list(layer_outputs.values())
         layer_output_grads_list = autograd.grad(
-            output_local,
+            output_flat,
             output_tensors,
             grad_outputs=grad_outputs,
             is_grads_batched=True,
@@ -285,6 +292,53 @@ def make_compute_kfac_batch(
         )
     )
 
+    def group_inputs(group: ParamGroup, layer_inputs: dict[str, Tensor]) -> Tensor:
+        """Gather a group's layer inputs in weight sharing format.
+
+        Args:
+            group: Parameter group dict.
+            layer_inputs: Raw layer inputs keyed by IO layer name.
+
+        Returns:
+            Concatenated tensor of shape ``[batch, shared, d_in]``.
+        """
+        group_key = tuple(group.values())
+        io_names = io_groups[group_key]
+        has_joint_wb = "b" in group
+        xs = [
+            input_to_weight_sharing_format(
+                layer_inputs[n].data.detach(),
+                kfac_approx,
+                layer_hyperparams=layer_hparams[n],
+                bias_pad=_bias_pad(has_joint_wb, io_param_names[n]),
+            )
+            for n in io_names
+        ]
+        return cat(xs, dim=1)
+
+    def group_grads(group: ParamGroup, layer_output_grads: dict[str, Tensor]) -> Tensor:
+        """Gather a group's layer output gradients in weight sharing format.
+
+        Args:
+            group: Parameter group dict.
+            layer_output_grads: Batched output gradients keyed by IO layer name.
+
+        Returns:
+            Concatenated tensor of shape ``[v, batch, shared, d_out]``.
+        """
+        group_key = tuple(group.values())
+        io_names = io_groups[group_key]
+        gs = [
+            grad_to_weight_sharing_format(
+                layer_output_grads[n].data.detach(),
+                kfac_approx,
+                layer_hyperparams=layer_hparams[n],
+                num_leading_dims=2,
+            )
+            for n in io_names
+        ]
+        return cat(gs, dim=2)
+
     def compute_batch(
         params: dict[str, Tensor], X: Tensor, y: Tensor
     ) -> tuple[dict[tuple[str, ...], Tensor], dict[tuple[str, ...], Tensor]]:
@@ -295,19 +349,8 @@ def make_compute_kfac_batch(
         for group in mapping:
             if "W" not in group:
                 continue
+            x = group_inputs(group, layer_inputs)
             group_key = tuple(group.values())
-            io_names = io_groups[group_key]
-            has_joint_wb = "b" in group
-            xs = [
-                input_to_weight_sharing_format(
-                    layer_inputs[n].data.detach(),
-                    kfac_approx,
-                    layer_hyperparams=layer_hparams[n],
-                    bias_pad=_bias_pad(has_joint_wb, io_param_names[n]),
-                )
-                for n in io_names
-            ]
-            x = cat(xs, dim=1)
             xxT = einsum(x, x, "batch shared i, batch shared j -> i j")
             input_covs[group_key] = xxT.div_(batch_size * x.shape[1])
 
@@ -317,19 +360,11 @@ def make_compute_kfac_batch(
             if fisher_type == FisherType.FORWARD_ONLY:
                 # FORWARD_ONLY: gradient covariance is identity
                 W = params[next(iter(group.values()))]
-                gradient_covs[group_key] = eye(W.shape[0], dtype=W.dtype, device=W.device)
-                continue
-            io_names = io_groups[group_key]
-            gs = [
-                grad_to_weight_sharing_format(
-                    layer_output_grads[n].data.detach(),
-                    kfac_approx,
-                    layer_hyperparams=layer_hparams[n],
-                    num_leading_dims=2,
+                gradient_covs[group_key] = eye(
+                    W.shape[0], dtype=W.dtype, device=W.device
                 )
-                for n in io_names
-            ]
-            g = cat(gs, dim=2)
+                continue
+            g = group_grads(group, layer_output_grads)
             ggT = einsum(g, g, "v batch shared i, v batch shared j -> i j")
             if loss_func.reduction == "mean":
                 num_loss_terms = (
