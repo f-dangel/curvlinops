@@ -4,6 +4,17 @@ Contains the :class:`Benchmark` class that handles time and memory measurements.
 The ``__main__`` block serves as the CLI entry point for subprocess-based memory
 measurements launched by :meth:`Benchmark.run_reference` and
 :meth:`Benchmark.run_operator`.
+
+**Time** is measured in-process: minimum over ``num_repeats`` calls, with
+``cuda.synchronize()`` before and after each call. Compiled measurements use
+:meth:`_time_or_nan` which catches ``RuntimeError`` from ``torch.compile``
+failures (e.g. FX-traced operators containing ``autograd.grad``).
+
+**Peak memory** is measured in isolated subprocesses to avoid allocation
+artifacts. For compiled measurements, a warmup call runs first (the 1st call
+of a ``torch.compiled`` function traces in eager mode, not compiled), followed
+by ``gc.collect()`` to free compilation reference cycles. The actual
+measurement captures steady-state compiled memory.
 """
 
 from __future__ import annotations
@@ -357,6 +368,8 @@ class Benchmark:
 
     def _run_reference_time(self):
         """Time gradient_and_loss (eager + compiled) and save to reference JSON."""
+        # Memory subprocesses between operators pollute the inductor filesystem
+        # cache, causing torch.compile to silently fall back to eager speed.
         reset_compiler()
         savepath = reference_benchpath(self.problem_str, self.device_str)
         label = f"Reference on {self.problem_str} and {self.device_str}"
@@ -375,6 +388,8 @@ class Benchmark:
 
     def _run_operator_time(self, linop_str: str):
         """Time matvec and precompute phases (eager + compiled), save to JSON."""
+        # Memory subprocesses between operators pollute the inductor filesystem
+        # cache, causing torch.compile to silently fall back to eager speed.
         reset_compiler()
         savepath = benchpath(linop_str, self.problem_str, self.device_str)
         label = f"{linop_str} on {self.problem_str} and {self.device_str}"
@@ -474,14 +489,11 @@ class Benchmark:
         """
         return ("--compiled",) if compiled else ()
 
-    def _try_subprocess(self, *extra_args: str) -> bool:
-        """Run benchmark_execute.py as a subprocess; return success status.
+    def _try_subprocess(self, *extra_args: str):
+        """Run benchmark_execute.py as a subprocess, suppressing failures.
 
         Args:
             *extra_args: Extra CLI arguments.
-
-        Returns:
-            ``True`` if the subprocess succeeded, ``False`` otherwise.
         """
         cmd = [
             sys.executable,
@@ -493,9 +505,8 @@ class Benchmark:
         print(f"Running command: {' '.join(cmd)}")
         try:
             run_verbose(cmd)
-            return True
         except CalledProcessError:
-            return False
+            pass
 
 
 # -- Helpers for precompute sub-phase timing --
