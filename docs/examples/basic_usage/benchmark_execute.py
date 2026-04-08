@@ -8,6 +8,7 @@ measurements launched by :meth:`Benchmark.run_reference` and
 
 from __future__ import annotations
 
+import gc
 import json
 import sys
 from argparse import ArgumentParser
@@ -697,6 +698,10 @@ def _run_reference_peakmem(problem_str: str, device_str: str, compiled: bool):
 
     if compiled:
         func = torch_compile(func)
+        # Warmup: the 1st call traces in eager (not compiled), and leaves
+        # reference cycles from compilation. Run + gc to get steady state.
+        func()
+        gc.collect()
 
     def func_and_sync():
         func()
@@ -740,6 +745,10 @@ def _run_operator_peakmem(
 
     if compiled:
         func = torch_compile(func)
+        # Warmup: the 1st call traces in eager (not compiled), and leaves
+        # reference cycles from compilation. Run + gc to get steady state.
+        func()
+        gc.collect()
 
     def func_and_sync():
         func()
