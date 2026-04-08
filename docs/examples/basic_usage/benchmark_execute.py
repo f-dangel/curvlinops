@@ -38,6 +38,7 @@ from benchmark_utils import (
 from memory_profiler import memory_usage
 from torch import Tensor, cuda, device, manual_seed, nan, rand
 from torch import compile as torch_compile
+from torch.compiler import reset as reset_compiler
 from torch.nn import Conv2d, Linear, Module
 
 from curvlinops import KFACLinearOperator
@@ -355,6 +356,7 @@ class Benchmark:
 
     def _run_reference_time(self):
         """Time gradient_and_loss (eager + compiled) and save to reference JSON."""
+        reset_compiler()
         savepath = reference_benchpath(self.problem_str, self.device_str)
         label = f"Reference on {self.problem_str} and {self.device_str}"
         model, loss_function, params, data = self.setup_problem("Hessian")
@@ -372,6 +374,7 @@ class Benchmark:
 
     def _run_operator_time(self, linop_str: str):
         """Time matvec and precompute phases (eager + compiled), save to JSON."""
+        reset_compiler()
         savepath = benchpath(linop_str, self.problem_str, self.device_str)
         label = f"{linop_str} on {self.problem_str} and {self.device_str}"
 
