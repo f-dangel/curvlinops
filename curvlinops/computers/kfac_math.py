@@ -153,6 +153,7 @@ def grad_to_weight_sharing_format(
     # Step 2: Collapse sharing dimensions [*leading, batch, shared, d_out]
     # NOTE: Use flatten/unsqueeze (not einops rearrange) because rearrange traces
     # as aten.view which fails on non-contiguous tensors during torch.compile.
+    assert g.ndim >= num_leading_dims + 1, f"Expected g.ndim >= {num_leading_dims + 1}, got {g.ndim}"
     has_sharing = g.ndim > num_leading_dims + 1
     if not has_sharing:
         g = g.unsqueeze(num_leading_dims)
