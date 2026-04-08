@@ -228,6 +228,8 @@ def make_compute_kfac_batch(
     mc_samples: int = 1,
     kfac_approx: str = KFACType.EXPAND,
     separate_weight_and_bias: bool = True,
+    num_per_example_loss_terms: int | None = None,
+    output_check_fn: Callable[[Tensor], None] | None = None,
 ) -> tuple[
     Callable[[dict[str, Tensor], Tensor, Tensor], tuple[list[Tensor], list[Tensor]]],
     list[ParamGroup],
@@ -257,6 +259,9 @@ def make_compute_kfac_batch(
             ``KFACType.REDUCE``). Defaults to ``KFACType.EXPAND``.
         separate_weight_and_bias: Whether to treat weights and biases
             separately. Defaults to ``True``.
+        num_per_example_loss_terms: Number of loss terms per example.
+            Inferred from ``y`` and ``loss_func`` if ``None``.
+        output_check_fn: Passed to :func:`make_compute_kfac_io_batch`.
 
     Returns:
         Tuple of ``(traced_fn, mapping, weight_group_keys, all_group_keys)``
@@ -274,17 +279,18 @@ def make_compute_kfac_batch(
             fisher_type,
             mc_samples,
             separate_weight_and_bias,
+            output_check_fn,
         )
     )
     weight_group_keys = [tuple(g.values()) for g in mapping if "W" in g]
     all_group_keys = [tuple(g.values()) for g in mapping]
 
-    # Infer num_per_example_loss_terms from (y, loss_func)
-    batch_size = y.shape[0]
-    if isinstance(loss_func, CrossEntropyLoss):
-        num_per_example_loss_terms = y.numel() // batch_size
-    else:
-        num_per_example_loss_terms = y.shape[:-1].numel() // batch_size
+    if num_per_example_loss_terms is None:
+        batch_size = y.shape[0]
+        if isinstance(loss_func, CrossEntropyLoss):
+            num_per_example_loss_terms = y.numel() // batch_size
+        else:
+            num_per_example_loss_terms = y.shape[:-1].numel() // batch_size
 
     loss_reduction = loss_func.reduction
 
@@ -405,96 +411,20 @@ class MakeFxKFACComputer(_BaseKFACComputer):
             if batch_size not in traced_fns:
                 if isinstance(X, UserDict):
                     _register_userdict_as_pytree()
-                io_batch, mapping, io_groups, io_param_names, layer_hparams = (
-                    make_compute_kfac_io_batch(
+                traced_fns[batch_size], mapping, weight_group_keys, all_group_keys = (
+                    make_compute_kfac_batch(
                         self._model_func,
                         self._loss_func,
                         self._params,
                         X,
+                        y,
                         self._fisher_type,
                         self._mc_samples,
+                        self._kfac_approx,
                         self._separate_weight_and_bias,
+                        self._num_per_example_loss_terms,
                     )
                 )
-                weight_group_keys = [tuple(g.values()) for g in mapping if "W" in g]
-                all_group_keys = [tuple(g.values()) for g in mapping]
-
-                # Pre-compute group structure for stable ordering in the trace
-                weight_group_info = []
-                for group in mapping:
-                    if "W" not in group:
-                        continue
-                    group_key = tuple(group.values())
-                    io_names = io_groups.get(group_key, [])
-                    has_joint_wb = "b" in group
-                    bias_pads = [
-                        _bias_pad(has_joint_wb, io_param_names[n]) for n in io_names
-                    ]
-                    hparams = [layer_hparams[n] for n in io_names]
-                    weight_group_info.append((io_names, bias_pads, hparams))
-
-                grad_group_info = []
-                for group in mapping:
-                    group_key = tuple(group.values())
-                    io_names = io_groups.get(group_key, [])
-                    hparams = [layer_hparams[n] for n in io_names]
-                    grad_group_info.append((io_names, hparams))
-
-                kfac_approx = self._kfac_approx
-                loss_reduction = self._loss_func.reduction
-                num_per_example_loss_terms = self._num_per_example_loss_terms
-
-                def compute_batch(
-                    params: dict[str, Tensor], X: Tensor, y: Tensor
-                ) -> tuple[list[Tensor], list[Tensor]]:
-                    layer_inputs, layer_output_grads = io_batch(params, X, y)
-
-                    input_covs = []
-                    for io_names, bias_pads, hparams in weight_group_info:
-                        xs = [
-                            input_to_weight_sharing_format(
-                                layer_inputs[n].data.detach(),
-                                kfac_approx,
-                                layer_hyperparams=hp,
-                                bias_pad=bp,
-                            )
-                            for n, bp, hp in zip(io_names, bias_pads, hparams)
-                        ]
-                        x = cat(xs, dim=1)
-                        scale = x.shape[1]
-                        xxT = einsum(x, x, "batch shared i, batch shared j -> i j")
-                        input_covs.append(xxT.div_(scale))
-
-                    if not layer_output_grads:
-                        return input_covs, []
-
-                    gradient_covs = []
-                    for io_names, hparams in grad_group_info:
-                        gs = [
-                            grad_to_weight_sharing_format(
-                                layer_output_grads[n].data.detach(),
-                                kfac_approx,
-                                layer_hyperparams=hp,
-                                num_leading_dims=2,
-                            )
-                            for n, hp in zip(io_names, hparams)
-                        ]
-                        g = cat(gs, dim=2)
-                        correction = compute_loss_correction(
-                            g.shape[1],
-                            num_per_example_loss_terms,
-                            loss_reduction,
-                        )
-                        ggT = einsum(
-                            g,
-                            g,
-                            "v batch shared i, v batch shared j -> i j",
-                        ).mul_(correction)
-                        gradient_covs.append(ggT)
-
-                    return input_covs, gradient_covs
-
-                traced_fns[batch_size] = _make_fx(compute_batch)(self._params, X, y)
 
         return traced_fns, mapping, weight_group_keys, all_group_keys
 

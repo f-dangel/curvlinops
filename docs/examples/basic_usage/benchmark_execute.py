@@ -593,23 +593,19 @@ def make_precompute_phases(  # noqa: C901
         # EKFAC hooks: factors → eigh → correction
         computer = setup_computer(linop_str, model, loss_function, params, data)
 
-        def ekfac_factors():
-            return computer._compute_kronecker_factors()
-
         def ekfac_eigh(state):
             input_cov, grad_cov, mapping = state
             input_cov = _EKFACMixin._eigenvectors_(input_cov)
             grad_cov = _EKFACMixin._eigenvectors_(grad_cov)
             return (input_cov, grad_cov, mapping)
 
-        def ekfac_correction(state):
-            input_cov, grad_cov, mapping = state
-            return computer.compute_eigenvalue_correction(input_cov, grad_cov, mapping)
-
         phases = [
-            ("kfac_factors", ekfac_factors),
+            ("kfac_factors", computer._compute_kronecker_factors),
             ("eigh", ekfac_eigh),
-            ("eigenvalue_correction", ekfac_correction),
+            (
+                "eigenvalue_correction",
+                lambda state: computer.compute_eigenvalue_correction(*state),
+            ),
         ]
 
         def context():
@@ -637,11 +633,9 @@ def make_precompute_phases(  # noqa: C901
         computer = setup_computer(linop_str, model, loss_function, params, data)
 
         def ekfac_fx_tracing():
-            io_batch_fns, mapping, io_groups, io_param_names, layer_hparams = (
+            traced_batch = computer._trace_batch_functions()
+            io_batch_fns, _, io_groups, io_param_names, layer_hparams = (
                 computer._trace_io_batch_functions()
-            )
-            traced_batch = computer._trace_batch_functions(
-                io_batch_fns, mapping, io_groups, io_param_names, layer_hparams
             )
             return traced_batch, io_batch_fns, io_groups, io_param_names, layer_hparams
 
