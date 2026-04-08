@@ -75,7 +75,6 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
                     io_groups,
                     io_param_names,
                     layer_hparams,
-                    *_,
                 ) = make_compute_kfac_io_batch(
                     self._model_func,
                     self._loss_func,
