@@ -285,12 +285,6 @@ def make_compute_kfac_batch(
         )
     )
 
-    batch_size = batch_size_fn(X)
-    if isinstance(loss_func, CrossEntropyLoss):
-        num_per_example_loss_terms = y.numel() // batch_size
-    else:
-        num_per_example_loss_terms = y.shape[:-1].numel() // batch_size
-
     def compute_batch(
         params: dict[str, Tensor], X: Tensor, y: Tensor
     ) -> tuple[dict[tuple[str, ...], Tensor], dict[tuple[str, ...], Tensor]]:
@@ -323,11 +317,7 @@ def make_compute_kfac_batch(
             if fisher_type == FisherType.FORWARD_ONLY:
                 # FORWARD_ONLY: gradient covariance is identity
                 W = params[next(iter(group.values()))]
-                gradient_covs[group_key] = eye(
-                    W.shape[0],
-                    dtype=W.dtype,
-                    device=W.device,
-                )
+                gradient_covs[group_key] = eye(W.shape[0], dtype=W.dtype, device=W.device)
                 continue
             io_names = io_groups[group_key]
             gs = [
@@ -342,7 +332,12 @@ def make_compute_kfac_batch(
             g = cat(gs, dim=2)
             ggT = einsum(g, g, "v batch shared i, v batch shared j -> i j")
             if loss_func.reduction == "mean":
-                ggT.mul_(batch_size * num_per_example_loss_terms)
+                num_loss_terms = (
+                    y.numel()
+                    if isinstance(loss_func, CrossEntropyLoss)
+                    else y.shape[:-1].numel()
+                )
+                ggT.mul_(num_loss_terms)
             gradient_covs[group_key] = ggT
 
         return input_covs, gradient_covs
