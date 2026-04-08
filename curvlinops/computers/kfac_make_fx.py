@@ -162,9 +162,6 @@ def make_compute_kfac_io_batch(
         loss_func, fisher_type, mc_samples
     )
 
-    loss_reduction = loss_func.reduction
-    is_forward_only = fisher_type == FisherType.FORWARD_ONLY
-
     io_fn, io_param_names, layer_hparams = with_kfac_io(
         model_func, X, params, fisher_type
     )
@@ -181,7 +178,7 @@ def make_compute_kfac_io_batch(
         if output_check_fn is not None:
             output_check_fn(output)
 
-        if is_forward_only:
+        if fisher_type == FisherType.FORWARD_ONLY:
             return layer_inputs, {}
 
         if isinstance(loss_func, CrossEntropyLoss):
@@ -192,7 +189,7 @@ def make_compute_kfac_io_batch(
             y_local = y.flatten(0, -2)
         grad_outputs = grad_outputs_computer(output_local.detach(), y_local, None)
         num_loss_terms = output_local.shape[0]
-        scale = {"sum": 1.0, "mean": 1.0 / num_loss_terms}[loss_reduction]
+        scale = {"sum": 1.0, "mean": 1.0 / num_loss_terms}[loss_func.reduction]
         grad_outputs.mul_(scale)
 
         io_layer_names = list(layer_outputs)
@@ -280,7 +277,6 @@ def make_compute_kfac_batch(
         else:
             num_per_example_loss_terms = y.shape[:-1].numel() // batch_size
 
-    loss_reduction = loss_func.reduction
     weight_group_keys = [tuple(g.values()) for g in mapping if "W" in g]
     all_group_keys = [tuple(g.values()) for g in mapping]
 
@@ -330,7 +326,7 @@ def make_compute_kfac_batch(
             correction = compute_loss_correction(
                 g.shape[1],
                 num_per_example_loss_terms,
-                loss_reduction,
+                loss_func.reduction,
             )
             ggT = einsum(g, g, "v batch shared i, v batch shared j -> i j").mul_(
                 correction
