@@ -102,17 +102,14 @@ def input_to_weight_sharing_format(
     assert x.ndim >= 2, f"Expected x.ndim >= 2, got {x.ndim}"
     # NOTE: Use flatten/unsqueeze (not einops rearrange) because rearrange traces
     # as aten.view which fails on non-contiguous tensors during torch.compile.
-    if kfac_approx == KFACType.REDUCE:
+    if x.ndim == 2:
+        x = x.unsqueeze(1)
+    elif kfac_approx == KFACType.REDUCE:
         # einops: reduce(x, "batch ... d_in -> batch 1 d_in", "mean")
-        if x.ndim > 2:
-            x = x.flatten(1, -2).mean(dim=1, keepdim=True)
-        else:
-            x = x.unsqueeze(1)
-    elif x.ndim > 2:
+        x = x.flatten(1, -2).mean(dim=1, keepdim=True)
+    else:
         # einops: rearrange(x, "batch ... d_in -> batch (...) d_in")
         x = x.flatten(1, -2)
-    else:
-        x = x.unsqueeze(1)
 
     # Step 3: Optionally append constant column for joint weight+bias
     if bias_pad is not None:
