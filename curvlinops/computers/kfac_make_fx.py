@@ -13,7 +13,7 @@ from collections.abc import Callable
 
 from einops import einsum
 from torch import Tensor, autograd, cat, manual_seed, no_grad
-from torch.nn import CrossEntropyLoss, Module
+from torch.nn import CrossEntropyLoss
 
 from curvlinops._checks import _register_userdict_as_pytree
 from curvlinops.computers._base import ParamGroup, ParamGroupKey, _BaseKFACComputer
@@ -24,7 +24,7 @@ from curvlinops.computers.kfac_math import (
     input_to_weight_sharing_format,
 )
 from curvlinops.kfac_utils import FisherType, KFACType
-from curvlinops.utils import _make_fx, make_functional_call
+from curvlinops.utils import _make_fx
 
 
 def _build_param_groups_from_io(
@@ -138,8 +138,7 @@ def make_compute_kfac_io_batch(
     * traced directly for compile tests.
 
     Args:
-        model_func: Functional model ``(params, X) -> prediction``, or an
-            ``nn.Module`` (converted internally via ``make_functional_call``).
+        model_func: Functional model ``(params, X) -> prediction``.
         loss_func: Loss function (``MSELoss``, ``CrossEntropyLoss``, or
             ``BCEWithLogitsLoss``).
         params: Named parameter dict (example for IO tracing).
@@ -159,22 +158,9 @@ def make_compute_kfac_io_batch(
         layer_hparams)`` where ``io_batch_fn(params, X, y)`` returns
         ``(layer_inputs, layer_output_grads)`` dicts keyed by IO layer name.
     """
-    if isinstance(model_func, Module):
-        model_func = make_functional_call(model_func)
-
     grad_outputs_computer = _BaseKFACComputer._set_up_grad_outputs_computer(
         loss_func, fisher_type, mc_samples
     )
-
-    if isinstance(loss_func, CrossEntropyLoss):
-
-        def rearrange_fn(output: Tensor, y: Tensor) -> tuple[Tensor, Tensor]:
-            return output.movedim(1, -1).flatten(0, -2), y.flatten()
-
-    else:
-
-        def rearrange_fn(output: Tensor, y: Tensor) -> tuple[Tensor, Tensor]:
-            return output.flatten(0, -2), y.flatten(0, -2)
 
     loss_reduction = loss_func.reduction
     is_forward_only = fisher_type == FisherType.FORWARD_ONLY
@@ -182,9 +168,6 @@ def make_compute_kfac_io_batch(
     io_fn, io_param_names, layer_hparams = with_kfac_io(
         model_func, X, params, fisher_type
     )
-
-    if output_check_fn is not None:
-        output_check_fn(model_func(params, X))
 
     mapping, io_groups = _build_param_groups_from_io(
         io_param_names, separate_weight_and_bias
@@ -195,10 +178,18 @@ def make_compute_kfac_io_batch(
     ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
         output, layer_inputs, layer_outputs = io_fn(params, X)
 
+        if output_check_fn is not None:
+            output_check_fn(output)
+
         if is_forward_only:
             return layer_inputs, {}
 
-        output_local, y_local = rearrange_fn(output, y)
+        if isinstance(loss_func, CrossEntropyLoss):
+            output_local = output.movedim(1, -1).flatten(0, -2)
+            y_local = y.flatten()
+        else:
+            output_local = output.flatten(0, -2)
+            y_local = y.flatten(0, -2)
         grad_outputs = grad_outputs_computer(output_local.detach(), y_local, None)
         num_loss_terms = output_local.shape[0]
         scale = {"sum": 1.0, "mean": 1.0 / num_loss_terms}[loss_reduction]
@@ -244,8 +235,7 @@ def make_compute_kfac_batch(
     breaks.
 
     Args:
-        model_func: Functional model ``(params, X) -> prediction``, or an
-            ``nn.Module`` (converted internally via ``make_functional_call``).
+        model_func: Functional model ``(params, X) -> prediction``.
         loss_func: Loss function (``MSELoss``, ``CrossEntropyLoss``, or
             ``BCEWithLogitsLoss``).
         params: Named parameter dict.
@@ -364,7 +354,7 @@ class MakeFxKFACComputer(_BaseKFACComputer):
     ``make_fx``, allowing ``torch.compile`` to optimize the full per-batch
     kernel.
 
-    Supports both ``nn.Module`` and plain callable ``model_func``.
+    Supports plain callable ``model_func``.
     """
 
     def __init__(self, *args, **kwargs):

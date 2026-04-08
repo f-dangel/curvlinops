@@ -29,6 +29,7 @@ from curvlinops import (
     KFACLinearOperator,
 )
 from curvlinops.computers.kfac_make_fx import make_compute_kfac_batch
+from curvlinops.utils import make_functional_call
 
 
 def _setup_mlp_problem():
@@ -53,7 +54,10 @@ def _setup_cnn_problem():
     """
     manual_seed(0)
     model = Sequential(
-        Conv2d(3, 4, 3, padding=1), Conv2d(4, 5, 3, padding=1), Flatten(), Linear(180, 3)
+        Conv2d(3, 4, 3, padding=1),
+        Conv2d(4, 5, 3, padding=1),
+        Flatten(),
+        Linear(180, 3),
     )
     loss_fn = MSELoss()
     params = dict(model.named_parameters())
@@ -172,7 +176,12 @@ def test_kfac_precompute_no_graph_breaks(setup_fn):
     model, loss_fn, params, data = setup_fn()
     X, y = data[0]
     traced, *_ = make_compute_kfac_batch(
-        model, loss_fn, params, X, y, separate_weight_and_bias=False
+        make_functional_call(model),
+        loss_fn,
+        params,
+        X,
+        y,
+        separate_weight_and_bias=False,
     )
 
     def traced_seeded(params, X, y):
