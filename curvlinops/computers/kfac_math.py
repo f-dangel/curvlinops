@@ -154,17 +154,14 @@ def grad_to_weight_sharing_format(
     # NOTE: Use flatten/unsqueeze (not einops rearrange) because rearrange traces
     # as aten.view which fails on non-contiguous tensors during torch.compile.
     has_sharing = g.ndim > num_leading_dims + 1
-    if kfac_approx == KFACType.REDUCE:
+    if not has_sharing:
+        g = g.unsqueeze(num_leading_dims)
+    elif kfac_approx == KFACType.REDUCE:
         # einops: reduce(g, "{leading}batch ... d_out -> {leading}batch 1 d_out", "sum")
-        if has_sharing:
-            g = g.flatten(num_leading_dims, -2).sum(dim=num_leading_dims, keepdim=True)
-        else:
-            g = g.unsqueeze(num_leading_dims)
-    elif has_sharing:
+        g = g.flatten(num_leading_dims, -2).sum(dim=num_leading_dims, keepdim=True)
+    else:
         # einops: rearrange(g, "{leading}batch ... d_out -> {leading}batch (...) d_out")
         g = g.flatten(num_leading_dims, -2)
-    else:
-        g = g.unsqueeze(num_leading_dims)
 
     return g.contiguous()  # torch.compile needs contiguous tensors for reshape ops
 
