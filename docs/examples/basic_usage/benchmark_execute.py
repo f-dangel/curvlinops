@@ -4,27 +4,40 @@ Contains the :class:`Benchmark` class that handles time and memory measurements.
 The ``__main__`` block serves as the CLI entry point for subprocess-based memory
 measurements launched by :meth:`Benchmark.run_reference` and
 :meth:`Benchmark.run_operator`.
+
+**Time** is measured in-process: minimum over ``num_repeats`` calls, with
+``cuda.synchronize()`` before and after each call. Compiled measurements use
+:meth:`_time_or_nan` which catches ``RuntimeError`` from ``torch.compile``
+failures (e.g. FX-traced operators containing ``autograd.grad``).
+
+**Peak memory** is measured in isolated subprocesses to avoid allocation
+artifacts. For compiled measurements, a warmup call runs first (the 1st call
+of a ``torch.compiled`` function traces in eager mode, not compiled), followed
+by ``gc.collect()`` to free compilation reference cycles. The actual
+measurement captures steady-state compiled memory.
 """
 
 from __future__ import annotations
 
+import gc
 import json
 import sys
 from argparse import ArgumentParser
 from collections.abc import Callable, Iterable
 from contextlib import nullcontext
+from functools import partial
 from os import path, remove
 from subprocess import CalledProcessError, CompletedProcess, run
 from time import perf_counter
 
 from benchmark_utils import (
-    _IS_COMPILABLE,
     _IS_EKFAC,
     _IS_FX,
     _IS_KFAC_INVERSE_HOOKS,
     _KFAC_LIKE,
     LINOP_STRS,
     PROBLEM_STRS,
+    _get_precompute_ops,
     attention_context,
     benchpath,
     reference_benchpath,
@@ -35,8 +48,9 @@ from benchmark_utils import (
     setup_synthetic_shakespeare_nanogpt,
 )
 from memory_profiler import memory_usage
-from torch import Tensor, cuda, device, manual_seed, rand
+from torch import Tensor, cuda, device, manual_seed, nan, rand
 from torch import compile as torch_compile
+from torch.compiler import reset as reset_compiler
 from torch.nn import Conv2d, Linear, Module
 
 from curvlinops import KFACLinearOperator
@@ -45,7 +59,7 @@ from curvlinops.computers.ekfac_hooks import HooksEKFACComputer
 from curvlinops.computers.ekfac_make_fx import MakeFxEKFACComputer
 from curvlinops.computers.kfac_hooks import HooksKFACComputer, _use_params
 from curvlinops.computers.kfac_make_fx import MakeFxKFACComputer
-from curvlinops.examples import gradient_and_loss, make_compiled_gradient_and_loss
+from curvlinops.examples import gradient_and_loss
 
 
 def run_verbose(cmd: list[str]) -> CompletedProcess:
@@ -286,116 +300,143 @@ class Benchmark:
             # memory_usage with max_usage=True returns peak MiB
             return memory_usage(func, interval=1e-4, max_usage=True) / 2**10
 
+    # -- Internal: skip logic --
+
+    @staticmethod
+    def _read_result(savepath: str, category: str, key: str):
+        """Read a specific result from a JSON file.
+
+        Args:
+            savepath: Path to the JSON results file.
+            category: The category (``"eager"`` or ``"compiled"``).
+            key: The measurement key (e.g. ``"matvec"``, ``"peakmem"``).
+
+        Returns:
+            The value if found, ``None`` otherwise.
+        """
+        if not path.exists(savepath):
+            return None
+        with open(savepath) as f:
+            return json.load(f).get(category, {}).get(key)
+
+    def _has_result(self, savepath: str, category: str, key: str):
+        """Check if a result exists and should be skipped.
+
+        Args:
+            savepath: Path to the JSON results file.
+            category: The category (``"eager"`` or ``"compiled"``).
+            key: The measurement key (e.g. ``"matvec"``, ``"peakmem"``).
+
+        Returns:
+            The existing value if found and ``skip_existing`` is enabled,
+            ``None`` otherwise.
+        """
+        if not self.skip_existing:
+            return None
+        return self._read_result(savepath, category, key)
+
     # -- Internal: time measurements (in-process) --
+
+    def _time_or_nan(self, func, **kwargs):
+        """Like :meth:`time`, but return NaN on ``RuntimeError``.
+
+        Args:
+            func: Passed to :meth:`time`.
+            **kwargs: Passed to :meth:`time`.
+
+        Returns:
+            Same as :meth:`time`, but with NaN values on failure.
+        """
+        try:
+            return self.time(func, **kwargs)
+        except RuntimeError as e:
+            print(f"  torch.compile RuntimeError: {e}")
+            if callable(func):
+                return float(nan), None
+            return {name: float(nan) for name, _ in func}, None
+
+    def _get_timer(self, compiled: bool):
+        """Return :meth:`_time_or_nan` for compiled, :meth:`time` for eager.
+
+        Args:
+            compiled: Whether this is a compiled measurement.
+
+        Returns:
+            The timing callable.
+        """
+        return self._time_or_nan if compiled else self.time
 
     def _run_reference_time(self):
         """Time gradient_and_loss (eager + compiled) and save to reference JSON."""
+        # Memory subprocesses between operators pollute the inductor filesystem
+        # cache, causing torch.compile to silently fall back to eager speed.
+        reset_compiler()
         savepath = reference_benchpath(self.problem_str, self.device_str)
         label = f"Reference on {self.problem_str} and {self.device_str}"
-
-        if self.skip_existing and path.exists(savepath):
-            with open(savepath) as f:
-                existing = json.load(f)
-            if "time" in existing.get("eager", {}) and "time" in existing.get(
-                "compiled", {}
-            ):
-                print(f"[Time] Skipping {label}")
-                return
-
         model, loss_function, params, data = self.setup_problem("Hessian")
 
-        # Eager
-        best, _ = self.time(
-            lambda: gradient_and_loss(model, loss_function, params, data)
-        )
-        print(f"[Time] {label}: {best:.4f} s")
-        _merge_json(savepath, "eager", "time", best)
-
-        # Compiled (make_fx traces autograd.grad, then torch.compile)
-        ((X, y),) = data
-        compiled_fn = make_compiled_gradient_and_loss(
-            model, loss_function, params, X, y
-        )
-        compiled_best, _ = self.time(lambda: compiled_fn(params, X, y))
-        print(f"[Time] {label} (compiled): {compiled_best:.4f} s")
-        _merge_json(savepath, "compiled", "time", compiled_best)
+        for category, compiled in [("eager", False), ("compiled", True)]:
+            existing = self._has_result(savepath, category, "time")
+            if existing is not None:
+                print(f"[Time] Skipping {label} ({category}): {existing:.4f} s")
+                continue
+            fn = torch_compile(gradient_and_loss) if compiled else gradient_and_loss
+            timer = self._get_timer(compiled)
+            best, _ = timer(partial(fn, model, loss_function, params, data))
+            print(f"[Time] {label} ({category}): {best:.4f} s")
+            _merge_json(savepath, category, "time", best)
 
     def _run_operator_time(self, linop_str: str):
-        """Time matvec (and compiled matvec if supported), save to operator JSON."""
+        """Time matvec and precompute phases (eager + compiled), save to JSON."""
+        # Memory subprocesses between operators pollute the inductor filesystem
+        # cache, causing torch.compile to silently fall back to eager speed.
+        reset_compiler()
         savepath = benchpath(linop_str, self.problem_str, self.device_str)
         label = f"{linop_str} on {self.problem_str} and {self.device_str}"
 
-        if self.skip_existing and path.exists(savepath):
-            print(f"[Time] Skipping {label}")
-            return
-
         model, loss_function, params, data = self.setup_problem(linop_str)
-        # NOTE Disable deterministic check as it will otherwise compute matvecs
         linop = setup_linop(
             linop_str, model, loss_function, params, data, check_deterministic=False
         )
         v = rand(linop.shape[1], device=linop.device)
+        ctx = partial(attention_context, linop, model)
 
-        def _matvec():
-            with attention_context(linop, model):
-                _ = linop @ v
+        for category, compiled in [("eager", False), ("compiled", True)]:
+            existing = self._has_result(savepath, category, "matvec")
+            if existing is not None:
+                print(
+                    f"[Time] Skipping {label} / matvec ({category}): {existing:.4f} s"
+                )
+            else:
+                matvec_fn = (
+                    torch_compile(lambda: linop @ v) if compiled else lambda: linop @ v
+                )
+                timer = self._get_timer(compiled)
+                matvec_time, _ = timer(matvec_fn, context=ctx)
+                _merge_json(savepath, category, "matvec", matvec_time)
+                print(f"[Time] {label} / matvec ({category}): {matvec_time:.4f} s")
 
-        matvec_time, _ = self.time(_matvec)
-        results = {"eager": {"matvec": matvec_time}}
-        print(f"[Time] {label} / matvec: {matvec_time:.4f} s")
-
-        # Also measure compiled matvec for operators that support it
-        if linop_str in _IS_COMPILABLE:
-            compiled_matvec = torch_compile(lambda: linop @ v)
-
-            def _compiled_matvec():
-                with attention_context(linop, model):
-                    _ = compiled_matvec()
-
-            compiled_time, _ = self.time(_compiled_matvec)
-            results["compiled"] = {"matvec": compiled_time}
-            print(f"[Time] {label} / matvec_compiled: {compiled_time:.4f} s")
-
-        if linop_str in _KFAC_LIKE:
-            phases, ctx = make_precompute_phases(
-                linop_str, model, loss_function, params, data
-            )
-            phase_times, _ = self.time(phases, context=ctx)
-            for phase_name, t in phase_times.items():
-                results["eager"][phase_name] = t
-                print(f"[Time] {label} / {phase_name}: {t:.4f} s")
-
-        # Compiled factors for KFAC FX: trace once, then time compiled accumulation
-        if linop_str in _IS_FX and linop_str not in _IS_EKFAC:
-            compiled_factors_time = self._time_compiled_kfac_factors(
-                linop_str, model, loss_function, params, data
-            )
-            results["kfac_factors_compiled"] = compiled_factors_time
-            print(
-                f"[Time] {label} / kfac_factors_compiled: {compiled_factors_time:.4f} s"
-            )
-
-        with open(savepath, "w") as f:
-            json.dump(results, f, indent=2)
-        print(f"[Time] Saved {label}")
-
-    def _time_compiled_kfac_factors(
-        self, linop_str, model, loss_function, params, data
-    ):
-        """Trace KFAC batch functions, then time compiled factor accumulation.
-
-        Returns:
-            Best compiled factors time in seconds.
-        """
-        computer = setup_computer(linop_str, model, loss_function, params, data)
-        traced_batch = computer._trace_batch_functions()
-        compiled_factors = torch_compile(computer._compute_kronecker_factors)
-
-        def _compiled_factors():
-            compiled_factors(traced_batch)
-
-        compiled_factors_time, _ = self.time(_compiled_factors)
-        return compiled_factors_time
+            if linop_str in _KFAC_LIKE:
+                expected_ops = _get_precompute_ops(linop_str)
+                if self.skip_existing and path.exists(savepath):
+                    with open(savepath) as f:
+                        existing_cat = json.load(f).get(category, {})
+                    all_exist = all(op in existing_cat for op in expected_ops)
+                else:
+                    all_exist = False
+                if all_exist:
+                    print(f"[Time] Skipping {label} / precompute ({category})")
+                else:
+                    phases, phase_ctx = make_precompute_phases(
+                        linop_str, model, loss_function, params, data
+                    )
+                    if compiled:
+                        phases = [(name, torch_compile(fn)) for name, fn in phases]
+                    timer = self._get_timer(compiled)
+                    phase_times, _ = timer(phases, context=phase_ctx)
+                    for phase_name, t in phase_times.items():
+                        _merge_json(savepath, category, phase_name, t)
+                        print(f"[Time] {label} / {phase_name} ({category}): {t:.4f} s")
 
     # -- Internal: memory measurements (subprocess) --
 
@@ -404,48 +445,56 @@ class Benchmark:
         savepath = reference_benchpath(self.problem_str, self.device_str)
         label = f"reference on {self.problem_str} and {self.device_str}"
 
-        if self.skip_existing and path.exists(savepath):
-            with open(savepath) as f:
-                existing = json.load(f)
-            if "peakmem" in existing.get("eager", {}) and "peakmem" in existing.get(
-                "compiled", {}
-            ):
-                print(f"[Memory] Skipping {label}")
-                return
-
-        self._run_subprocess("--reference")
+        for category, compiled in [("eager", False), ("compiled", True)]:
+            existing = self._has_result(savepath, category, "peakmem")
+            if existing is not None:
+                print(f"[Memory] Skipping {label} ({category}): {existing:.2f} GiB")
+                continue
+            self._try_subprocess("--reference", *self._compiled_flag(compiled))
+            if self._read_result(savepath, category, "peakmem") is None:
+                print(f"[Memory] FAILED {label} ({category}), storing NaN")
+                _merge_json(savepath, category, "peakmem", float(nan))
 
     def _run_operator_memory(self, linop_str: str):
         """Spawn subprocess for operator peak memory, merge into operator JSON."""
         savepath = benchpath(linop_str, self.problem_str, self.device_str)
         label = f"{linop_str} on {self.problem_str}"
 
-        if self.skip_existing and path.exists(savepath):
-            with open(savepath) as f:
-                existing = json.load(f)
-            need_compiled = linop_str in _IS_COMPILABLE
-            has_compiled = "peakmem" in existing.get("compiled", {})
-            if "peakmem" in existing.get("eager", {}) and (
-                has_compiled or not need_compiled
-            ):
-                print(f"[Memory] Skipping {label}")
-                return
+        for category, compiled in [("eager", False), ("compiled", True)]:
+            existing = self._has_result(savepath, category, "peakmem")
+            if existing is not None:
+                print(f"[Memory] Skipping {label} ({category}): {existing:.2f} GiB")
+                continue
+            mem_path = benchpath(
+                linop_str, self.problem_str, self.device_str, op_str="peakmem"
+            )
+            self._try_subprocess(f"--linop={linop_str}", *self._compiled_flag(compiled))
+            if path.exists(mem_path) and path.exists(savepath):
+                with open(mem_path) as f:
+                    mem_data = json.load(f)
+                for cat, sub in mem_data.items():
+                    for key, value in sub.items():
+                        _merge_json(savepath, cat, key, value)
+                remove(mem_path)
+            if self._read_result(savepath, category, "peakmem") is None:
+                print(f"[Memory] FAILED {label} ({category}), storing NaN")
+                _merge_json(savepath, category, "peakmem", float(nan))
 
-        mem_path = benchpath(
-            linop_str, self.problem_str, self.device_str, op_str="peakmem"
-        )
-        self._run_subprocess(f"--linop={linop_str}")
+    @staticmethod
+    def _compiled_flag(compiled: bool) -> tuple[str, ...]:
+        """Return CLI flags for the subprocess compiled mode.
 
-        if path.exists(mem_path) and path.exists(savepath):
-            with open(mem_path) as f:
-                mem_data = json.load(f)
-            for category, sub in mem_data.items():
-                for key, value in sub.items():
-                    _merge_json(savepath, category, key, value)
-            remove(mem_path)
+        Returns:
+            ``("--compiled",)`` if compiled, else ``()``.
+        """
+        return ("--compiled",) if compiled else ()
 
-    def _run_subprocess(self, *extra_args: str):
-        """Run benchmark_execute.py as a subprocess with given extra arguments."""
+    def _try_subprocess(self, *extra_args: str):
+        """Run benchmark_execute.py as a subprocess, suppressing failures.
+
+        Args:
+            *extra_args: Extra CLI arguments.
+        """
         cmd = [
             sys.executable,
             path.join(path.dirname(__file__), "benchmark_execute.py"),
@@ -454,7 +503,10 @@ class Benchmark:
             *extra_args,
         ]
         print(f"Running command: {' '.join(cmd)}")
-        run_verbose(cmd)
+        try:
+            run_verbose(cmd)
+        except CalledProcessError:
+            pass
 
 
 # -- Helpers for precompute sub-phase timing --
@@ -641,73 +693,59 @@ def make_precompute_phases(  # noqa: C901
 # -- Subprocess entry points for memory measurement --
 
 
-def _run_reference_peakmem(problem_str: str, device_str: str):
+def _run_reference_peakmem(problem_str: str, device_str: str, compiled: bool):
     """Measure peak memory for gradient_and_loss (called in subprocess).
-
-    Measures both eager and compiled variants and merges results into the
-    reference benchmark JSON file.
 
     Args:
         problem_str: The problem.
         device_str: The device.
+        compiled: Whether to measure with ``torch.compile``.
     """
     bench = Benchmark(problem_str, device_str)
+    savepath = reference_benchpath(problem_str, device_str)
+    category = "compiled" if compiled else "eager"
 
     def func():
         model, loss_function, params, data = bench.setup_problem("Hessian")
-        _ = gradient_and_loss(model, loss_function, params, data)
+        gradient_and_loss(model, loss_function, params, data)
+
+    if compiled:
+        func = torch_compile(func)
+        # Warmup: the 1st call traces in eager (not compiled), and leaves
+        # reference cycles from compilation. Run + gc to get steady state.
+        func()
+        gc.collect()
+
+    def func_and_sync():
+        func()
         if bench.is_cuda:
             cuda.synchronize()
 
-    peakmem_gib = bench.memory(func)
+    peakmem_gib = bench.memory(func_and_sync)
     print(
-        f"[Memory] Reference gradient_and_loss on {problem_str} and {device_str}:"
-        f" {peakmem_gib:.2f} GiB"
+        f"[Memory] Reference gradient_and_loss ({category}) on {problem_str}"
+        f" and {device_str}: {peakmem_gib:.2f} GiB"
     )
-    _merge_json(
-        reference_benchpath(problem_str, device_str),
-        "eager",
-        "peakmem",
-        peakmem_gib,
-    )
-
-    def func_compiled():
-        model, loss_function, params, data = bench.setup_problem("Hessian")
-        ((X, y),) = data
-        compiled_fn = make_compiled_gradient_and_loss(
-            model, loss_function, params, X, y
-        )
-        _ = compiled_fn(params, X, y)
-        if bench.is_cuda:
-            cuda.synchronize()
-
-    peakmem_compiled_gib = bench.memory(func_compiled)
-    print(
-        f"[Memory] Reference gradient_and_loss (compiled) on {problem_str}"
-        f" and {device_str}: {peakmem_compiled_gib:.2f} GiB"
-    )
-    _merge_json(
-        reference_benchpath(problem_str, device_str),
-        "compiled",
-        "peakmem",
-        peakmem_compiled_gib,
-    )
+    _merge_json(savepath, category, "peakmem", peakmem_gib)
 
 
-def _run_operator_peakmem(linop_str: str, problem_str: str, device_str: str):
-    """Measure peak memory for the full pipeline (called in subprocess).
+def _run_operator_peakmem(
+    linop_str: str, problem_str: str, device_str: str, compiled: bool
+):
+    """Measure peak memory for a single matvec variant (called in subprocess).
 
-    Measures eager matvec memory. For compilable operators, also measures
-    compiled matvec memory (with warmup). Writes results to a temporary
-    peakmem JSON file that will be merged by the parent process.
+    Writes results to a temporary peakmem JSON file that will be merged
+    by the parent process.
 
     Args:
         linop_str: The linear operator.
         problem_str: The problem.
         device_str: The device.
+        compiled: Whether to measure with ``torch.compile``.
     """
     savepath = benchpath(linop_str, problem_str, device_str, op_str="peakmem")
     bench = Benchmark(problem_str, device_str)
+    category = "compiled" if compiled else "eager"
 
     def func():
         model, loss_function, params, data = bench.setup_problem(linop_str)
@@ -717,43 +755,25 @@ def _run_operator_peakmem(linop_str: str, problem_str: str, device_str: str):
         v = rand(linop.shape[1], device=linop.device)
         with attention_context(linop, model):
             _ = linop @ v
+
+    if compiled:
+        func = torch_compile(func)
+        # Warmup: the 1st call traces in eager (not compiled), and leaves
+        # reference cycles from compilation. Run + gc to get steady state.
+        func()
+        gc.collect()
+
+    def func_and_sync():
+        func()
         if bench.is_cuda:
             cuda.synchronize()
 
-    peakmem_gib = bench.memory(func)
+    peakmem_gib = bench.memory(func_and_sync)
     print(
-        f"[Memory] {linop_str} on {problem_str} and {device_str}: {peakmem_gib:.2f} GiB"
+        f"[Memory] {linop_str} ({category}) on {problem_str}"
+        f" and {device_str}: {peakmem_gib:.2f} GiB"
     )
-    results = {"eager": {"peakmem": peakmem_gib}}
-
-    if linop_str in _IS_COMPILABLE:
-
-        def _setup_and_matvec():
-            model, loss_function, params, data = bench.setup_problem(linop_str)
-            linop = setup_linop(
-                linop_str,
-                model,
-                loss_function,
-                params,
-                data,
-                check_deterministic=False,
-            )
-            v = rand(linop.shape[1], device=linop.device)
-            with attention_context(linop, model):
-                _ = linop @ v
-            if bench.is_cuda:
-                cuda.synchronize()
-
-        def func_compiled():
-            torch_compile(_setup_and_matvec)()
-
-        peakmem_compiled_gib = bench.memory(func_compiled)
-        print(
-            f"[Memory] {linop_str} (compiled) on {problem_str}"
-            f" and {device_str}: {peakmem_compiled_gib:.2f} GiB"
-        )
-        results["compiled"] = {"peakmem": peakmem_compiled_gib}
-
+    results = {category: {"peakmem": peakmem_gib}}
     with open(savepath, "w") as f:
         json.dump(results, f, indent=2)
 
@@ -786,9 +806,14 @@ if __name__ == "__main__":
         action="store_true",
         help="Measure reference gradient_and_loss (ignores --linop).",
     )
+    parser.add_argument(
+        "--compiled",
+        action="store_true",
+        help="Measure with torch.compile (default: eager).",
+    )
 
     args = parser.parse_args()
     if args.reference:
-        _run_reference_peakmem(args.problem, args.device)
+        _run_reference_peakmem(args.problem, args.device, args.compiled)
     else:
-        _run_operator_peakmem(args.linop, args.problem, args.device)
+        _run_operator_peakmem(args.linop, args.problem, args.device, args.compiled)

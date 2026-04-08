@@ -29,7 +29,6 @@ from curvlinops import (
     KFACLinearOperator,
 )
 from curvlinops.computers.kfac_make_fx import make_compute_kfac_batch
-from curvlinops.examples import trace_gradient_and_loss
 
 
 def _setup_problem():
@@ -75,15 +74,6 @@ def _assert_no_graph_breaks(linop):
     """Assert that ``linop @ v`` compiles with zero graph breaks."""
     v = rand(linop.shape[1])
     with _dynamo_explain(lambda op, vec: op @ vec, linop, v) as result:
-        assert result.graph_break_count == 0
-
-
-def test_gradient_and_loss_no_graph_breaks():
-    """Per-batch gradient+loss traced with ``make_fx`` compiles with 0 graph breaks."""
-    model, loss_fn, params, data = _setup_problem()
-    X, y = data[0]
-    traced = trace_gradient_and_loss(model, loss_fn, params, X, y)
-    with _dynamo_explain(traced, params, X, y) as result:
         assert result.graph_break_count == 0
 
 

@@ -1,5 +1,6 @@
 {
   "pytorch_version": "2.10.0+cu128",
+  "hostname": "quartet2",
   "gpu": "NVIDIA RTX A6000",
   "cuda_version": "12.8"
 }
