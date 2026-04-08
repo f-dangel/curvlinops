@@ -295,6 +295,7 @@ def make_compute_kfac_batch(
         params: dict[str, Tensor], X: Tensor, y: Tensor
     ) -> tuple[list[Tensor], list[Tensor]]:
         layer_inputs, layer_output_grads = inputs_and_grad_outputs_batch(params, X, y)
+        batch_size = batch_size_fn(X)
 
         input_covs = []
         for group in mapping:
@@ -313,9 +314,8 @@ def make_compute_kfac_batch(
                 for n in io_names
             ]
             x = cat(xs, dim=1)
-            scale = x.shape[1]
             xxT = einsum(x, x, "batch shared i, batch shared j -> i j")
-            input_covs.append(xxT.div_(scale))
+            input_covs.append(xxT.div_(batch_size * x.shape[1]))
 
         if not layer_output_grads:
             return input_covs, []
@@ -342,6 +342,8 @@ def make_compute_kfac_batch(
             ggT = einsum(g, g, "v batch shared i, v batch shared j -> i j").mul_(
                 correction
             )
+            if loss_func.reduction == "mean":
+                ggT.div_(batch_size)
             gradient_covs.append(ggT)
 
         return input_covs, gradient_covs
@@ -441,11 +443,6 @@ class MakeFxKFACComputer(_BaseKFACComputer):
         weight_group_keys = [tuple(g.values()) for g in mapping if "W" in g]
         all_group_keys = [tuple(g.values()) for g in mapping]
 
-        grad_normalization = {
-            "sum": 1.0,
-            "mean": 1.0 / self._N_data,
-        }[self._loss_func.reduction]
-
         input_covariances: dict[ParamGroupKey, Tensor] = {}
         gradient_covariances: dict[ParamGroupKey, Tensor] = {}
 
@@ -458,14 +455,17 @@ class MakeFxKFACComputer(_BaseKFACComputer):
                 batch_size = self._batch_size_fn(X)
                 input_covs, gradient_covs = traced_fns[batch_size](self._params, X, y)
 
+                # The traced batch function returns per-batch averages.
+                # Accumulate with batch_size / N_data weighting.
+                weight = batch_size / self._N_data
                 for key, xxT in zip(weight_group_keys, input_covs):
-                    self._set_or_add_(input_covariances, key, xxT.div_(self._N_data))
+                    self._set_or_add_(input_covariances, key, xxT.mul_(weight))
 
+                grad_weight = weight if self._loss_func.reduction == "mean" else 1.0
                 for key, ggT in zip(all_group_keys, gradient_covs):
-                    self._set_or_add_(
-                        gradient_covariances, key, ggT.mul_(grad_normalization)
-                    )
+                    self._set_or_add_(gradient_covariances, key, ggT.mul_(grad_weight))
 
+        # Handle FORWARD_ONLY case
         if self._fisher_type == FisherType.FORWARD_ONLY:
             self._set_gradient_covariances_to_identity(gradient_covariances, mapping)
 
