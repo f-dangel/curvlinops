@@ -35,6 +35,7 @@ from benchmark_utils import (
 from benchmark_utils import (
     PROBLEM_STRS as ALL_PROBLEM_STRS,
 )
+from matplotlib.patches import Patch
 from torch import cuda
 from tueplots import bundles
 
@@ -176,6 +177,7 @@ def visualize_precompute_benchmark(
     """
     kfac = [linop for linop in linop_strs if linop in _KFAC_LIKE]
     fig, ax = plt.subplots()
+    plt.rcParams["hatch.linewidth"] = 2.5
 
     precompute_colors = {
         "kfac_factors": "tab:green",
@@ -193,27 +195,41 @@ def visualize_precompute_benchmark(
     }
     labels_shown = set()
 
+    bar_height = 0.35
+    bar_offset = 0.2
+    compiled_hatch = "//////"
+    categories = [("eager", bar_offset, False), ("compiled", -bar_offset, True)]
+
     for idx, name in enumerate(kfac):
         sub_ops = _get_precompute_ops(name)
+        operator_data = bench.load_operator(name)
 
-        precompute_data = bench.load_operator(name)["eager"]
-
-        left = 0.0
-        for op in sub_ops:
-            if op not in precompute_data:
-                continue
-            t = precompute_data[op]
-            label = precompute_labels[op] if op not in labels_shown else None
-            ax.barh(
-                idx,
-                width=t,
-                left=left,
-                color=precompute_colors[op],
-                label=label,
-                height=0.6,
-            )
-            labels_shown.add(op)
-            left += t
+        for category, y_off, is_compiled in categories:
+            cat_data = operator_data.get(category, {})
+            left = 0.0
+            for op in sub_ops:
+                t = cat_data.get(op, float("nan"))
+                label = precompute_labels[op] if op not in labels_shown else None
+                color = precompute_colors[op]
+                if is_compiled:
+                    bar_kwargs = dict(
+                        color="white",
+                        edgecolor=color,
+                        hatch=compiled_hatch,
+                        linewidth=0,
+                    )
+                else:
+                    bar_kwargs = dict(color=color)
+                ax.barh(
+                    idx + y_off,
+                    width=t,
+                    left=left,
+                    label=label,
+                    height=bar_height,
+                    **bar_kwargs,
+                )
+                labels_shown.add(op)
+                left += t
 
     ax.set_yticks(list(range(len(kfac))))
     ax.set_yticklabels([display_name(n) for n in kfac])
@@ -223,7 +239,17 @@ def visualize_precompute_benchmark(
     reference = bench.load_reference()["eager"]["time"]
     add_gradient_reference(ax, reference)
 
-    ax.legend(bbox_to_anchor=(0.5, -0.45), loc="upper center", borderaxespad=0, ncol=2)
+    handles, legend_labels = ax.get_legend_handles_labels()
+    handles.append(
+        Patch(facecolor="white", edgecolor="black", hatch=compiled_hatch, linewidth=0)
+    )
+    legend_labels.append("Compiled")
+    fig.legend(
+        handles,
+        legend_labels,
+        loc="outside lower center",
+        ncol=3,
+    )
     return fig, ax
 
 
