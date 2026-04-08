@@ -634,10 +634,20 @@ def make_precompute_phases(  # noqa: C901
 
         def ekfac_fx_tracing():
             traced_batch = computer._trace_batch_functions()
-            io_batch_fns, _, io_groups, io_param_names, layer_hparams = (
-                computer._trace_io_batch_functions()
+            (
+                inputs_and_grad_outputs_batch_fns,
+                _,
+                io_groups,
+                io_param_names,
+                layer_hparams,
+            ) = computer._trace_io_batch_functions()
+            return (
+                traced_batch,
+                inputs_and_grad_outputs_batch_fns,
+                io_groups,
+                io_param_names,
+                layer_hparams,
             )
-            return traced_batch, io_batch_fns, io_groups, io_param_names, layer_hparams
 
         def ekfac_fx_factors(state):
             traced_batch, *io_state = state
@@ -653,11 +663,23 @@ def make_precompute_phases(  # noqa: C901
             return (input_cov, grad_cov, mapping, *io_state)
 
         def ekfac_fx_correction(state):
-            input_cov, grad_cov, mapping, io_batch_fns, io_groups, io_pnames, lhp = (
-                state
-            )
+            (
+                input_cov,
+                grad_cov,
+                mapping,
+                inputs_and_grad_outputs_batch_fns,
+                io_groups,
+                io_pnames,
+                lhp,
+            ) = state
             return computer.compute_eigenvalue_correction(
-                input_cov, grad_cov, mapping, io_batch_fns, io_groups, io_pnames, lhp
+                input_cov,
+                grad_cov,
+                mapping,
+                inputs_and_grad_outputs_batch_fns,
+                io_groups,
+                io_pnames,
+                lhp,
             )
 
         return [

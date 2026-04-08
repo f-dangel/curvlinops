@@ -54,11 +54,11 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
         for each unique batch size.
 
         Returns:
-            Tuple of ``(io_batch_fns, mapping, io_groups, io_param_names,
-            layer_hparams)`` where ``io_batch_fns`` maps batch sizes to
+            Tuple of ``(inputs_and_grad_outputs_batch_fns, mapping, io_groups, io_param_names,
+            layer_hparams)`` where ``inputs_and_grad_outputs_batch_fns`` maps batch sizes to
             IO batch callables.
         """
-        io_batch_fns: dict[int, Callable] = {}
+        inputs_and_grad_outputs_batch_fns: dict[int, Callable] = {}
         mapping: list[ParamGroup] | None = None
         io_groups: dict[ParamGroupKey, list[str]] | None = None
         io_param_names: dict[str, dict[str, str]] | None = None
@@ -66,11 +66,11 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
 
         for X, y in self._loop_over_data(desc="FX tracing"):
             batch_size = self._batch_size_fn(X)
-            if batch_size not in io_batch_fns:
+            if batch_size not in inputs_and_grad_outputs_batch_fns:
                 if isinstance(X, UserDict):
                     _register_userdict_as_pytree()
                 (
-                    io_batch_fns[batch_size],
+                    inputs_and_grad_outputs_batch_fns[batch_size],
                     mapping,
                     io_groups,
                     io_param_names,
@@ -88,7 +88,13 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
                     ),
                 )
 
-        return io_batch_fns, mapping, io_groups, io_param_names, layer_hparams
+        return (
+            inputs_and_grad_outputs_batch_fns,
+            mapping,
+            io_groups,
+            io_param_names,
+            layer_hparams,
+        )
 
     def _trace_batch_functions(
         self,
@@ -147,16 +153,20 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
         input_covariances, gradient_covariances, mapping = (
             self._compute_kronecker_factors(self._trace_batch_functions())
         )
-        io_batch_fns, _, io_groups, io_param_names, layer_hparams = (
-            self._trace_io_batch_functions()
-        )
+        (
+            inputs_and_grad_outputs_batch_fns,
+            _,
+            io_groups,
+            io_param_names,
+            layer_hparams,
+        ) = self._trace_io_batch_functions()
         input_covariances = self._eigenvectors_(input_covariances)
         gradient_covariances = self._eigenvectors_(gradient_covariances)
         corrected_eigenvalues = self.compute_eigenvalue_correction(
             input_covariances,
             gradient_covariances,
             mapping,
-            io_batch_fns,
+            inputs_and_grad_outputs_batch_fns,
             io_groups,
             io_param_names,
             layer_hparams,
@@ -168,7 +178,7 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
         input_covariances_eigenvectors: dict[ParamGroupKey, Tensor],
         gradient_covariances_eigenvectors: dict[ParamGroupKey, Tensor],
         mapping: list[ParamGroup],
-        io_batch_fns: dict[int, Callable],
+        inputs_and_grad_outputs_batch_fns: dict[int, Callable],
         io_groups: dict[ParamGroupKey, list[str]],
         io_param_names: dict[str, dict[str, str]],
         layer_hparams: dict[str, dict[str, Any]],
@@ -184,7 +194,7 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
             gradient_covariances_eigenvectors: Gradient covariance eigenvectors
                 per parameter group.
             mapping: List of parameter groups.
-            io_batch_fns: IO batch functions per batch size.
+            inputs_and_grad_outputs_batch_fns: IO batch functions per batch size.
             io_groups: IO-layer mapping.
             io_param_names: Layer parameter name mappings.
             layer_hparams: Layer hyperparameter dicts.
@@ -198,9 +208,9 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
 
         for X, y in self._loop_over_data(desc="Eigenvalue correction"):
             batch_size = self._batch_size_fn(X)
-            layer_inputs, layer_output_grads = io_batch_fns[batch_size](
-                self._params, X, y
-            )
+            layer_inputs, layer_output_grads = inputs_and_grad_outputs_batch_fns[
+                batch_size
+            ](self._params, X, y)
 
             for group in mapping:
                 group_key = tuple(group.values())

@@ -154,8 +154,8 @@ def make_compute_kfac_io_batch(
             reject unsupported output shapes (e.g., EKFAC's 2d restriction).
 
     Returns:
-        Tuple of ``(io_batch_fn, mapping, io_groups, io_param_names,
-        layer_hparams)`` where ``io_batch_fn(params, X, y)`` returns
+        Tuple of ``(inputs_and_grad_outputs_batch_fn, mapping, io_groups, io_param_names,
+        layer_hparams)`` where ``inputs_and_grad_outputs_batch_fn(params, X, y)`` returns
         ``(layer_inputs, layer_output_grads)`` dicts keyed by IO layer name.
     """
     grad_outputs_computer = _BaseKFACComputer._set_up_grad_outputs_computer(
@@ -168,7 +168,7 @@ def make_compute_kfac_io_batch(
         io_param_names, separate_weight_and_bias
     )
 
-    def io_batch(
+    def inputs_and_grad_outputs_batch(
         params: dict[str, Tensor], X: Tensor, y: Tensor
     ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
         """Run forward pass with IO collection and backpropagate grad outputs.
@@ -216,7 +216,13 @@ def make_compute_kfac_io_batch(
         layer_output_grads = dict(zip(io_layer_names, layer_output_grads_list))
         return layer_inputs, layer_output_grads
 
-    return io_batch, mapping, io_groups, io_param_names, layer_hparams
+    return (
+        inputs_and_grad_outputs_batch,
+        mapping,
+        io_groups,
+        io_param_names,
+        layer_hparams,
+    )
 
 
 def make_compute_kfac_batch(
@@ -266,7 +272,7 @@ def make_compute_kfac_batch(
         function ``(params, X, y) -> (input_covs, gradient_covs)`` (each a
         list of tensors) and ``mapping`` is the list of parameter groups.
     """
-    io_batch, mapping, io_groups, io_param_names, layer_hparams = (
+    inputs_and_grad_outputs_batch, mapping, io_groups, io_param_names, layer_hparams = (
         make_compute_kfac_io_batch(
             model_func,
             loss_func,
@@ -288,7 +294,7 @@ def make_compute_kfac_batch(
     def compute_batch(
         params: dict[str, Tensor], X: Tensor, y: Tensor
     ) -> tuple[list[Tensor], list[Tensor]]:
-        layer_inputs, layer_output_grads = io_batch(params, X, y)
+        layer_inputs, layer_output_grads = inputs_and_grad_outputs_batch(params, X, y)
 
         input_covs = []
         for group in mapping:
