@@ -187,7 +187,7 @@ def make_compute_kfac_io_batch(
         if output_check_fn is not None:
             output_check_fn(output)
 
-        if not layer_outputs:
+        if fisher_type == FisherType.FORWARD_ONLY:
             return layer_inputs, {}
 
         # Scale grad_outputs by 1/num_loss_terms for mean reduction
