@@ -97,9 +97,7 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
 
 - ``torch.compile`` support for matvecs:
   - `HessianLinearOperator`: replace `cached_property` with eager `_init_mp()`
-    in `CurvatureLinearOperator` and all subclasses. Add
-    `make_compiled_gradient_and_loss` to `curvlinops.examples`. Benchmark
-    measures both eager and compiled matvec/memory for compilable operators.
+    in `CurvatureLinearOperator` and all subclasses.
     ([PR #286](https://github.com/f-dangel/curvlinops/pull/286))
   - `GGNLinearOperator` (exact and MC): replace `torch.Generator` with global
     RNG seeded via `fork_rng` + `manual_seed` in `_matmat`.
@@ -116,6 +114,10 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
   - Fix compiled peak memory benchmark measuring only the matvec slice instead
     of the full pipeline (setup + compilation + matvec)
     ([PR #289](https://github.com/f-dangel/curvlinops/pull/289))
+  - Benchmark: always measure compiled performance (matvec, precompute phases,
+    peak memory) for all operators. Remove `_IS_COMPILABLE` gate and
+    `make_compiled_gradient_and_loss` (use `torch.compile(gradient_and_loss)`).
+    ([PR #293](https://github.com/f-dangel/curvlinops/pull/293))
 
 - Restructure benchmark tutorial: add both backends (hooks, `make_fx`) for
   KFAC/EKFAC, break down precompute into sub-phases (Kronecker factors,

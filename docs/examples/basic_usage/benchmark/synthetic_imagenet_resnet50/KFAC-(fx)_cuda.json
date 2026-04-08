@@ -1,11 +1,14 @@
 {
   "eager": {
-    "matvec": 0.01719736005179584,
-    "tracing": 6.011908200045582,
-    "kfac_factors": 0.30147159699117765,
+    "matvec": 0.017339491983875632,
+    "tracing": 5.637699921964668,
+    "kfac_factors": 0.2963975389720872,
     "peakmem": 8.584353923797607
   },
   "compiled": {
-    "matvec": 0.009471989993471652
+    "matvec": 0.00898109597619623,
+    "tracing": NaN,
+    "kfac_factors": NaN,
+    "peakmem": NaN
   }
 }

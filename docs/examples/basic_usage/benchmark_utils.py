@@ -2,6 +2,7 @@
 
 import inspect
 import json
+import platform
 from collections.abc import Iterable
 from contextlib import nullcontext
 from os import makedirs, path
@@ -107,22 +108,6 @@ _IS_KFAC_INVERSE_HOOKS = {"KFAC inverse (hooks)"}
 _IS_FX = {
     "KFAC (fx)",
     "KFAC inverse (fx)",
-    "EKFAC (fx)",
-    "EKFAC inverse (fx)",
-}
-# Operators whose matvec supports torch.compile (0 graph breaks).
-# run_operator will also measure compiled matvec and memory for these.
-_IS_COMPILABLE = {
-    "Hessian",
-    "Generalized Gauss-Newton",
-    "Empirical Fisher",
-    "Monte-Carlo Fisher",
-    "KFAC (hooks)",
-    "KFAC inverse (hooks)",
-    "KFAC (fx)",
-    "KFAC inverse (fx)",
-    "EKFAC (hooks)",
-    "EKFAC inverse (hooks)",
     "EKFAC (fx)",
     "EKFAC inverse (fx)",
 }
@@ -236,7 +221,7 @@ def save_environment_info(result_dir: str):
     Args:
         result_dir: Directory where ``environment.json`` is written.
     """
-    info = {"pytorch_version": torch.__version__}
+    info = {"pytorch_version": torch.__version__, "hostname": platform.node()}
     if cuda.is_available():
         info["gpu"] = cuda.get_device_name(0)
         info["cuda_version"] = torch.version.cuda
