@@ -386,6 +386,11 @@ def make_compute_kfac_batch(
     ) -> tuple[dict[tuple[str, ...], Tensor], dict[tuple[str, ...], Tensor]]:
         """Compute per-batch input and gradient covariances for all groups.
 
+        Args:
+            params: Named model parameters.
+            X: Input batch.
+            y: Target batch.
+
         Returns:
             Tuple of ``(input_covs, gradient_covs)`` dicts.
         """

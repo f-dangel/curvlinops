@@ -101,6 +101,13 @@ def make_compute_ekfac_eigencorrection_batch(
     ) -> dict[tuple[str, ...], Tensor]:
         """Compute per-batch eigenvalue corrections for all groups.
 
+        Args:
+            params: Named model parameters.
+            X: Input batch.
+            y: Target batch.
+            input_eigvecs: Input covariance eigenvectors per parameter group.
+            gradient_eigvecs: Gradient covariance eigenvectors per parameter group.
+
         Returns:
             Dict mapping parameter group keys to eigencorrection tensors.
         """
@@ -138,16 +145,15 @@ def make_compute_ekfac_eigencorrection_batch(
     example_gradient_eigvecs: dict[ParamGroupKey, Tensor] = {}
     for group in mapping:
         group_key = tuple(group.values())
-        first_param = params[next(iter(group.values()))]
-        d_out = first_param.shape[0]
+        p1 = params[next(iter(group.values()))]
+        d_out = p1.shape[0]
         example_gradient_eigvecs[group_key] = empty(
-            d_out, d_out, dtype=first_param.dtype, device=first_param.device
+            d_out, d_out, dtype=p1.dtype, device=p1.device
         )
         if "W" in group:
-            W = params[group["W"]]
-            d_in = W.numel() // W.shape[0] + ("b" in group)
+            d_in = p1.numel() // p1.shape[0] + ("b" in group)
             example_input_eigvecs[group_key] = empty(
-                d_in, d_in, dtype=W.dtype, device=W.device
+                d_in, d_in, dtype=p1.dtype, device=p1.device
             )
 
     traced_fn = _make_fx(compute_eigencorrection_batch)(
