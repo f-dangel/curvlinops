@@ -48,7 +48,7 @@ from benchmark_utils import (
     setup_synthetic_shakespeare_nanogpt,
 )
 from memory_profiler import memory_usage
-from torch import Tensor, cuda, device, manual_seed, nan, rand
+from torch import Tensor, cuda, device, manual_seed, nan, no_grad, rand
 from torch import compile as torch_compile
 from torch.compiler import reset as reset_compiler
 from torch.nn import Conv2d, Linear, Module
@@ -629,61 +629,38 @@ def make_precompute_phases(  # noqa: C901
         ], None
 
     if linop_str in _IS_FX and linop_str in _IS_EKFAC:
-        # EKFAC FX: tracing → factors → eigh → correction
+        # EKFAC FX: tracing → factors → eigh → eigencorrection (trace + accumulate)
         computer = setup_computer(linop_str, model, loss_function, params, data)
 
-        def ekfac_fx_tracing():
-            traced_batch = computer._trace_batch_functions()
-            (
-                inputs_and_grad_outputs_batch_fns,
-                _,
-                io_groups,
-                io_param_names,
-                layer_hparams,
-            ) = computer._trace_io_batch_functions()
-            return (
-                traced_batch,
-                inputs_and_grad_outputs_batch_fns,
-                io_groups,
-                io_param_names,
-                layer_hparams,
-            )
-
         def ekfac_fx_factors(state):
-            traced_batch, *io_state = state
-            input_cov, grad_cov, mapping = computer._compute_kronecker_factors(
-                traced_batch
-            )
-            return (input_cov, grad_cov, mapping, *io_state)
+            input_cov, grad_cov, mapping = computer._compute_kronecker_factors(state)
+            return (input_cov, grad_cov, mapping)
 
         def ekfac_fx_eigh(state):
-            input_cov, grad_cov, mapping, *io_state = state
+            input_cov, grad_cov, mapping = state
             input_cov = _EKFACMixin._eigenvectors_(input_cov)
             grad_cov = _EKFACMixin._eigenvectors_(grad_cov)
-            return (input_cov, grad_cov, mapping, *io_state)
+            return (input_cov, grad_cov)
 
         def ekfac_fx_correction(state):
-            (
-                input_cov,
-                grad_cov,
-                mapping,
-                inputs_and_grad_outputs_batch_fns,
-                io_groups,
-                io_pnames,
-                lhp,
-            ) = state
-            return computer.compute_eigenvalue_correction(
-                input_cov,
-                grad_cov,
-                mapping,
-                inputs_and_grad_outputs_batch_fns,
-                io_groups,
-                io_pnames,
-                lhp,
+            input_eigvecs, grad_eigvecs = state
+            eigcorr_fns, _ = computer._trace_eigencorrection_batch_functions(
+                input_eigvecs, grad_eigvecs
             )
+            corrected = {}
+            manual_seed(computer._seed)
+            with no_grad():
+                for X, y in computer._loop_over_data(desc="Eigenvalue correction"):
+                    batch_size = computer._batch_size_fn(X)
+                    eigcorrs = eigcorr_fns[batch_size](computer._params, X, y)
+                    is_averaged = computer._loss_func.reduction == "mean"
+                    weight = batch_size / computer._N_data if is_averaged else 1.0
+                    for key, eigcorr in eigcorrs.items():
+                        computer._set_or_add_(corrected, key, eigcorr.mul_(weight))
+            return corrected
 
         return [
-            ("tracing", ekfac_fx_tracing),
+            ("tracing", computer._trace_batch_functions),
             ("kfac_factors", ekfac_fx_factors),
             ("eigh", ekfac_fx_eigh),
             ("eigenvalue_correction", ekfac_fx_correction),

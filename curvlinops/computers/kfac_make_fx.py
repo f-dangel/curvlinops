@@ -104,6 +104,96 @@ def _bias_pad(has_joint_wb: bool, io_layer_params: dict[str, str]) -> int | None
     return 1 if "b" in io_layer_params else 0
 
 
+def _num_loss_terms(loss_func: Callable, y: Tensor) -> int:
+    """Compute total number of loss terms from target tensor.
+
+    For ``CrossEntropyLoss``, each element of ``y`` is one loss term.
+    For other losses, each row ``y[i, ...]`` (dropping the last/class dim)
+    is one loss term.
+
+    Args:
+        loss_func: The loss function.
+        y: Target tensor.
+
+    Returns:
+        Total number of loss terms.
+    """
+    return (
+        y.numel() if isinstance(loss_func, CrossEntropyLoss) else y.shape[:-1].numel()
+    )
+
+
+def make_group_gatherers(
+    io_groups: dict[ParamGroupKey, list[str]],
+    io_param_names: dict[str, dict[str, str]],
+    layer_hparams: dict[str, dict],
+    kfac_approx: str = KFACType.EXPAND,
+) -> tuple[
+    Callable[[ParamGroup, dict[str, Tensor]], Tensor],
+    Callable[[ParamGroup, dict[str, Tensor]], Tensor],
+]:
+    """Create closures that gather per-group layer inputs/gradients in weight sharing format.
+
+    Args:
+        io_groups: Mapping from parameter group keys to IO layer names.
+        io_param_names: Per-IO-layer parameter name mappings.
+        layer_hparams: Per-IO-layer hyperparameter dicts.
+        kfac_approx: KFAC approximation type. Defaults to ``KFACType.EXPAND``.
+
+    Returns:
+        Tuple of ``(group_inputs, group_grads)`` closures.
+    """
+
+    def group_inputs(group: ParamGroup, layer_inputs: dict[str, Tensor]) -> Tensor:
+        """Gather a group's layer inputs in weight sharing format.
+
+        Args:
+            group: Parameter group dict.
+            layer_inputs: Raw layer inputs keyed by IO layer name.
+
+        Returns:
+            Concatenated tensor of shape ``[batch, shared, d_in]``.
+        """
+        group_key = tuple(group.values())
+        io_names = io_groups[group_key]
+        has_joint_wb = "b" in group
+        xs = [
+            input_to_weight_sharing_format(
+                layer_inputs[n].data.detach(),
+                kfac_approx,
+                layer_hyperparams=layer_hparams[n],
+                bias_pad=_bias_pad(has_joint_wb, io_param_names[n]),
+            )
+            for n in io_names
+        ]
+        return cat(xs, dim=1)
+
+    def group_grads(group: ParamGroup, layer_output_grads: dict[str, Tensor]) -> Tensor:
+        """Gather a group's layer output gradients in weight sharing format.
+
+        Args:
+            group: Parameter group dict.
+            layer_output_grads: Batched output gradients keyed by IO layer name.
+
+        Returns:
+            Concatenated tensor of shape ``[v, batch, shared, d_out]``.
+        """
+        group_key = tuple(group.values())
+        io_names = io_groups[group_key]
+        gs = [
+            grad_to_weight_sharing_format(
+                layer_output_grads[n].data.detach(),
+                kfac_approx,
+                layer_hyperparams=layer_hparams[n],
+                num_leading_dims=2,
+            )
+            for n in io_names
+        ]
+        return cat(gs, dim=2)
+
+    return group_inputs, group_grads
+
+
 def make_compute_kfac_io_batch(
     model_func: Callable,
     loss_func: Callable,
@@ -191,11 +281,7 @@ def make_compute_kfac_io_batch(
             return layer_inputs, {}
 
         # Scale grad_outputs by 1/num_loss_terms for mean reduction
-        num_loss_terms = (
-            y.numel()
-            if isinstance(loss_func, CrossEntropyLoss)
-            else y.shape[:-1].numel()
-        )
+        num_loss_terms = _num_loss_terms(loss_func, y)
         scale = {"sum": 1.0, "mean": 1.0 / num_loss_terms}[loss_func.reduction]
 
         # Rearrange >2d output/target into 2d for grad_outputs_computer.
@@ -292,52 +378,9 @@ def make_compute_kfac_batch(
         )
     )
 
-    def group_inputs(group: ParamGroup, layer_inputs: dict[str, Tensor]) -> Tensor:
-        """Gather a group's layer inputs in weight sharing format.
-
-        Args:
-            group: Parameter group dict.
-            layer_inputs: Raw layer inputs keyed by IO layer name.
-
-        Returns:
-            Concatenated tensor of shape ``[batch, shared, d_in]``.
-        """
-        group_key = tuple(group.values())
-        io_names = io_groups[group_key]
-        has_joint_wb = "b" in group
-        xs = [
-            input_to_weight_sharing_format(
-                layer_inputs[n].data.detach(),
-                kfac_approx,
-                layer_hyperparams=layer_hparams[n],
-                bias_pad=_bias_pad(has_joint_wb, io_param_names[n]),
-            )
-            for n in io_names
-        ]
-        return cat(xs, dim=1)
-
-    def group_grads(group: ParamGroup, layer_output_grads: dict[str, Tensor]) -> Tensor:
-        """Gather a group's layer output gradients in weight sharing format.
-
-        Args:
-            group: Parameter group dict.
-            layer_output_grads: Batched output gradients keyed by IO layer name.
-
-        Returns:
-            Concatenated tensor of shape ``[v, batch, shared, d_out]``.
-        """
-        group_key = tuple(group.values())
-        io_names = io_groups[group_key]
-        gs = [
-            grad_to_weight_sharing_format(
-                layer_output_grads[n].data.detach(),
-                kfac_approx,
-                layer_hyperparams=layer_hparams[n],
-                num_leading_dims=2,
-            )
-            for n in io_names
-        ]
-        return cat(gs, dim=2)
+    group_inputs, group_grads = make_group_gatherers(
+        io_groups, io_param_names, layer_hparams, kfac_approx
+    )
 
     def compute_batch(
         params: dict[str, Tensor], X: Tensor, y: Tensor
@@ -367,12 +410,7 @@ def make_compute_kfac_batch(
             g = group_grads(group, layer_output_grads)
             ggT = einsum(g, g, "v batch shared i, v batch shared j -> i j")
             if loss_func.reduction == "mean":
-                num_loss_terms = (
-                    y.numel()
-                    if isinstance(loss_func, CrossEntropyLoss)
-                    else y.shape[:-1].numel()
-                )
-                ggT.mul_(num_loss_terms)
+                ggT.mul_(_num_loss_terms(loss_func, y))
             gradient_covs[group_key] = ggT
 
         return input_covs, gradient_covs
