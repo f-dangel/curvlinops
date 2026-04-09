@@ -229,7 +229,7 @@ class Benchmark:
 
     # -- Low-level measurement --
 
-    def time(self, func, context=None):
+    def time(self, func, context=None, init=None):
         """Time a function or pipeline of functions.
 
         For a single callable, returns ``(min_time, last_result)``.
@@ -245,10 +245,17 @@ class Benchmark:
         (all phases) runs inside it each repeat. A fresh context manager is
         created per repeat to support generator-based context managers.
 
+        An optional ``init`` pair ``(name, callable)`` runs once before the repeat
+        loop. Its return value is passed as the initial state to the first pipeline
+        phase in every repeat. This is useful for one-shot setup (e.g. FX tracing)
+        whose result should be reused across repeats.
+
         Args:
             func: A callable, or a list of ``(name, callable)`` pairs.
             context: Optional callable returning a context manager that wraps
                 the full pipeline per repeat. Defaults to ``nullcontext``.
+            init: Optional ``(name, callable)`` pair that runs once before the
+                repeat loop. Its time is recorded under ``name``.
 
         Returns:
             ``(float, Any)`` for a single callable, or
@@ -261,9 +268,22 @@ class Benchmark:
             context = nullcontext
 
         phase_times = {name: [] for name, _ in func}
+
+        # Run init once; its result becomes the initial state for each repeat.
+        init_state = None
+        if init is not None:
+            init_name, init_fn = init
+            if self.is_cuda:
+                cuda.synchronize()
+            start = perf_counter()
+            init_state = init_fn()
+            if self.is_cuda:
+                cuda.synchronize()
+            phase_times[init_name] = [perf_counter() - start]
+
         result = None
         for _ in range(self.num_repeats):
-            state = None
+            state = init_state
             with context():
                 for name, phase_fn in func:
                     if self.is_cuda:
@@ -337,23 +357,28 @@ class Benchmark:
 
     # -- Internal: time measurements (in-process) --
 
-    def _time_or_nan(self, func, **kwargs):
+    def _time_or_nan(self, func, init=None, **kwargs):
         """Like :meth:`time`, but return NaN on ``RuntimeError``.
 
         Args:
             func: Passed to :meth:`time`.
+            init: Passed to :meth:`time`.
             **kwargs: Passed to :meth:`time`.
 
         Returns:
             Same as :meth:`time`, but with NaN values on failure.
         """
         try:
-            return self.time(func, **kwargs)
+            return self.time(func, init=init, **kwargs)
         except RuntimeError as e:
             print(f"  torch.compile RuntimeError: {e}")
+            nans = {}
+            if init is not None:
+                nans[init[0]] = float(nan)
             if callable(func):
                 return float(nan), None
-            return {name: float(nan) for name, _ in func}, None
+            nans.update({name: float(nan) for name, _ in func})
+            return nans, None
 
     def _get_timer(self, compiled: bool):
         """Return :meth:`_time_or_nan` for compiled, :meth:`time` for eager.
@@ -427,13 +452,14 @@ class Benchmark:
                 if all_exist:
                     print(f"[Time] Skipping {label} / precompute ({category})")
                 else:
-                    phases, phase_ctx = make_precompute_phases(
+                    init, phases, phase_ctx = make_precompute_phases(
                         linop_str, model, loss_function, params, data
                     )
                     if compiled:
                         phases = [(name, torch_compile(fn)) for name, fn in phases]
+                        # init (tracing) is never compiled — make_fx is eager
                     timer = self._get_timer(compiled)
-                    phase_times, _ = timer(phases, context=phase_ctx)
+                    phase_times, _ = timer(phases, context=phase_ctx, init=init)
                     for phase_name, t in phase_times.items():
                         _merge_json(savepath, category, phase_name, t)
                         print(f"[Time] {label} / {phase_name} ({category}): {t:.4f} s")
@@ -559,12 +585,16 @@ def make_precompute_phases(  # noqa: C901
     loss_function: Module,
     params: dict[str, Tensor],
     data,
-) -> tuple[list[tuple[str, callable]], callable | None]:
+) -> tuple[tuple[str, callable] | None, list[tuple[str, callable]], callable | None]:
     """Build a pipeline of precompute sub-phases for timing.
 
     Returns a list of ``(name, callable)`` pairs. The first callable takes no
     arguments; each subsequent callable receives the return value of the
     previous one. This pipeline is passed to :meth:`Benchmark.time`.
+
+    For FX operators, tracing is returned separately as ``init`` so it runs
+    once before the repeat loop. The traced functions are then reused across
+    repeats, avoiding dynamo recompilation from changing GraphModule identities.
 
     Args:
         linop_str: The linear operator name.
@@ -574,10 +604,10 @@ def make_precompute_phases(  # noqa: C901
         data: The data.
 
     Returns:
-        Tuple of ``(phases, context)`` where ``phases`` is a list of
-        ``(name, callable)`` pairs forming a pipeline, and ``context`` is
-        an optional callable returning a context manager that wraps the
-        full pipeline (or ``None``).
+        Tuple of ``(init, phases, context)`` where ``init`` is an optional
+        ``(name, callable)`` pair that runs once before repeats, ``phases``
+        is a list of ``(name, callable)`` pairs forming the repeated pipeline,
+        and ``context`` is an optional callable returning a context manager.
     """
     num_data = sum(X.shape[0] for (X, _) in data)
     X0, y0 = next(iter(data))
@@ -611,7 +641,7 @@ def make_precompute_phases(  # noqa: C901
         def context():
             return _use_params(computer._model_module, computer._params)
 
-        return phases, context
+        return None, phases, context
 
     if linop_str in _IS_KFAC_INVERSE_HOOKS:
         # KFAC inverse hooks: factors → Cholesky inverse
@@ -623,10 +653,14 @@ def make_precompute_phases(  # noqa: C901
         def cholesky_inverse(linop):
             return linop.inverse(damping=1e-3)
 
-        return [
-            ("kfac_factors", kfac_inv_factors),
-            ("cholesky_inverse", cholesky_inverse),
-        ], None
+        return (
+            None,
+            [
+                ("kfac_factors", kfac_inv_factors),
+                ("cholesky_inverse", cholesky_inverse),
+            ],
+            None,
+        )
 
     if linop_str in _IS_FX and linop_str in _IS_EKFAC:
         # EKFAC FX: tracing → factors → eigh → eigencorrection (trace + accumulate)
@@ -667,26 +701,32 @@ def make_precompute_phases(  # noqa: C901
                         computer._set_or_add_(corrected, key, eigcorr.mul_(weight))
             return corrected
 
-        return [
+        return (
             ("tracing", ekfac_fx_tracing),
-            ("kfac_factors", ekfac_fx_factors),
-            ("eigh", ekfac_fx_eigh),
-            ("eigenvalue_correction", ekfac_fx_correction),
-        ], None
+            [
+                ("kfac_factors", ekfac_fx_factors),
+                ("eigh", ekfac_fx_eigh),
+                ("eigenvalue_correction", ekfac_fx_correction),
+            ],
+            None,
+        )
 
     if linop_str in _IS_FX:
         # KFAC FX: tracing → factors
         computer = setup_computer(linop_str, model, loss_function, params, data)
-        return [
+        return (
             ("tracing", computer._trace_batch_functions),
-            ("kfac_factors", computer._compute_kronecker_factors),
-        ], None
+            [
+                ("kfac_factors", computer._compute_kronecker_factors),
+            ],
+            None,
+        )
 
     # Plain KFAC hooks: single phase
     def kfac_factors():
         return KFACLinearOperator(model, loss_function, params, data, **common_kwargs)
 
-    return [("kfac_factors", kfac_factors)], None
+    return None, [("kfac_factors", kfac_factors)], None
 
 
 # -- Subprocess entry points for memory measurement --
