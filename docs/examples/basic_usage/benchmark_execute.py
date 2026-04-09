@@ -33,6 +33,7 @@ from time import perf_counter
 from benchmark_utils import (
     _IS_EKFAC,
     _IS_FX,
+    _IS_KFAC_INVERSE_FX,
     _IS_KFAC_INVERSE_HOOKS,
     _KFAC_LIKE,
     LINOP_STRS,
@@ -60,6 +61,7 @@ from curvlinops.computers.ekfac_make_fx import MakeFxEKFACComputer
 from curvlinops.computers.kfac_hooks import HooksKFACComputer, _use_params
 from curvlinops.computers.kfac_make_fx import MakeFxKFACComputer
 from curvlinops.examples import gradient_and_loss
+from curvlinops.kronecker import KroneckerProductLinearOperator
 
 
 def run_verbose(cmd: list[str]) -> CompletedProcess:
@@ -707,6 +709,28 @@ def make_precompute_phases(  # noqa: C901
                 ("kfac_factors", ekfac_fx_factors),
                 ("eigh", ekfac_fx_eigh),
                 ("eigenvalue_correction", ekfac_fx_correction),
+            ],
+            None,
+        )
+
+    if linop_str in _IS_KFAC_INVERSE_FX:
+        # KFAC inverse FX: tracing → factors → Cholesky inverse
+        computer = setup_computer(linop_str, model, loss_function, params, data)
+
+        def kfac_inv_fx_cholesky(state):
+            input_cov, grad_cov, mapping = state
+            for group in mapping:
+                group_key = tuple(group.values())
+                aaT = input_cov.get(group_key)
+                ggT = grad_cov[group_key]
+                factors = [ggT, aaT] if aaT is not None else [ggT]
+                KroneckerProductLinearOperator(*factors).inverse(damping=1e-3)
+
+        return (
+            ("tracing", computer._trace_batch_functions),
+            [
+                ("kfac_factors", computer._compute_kronecker_factors),
+                ("cholesky_inverse", kfac_inv_fx_cholesky),
             ],
             None,
         )

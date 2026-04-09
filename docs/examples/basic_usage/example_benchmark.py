@@ -194,9 +194,8 @@ def visualize_precompute_benchmark(
     }
     labels_shown = set()
 
-    bar_height = 0.35
-    bar_offset = 0.2
-    compiled_hatch = "//////"
+    bar_height = 0.3
+    bar_offset = 0.15
     categories = [("eager", bar_offset, False), ("compiled", -bar_offset, True)]
 
     for idx, name in enumerate(kfac):
@@ -211,12 +210,7 @@ def visualize_precompute_benchmark(
                 label = precompute_labels[op] if op not in labels_shown else None
                 color = precompute_colors[op]
                 if is_compiled:
-                    bar_kwargs = dict(
-                        color="white",
-                        edgecolor=color,
-                        hatch=compiled_hatch,
-                        linewidth=0,
-                    )
+                    bar_kwargs = dict(color=color, alpha=0.5)
                 else:
                     bar_kwargs = dict(color=color)
                 ax.barh(
@@ -239,9 +233,7 @@ def visualize_precompute_benchmark(
     add_gradient_reference(ax, reference)
 
     handles, legend_labels = ax.get_legend_handles_labels()
-    handles.append(
-        Patch(facecolor="white", edgecolor="black", hatch=compiled_hatch, linewidth=0)
-    )
+    handles.append(Patch(facecolor="black", alpha=0.5))
     legend_labels.append("Compiled")
     fig.legend(
         handles,

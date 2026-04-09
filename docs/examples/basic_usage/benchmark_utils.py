@@ -105,6 +105,7 @@ _IS_EKFAC = {
     "EKFAC inverse (fx)",
 }
 _IS_KFAC_INVERSE_HOOKS = {"KFAC inverse (hooks)"}
+_IS_KFAC_INVERSE_FX = {"KFAC inverse (fx)"}
 _IS_FX = {
     "KFAC (fx)",
     "KFAC inverse (fx)",
@@ -261,8 +262,10 @@ def _get_precompute_ops(linop_str: str) -> list[str]:
         return EKFAC_PRECOMPUTE_OPS + ["tracing"]
     elif linop_str in _IS_EKFAC:
         return EKFAC_PRECOMPUTE_OPS
-    elif linop_str in _IS_KFAC_INVERSE_HOOKS:
-        return KFAC_INVERSE_PRECOMPUTE_OPS
+    elif linop_str in _IS_KFAC_INVERSE_HOOKS or linop_str in _IS_KFAC_INVERSE_FX:
+        return KFAC_INVERSE_PRECOMPUTE_OPS + (
+            ["tracing"] if linop_str in _IS_FX else []
+        )
     elif linop_str in _IS_FX:
         return FX_PRECOMPUTE_OPS
     else:
