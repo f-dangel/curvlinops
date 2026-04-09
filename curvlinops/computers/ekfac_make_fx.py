@@ -6,7 +6,7 @@ collector (``with_kfac_io``) instead of forward/backward hooks.
 """
 
 from collections import UserDict
-from collections.abc import Callable
+from collections.abc import Callable, MutableMapping
 from functools import partial
 
 from torch import Tensor, manual_seed, no_grad
@@ -31,14 +31,13 @@ def make_compute_ekfac_eigencorrection_batch(
     model_func: Callable,
     loss_func: Callable,
     params: dict[str, Tensor],
-    X: Tensor,
+    X: Tensor | MutableMapping,
     y: Tensor,
     fisher_type: FisherType = FisherType.MC,
     mc_samples: int = 1,
     separate_weight_and_bias: bool = True,
     input_eigvecs: dict[ParamGroupKey, Tensor] | None = None,
     gradient_eigvecs: dict[ParamGroupKey, Tensor] | None = None,
-    batch_size_fn: Callable[[Tensor], int] = lambda X: X.shape[0],
     output_check_fn: Callable[[Tensor], None] | None = None,
 ) -> tuple[
     Callable[
@@ -66,8 +65,6 @@ def make_compute_ekfac_eigencorrection_batch(
             separately. Defaults to ``True``.
         input_eigvecs: Input covariance eigenvectors per parameter group.
         gradient_eigvecs: Gradient covariance eigenvectors per parameter group.
-        batch_size_fn: Function to extract batch size from ``X``.
-            Defaults to ``X.shape[0]``.
         output_check_fn: Passed to :func:`make_compute_kfac_io_batch`.
 
     Returns:
@@ -93,8 +90,13 @@ def make_compute_ekfac_eigencorrection_batch(
     )
 
     def compute_eigencorrection_batch(
-        params: dict[str, Tensor], X: Tensor, y: Tensor
+        params: dict[str, Tensor], X: Tensor | MutableMapping, y: Tensor
     ) -> dict[tuple[str, ...], Tensor]:
+        """Compute per-batch eigenvalue corrections for all groups.
+
+        Returns:
+            Dict mapping parameter group keys to eigencorrection tensors.
+        """
         layer_inputs, layer_output_grads = inputs_and_grad_outputs_batch(params, X, y)
 
         eigencorrections: dict[tuple[str, ...], Tensor] = {}
@@ -207,7 +209,6 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
                         self._separate_weight_and_bias,
                         input_eigvecs,
                         gradient_eigvecs,
-                        self._batch_size_fn,
                         output_check_fn=partial(
                             self._rearrange_for_larger_than_2d_output, y=y
                         ),

@@ -9,7 +9,7 @@ to optimize the full per-batch kernel.
 """
 
 from collections import UserDict, defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, MutableMapping
 
 from einops import einsum
 from torch import Tensor, autograd, cat, eye, manual_seed, no_grad
@@ -198,7 +198,7 @@ def make_compute_kfac_io_batch(
     model_func: Callable,
     loss_func: Callable,
     params: dict[str, Tensor],
-    X: Tensor,
+    X: Tensor | MutableMapping,
     fisher_type: FisherType = FisherType.MC,
     mc_samples: int = 1,
     separate_weight_and_bias: bool = True,
@@ -218,13 +218,6 @@ def make_compute_kfac_io_batch(
     Returns an **untraced** closure that, given ``(params, X, y)``, runs the
     forward pass with IO collection and backpropagates the Fisher-type-specific
     gradient outputs to produce per-layer inputs and batched output gradients.
-
-    The closure can be:
-
-    * composed with covariance computation and traced for KFAC
-      (see :func:`make_compute_kfac_batch`),
-    * called eagerly for EKFAC eigenvalue correction,
-    * traced directly for compile tests.
 
     Args:
         model_func: Functional model ``(params, X) -> prediction``.
@@ -258,7 +251,7 @@ def make_compute_kfac_io_batch(
     )
 
     def inputs_and_grad_outputs_batch(
-        params: dict[str, Tensor], X: Tensor, y: Tensor
+        params: dict[str, Tensor], X: Tensor | MutableMapping, y: Tensor
     ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
         """Run forward pass with IO collection and backpropagate grad outputs.
 
@@ -280,10 +273,6 @@ def make_compute_kfac_io_batch(
         if fisher_type == FisherType.FORWARD_ONLY:
             return layer_inputs, {}
 
-        # Scale grad_outputs by 1/num_loss_terms for mean reduction
-        num_loss_terms = _num_loss_terms(loss_func, y)
-        scale = {"sum": 1.0, "mean": 1.0 / num_loss_terms}[loss_func.reduction]
-
         # Rearrange >2d output/target into 2d for grad_outputs_computer.
         # Needed for empirical Fisher support (assumes 1d per-datum prediction).
         # CrossEntropyLoss expects class dim second: "batch c ... -> (batch ...) c"
@@ -295,6 +284,11 @@ def make_compute_kfac_io_batch(
             output_flat = output.flatten(0, -2)
             y_flat = y.flatten(0, -2)
         grad_outputs = grad_outputs_computer(output_flat.detach(), y_flat, None)
+
+        # Scale grad_outputs by 1/num_loss_terms for mean reduction
+        scale = {"sum": 1.0, "mean": 1.0 / _num_loss_terms(loss_func, y)}[
+            loss_func.reduction
+        ]
         grad_outputs.mul_(scale)
 
         io_layer_names = list(layer_outputs)
@@ -321,13 +315,13 @@ def make_compute_kfac_batch(
     model_func: Callable,
     loss_func: Callable,
     params: dict[str, Tensor],
-    X: Tensor,
+    X: Tensor | MutableMapping,
     y: Tensor,
     fisher_type: FisherType = FisherType.MC,
     mc_samples: int = 1,
     kfac_approx: str = KFACType.EXPAND,
     separate_weight_and_bias: bool = True,
-    batch_size_fn: Callable[[Tensor], int] = lambda X: X.shape[0],
+    batch_size_fn: Callable[[Tensor | MutableMapping], int] | None = None,
     output_check_fn: Callable[[Tensor], None] | None = None,
 ) -> tuple[
     Callable[[dict[str, Tensor], Tensor, Tensor], tuple[list[Tensor], list[Tensor]]],
@@ -378,13 +372,23 @@ def make_compute_kfac_batch(
         )
     )
 
+    if batch_size_fn is None:
+
+        def batch_size_fn(X):
+            return X.shape[0]
+
     group_inputs, group_grads = make_group_gatherers(
         io_groups, io_param_names, layer_hparams, kfac_approx
     )
 
     def compute_batch(
-        params: dict[str, Tensor], X: Tensor, y: Tensor
+        params: dict[str, Tensor], X: Tensor | MutableMapping, y: Tensor
     ) -> tuple[dict[tuple[str, ...], Tensor], dict[tuple[str, ...], Tensor]]:
+        """Compute per-batch input and gradient covariances for all groups.
+
+        Returns:
+            Tuple of ``(input_covs, gradient_covs)`` dicts.
+        """
         layer_inputs, layer_output_grads = inputs_and_grad_outputs_batch(params, X, y)
         batch_size = batch_size_fn(X)
 

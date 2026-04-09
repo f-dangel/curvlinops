@@ -28,6 +28,8 @@ from curvlinops import (
     HessianLinearOperator,
     KFACLinearOperator,
 )
+from curvlinops.computers._base import _EKFACMixin
+from curvlinops.computers.ekfac_make_fx import make_compute_ekfac_eigencorrection_batch
 from curvlinops.computers.kfac_make_fx import make_compute_kfac_batch
 from curvlinops.utils import make_functional_call
 
@@ -188,6 +190,44 @@ def test_kfac_precompute_no_graph_breaks(setup_fn):
         with fork_rng():
             manual_seed(0)
             return traced(params, X, y)
+
+    with _dynamo_explain(traced_seeded, params, X, y) as result:
+        assert result.graph_break_count == 0
+
+
+@mark.parametrize("setup_fn", SETUPS, ids=SETUP_IDS)
+def test_ekfac_eigencorrection_precompute_no_graph_breaks(setup_fn):
+    """EKFAC per-batch eigencorrection traced with ``make_fx`` compiles correctly."""
+    model, loss_fn, params, data = setup_fn()
+    X, y = data[0]
+    model_func = make_functional_call(model)
+
+    # Compute KFAC factors and eigenvectors
+    traced_kfac, mapping = make_compute_kfac_batch(
+        model_func, loss_fn, params, X, y, separate_weight_and_bias=False
+    )
+    with fork_rng():
+        manual_seed(0)
+        input_covs, gradient_covs = traced_kfac(params, X, y)
+    input_eigvecs = _EKFACMixin._eigenvectors_(input_covs)
+    gradient_eigvecs = _EKFACMixin._eigenvectors_(gradient_covs)
+
+    # Trace eigencorrection
+    traced_eigcorr, _ = make_compute_ekfac_eigencorrection_batch(
+        model_func,
+        loss_fn,
+        params,
+        X,
+        y,
+        separate_weight_and_bias=False,
+        input_eigvecs=input_eigvecs,
+        gradient_eigvecs=gradient_eigvecs,
+    )
+
+    def traced_seeded(params, X, y):
+        with fork_rng():
+            manual_seed(0)
+            return traced_eigcorr(params, X, y)
 
     with _dynamo_explain(traced_seeded, params, X, y) as result:
         assert result.graph_break_count == 0
