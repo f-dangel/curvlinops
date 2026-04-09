@@ -220,14 +220,14 @@ def test_ekfac_eigencorrection_precompute_no_graph_breaks(setup_fn):
         X,
         y,
         separate_weight_and_bias=False,
-        input_eigvecs=input_eigvecs,
-        gradient_eigvecs=gradient_eigvecs,
     )
 
-    def traced_seeded(params, X, y):
+    def traced_seeded(params, X, y, input_eigvecs, gradient_eigvecs):
         with fork_rng():
             manual_seed(0)
-            return traced_eigcorr(params, X, y)
+            return traced_eigcorr(params, X, y, input_eigvecs, gradient_eigvecs)
 
-    with _dynamo_explain(traced_seeded, params, X, y) as result:
+    with _dynamo_explain(
+        traced_seeded, params, X, y, input_eigvecs, gradient_eigvecs
+    ) as result:
         assert result.graph_break_count == 0

@@ -632,27 +632,35 @@ def make_precompute_phases(  # noqa: C901
         # EKFAC FX: tracing → factors → eigh → eigencorrection (trace + accumulate)
         computer = setup_computer(linop_str, model, loss_function, params, data)
 
+        def ekfac_fx_tracing():
+            kfac_fns, mapping = computer._trace_batch_functions()
+            eigcorr_fns, _ = computer._trace_eigencorrection_batch_functions()
+            return kfac_fns, mapping, eigcorr_fns
+
         def ekfac_fx_factors(state):
-            input_cov, grad_cov, mapping = computer._compute_kronecker_factors(state)
-            return (input_cov, grad_cov, mapping)
+            kfac_fns, mapping, eigcorr_fns = state
+            input_cov, grad_cov, mapping = computer._compute_kronecker_factors((
+                kfac_fns,
+                mapping,
+            ))
+            return (input_cov, grad_cov, mapping, eigcorr_fns)
 
         def ekfac_fx_eigh(state):
-            input_cov, grad_cov, mapping = state
-            input_cov = _EKFACMixin._eigenvectors_(input_cov)
-            grad_cov = _EKFACMixin._eigenvectors_(grad_cov)
-            return (input_cov, grad_cov)
+            input_cov, grad_cov, mapping, eigcorr_fns = state
+            input_eigvecs = _EKFACMixin._eigenvectors_(input_cov)
+            grad_eigvecs = _EKFACMixin._eigenvectors_(grad_cov)
+            return (eigcorr_fns, input_eigvecs, grad_eigvecs)
 
         def ekfac_fx_correction(state):
-            input_eigvecs, grad_eigvecs = state
-            eigcorr_fns, _ = computer._trace_eigencorrection_batch_functions(
-                input_eigvecs, grad_eigvecs
-            )
+            eigcorr_fns, input_eigvecs, grad_eigvecs = state
             corrected = {}
             manual_seed(computer._seed)
             with no_grad():
                 for X, y in computer._loop_over_data(desc="Eigenvalue correction"):
                     batch_size = computer._batch_size_fn(X)
-                    eigcorrs = eigcorr_fns[batch_size](computer._params, X, y)
+                    eigcorrs = eigcorr_fns[batch_size](
+                        computer._params, X, y, input_eigvecs, grad_eigvecs
+                    )
                     is_averaged = computer._loss_func.reduction == "mean"
                     weight = batch_size / computer._N_data if is_averaged else 1.0
                     for key, eigcorr in eigcorrs.items():
@@ -660,7 +668,7 @@ def make_precompute_phases(  # noqa: C901
             return corrected
 
         return [
-            ("tracing", computer._trace_batch_functions),
+            ("tracing", ekfac_fx_tracing),
             ("kfac_factors", ekfac_fx_factors),
             ("eigh", ekfac_fx_eigh),
             ("eigenvalue_correction", ekfac_fx_correction),

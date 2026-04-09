@@ -9,7 +9,7 @@ from collections import UserDict
 from collections.abc import Callable, MutableMapping
 from functools import partial
 
-from torch import Tensor, manual_seed, no_grad
+from torch import Tensor, empty, manual_seed, no_grad
 
 from curvlinops._checks import _register_userdict_as_pytree
 from curvlinops.computers._base import ParamGroup, ParamGroupKey, _EKFACMixin
@@ -36,12 +36,16 @@ def make_compute_ekfac_eigencorrection_batch(
     fisher_type: FisherType = FisherType.MC,
     mc_samples: int = 1,
     separate_weight_and_bias: bool = True,
-    input_eigvecs: dict[ParamGroupKey, Tensor] | None = None,
-    gradient_eigvecs: dict[ParamGroupKey, Tensor] | None = None,
     output_check_fn: Callable[[Tensor], None] | None = None,
 ) -> tuple[
     Callable[
-        [dict[str, Tensor], Tensor, Tensor],
+        [
+            dict[str, Tensor],
+            Tensor,
+            Tensor,
+            dict[ParamGroupKey, Tensor],
+            dict[ParamGroupKey, Tensor],
+        ],
         dict[ParamGroupKey, Tensor],
     ],
     list[ParamGroup],
@@ -63,14 +67,13 @@ def make_compute_ekfac_eigencorrection_batch(
         mc_samples: Number of Monte-Carlo samples. Defaults to ``1``.
         separate_weight_and_bias: Whether to treat weights and biases
             separately. Defaults to ``True``.
-        input_eigvecs: Input covariance eigenvectors per parameter group.
-        gradient_eigvecs: Gradient covariance eigenvectors per parameter group.
         output_check_fn: Passed to :func:`make_compute_kfac_io_batch`.
 
     Returns:
         Tuple of ``(traced_fn, mapping)`` where ``traced_fn`` is a compiled
-        function ``(params, X, y) -> eigencorrections`` (dict mapping parameter
-        group keys to tensors) and ``mapping`` is the list of parameter groups.
+        function ``(params, X, y, input_eigvecs, gradient_eigvecs) ->
+        eigencorrections`` (dict mapping parameter group keys to tensors)
+        and ``mapping`` is the list of parameter groups.
     """
     inputs_and_grad_outputs_batch, mapping, io_groups, io_param_names, layer_hparams = (
         make_compute_kfac_io_batch(
@@ -90,7 +93,11 @@ def make_compute_ekfac_eigencorrection_batch(
     )
 
     def compute_eigencorrection_batch(
-        params: dict[str, Tensor], X: Tensor | MutableMapping, y: Tensor
+        params: dict[str, Tensor],
+        X: Tensor | MutableMapping,
+        y: Tensor,
+        input_eigvecs: dict[ParamGroupKey, Tensor],
+        gradient_eigvecs: dict[ParamGroupKey, Tensor],
     ) -> dict[tuple[str, ...], Tensor]:
         """Compute per-batch eigenvalue corrections for all groups.
 
@@ -125,7 +132,27 @@ def make_compute_ekfac_eigencorrection_batch(
 
         return eigencorrections
 
-    traced_fn = _make_fx(compute_eigencorrection_batch)(params, X, y)
+    # Create example eigvecs with correct shapes for tracing.
+    # Shapes derived from params: D_out = W.shape[0], D_in = W[0].numel() (+1 for bias pad).
+    example_input_eigvecs: dict[ParamGroupKey, Tensor] = {}
+    example_gradient_eigvecs: dict[ParamGroupKey, Tensor] = {}
+    for group in mapping:
+        group_key = tuple(group.values())
+        first_param = params[next(iter(group.values()))]
+        d_out = first_param.shape[0]
+        example_gradient_eigvecs[group_key] = empty(
+            d_out, d_out, dtype=first_param.dtype, device=first_param.device
+        )
+        if "W" in group:
+            W = params[group["W"]]
+            d_in = W.numel() // W.shape[0] + ("b" in group)
+            example_input_eigvecs[group_key] = empty(
+                d_in, d_in, dtype=W.dtype, device=W.device
+            )
+
+    traced_fn = _make_fx(compute_eigencorrection_batch)(
+        params, X, y, example_input_eigvecs, example_gradient_eigvecs
+    )
 
     return traced_fn, mapping
 
@@ -177,14 +204,8 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
 
     def _trace_eigencorrection_batch_functions(
         self,
-        input_eigvecs: dict[ParamGroupKey, Tensor],
-        gradient_eigvecs: dict[ParamGroupKey, Tensor],
     ) -> tuple[dict[int, Callable], list[ParamGroup]]:
         """Trace per-batch eigencorrection for all batch sizes in the data.
-
-        Args:
-            input_eigvecs: Input covariance eigenvectors per parameter group.
-            gradient_eigvecs: Gradient covariance eigenvectors per parameter group.
 
         Returns:
             Tuple of ``(traced_fns, mapping)``.
@@ -207,8 +228,6 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
                         self._fisher_type,
                         self._mc_samples,
                         self._separate_weight_and_bias,
-                        input_eigvecs,
-                        gradient_eigvecs,
                         output_check_fn=partial(
                             self._rearrange_for_larger_than_2d_output, y=y
                         ),
@@ -240,9 +259,7 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
         input_covariances = self._eigenvectors_(input_covariances)
         gradient_covariances = self._eigenvectors_(gradient_covariances)
 
-        eigencorrection_fns, _ = self._trace_eigencorrection_batch_functions(
-            input_covariances, gradient_covariances
-        )
+        eigencorrection_fns, _ = self._trace_eigencorrection_batch_functions()
 
         corrected_eigenvalues: dict[ParamGroupKey, Tensor] = {}
         manual_seed(self._seed)
@@ -250,7 +267,9 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
         with no_grad():
             for X, y in self._loop_over_data(desc="Eigenvalue correction"):
                 batch_size = self._batch_size_fn(X)
-                eigcorrs = eigencorrection_fns[batch_size](self._params, X, y)
+                eigcorrs = eigencorrection_fns[batch_size](
+                    self._params, X, y, input_covariances, gradient_covariances
+                )
 
                 is_averaged = self._loss_func.reduction == "mean"
                 weight = batch_size / self._N_data if is_averaged else 1.0
