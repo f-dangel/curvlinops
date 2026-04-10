@@ -206,6 +206,8 @@ def visualize_precompute_benchmark(
             cat_data = operator_data.get(category, {})
             left = 0.0
             for op in sub_ops:
+                if op == "tracing":
+                    continue
                 t = cat_data.get(op, float("nan"))
                 label = precompute_labels[op] if op not in labels_shown else None
                 color = precompute_colors[op]
