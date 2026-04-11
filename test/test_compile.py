@@ -18,7 +18,6 @@ from torch import manual_seed, rand
 from torch._dynamo import explain
 from torch._dynamo import reset as dynamo_reset
 from torch.nn import Conv2d, Flatten, Linear, MSELoss, Sequential
-from torch.random import fork_rng
 from torch.testing import assert_close
 
 from curvlinops import (
@@ -31,7 +30,7 @@ from curvlinops import (
 from curvlinops.computers._base import _EKFACMixin
 from curvlinops.computers.ekfac_make_fx import make_compute_ekfac_eigencorrection_batch
 from curvlinops.computers.kfac_make_fx import make_compute_kfac_batch
-from curvlinops.utils import make_functional_call
+from curvlinops.utils import fork_rng_with_seed, make_functional_call
 
 
 def _setup_mlp_problem():
@@ -187,8 +186,7 @@ def test_kfac_precompute_no_graph_breaks(setup_fn):
     )
 
     def traced_seeded(params, X, y):
-        with fork_rng():
-            manual_seed(0)
+        with fork_rng_with_seed(0):
             return traced(params, X, y)
 
     with _dynamo_explain(traced_seeded, params, X, y) as result:
@@ -206,8 +204,7 @@ def test_ekfac_eigencorrection_precompute_no_graph_breaks(setup_fn):
     traced_kfac, mapping = make_compute_kfac_batch(
         model_func, loss_fn, params, X, y, separate_weight_and_bias=False
     )
-    with fork_rng():
-        manual_seed(0)
+    with fork_rng_with_seed(0):
         input_covs, gradient_covs = traced_kfac(params, X, y)
     input_eigvecs = _EKFACMixin._eigenvectors_(input_covs)
     gradient_eigvecs = _EKFACMixin._eigenvectors_(gradient_covs)
@@ -218,8 +215,7 @@ def test_ekfac_eigencorrection_precompute_no_graph_breaks(setup_fn):
     )
 
     def traced_seeded(params, X, y, input_eigvecs, gradient_eigvecs):
-        with fork_rng():
-            manual_seed(0)
+        with fork_rng_with_seed(0):
             return traced_eigcorr(params, X, y, input_eigvecs, gradient_eigvecs)
 
     with _dynamo_explain(
