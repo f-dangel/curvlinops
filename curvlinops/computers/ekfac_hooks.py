@@ -277,8 +277,9 @@ class HooksEKFACComputer(_EKFACMixin, HooksKFACComputer):
             input_covariances, gradient_covariances, mapping = (
                 self._compute_kronecker_factors()
             )
-            input_covariances = self._eigenvectors_(input_covariances)
-            gradient_covariances = self._eigenvectors_(gradient_covariances)
+            input_covariances, gradient_covariances = self._eigenvectors_(
+                input_covariances, gradient_covariances
+            )
             corrected_eigenvalues = self.compute_eigenvalue_correction(
                 input_covariances, gradient_covariances, mapping
             )

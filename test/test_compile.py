@@ -206,8 +206,9 @@ def test_ekfac_eigencorrection_precompute_no_graph_breaks(setup_fn):
     )
     with fork_rng_with_seed(0):
         input_covs, gradient_covs = traced_kfac(params, X, y)
-    input_eigvecs = _EKFACMixin._eigenvectors_(input_covs)
-    gradient_eigvecs = _EKFACMixin._eigenvectors_(gradient_covs)
+    input_eigvecs, gradient_eigvecs = _EKFACMixin._eigenvectors_(
+        input_covs, gradient_covs
+    )
 
     # Trace eigencorrection
     traced_eigcorr, _ = make_compute_ekfac_eigencorrection_batch(

@@ -353,15 +353,20 @@ class _EKFACMixin:
         return output, y
 
     @staticmethod
-    def _eigenvectors_(dictionary: dict[Any, Tensor]) -> dict[Any, Tensor]:
+    def _eigenvectors_(
+        *dictionaries: dict[Any, Tensor],
+    ) -> tuple[dict[Any, Tensor], ...]:
         """Replace all matrix values with their eigenvectors (in-place).
 
         Args:
-            dictionary: A dictionary mapping parameter group keys to square matrices.
+            dictionaries: One or more dictionaries mapping parameter group
+                keys to square matrices.
 
         Returns:
-            The modified dictionary with eigenvectors replacing the original matrices.
+            The modified dictionaries with eigenvectors replacing the
+            original matrices.
         """
-        for key, value in dictionary.items():
-            dictionary[key] = eigh(value).eigenvectors
-        return dictionary
+        for dictionary in dictionaries:
+            for key, value in dictionary.items():
+                dictionary[key] = eigh(value).eigenvectors
+        return dictionaries
