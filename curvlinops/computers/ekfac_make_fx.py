@@ -124,7 +124,7 @@ def make_compute_ekfac_eigencorrection_batch(
             aaT_eigvecs = None
             if "W" in group:
                 a = group_inputs(group, layer_inputs)
-                aaT_eigvecs = input_eigvecs.get(group_key)
+                aaT_eigvecs = input_eigvecs[group_key]
 
             eigcorr = compute_eigenvalue_correction_linear_weight_sharing(
                 g, ggT_eigvecs, a, aaT_eigvecs
