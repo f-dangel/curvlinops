@@ -211,10 +211,7 @@ def visualize_precompute_benchmark(
                 t = cat_data.get(op, float("nan"))
                 label = precompute_labels[op] if op not in labels_shown else None
                 color = precompute_colors[op]
-                if is_compiled:
-                    bar_kwargs = dict(color=color, alpha=0.5)
-                else:
-                    bar_kwargs = dict(color=color)
+                bar_kwargs = dict(color=color, alpha=0.5 if is_compiled else 1.0)
                 ax.barh(
                     idx + y_off,
                     width=t,

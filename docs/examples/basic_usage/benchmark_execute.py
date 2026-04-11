@@ -62,6 +62,7 @@ from curvlinops.computers.kfac_hooks import HooksKFACComputer, _use_params
 from curvlinops.computers.kfac_make_fx import MakeFxKFACComputer
 from curvlinops.examples import gradient_and_loss
 from curvlinops.kronecker import KroneckerProductLinearOperator
+from curvlinops.utils import fork_rng_with_seed
 
 
 def run_verbose(cmd: list[str]) -> CompletedProcess:
@@ -674,10 +675,8 @@ def make_precompute_phases(  # noqa: C901
 
         def ekfac_fx_factors(state):
             kfac_fns, mapping, eigcorr_fns = state
-            input_cov, grad_cov, mapping = computer._compute_kronecker_factors((
-                kfac_fns,
-                mapping,
-            ))
+            traced = (kfac_fns, mapping)
+            input_cov, grad_cov, mapping = computer._compute_kronecker_factors(traced)
             return (input_cov, grad_cov, mapping, eigcorr_fns)
 
         def ekfac_fx_eigh(state):
@@ -690,8 +689,7 @@ def make_precompute_phases(  # noqa: C901
         def ekfac_fx_correction(state):
             eigcorr_fns, input_eigvecs, grad_eigvecs = state
             corrected = {}
-            manual_seed(computer._seed)
-            with no_grad():
+            with fork_rng_with_seed(computer._seed), no_grad():
                 for X, y in computer._loop_over_data(desc="Eigenvalue correction"):
                     batch_size = computer._batch_size_fn(X)
                     eigcorrs = eigcorr_fns[batch_size](
@@ -740,9 +738,7 @@ def make_precompute_phases(  # noqa: C901
         computer = setup_computer(linop_str, model, loss_function, params, data)
         return (
             ("tracing", computer._trace_batch_functions),
-            [
-                ("kfac_factors", computer._compute_kronecker_factors),
-            ],
+            [("kfac_factors", computer._compute_kronecker_factors)],
             None,
         )
 
