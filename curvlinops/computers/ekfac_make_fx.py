@@ -9,7 +9,7 @@ from collections import UserDict
 from collections.abc import Callable, MutableMapping
 from functools import partial
 
-from torch import Tensor, empty, manual_seed, no_grad
+from torch import Tensor, empty, no_grad
 
 from curvlinops._checks import _register_userdict_as_pytree
 from curvlinops.computers._base import ParamGroup, ParamGroupKey, _EKFACMixin
@@ -24,7 +24,7 @@ from curvlinops.computers.kfac_make_fx import (
     make_group_gatherers,
 )
 from curvlinops.kfac_utils import FisherType, KFACType
-from curvlinops.utils import _make_fx
+from curvlinops.utils import _make_fx, fork_rng_with_seed
 
 
 def make_compute_ekfac_eigencorrection_batch(
@@ -268,9 +268,11 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
         eigencorrection_fns, _ = self._trace_eigencorrection_batch_functions()
 
         corrected_eigenvalues: dict[ParamGroupKey, Tensor] = {}
-        manual_seed(self._seed)
 
-        with no_grad():
+        # Seed only for stochastic fisher types. fork_rng_with_seed isolates
+        # the seed from the caller's global RNG state.
+        seed = self._seed if self._fisher_type == FisherType.MC else None
+        with fork_rng_with_seed(seed), no_grad():
             for X, y in self._loop_over_data(desc="Eigenvalue correction"):
                 batch_size = self._batch_size_fn(X)
                 eigcorrs = eigencorrection_fns[batch_size](

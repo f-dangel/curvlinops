@@ -1,14 +1,16 @@
 """General utility functions."""
 
-from collections.abc import Callable, Iterable, MutableMapping
+from collections.abc import Callable, Iterable, Iterator, MutableMapping
+from contextlib import contextmanager
 from functools import partial
 
 from einops import rearrange
 from numpy import ndarray
-from torch import Generator, Tensor, as_tensor, device, dtype
+from torch import Generator, Tensor, as_tensor, device, dtype, manual_seed
 from torch.func import functional_call
 from torch.fx.experimental.proxy_tensor import make_fx
 from torch.nn import CrossEntropyLoss, Module
+from torch.random import fork_rng
 
 #: Standardized ``make_fx`` with fake tensor tracing. All ``make_fx`` calls in
 #: curvlinops should use this to ensure consistent tracing behavior (fake mode
@@ -71,6 +73,29 @@ def _seed_generator(generator: Generator | None, dev: device, seed: int) -> Gene
         generator = Generator(device=dev)
     generator.manual_seed(seed)
     return generator
+
+
+@contextmanager
+def fork_rng_with_seed(seed: int | None) -> Iterator[None]:
+    """Fork the global RNG state and seed it, restoring on exit.
+
+    Used in the FX backends to isolate ``manual_seed`` calls from the caller's
+    global RNG state (the hooks backends achieve the same with a dedicated
+    ``torch.Generator``, but ``make_fx`` cannot trace through that).
+
+    Args:
+        seed: Seed to set inside the forked context. If ``None``, the context
+            is a pass-through no-op (neither forking nor seeding).
+
+    Yields:
+        None.
+    """
+    if seed is None:
+        yield
+        return
+    with fork_rng():
+        manual_seed(seed)
+        yield
 
 
 def split_list(x: list | tuple, sizes: list[int]) -> list[list]:

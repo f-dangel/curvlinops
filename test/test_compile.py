@@ -214,12 +214,7 @@ def test_ekfac_eigencorrection_precompute_no_graph_breaks(setup_fn):
 
     # Trace eigencorrection
     traced_eigcorr, _ = make_compute_ekfac_eigencorrection_batch(
-        model_func,
-        loss_fn,
-        params,
-        X,
-        y,
-        separate_weight_and_bias=False,
+        model_func, loss_fn, params, X, y, separate_weight_and_bias=False
     )
 
     def traced_seeded(params, X, y, input_eigvecs, gradient_eigvecs):

@@ -12,7 +12,7 @@ from collections import UserDict, defaultdict
 from collections.abc import Callable, MutableMapping
 
 from einops import einsum
-from torch import Tensor, autograd, cat, eye, manual_seed, no_grad
+from torch import Tensor, autograd, cat, eye, no_grad
 from torch.nn import CrossEntropyLoss
 
 from curvlinops._checks import _register_userdict_as_pytree
@@ -23,7 +23,7 @@ from curvlinops.computers.kfac_math import (
     input_to_weight_sharing_format,
 )
 from curvlinops.kfac_utils import FisherType, KFACType
-from curvlinops.utils import _make_fx
+from curvlinops.utils import _make_fx, fork_rng_with_seed
 
 
 def _build_param_groups_from_io(
@@ -520,11 +520,12 @@ class MakeFxKFACComputer(_BaseKFACComputer):
         input_covariances: dict[ParamGroupKey, Tensor] = {}
         gradient_covariances: dict[ParamGroupKey, Tensor] = {}
 
-        manual_seed(self._seed)
-
+        # Seed only for stochastic fisher types. fork_rng_with_seed isolates
+        # the seed from the caller's global RNG state.
         # no_grad: the traced graph already contains explicit backward ops from
         # make_fx; disabling the outer autograd avoids retaining intermediates.
-        with no_grad():
+        seed = self._seed if self._fisher_type == FisherType.MC else None
+        with fork_rng_with_seed(seed), no_grad():
             for X, y in self._loop_over_data(desc="KFAC matrices"):
                 batch_size = self._batch_size_fn(X)
                 input_covs, gradient_covs = traced_fns[batch_size](self._params, X, y)
