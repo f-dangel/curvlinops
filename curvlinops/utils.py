@@ -92,10 +92,10 @@ def fork_rng_with_seed(seed: int | None) -> Iterator[None]:
     """
     if seed is None:
         yield
-        return
-    with fork_rng():
-        manual_seed(seed)
-        yield
+    else:
+        with fork_rng():
+            manual_seed(seed)
+            yield
 
 
 def split_list(x: list | tuple, sizes: list[int]) -> list[list]:
