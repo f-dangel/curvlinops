@@ -41,7 +41,7 @@ def make_compute_ekfac_eigencorrection_batch(
     Callable[
         [
             dict[str, Tensor],
-            Tensor,
+            Tensor | MutableMapping,
             Tensor,
             dict[ParamGroupKey, Tensor],
             dict[ParamGroupKey, Tensor],

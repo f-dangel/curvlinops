@@ -205,7 +205,7 @@ def make_compute_kfac_io_batch(
     output_check_fn: Callable[[Tensor], None] | None = None,
 ) -> tuple[
     Callable[
-        [dict[str, Tensor], Tensor, Tensor],
+        [dict[str, Tensor], Tensor | MutableMapping, Tensor],
         tuple[dict[str, Tensor], dict[str, Tensor]],
     ],
     list[ParamGroup],
@@ -324,7 +324,10 @@ def make_compute_kfac_batch(
     batch_size_fn: Callable[[Tensor | MutableMapping], int] | None = None,
     output_check_fn: Callable[[Tensor], None] | None = None,
 ) -> tuple[
-    Callable[[dict[str, Tensor], Tensor, Tensor], tuple[list[Tensor], list[Tensor]]],
+    Callable[
+        [dict[str, Tensor], Tensor | MutableMapping, Tensor],
+        tuple[list[Tensor], list[Tensor]],
+    ],
     list[ParamGroup],
 ]:
     """Set up and trace the per-batch KFAC Kronecker factor computation.
