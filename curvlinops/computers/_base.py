@@ -8,7 +8,6 @@ FX graph tracing).
 from collections.abc import Callable, Iterable, MutableMapping
 from typing import Any
 
-from einops import rearrange
 from torch import Generator, Tensor, eye
 from torch.func import vmap
 from torch.linalg import eigh
@@ -257,11 +256,13 @@ class _BaseKFACComputer(_EmpiricalRiskMixin):
             The rearranged output and target.
         """
         if isinstance(self._loss_func, CrossEntropyLoss):
-            output = rearrange(output, "batch c ... -> (batch ...) c")
-            y = rearrange(y, "batch ... -> (batch ...)")
+            # einops: "batch c ... -> (batch ...) c" and "batch ... -> (batch ...)"
+            output = output.movedim(1, -1).flatten(0, -2)
+            y = y.flatten()
         else:
-            output = rearrange(output, "batch ... c -> (batch ...) c")
-            y = rearrange(y, "batch ... c -> (batch ...) c")
+            # einops: "batch ... c -> (batch ...) c" and same for y
+            output = output.flatten(0, -2)
+            y = y.flatten(0, -2)
         return output, y
 
     @staticmethod
@@ -352,15 +353,20 @@ class _EKFACMixin:
         return output, y
 
     @staticmethod
-    def _eigenvectors_(dictionary: dict[Any, Tensor]) -> dict[Any, Tensor]:
+    def _eigenvectors_(
+        *dictionaries: dict[Any, Tensor],
+    ) -> tuple[dict[Any, Tensor], ...]:
         """Replace all matrix values with their eigenvectors (in-place).
 
         Args:
-            dictionary: A dictionary mapping parameter group keys to square matrices.
+            dictionaries: One or more dictionaries mapping parameter group
+                keys to square matrices.
 
         Returns:
-            The modified dictionary with eigenvectors replacing the original matrices.
+            The modified dictionaries with eigenvectors replacing the
+            original matrices.
         """
-        for key, value in dictionary.items():
-            dictionary[key] = eigh(value).eigenvectors
-        return dictionary
+        for dictionary in dictionaries:
+            for key, value in dictionary.items():
+                dictionary[key] = eigh(value).eigenvectors
+        return dictionaries

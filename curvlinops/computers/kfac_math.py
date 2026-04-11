@@ -35,7 +35,6 @@ Examples of the conversion (expand):
 
 from typing import Any
 
-from einops import rearrange, reduce
 from torch import Tensor, cat
 
 from curvlinops.kfac_utils import (
@@ -95,19 +94,28 @@ def input_to_weight_sharing_format(
             layer_hyperparams["padding"],
             layer_hyperparams["dilation"],
             layer_hyperparams["groups"],
-        )
+        ).contiguous()  # torch.compile needs contiguous tensors for reshape ops
 
-    # Step 2: Collapse sharing dimensions into a single axis
-    if kfac_approx == KFACType.REDUCE:
-        x = reduce(x, "batch ... d_in -> batch 1 d_in", "mean")
+    # Step 2: Collapse sharing dimensions into a single axis [batch, shared, d_in]
+    # x is always at least 2D: [batch, d_in] (Linear) or [batch, spatial..., d_in]
+    # (Conv2d after patch extraction). ndim < 2 would be a programming error.
+    assert x.ndim >= 2, f"Expected x.ndim >= 2, got {x.ndim}"
+    # NOTE: Use flatten/unsqueeze (not einops rearrange) because rearrange traces
+    # as aten.view which fails on non-contiguous tensors during torch.compile.
+    if x.ndim == 2:
+        x = x.unsqueeze(1)
+    elif kfac_approx == KFACType.REDUCE:
+        # einops: reduce(x, "batch ... d_in -> batch 1 d_in", "mean")
+        x = x.flatten(1, -2).mean(dim=1, keepdim=True)
     else:
-        x = rearrange(x, "batch ... d_in -> batch (...) d_in")
+        # einops: rearrange(x, "batch ... d_in -> batch (...) d_in")
+        x = x.flatten(1, -2)
 
     # Step 3: Optionally append constant column for joint weight+bias
     if bias_pad is not None:
         x = cat([x, x.new_full((*x.shape[:-1], 1), bias_pad)], dim=-1)
 
-    return x
+    return x.contiguous()  # torch.compile needs contiguous tensors for reshape ops
 
 
 def grad_to_weight_sharing_format(
@@ -142,14 +150,23 @@ def grad_to_weight_sharing_format(
         # [leading..., C_out, spatial...] -> [leading..., spatial..., C_out]
         g = g.movedim(num_leading_dims, -1)
 
-    # Step 2: Collapse sharing dimensions into single axis
-    leading = {1: "", 2: "v "}[num_leading_dims]
-    if kfac_approx == KFACType.REDUCE:
-        g = reduce(g, f"{leading}batch ... d_out -> {leading}batch 1 d_out", "sum")
+    # Step 2: Collapse sharing dimensions [*leading, batch, shared, d_out]
+    # NOTE: Use flatten/unsqueeze (not einops rearrange) because rearrange traces
+    # as aten.view which fails on non-contiguous tensors during torch.compile.
+    assert g.ndim >= num_leading_dims + 1, (
+        f"Expected g.ndim >= {num_leading_dims + 1}, got {g.ndim}"
+    )
+    has_sharing = g.ndim > num_leading_dims + 1
+    if not has_sharing:
+        g = g.unsqueeze(num_leading_dims)
+    elif kfac_approx == KFACType.REDUCE:
+        # einops: reduce(g, "{leading}batch ... d_out -> {leading}batch 1 d_out", "sum")
+        g = g.flatten(num_leading_dims, -2).sum(dim=num_leading_dims, keepdim=True)
     else:
-        g = rearrange(g, f"{leading}batch ... d_out -> {leading}batch (...) d_out")
+        # einops: rearrange(g, "{leading}batch ... d_out -> {leading}batch (...) d_out")
+        g = g.flatten(num_leading_dims, -2)
 
-    return g
+    return g.contiguous()  # torch.compile needs contiguous tensors for reshape ops
 
 
 def compute_loss_correction(
