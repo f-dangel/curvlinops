@@ -285,7 +285,6 @@ def make_compute_kfac_io_batch(
             y_flat = y.flatten(0, -2)
         grad_outputs = grad_outputs_computer(output_flat.detach(), y_flat, None)
 
-        # Scale grad_outputs by 1/num_loss_terms for mean reduction
         scale = {"sum": 1.0, "mean": 1.0 / _num_loss_terms(loss_func, y)}[
             loss_func.reduction
         ]
@@ -413,7 +412,6 @@ def make_compute_kfac_batch(
         for group in mapping:
             group_key = tuple(group.values())
             if fisher_type == FisherType.FORWARD_ONLY:
-                # FORWARD_ONLY: gradient covariance is identity
                 W = params[next(iter(group.values()))]
                 gradient_covs[group_key] = eye(
                     W.shape[0], dtype=W.dtype, device=W.device
@@ -513,7 +511,7 @@ class MakeFxKFACComputer(_BaseKFACComputer):
 
         Args:
             traced_batch: Pre-traced batch functions from
-                :func:`trace_kfac_batch`.
+                :meth:`_trace_batch_functions`.
 
         Returns:
             Tuple of (input_covariances, gradient_covariances, mapping).
