@@ -111,11 +111,19 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
     to avoid operator instantiation during tracing, remove numpy from
     `split_list`.
     ([PR #290](https://github.com/f-dangel/curvlinops/pull/290))
-  - `KFACLinearOperator` (fx) precompute: trace the entire per-batch computation
-    (IO collection, backward pass, covariance einsums) with `make_fx` into a
-    single FX graph (0 graph breaks). Extract `make_compute_kfac_batch` factory
-    function following the `make_batch_*` pattern.
-    ([PR #291](https://github.com/f-dangel/curvlinops/pull/291))
+  - `KFACLinearOperator`/`EKFACLinearOperator` (`make_fx` backend) precompute:
+    trace the entire per-batch computation (IO collection, backward pass,
+    covariance einsums; for EKFAC also the eigenvalue correction) into single
+    FX graphs via new `make_compute_kfac_batch` and
+    `make_compute_ekfac_eigencorrection_batch` factories, splitting tracing
+    from accumulation. Switch IO-collector tracing to fake-tensor mode to
+    reduce tracing memory. Isolate global RNG state during factor accumulation
+    via a new `fork_rng_with_seed` utility and only seed for `FisherType.MC`
+    (previously the FX backends mutated the caller's global RNG as a side
+    effect of `manual_seed`). Replace `einops` reduce/rearrange with native
+    tensor ops for compile stability. Extend compile tests to cover KFAC/EKFAC
+    precompute and multi-batch-size datasets.
+    ([PR #292](https://github.com/f-dangel/curvlinops/pull/292))
   - Fix compiled peak memory benchmark measuring only the matvec slice instead
     of the full pipeline (setup + compilation + matvec)
     ([PR #289](https://github.com/f-dangel/curvlinops/pull/289))
