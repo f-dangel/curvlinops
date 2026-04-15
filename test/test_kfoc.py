@@ -14,6 +14,7 @@ from torch.linalg import svd as torch_svd
 from torch.nn import Linear, MSELoss, Sequential
 from torch.testing import assert_close
 
+from curvlinops import KFOCLinearOperator
 from curvlinops.computers.kfac_make_fx import (
     make_compute_kfac_io_batch,
     make_group_gatherers,
@@ -187,8 +188,6 @@ def test_first_order_optimality():
 
 def test_rejects_multi_batch():
     """Constructor raises on zero batches and on more than one batch."""
-    from curvlinops import KFOCLinearOperator
-
     model, loss_fn, params, X, y = _setup_problem()
 
     with raises(ValueError, match="got more than one"):
@@ -212,8 +211,6 @@ def test_rejects_multi_batch():
 
 def test_does_not_exhaust_iterable_past_second_batch():
     """A lazy iterable is advanced at most two steps before rejecting multi-batch data."""
-    from curvlinops import KFOCLinearOperator
-
     model, loss_fn, params, X, y = _setup_problem()
 
     steps = [0]
