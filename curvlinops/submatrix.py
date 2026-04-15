@@ -8,7 +8,14 @@ from curvlinops._torch_base import PyTorchLinearOperator
 
 
 class SubmatrixLinearOperator(PyTorchLinearOperator):
-    """Class for sub-matrices of linear operators."""
+    """Class for sub-matrices of linear operators.
+
+    .. note::
+        This operator is not compiler-friendly (:func:`torch.compile`). Its matrix-vector
+        product dispatches through the wrapped operator's ``__matmul__``, and Dynamo
+        cannot proxy a user-defined linear operator as an argument, which causes graph
+        breaks.
+    """
 
     def __init__(
         self, A: PyTorchLinearOperator, row_idxs: list[int], col_idxs: list[int]

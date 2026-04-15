@@ -54,6 +54,12 @@ class CGInverseLinearOperator(_InversePyTorchLinearOperator):
 
     Note:
         Internally, this operator uses GPyTorch's implementation of CG.
+
+    .. note::
+        This operator is not compiler-friendly (:func:`torch.compile`). The underlying
+        ``linear_cg`` routine uses data-dependent control flow (convergence checks
+        on tensor values via ``aten.equal`` and Python ``if`` on tensors), which
+        causes graph breaks during tracing.
     """
 
     def __init__(self, A: PyTorchLinearOperator, **cg_hyperparameters):
@@ -107,6 +113,11 @@ class LSMRInverseLinearOperator(_InversePyTorchLinearOperator):
         Internally, this operator uses SciPy's CPU implementation of LSMR as PyTorch
         currently does not offer an LSMR interface that purely relies on matrix-vector
         products.
+
+    .. note::
+        This operator is not compiler-friendly (:func:`torch.compile`). The matrix-vector
+        product converts tensors to NumPy and calls SciPy's ``lsmr``; these non-Torch
+        operations cannot be traced and cause graph breaks.
     """
 
     def __init__(self, A: PyTorchLinearOperator, **lsmr_hyperparameters):
@@ -182,6 +193,13 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
     .. warning::
         The Neumann series can converge slowly.
         Use :py:class:`curvlinops.CGInverLinearOperator` for better accuracy.
+
+    .. note::
+        With the default ``check_nan=True``, this operator is not compiler-friendly
+        (:func:`torch.compile`): the per-iteration ``isnan`` check introduces
+        data-dependent branching that causes graph breaks. Passing ``check_nan=False``
+        makes the operator compiler-friendly (the truncated series itself uses only
+        traceable PyTorch ops).
     """
 
     def __init__(
