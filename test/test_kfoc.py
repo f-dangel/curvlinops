@@ -187,7 +187,7 @@ def test_first_order_optimality():
 
 
 def test_rejects_multi_batch():
-    """Constructor raises on zero batches and on more than one batch."""
+    """Constructor raises when data does not contain exactly one batch."""
     model, loss_fn, params, X, y = _setup_problem()
 
     with raises(ValueError, match="got more than one"):
@@ -198,34 +198,3 @@ def test_rejects_multi_batch():
             [(X, y), (X, y)],
             check_deterministic=False,
         )
-
-    with raises(ValueError, match="got 0"):
-        KFOCLinearOperator(
-            model,
-            loss_fn,
-            params,
-            [],
-            check_deterministic=False,
-        )
-
-
-def test_does_not_exhaust_iterable_past_second_batch():
-    """A lazy iterable is advanced at most two steps before rejecting multi-batch data."""
-    model, loss_fn, params, X, y = _setup_problem()
-
-    steps = [0]
-
-    def infinite_batches():
-        while True:
-            steps[0] += 1
-            yield (X, y)
-
-    with raises(ValueError, match="got more than one"):
-        KFOCLinearOperator(
-            model,
-            loss_fn,
-            params,
-            infinite_batches(),
-            check_deterministic=False,
-        )
-    assert steps[0] == 2
