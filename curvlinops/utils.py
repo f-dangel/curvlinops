@@ -98,7 +98,7 @@ def fork_rng_with_seed(seed: int | None) -> Iterator[None]:
             yield
 
 
-def _has_single_element(iterable: Iterable) -> None:
+def _assert_single_element(iterable: Iterable) -> None:
     """Validate that ``iterable`` yields exactly one element.
 
     Advances the underlying iterator at most two steps, so a lazy iterable
