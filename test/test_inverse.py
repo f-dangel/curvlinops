@@ -188,18 +188,20 @@ def test_NeumannInverseLinearOperator_preconditioner():
     ]).double()
     A_linop = TensorLinearOperator(A)
 
+    theta = 0.3
+
     inv_A = inv(A)
     inv_A_neumann = NeumannInverseLinearOperator(A_linop, num_terms=1_000)
     inv_A_neumann_20terms = NeumannInverseLinearOperator(A_linop, num_terms=20)
     inv_A_neumann_scaled_20terms = NeumannInverseLinearOperator(
-        A_linop, num_terms=20, scale=0.3
+        A_linop, num_terms=20, scale=theta
     )
     inv_A_neumann_scaled_100terms = NeumannInverseLinearOperator(
-        A_linop, num_terms=100, scale=0.3
+        A_linop, num_terms=100, scale=theta
     )
 
-    # Directly applying the Neumann sereis will diverge.
-    with raises(ValueError):
+    # Directly applying the Neumann series will diverge.
+    with raises(ValueError, match="Detected NaNs after application of"):
         compare_consecutive_matmats(inv_A_neumann)
 
     tols = {"rtol": 1e-3, "atol": 1e-5}
@@ -213,7 +215,6 @@ def test_NeumannInverseLinearOperator_preconditioner():
     compare_matmat(inv_A_neumann_scaled_100terms, inv_A, **tols)
 
     # We can use Richardson preconditioner, then we don't need scale
-    theta = 0.3
     preconditioner_richardson = (
         IdentityLinearOperator(A_linop._in_shape, A.device, A.dtype) * theta
     )

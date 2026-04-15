@@ -69,8 +69,8 @@ class CGInverseLinearOperator(_InversePyTorchLinearOperator):
                 ``tolerance``, and ``preconditioner``.
                 The ``preconditioner`` should be a callable that applies a left
                 preconditioning operation to a supplied vector. This can be
-                implemented via a `PyTorchLinearOperator`'s ``__matmul__`` method. For
-                details, see the documentation of the ``linear_cg`` function in
+                implemented via a ``PyTorchLinearOperator``'s ``__matmul__`` method.
+                For details, see the documentation of the ``linear_cg`` function in
                 https://github.com/cornellius-gp/linear_operator/blob/main/linear_operator/utils/linear_cg.py.
 
         Example:
@@ -240,12 +240,12 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
             \mathbf{A}^{-1}
             =
             \sum_{k=0}^{\infty}
-            \left(\mathbf{I} - \mathbf{A} \right)^k\,.
+            \left(\mathbf{I} - \mathbf{A} \right)^k\,,
 
-        and is convergent if all eigenvalues satisfy
+        which is convergent if all eigenvalues satisfy
         :math:`0 < \lambda(\mathbf{A}) < 2`.
 
-        By re-rescaling the matrix by ``scale`` (:math:`\alpha`), we have:
+        By re-scaling the matrix by ``scale`` (:math:`\alpha`), we have:
 
         .. math::
             \mathbf{A}^{-1}
@@ -255,7 +255,7 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
             \alpha \sum_{k=0}^{\infty}
             \left(\mathbf{I} - \alpha \mathbf{A} \right)^k\,,
 
-        which and is convergent if :math:`0 < \lambda(\mathbf{A}) < \frac{2}{\alpha}`.
+        which is convergent if :math:`0 < \lambda(\mathbf{A}) < \frac{2}{\alpha}`.
 
         Additionally, we truncate the series at ``num_terms`` (:math:`K`):
 
@@ -281,7 +281,7 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
                 formulation is inspired by Wang et al. (NeurIPS 2025).
                 ``preconditioner`` should be a callable that applies a left
                 preconditioning operation to a supplied vector or matrix in tensor
-                format, e.g. a `PyTorchLinearOperator`'s ``__matmul__`` method.
+                format, e.g. a ``PyTorchLinearOperator``'s ``__matmul__`` method.
                 Default: ``None``.
         """
         super().__init__(A)
