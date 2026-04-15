@@ -2,7 +2,7 @@
 
 from pytest import raises
 
-from curvlinops.utils import _has_single_batch, split_list
+from curvlinops.utils import _has_single_element, split_list
 
 
 def test_split_list():
@@ -14,23 +14,23 @@ def test_split_list():
         split_list(["a", "b", "c"], [1, 3])
 
 
-def test_has_single_batch():
-    """``_has_single_batch`` accepts exactly one batch, rejects otherwise, and doesn't exhaust past the second element."""
-    assert _has_single_batch([("x", "y")]) is None
+def test_has_single_element():
+    """``_has_single_element`` accepts exactly one element, rejects otherwise, and doesn't exhaust past the second element."""
+    assert _has_single_element(["x"]) is None
 
     with raises(ValueError, match="got 0"):
-        _has_single_batch([])
+        _has_single_element([])
 
     with raises(ValueError, match="got more than one"):
-        _has_single_batch([("x", "y"), ("x", "y")])
+        _has_single_element(["x", "y"])
 
     steps = [0]
 
     def infinite():
         while True:
             steps[0] += 1
-            yield ("x", "y")
+            yield "x"
 
     with raises(ValueError, match="got more than one"):
-        _has_single_batch(infinite())
+        _has_single_element(infinite())
     assert steps[0] == 2

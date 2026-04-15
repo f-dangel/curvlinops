@@ -98,30 +98,30 @@ def fork_rng_with_seed(seed: int | None) -> Iterator[None]:
             yield
 
 
-def _has_single_batch(data: Iterable) -> None:
-    """Validate that ``data`` yields exactly one batch.
+def _has_single_element(iterable: Iterable) -> None:
+    """Validate that ``iterable`` yields exactly one element.
 
-    Advances the underlying iterator at most two steps, so a full
-    ``DataLoader`` accidentally passed in is not materialized. Callers that
-    need to use the batch afterwards should pass a reusable iterable (e.g.,
-    a list or ``DataLoader``) and re-iterate it themselves.
+    Advances the underlying iterator at most two steps, so a lazy iterable
+    (e.g., a generator or ``DataLoader``) accidentally passed in is not
+    materialized. Callers that need to use the element afterwards should
+    pass a reusable iterable and re-iterate it themselves.
 
     Args:
-        data: Iterable expected to yield exactly one batch.
+        iterable: Iterable expected to yield exactly one element.
 
     Raises:
-        ValueError: If ``data`` yields zero or more than one batch.
+        ValueError: If ``iterable`` yields zero or more than one element.
     """
-    data_iter = iter(data)
+    it = iter(iterable)
     try:
-        next(data_iter)
+        next(it)
     except StopIteration as err:
-        raise ValueError("Data must contain exactly one batch, got 0.") from err
+        raise ValueError("Iterable must contain exactly one element, got 0.") from err
     try:
-        next(data_iter)
+        next(it)
     except StopIteration:
         return
-    raise ValueError("Data must contain exactly one batch, got more than one.")
+    raise ValueError("Iterable must contain exactly one element, got more than one.")
 
 
 def split_list(x: list | tuple, sizes: list[int]) -> list[list]:
