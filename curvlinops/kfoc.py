@@ -25,7 +25,7 @@ from curvlinops._torch_base import _ChainPyTorchLinearOperator
 from curvlinops.computers.kfoc_make_fx import MakeFxKFOCComputer
 from curvlinops.kfac import KFACLinearOperator
 from curvlinops.kfac_utils import FisherType, KFACType
-from curvlinops.utils import _take_single_batch
+from curvlinops.utils import _has_single_batch
 
 
 class KFOCLinearOperator(KFACLinearOperator):
@@ -106,7 +106,8 @@ class KFOCLinearOperator(KFACLinearOperator):
             batch_size_fn: Function to extract batch size from ``X``. Required
                 if ``X`` is not a ``torch.Tensor``.
         """
-        data_list = _take_single_batch(data, "KFOCLinearOperator")
+        _has_single_batch(data)
+        data_list = list(data)
 
         computer = MakeFxKFOCComputer(
             model_func,

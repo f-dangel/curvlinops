@@ -98,37 +98,30 @@ def fork_rng_with_seed(seed: int | None) -> Iterator[None]:
             yield
 
 
-def _take_single_batch(data: Iterable, context: str) -> list:
-    """Validate that ``data`` yields exactly one batch and return it as a list.
+def _has_single_batch(data: Iterable) -> None:
+    """Validate that ``data`` yields exactly one batch.
 
     Advances the underlying iterator at most two steps, so a full
-    ``DataLoader`` accidentally passed in is not materialized.
+    ``DataLoader`` accidentally passed in is not materialized. Callers that
+    need to use the batch afterwards should pass a reusable iterable (e.g.,
+    a list or ``DataLoader``) and re-iterate it themselves.
 
     Args:
         data: Iterable expected to yield exactly one batch.
-        context: Human-readable name of the caller, used in the error message
-            (e.g. ``"KFOCLinearOperator"``).
-
-    Returns:
-        A one-element list containing the single batch.
 
     Raises:
         ValueError: If ``data`` yields zero or more than one batch.
     """
     data_iter = iter(data)
     try:
-        first = next(data_iter)
+        next(data_iter)
     except StopIteration as err:
-        raise ValueError(
-            f"{context} requires data to contain exactly one batch, got 0."
-        ) from err
+        raise ValueError("Data must contain exactly one batch, got 0.") from err
     try:
         next(data_iter)
     except StopIteration:
-        return [first]
-    raise ValueError(
-        f"{context} requires data to contain exactly one batch, got more than one."
-    )
+        return
+    raise ValueError("Data must contain exactly one batch, got more than one.")
 
 
 def split_list(x: list | tuple, sizes: list[int]) -> list[list]:
