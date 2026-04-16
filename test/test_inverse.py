@@ -14,10 +14,9 @@ from curvlinops import (
     LSMRInverseLinearOperator,
     NeumannInverseLinearOperator,
 )
+from curvlinops.diag import DiagonalLinearOperator
 from curvlinops.examples import IdentityLinearOperator, TensorLinearOperator
 from curvlinops.examples.functorch import functorch_ggn
-from curvlinops.diag import DiagonalLinearOperator
-from torch.nn import Linear, MSELoss
 from test.utils import (
     change_dtype,
     compare_consecutive_matmats,
