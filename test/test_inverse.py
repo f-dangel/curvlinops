@@ -2,7 +2,8 @@
 
 from pytest import mark, raises
 from torch import Tensor, float64, manual_seed, randn
-from torch.linalg import inv, eigvalsh
+from torch.linalg import inv
+from torch.nn import Linear, MSELoss
 
 from curvlinops import (
     CGInverseLinearOperator,
@@ -33,6 +34,7 @@ def test_CGInverseLinearOperator_damped_GGN(
 
     Args:
         inv_case: Tuple of model, loss function, parameters, data, batch size getter.
+        precondition: Whether to use a Jacobi preconditioner.
         delta_rel: Relative damping factor that is multiplied onto the average trace
             to obtain the damping value.
     """
@@ -54,7 +56,9 @@ def test_CGInverseLinearOperator_damped_GGN(
     inv_GGN_naive = inv(damped_GGN_naive)
 
     # specify tolerance and turn off internal damping to get solution with accuracy
-    jacobi_preconditioner = DiagonalLinearOperator([damped_GGN_naive.diag().reciprocal()])
+    jacobi_preconditioner = DiagonalLinearOperator([
+        damped_GGN_naive.diag().reciprocal()
+    ])
     cg_kwargs = {"eps": 0, "tolerance": 1e-8}
     preconditioner = None if not precondition else jacobi_preconditioner.__matmul__
     inv_GGN = CGInverseLinearOperator(
@@ -112,21 +116,15 @@ def test_KFAC_EKFAC_preconditioners_for_CG_and_Neumann(delta: float = 0.0):
     inv_GGN_naive_linop = TensorLinearOperator(inv_GGN_naive)
 
     GGN = GGNLinearOperator(model, loss_func, params, data)
-    damping = delta * IdentityLinearOperator([p.shape for n, p in params.items()], X.device, X.dtype)
+    damping = delta * IdentityLinearOperator(
+        [p.shape for n, p in params.items()], X.device, X.dtype
+    )
 
     KFAC = KFACLinearOperator(
-        model,
-        loss_func,
-        params,
-        data,
-        fisher_type=FisherType.TYPE2
+        model, loss_func, params, data, fisher_type=FisherType.TYPE2
     )
     EKFAC = EKFACLinearOperator(
-        model,
-        loss_func,
-        params,
-        data,
-        fisher_type=FisherType.TYPE2
+        model, loss_func, params, data, fisher_type=FisherType.TYPE2
     )
     inv_KFAC = KFAC.inverse(damping=delta, use_exact_damping=True)
     inv_EKFAC = EKFAC.inverse(damping=delta)
@@ -176,7 +174,7 @@ def test_NeumannInverseLinearOperator_preconditioner():
     1. Richardson iteration: P = I / theta, where theta is a scalar, this is equivalent to the `scale` argument of NeumannInverseLinearOperator.
     2. Jacobi Iteration: P = diag(A)^{-1}, where diag(A) is the diagonal of A.
     3. Gauss-Seidel Iteration: P = (L + D)^{-1}, where L is the lower triangular part of A and D is the diagonal of A.
-    
+
     The test is inspired from
     https://student.cs.uwaterloo.ca/~cs475/CS475-Lecture-Notes.pdf page 78-82.
     """
