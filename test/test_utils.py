@@ -24,13 +24,14 @@ def test_assert_single_element():
     with raises(ValueError, match="got more than one"):
         _assert_single_element(["x", "y"])
 
-    steps = [0]
+    steps = 0
 
     def infinite():
+        nonlocal steps
         while True:
-            steps[0] += 1
+            steps += 1
             yield "x"
 
     with raises(ValueError, match="got more than one"):
         _assert_single_element(infinite())
-    assert steps[0] == 2
+    assert steps == 2
