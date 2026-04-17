@@ -25,6 +25,12 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
 
 ### Added/New
 
+- Add preconditioner support to `NeumannInverseLinearOperator` via a new
+  `preconditioner` argument, enabling the preconditioned Neumann/Richardson
+  iteration `A⁻¹ ≈ α Σₖ (I - α P A)ᵏ P` (inspired by Wang et al., NeurIPS 2025).
+  Also document and add an example for the existing `preconditioner` option of
+  `CGInverseLinearOperator`'s `cg_hyperparameters`
+
 - Support plain callable `(params_dict, X) -> prediction` as `model_func`
   (with `params` as `dict[str, Tensor]`):
   - `HessianLinearOperator` ([PR](https://github.com/f-dangel/curvlinops/pull/275))
