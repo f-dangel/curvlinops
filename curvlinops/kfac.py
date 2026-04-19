@@ -16,7 +16,7 @@ and generalized to all linear layers with weight sharing in
   Kronecker-Factored Approximate Curvature for Modern Neural Network Architectures (NeurIPS).
 """
 
-from collections.abc import Callable, Iterable, MutableMapping
+from collections.abc import Callable, Iterable, MutableMapping, Sequence
 
 from torch import Tensor
 from torch.nn import (
@@ -308,9 +308,37 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
         _, K, _ = self
         return K.frobenius_norm()
 
+    @staticmethod
+    def _broadcast_damping(
+        damping: float | Sequence[float], num_blocks: int
+    ) -> tuple[float, ...]:
+        """Return one damping value per canonical block.
+
+        Args:
+            damping: Scalar damping or one damping value per canonical block.
+            num_blocks: Number of canonical blocks.
+
+        Returns:
+            Tuple containing one damping value per canonical block.
+
+        Raises:
+            ValueError: If ``damping`` is a sequence whose length does not match
+                ``num_blocks``.
+        """
+        if isinstance(damping, Sequence):
+            if len(damping) != num_blocks:
+                raise ValueError(
+                    "Expected damping to be a scalar or a sequence containing one "
+                    f"scalar per canonical block. Got {len(damping)} values for "
+                    f"{num_blocks} blocks."
+                )
+            return tuple(damping)
+
+        return num_blocks * (damping,)
+
     def inverse(
         self,
-        damping: float = 0.0,
+        damping: float | Sequence[float] = 0.0,
         use_heuristic_damping: bool = False,
         min_damping: float = 1e-8,
         use_exact_damping: bool = False,
@@ -322,7 +350,9 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
         and returns the result in parameter space.
 
         Args:
-            damping: Damping value applied to all Kronecker factors. Default: ``0.0``.
+            damping: Damping value applied to each canonical block. If it is a scalar,
+                the same value is used for all blocks. If it is a sequence, it must
+                contain one damping value per canonical block. Default: ``0.0``.
             use_heuristic_damping: Whether to use a heuristic damping strategy by
                 `Martens and Grosse, 2015 <https://arxiv.org/abs/1503.05671>`_
                 (Section 6.3). Only supported for one or two factors.
@@ -337,14 +367,15 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
             Inverse of the KFAC approximation as a linear operator ``P @ K^-1 @ PT``.
         """
         P, K, PT = self
+        damping_per_block = self._broadcast_damping(damping, len(K))
         K_inv = BlockDiagonalLinearOperator([
             block.inverse(
-                damping=damping,
+                damping=block_damping,
                 use_heuristic_damping=use_heuristic_damping,
                 min_damping=min_damping,
                 use_exact_damping=use_exact_damping,
                 retry_double_precision=retry_double_precision,
             )
-            for block in K
+            for block, block_damping in zip(K, damping_per_block)
         ])
         return _ChainPyTorchLinearOperator(P, K_inv, PT)

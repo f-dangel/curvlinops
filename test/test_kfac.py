@@ -31,6 +31,7 @@ from torch.nn import (
 
 from curvlinops import EFLinearOperator, GGNLinearOperator
 from curvlinops.computers.kfac_hooks import HooksKFACComputer
+from curvlinops.examples import TensorLinearOperator
 from curvlinops.kfac import KFACLinearOperator
 from curvlinops.kfac_utils import FisherType, KFACType
 from curvlinops.utils import allclose_report
@@ -1183,6 +1184,148 @@ def test_KFAC_inverse_damped_matmat(
     compare_matmat(inv_KFAC, inv_KFAC_naive)
 
 
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+def test_KFAC_inverse_damped_matmat_per_block(
+    kfac_exact_case: tuple[
+        Module,
+        MSELoss,
+        dict[str, Tensor],
+        Iterable[tuple[Tensor, Tensor]],
+    ],
+    separate_weight_and_bias: bool,
+    delta: float = 1e-2,
+):
+    """Test matrix-matrix multiplication by a per-block damped KFAC inverse."""
+    model_func, loss_func, params, data, batch_size_fn = change_dtype(
+        kfac_exact_case, float64
+    )
+
+    KFAC = KFACLinearOperator(
+        model_func,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        separate_weight_and_bias=separate_weight_and_bias,
+    )
+
+    _, K, _ = KFAC
+    damping = tuple(delta * (idx + 1) for idx in range(len(K)))
+    inv_KFAC = KFAC.inverse(damping=damping)
+
+    # Manually add per-block damping to each Kronecker factor, materialize, invert.
+    for block, damping_i in zip(K, damping):
+        for idx in range(len(block)):
+            # NOTE Needs out-of-place addition because some factors correspond to
+            # the same tensors that would otherwise be damped multiple times.
+            block[idx] = block[idx] + damping_i * eye_like(block[idx])
+    inv_KFAC_naive = inv(KFAC @ eye_like(KFAC))
+
+    compare_consecutive_matmats(inv_KFAC)
+    compare_matmat(inv_KFAC, inv_KFAC_naive)
+
+
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+def test_KFAC_inverse_uniform_per_block_damping_matches_scalar(
+    kfac_exact_case: tuple[
+        Module,
+        MSELoss,
+        dict[str, Tensor],
+        Iterable[tuple[Tensor, Tensor]],
+    ],
+    separate_weight_and_bias: bool,
+    delta: float = 1e-2,
+):
+    """Uniform per-block damping should match the scalar damping path."""
+    model_func, loss_func, params, data, batch_size_fn = change_dtype(
+        kfac_exact_case, float64
+    )
+
+    KFAC = KFACLinearOperator(
+        model_func,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        separate_weight_and_bias=separate_weight_and_bias,
+    )
+
+    uniform_damping = (delta,) * len(KFAC[1])
+    inv_KFAC_scalar = KFAC.inverse(damping=delta)
+    inv_KFAC_sequence = KFAC.inverse(damping=uniform_damping)
+
+    compare_consecutive_matmats(inv_KFAC_sequence)
+    compare_matmat(inv_KFAC_scalar, inv_KFAC_sequence)
+
+
+def test_KFAC_inverse_single_block_sequence_matches_scalar(
+    single_layer_case: tuple[
+        Module,
+        MSELoss,
+        dict[str, Tensor],
+        Iterable[tuple[Tensor, Tensor]],
+    ],
+    delta: float = 1e-2,
+):
+    """A length-1 damping sequence should work for single-block KFAC operators."""
+    model_func, loss_func, params, data, batch_size_fn = change_dtype(
+        single_layer_case, float64
+    )
+
+    KFAC = KFACLinearOperator(
+        model_func,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        separate_weight_and_bias=False,
+    )
+
+    assert len(KFAC[1]) == 1
+
+    inv_KFAC_scalar = KFAC.inverse(damping=delta)
+    inv_KFAC_sequence = KFAC.inverse(damping=(delta,))
+
+    compare_consecutive_matmats(inv_KFAC_sequence)
+    compare_matmat(inv_KFAC_scalar, inv_KFAC_sequence)
+
+
+def test_KFAC_inverse_raises_on_bad_damping_length(
+    kfac_exact_case: tuple[
+        Module,
+        MSELoss,
+        dict[str, Tensor],
+        Iterable[tuple[Tensor, Tensor]],
+    ],
+):
+    """Per-block damping should require one value per canonical block."""
+    model_func, loss_func, params, data, batch_size_fn = change_dtype(
+        kfac_exact_case, float64
+    )
+
+    KFAC = KFACLinearOperator(
+        model_func,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+    )
+
+    bad_lengths = {0, len(KFAC[1]) - 1, len(KFAC[1]) + 1}
+    bad_lengths.discard(len(KFAC[1]))
+
+    for num_damping in sorted(bad_lengths):
+        with raises(ValueError, match="one scalar per canonical block"):
+            KFAC.inverse(damping=(1e-2,) * num_damping)
+
+
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
 def test_KFAC_inverse_heuristically_damped_matmat(
     case: tuple[
         Module,
@@ -1190,6 +1333,7 @@ def test_KFAC_inverse_heuristically_damped_matmat(
         dict[str, Tensor],
         Iterable[tuple[Tensor, Tensor]],
     ],
+    separate_weight_and_bias: bool,
     delta: float = 1e-2,
 ):
     """Test matrix-matrix multiplication by a heuristically damped KFAC inverse."""
@@ -1203,6 +1347,7 @@ def test_KFAC_inverse_heuristically_damped_matmat(
         data,
         batch_size_fn=batch_size_fn,
         check_deterministic=False,
+        separate_weight_and_bias=separate_weight_and_bias,
     )
 
     inv_KFAC = KFAC.inverse(
@@ -1229,6 +1374,106 @@ def test_KFAC_inverse_heuristically_damped_matmat(
         else:
             block[0] = block[0] + delta * eye_like(block[0])
 
+    inv_KFAC_naive = inv(KFAC @ eye_like(KFAC))
+
+    compare_consecutive_matmats(inv_KFAC)
+    compare_matmat(inv_KFAC, inv_KFAC_naive)
+
+
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+def test_KFAC_inverse_heuristically_damped_matmat_per_block(
+    kfac_exact_case: tuple[
+        Module,
+        MSELoss,
+        dict[str, Tensor],
+        Iterable[tuple[Tensor, Tensor]],
+    ],
+    separate_weight_and_bias: bool,
+    delta: float = 1e-2,
+):
+    """Per-block damping should also work with heuristic KFAC damping."""
+    model_func, loss_func, params, data, batch_size_fn = change_dtype(
+        kfac_exact_case, float64
+    )
+
+    KFAC = KFACLinearOperator(
+        model_func,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        check_deterministic=False,
+        separate_weight_and_bias=separate_weight_and_bias,
+    )
+
+    _, K, _ = KFAC
+    damping = tuple(delta * (idx + 1) for idx in range(len(K)))
+    inv_KFAC = KFAC.inverse(
+        damping=damping,
+        use_heuristic_damping=True,
+        min_damping=KFAC_MIN_DAMPING,
+    )
+
+    # Manually add heuristic damping to each Kronecker factor blockwise.
+    for block, damping_i in zip(K, damping):
+        if len(block) == 2:
+            S1, S2 = block[0], block[1]  # ggT, aaT
+            mean_eig1, mean_eig2 = S1.diag().mean(), S2.diag().mean()
+            if mean_eig1 > 0 and mean_eig2 >= 0:
+                sqrt_eig_mean_ratio = (mean_eig2 / mean_eig1).sqrt()
+                sqrt_damping = sqrt(damping_i)
+                damping1 = max(sqrt_damping / sqrt_eig_mean_ratio, KFAC_MIN_DAMPING)
+                damping2 = max(sqrt_damping * sqrt_eig_mean_ratio, KFAC_MIN_DAMPING)
+            else:
+                damping1, damping2 = damping_i, damping_i
+            block[0] = S1 + damping1 * eye_like(S1)
+            block[1] = S2 + damping2 * eye_like(S2)
+        else:
+            block[0] = block[0] + damping_i * eye_like(block[0])
+
+    inv_KFAC_naive = inv(KFAC @ eye_like(KFAC))
+
+    compare_consecutive_matmats(inv_KFAC)
+    compare_matmat(inv_KFAC, inv_KFAC_naive)
+
+
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+def test_KFAC_inverse_exactly_damped_matmat_per_block(
+    kfac_exact_case: tuple[
+        Module,
+        MSELoss,
+        dict[str, Tensor],
+        Iterable[tuple[Tensor, Tensor]],
+    ],
+    separate_weight_and_bias: bool,
+    delta: float = 1e-2,
+):
+    """Per-block exact damping should match a dense blockwise reference."""
+    model_func, loss_func, params, data, batch_size_fn = change_dtype(
+        kfac_exact_case, float64
+    )
+
+    KFAC = KFACLinearOperator(
+        model_func,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        separate_weight_and_bias=separate_weight_and_bias,
+    )
+
+    _, K, _ = KFAC
+    damping = tuple(delta * (idx + 1) for idx in range(len(K)))
+    inv_KFAC = KFAC.inverse(damping=damping, use_exact_damping=True)
+
+    # Materialize each block, add its individual exact damping, then reassemble.
+    for idx, (block, damping_i) in enumerate(zip(K, damping)):
+        damped_block = block @ eye_like(block) + damping_i * eye_like(block)
+        K[idx] = TensorLinearOperator(damped_block)
     inv_KFAC_naive = inv(KFAC @ eye_like(KFAC))
 
     compare_consecutive_matmats(inv_KFAC)

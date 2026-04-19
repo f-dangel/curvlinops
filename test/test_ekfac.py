@@ -19,6 +19,7 @@ from torch.nn import (
 from curvlinops import EFLinearOperator, GGNLinearOperator
 from curvlinops.computers.ekfac_hooks import HooksEKFACComputer
 from curvlinops.ekfac import EKFACLinearOperator
+from curvlinops.examples import TensorLinearOperator
 from curvlinops.kfac_utils import FisherType, KFACType
 from curvlinops.utils import allclose_report
 from test.cases import DEVICES, DEVICES_IDS
@@ -730,6 +731,143 @@ def test_EKFAC_inverse_exactly_damped_matmat(
 
     compare_consecutive_matmats(inv_EKFAC)
     compare_matmat(inv_EKFAC, inv_EKFAC_naive)
+
+
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+def test_EKFAC_inverse_exactly_damped_matmat_per_block(
+    kfac_exact_case: tuple[
+        Module,
+        MSELoss,
+        dict[str, Tensor],
+        Iterable[tuple[Tensor, Tensor]],
+    ],
+    separate_weight_and_bias: bool,
+    delta: float = 1e-2,
+):
+    """Test matrix-matrix multiplication by a per-block damped EKFAC inverse."""
+    model_func, loss_func, params, data, batch_size_fn = change_dtype(
+        kfac_exact_case, float64
+    )
+
+    EKFAC = EKFACLinearOperator(
+        model_func,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        separate_weight_and_bias=separate_weight_and_bias,
+    )
+
+    _, K, _ = EKFAC
+    damping = tuple(delta * (idx + 1) for idx in range(len(K)))
+    inv_EKFAC = EKFAC.inverse(damping=damping)
+
+    # Materialize each block, add its individual damping, then reassemble.
+    for idx, (block, damping_i) in enumerate(zip(K, damping)):
+        damped_block = block @ eye_like(block) + damping_i * eye_like(block)
+        K[idx] = TensorLinearOperator(damped_block)
+    inv_EKFAC_naive = inv(EKFAC @ eye_like(EKFAC))
+
+    compare_consecutive_matmats(inv_EKFAC)
+    compare_matmat(inv_EKFAC, inv_EKFAC_naive)
+
+
+@mark.parametrize(
+    "separate_weight_and_bias", [True, False], ids=["separate_bias", "joint_bias"]
+)
+def test_EKFAC_inverse_uniform_per_block_damping_matches_scalar(
+    kfac_exact_case: tuple[
+        Module,
+        MSELoss,
+        dict[str, Tensor],
+        Iterable[tuple[Tensor, Tensor]],
+    ],
+    separate_weight_and_bias: bool,
+    delta: float = 1e-2,
+):
+    """Uniform per-block damping should match the scalar EKFAC inverse path."""
+    model_func, loss_func, params, data, batch_size_fn = change_dtype(
+        kfac_exact_case, float64
+    )
+
+    EKFAC = EKFACLinearOperator(
+        model_func,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        separate_weight_and_bias=separate_weight_and_bias,
+    )
+
+    uniform_damping = (delta,) * len(EKFAC[1])
+    inv_EKFAC_scalar = EKFAC.inverse(damping=delta)
+    inv_EKFAC_sequence = EKFAC.inverse(damping=uniform_damping)
+
+    compare_consecutive_matmats(inv_EKFAC_sequence)
+    compare_matmat(inv_EKFAC_scalar, inv_EKFAC_sequence)
+
+
+def test_EKFAC_inverse_single_block_sequence_matches_scalar(
+    single_layer_case: tuple[
+        Module,
+        MSELoss,
+        dict[str, Tensor],
+        Iterable[tuple[Tensor, Tensor]],
+    ],
+    delta: float = 1e-2,
+):
+    """A length-1 damping sequence should work for single-block EKFAC operators."""
+    model_func, loss_func, params, data, batch_size_fn = change_dtype(
+        single_layer_case, float64
+    )
+
+    EKFAC = EKFACLinearOperator(
+        model_func,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+        separate_weight_and_bias=False,
+    )
+
+    assert len(EKFAC[1]) == 1
+
+    inv_EKFAC_scalar = EKFAC.inverse(damping=delta)
+    inv_EKFAC_sequence = EKFAC.inverse(damping=(delta,))
+
+    compare_consecutive_matmats(inv_EKFAC_sequence)
+    compare_matmat(inv_EKFAC_scalar, inv_EKFAC_sequence)
+
+
+def test_EKFAC_inverse_raises_on_bad_damping_length(
+    kfac_exact_case: tuple[
+        Module,
+        MSELoss,
+        dict[str, Tensor],
+        Iterable[tuple[Tensor, Tensor]],
+    ],
+):
+    """Per-block damping should require one value per canonical block."""
+    model_func, loss_func, params, data, batch_size_fn = change_dtype(
+        kfac_exact_case, float64
+    )
+
+    EKFAC = EKFACLinearOperator(
+        model_func,
+        loss_func,
+        params,
+        data,
+        batch_size_fn=batch_size_fn,
+    )
+
+    bad_lengths = {0, len(EKFAC[1]) - 1, len(EKFAC[1]) + 1}
+    bad_lengths.discard(len(EKFAC[1]))
+
+    for num_damping in sorted(bad_lengths):
+        with raises(ValueError, match="one scalar per canonical block"):
+            EKFAC.inverse(damping=(1e-2,) * num_damping)
 
 
 def test_ekfac_make_fx_flatten_different_batch_sizes():
