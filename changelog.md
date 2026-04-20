@@ -90,6 +90,15 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
 
 ### Internal
 
+- Add `merge_shared_into_batch` flag to the FX backend's
+  `make_compute_kfac_io_batch` (opt-in unflattened IO — with
+  `FisherType.TYPE2`, the collector output directly reconstructs the exact
+  per-layer GGN block). Also fold the FX backend's reduction scaling into a
+  single `1/sqrt(effective_batch)` pre-multiply on `grad_outputs`, removing
+  the compensating `mul_(N)` calls in KFAC-fx's `compute_batch` and
+  EKFAC-fx's eigcorr. `KFACLinearOperator`/`EKFACLinearOperator` behavior
+  unchanged ([PR](https://github.com/f-dangel/curvlinops/pull/295))
+
 - Benchmark tutorial: shorten plot labels (GGN, MC Fisher, ^{-1}), nest JSON
   data under `eager`/`compiled` keys, merge compiled overlay into main plots
   (5 plot types down to 3), remove stale compiled peakmem for (E)KFAC

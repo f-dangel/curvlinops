@@ -18,7 +18,6 @@ from curvlinops.computers.ekfac_hooks import (
 )
 from curvlinops.computers.kfac_make_fx import (
     MakeFxKFACComputer,
-    _num_loss_terms,
     make_compute_kfac_batch,
     make_compute_kfac_io_batch,
     make_group_gatherers,
@@ -126,16 +125,11 @@ def make_compute_ekfac_eigencorrection_batch(
                 a = group_inputs(group, layer_inputs)
                 aaT_eigvecs = input_eigvecs[group_key]
 
-            eigcorr = compute_eigenvalue_correction_linear_weight_sharing(
-                g, ggT_eigvecs, a, aaT_eigvecs
+            eigencorrections[group_key] = (
+                compute_eigenvalue_correction_linear_weight_sharing(
+                    g, ggT_eigvecs, a, aaT_eigvecs
+                )
             )
-
-            # Same mean-correction as KFAC's ggT: eigcorr is quadratic in g,
-            # which is scaled by 1/num_loss_terms in io_batch for mean reduction.
-            if loss_func.reduction == "mean":
-                eigcorr.mul_(_num_loss_terms(loss_func, y))
-
-            eigencorrections[group_key] = eigcorr
 
         return eigencorrections
 

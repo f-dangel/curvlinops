@@ -10,6 +10,7 @@ to optimize the full per-batch kernel.
 
 from collections import UserDict, defaultdict
 from collections.abc import Callable, MutableMapping
+from math import sqrt
 
 from einops import einsum
 from torch import Tensor, autograd, cat, eye, no_grad
@@ -104,25 +105,6 @@ def _bias_pad(has_joint_wb: bool, io_layer_params: dict[str, str]) -> int | None
     return 1 if "b" in io_layer_params else 0
 
 
-def _num_loss_terms(loss_func: Callable, y: Tensor) -> int:
-    """Compute total number of loss terms from target tensor.
-
-    For ``CrossEntropyLoss``, each element of ``y`` is one loss term.
-    For other losses, each row ``y[i, ...]`` (dropping the last/class dim)
-    is one loss term.
-
-    Args:
-        loss_func: The loss function.
-        y: Target tensor.
-
-    Returns:
-        Total number of loss terms.
-    """
-    return (
-        y.numel() if isinstance(loss_func, CrossEntropyLoss) else y.shape[:-1].numel()
-    )
-
-
 def make_group_gatherers(
     io_groups: dict[ParamGroupKey, list[str]],
     io_param_names: dict[str, dict[str, str]],
@@ -203,6 +185,7 @@ def make_compute_kfac_io_batch(
     mc_samples: int = 1,
     separate_weight_and_bias: bool = True,
     output_check_fn: Callable[[Tensor], None] | None = None,
+    merge_shared_into_batch: bool = True,
 ) -> tuple[
     Callable[
         [dict[str, Tensor], Tensor | MutableMapping, Tensor],
@@ -234,12 +217,39 @@ def make_compute_kfac_io_batch(
         output_check_fn: Optional callback ``(output) -> None`` called with
             the model output during setup. Raise inside this callback to
             reject unsupported output shapes (e.g., EKFAC's 2d restriction).
+        merge_shared_into_batch: Whether to merge shared (non-batch,
+            non-class) output axes into the batch axis before computing
+            gradient outputs. ``True`` (default) reproduces KFAC-expand
+            (Eschenhagen et al., 2023): per-token grad_outputs are computed
+            on a flattened ``[B*prod(D), C]`` view of the model output.
+            ``False`` keeps shared axes separate so each ``(*D, C)`` slice
+            is treated as one per-sample output, and the per-sample
+            decomposition ``sum_{v,n,t} g g^T (otimes) a a^T`` reconstructs
+            the exact per-layer GGN block (for position-wise layers with
+            ``FisherType.TYPE2``). Not supported with ``FisherType.EMPIRICAL``.
 
     Returns:
         Tuple of ``(inputs_and_grad_outputs_batch_fn, mapping, io_groups, io_param_names,
         layer_hparams)`` where ``inputs_and_grad_outputs_batch_fn(params, X, y)`` returns
         ``(layer_inputs, layer_output_grads)`` dicts keyed by IO layer name.
+        For mean reduction, ``layer_output_grads`` is scaled so that
+        ``sum_v grad_outputs grad_outputs^T`` equals the batch loss Hessian
+        (i.e., the ``1/N`` reduction factor is folded in once as ``1/sqrt(N)``
+        per vector). Downstream consumers therefore do not need to apply any
+        additional reduction-dependent correction.
+
+    Raises:
+        ValueError: If ``merge_shared_into_batch=False`` is combined with
+            ``FisherType.EMPIRICAL`` (the empirical per-datum loss helper
+            assumes a 1d prediction shape).
     """
+    if not merge_shared_into_batch and fisher_type == FisherType.EMPIRICAL:
+        raise ValueError(
+            "merge_shared_into_batch=False is not supported with "
+            "FisherType.EMPIRICAL because the per-datum loss helper assumes "
+            "a 1d prediction shape."
+        )
+
     grad_outputs_computer = _BaseKFACComputer._set_up_grad_outputs_computer(
         loss_func, fisher_type, mc_samples
     )
@@ -273,27 +283,29 @@ def make_compute_kfac_io_batch(
         if fisher_type == FisherType.FORWARD_ONLY:
             return layer_inputs, {}
 
-        # Rearrange >2d output/target into 2d for grad_outputs_computer.
-        # Needed for empirical Fisher support (assumes 1d per-datum prediction).
-        # CrossEntropyLoss expects class dim second: "batch c ... -> (batch ...) c"
-        # Other losses have class dim last: "batch ... c -> (batch ...) c"
-        if isinstance(loss_func, CrossEntropyLoss):
-            output_flat = output.movedim(1, -1).flatten(0, -2)
-            y_flat = y.flatten()
+        if merge_shared_into_batch:
+            # CrossEntropyLoss expects class dim second; other losses last.
+            if isinstance(loss_func, CrossEntropyLoss):
+                output_for_grad = output.movedim(1, -1).flatten(0, -2)
+                y_for_grad = y.flatten()
+            else:
+                output_for_grad = output.flatten(0, -2)
+                y_for_grad = y.flatten(0, -2)
         else:
-            output_flat = output.flatten(0, -2)
-            y_flat = y.flatten(0, -2)
-        grad_outputs = grad_outputs_computer(output_flat.detach(), y_flat, None)
-
-        scale = {"sum": 1.0, "mean": 1.0 / _num_loss_terms(loss_func, y)}[
-            loss_func.reduction
-        ]
-        grad_outputs.mul_(scale)
+            output_for_grad = output
+            y_for_grad = y
+        grad_outputs = grad_outputs_computer(output_for_grad.detach(), y_for_grad, None)
+        # Equivalent to the hooks backend's two-step scaling (pre-multiply
+        # ``grad_outputs`` by ``1/num_loss_terms``, then apply
+        # ``compute_loss_correction`` on ``ggT``): combining both into a single
+        # ``1/sqrt(N)`` per vector squares to the same ``1/N`` on ``ggT``.
+        mean_scale = 1.0 / sqrt(output_for_grad.shape[0])
+        grad_outputs.mul_({"sum": 1.0, "mean": mean_scale}[loss_func.reduction])
 
         io_layer_names = list(layer_outputs)
         output_tensors = list(layer_outputs.values())
         layer_output_grads_list = autograd.grad(
-            output_flat,
+            output_for_grad,
             output_tensors,
             grad_outputs=grad_outputs,
             is_grads_batched=True,
@@ -418,10 +430,9 @@ def make_compute_kfac_batch(
                 )
                 continue
             g = group_grads(group, layer_output_grads)
-            ggT = einsum(g, g, "v batch shared i, v batch shared j -> i j")
-            if loss_func.reduction == "mean":
-                ggT.mul_(_num_loss_terms(loss_func, y))
-            gradient_covs[group_key] = ggT
+            gradient_covs[group_key] = einsum(
+                g, g, "v batch shared i, v batch shared j -> i j"
+            )
 
         return input_covs, gradient_covs
 
