@@ -15,6 +15,7 @@ from torch import (
     manual_seed,
     rand,
     rand_like,
+    randn,
     save,
 )
 from torch.func import functional_call
@@ -66,6 +67,107 @@ def _skip_if_hooks_and_callable(model_func, backend: str):
     """Skip test if the hooks backend is used with a non-Module model_func."""
     if backend == "hooks" and not isinstance(model_func, Module):
         skip("Hooks backend requires nn.Module.")
+
+
+class RegularizedMSELoss(Module):
+    """Custom per-datum loss for exact type-2 KFAC tests."""
+
+    def __init__(self, reduction: str = "mean", reg_strength: float = 0.3):
+        """Initialize the regularized loss.
+
+        Args:
+            reduction: Reduction applied by the base MSE loss.
+            reg_strength: Coefficient of the output-space quadratic penalty.
+        """
+        super().__init__()
+        self.reduction = reduction
+        self.base_loss = MSELoss(reduction=reduction)
+        self.reg_strength = reg_strength
+
+    def forward(self, prediction: Tensor, target: Tensor) -> Tensor:
+        """Compute the regularized loss.
+
+        Returns:
+            Scalar regularized loss value.
+        """
+        return self.base_loss(prediction, target) + self.reg_strength * (
+            prediction.square().mean()
+        )
+
+
+class CoupledVectorLoss(Module):
+    """Custom vector-valued loss with a dense output Hessian."""
+
+    def __init__(self, reduction: str = "mean", coupling_strength: float = 0.3):
+        """Initialize the coupled loss."""
+        super().__init__()
+        self.reduction = reduction
+        self.coupling_strength = coupling_strength
+
+    def forward(self, prediction: Tensor, target: Tensor) -> Tensor:
+        """Compute the scalar loss value.
+
+        Returns:
+            Scalar loss value.
+        """
+        diff = prediction - target
+        per_sample = diff.square().sum(dim=1) + self.coupling_strength * (
+            diff.sum(dim=1).square()
+        )
+        return per_sample.mean() if self.reduction == "mean" else per_sample.sum()
+
+
+class StructuredCoupledLoss(Module):
+    """Custom structured loss that couples higher-dimensional outputs."""
+
+    def __init__(self, reduction: str = "mean", coupling_strength: float = 0.3):
+        """Initialize the structured coupled loss."""
+        super().__init__()
+        self.reduction = reduction
+        self.coupling_strength = coupling_strength
+
+    def forward(self, prediction: Tensor, target: Tensor) -> Tensor:
+        """Compute the scalar loss value.
+
+        Returns:
+            Scalar loss value.
+        """
+        diff = prediction - target
+        flat = diff.flatten(start_dim=1)
+        per_sample = diff.square().sum(dim=(1, 2)) + self.coupling_strength * (
+            flat.sum(dim=1).square()
+        )
+        return per_sample.mean() if self.reduction == "mean" else per_sample.sum()
+
+
+class ReductionFreeLoss(Module):
+    """Custom scalar loss without a ``reduction`` attribute."""
+
+    def forward(self, prediction: Tensor, target: Tensor) -> Tensor:
+        """Compute the scalar loss value.
+
+        Returns:
+            Scalar loss value.
+        """
+        diff = prediction - target
+        return diff.square().sum(dim=1).mean()
+
+
+class ReshapeLinearModel(Module):
+    """Single linear layer whose outputs are reshaped to 3d tensors."""
+
+    def __init__(self):
+        """Initialize the reshaped linear model."""
+        super().__init__()
+        self.linear = Linear(4, 6)
+
+    def forward(self, x: Tensor) -> Tensor:
+        """Map inputs to outputs with shape ``[batch, 2, 3]``.
+
+        Returns:
+            Model output with shape ``[batch, 2, 3]``.
+        """
+        return self.linear(x).reshape(x.shape[0], 2, 3)
 
 
 @mark.parametrize("backend", BACKENDS, ids=BACKENDS_IDS)
@@ -1083,6 +1185,125 @@ def _check_torch_save_load(linop_cls: type, tmp_path: Path) -> None:
 def test_kfac_torch_save_load(tmp_path: Path) -> None:
     """Test that KFACLinearOperator can be saved and loaded with torch.save/load."""
     _check_torch_save_load(KFACLinearOperator, tmp_path)
+
+
+def test_kfac_type2_accepts_custom_loss():
+    """Smoke-test exact type-2 KFAC with a custom per-datum loss module."""
+    manual_seed(0)
+
+    model = Linear(3, 2)
+    params = dict(model.named_parameters())
+    data = [(rand(4, 3), rand(4, 2))]
+    loss_func = RegularizedMSELoss()
+
+    kfac = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        fisher_type=FisherType.TYPE2,
+        backend="hooks",
+    )
+    kfac_mat = kfac @ eye_like(kfac)
+
+    assert kfac_mat.shape == (kfac.shape[0], kfac.shape[1])
+    assert kfac_mat.abs().sum() > 0
+
+
+@mark.parametrize("reduction", ["mean", "sum"])
+def test_kfac_type2_custom_vector_loss_matches_exact_ggn(reduction: str):
+    """Test supported custom vector losses against the exact GGN."""
+    manual_seed(0)
+
+    model = Linear(4, 3).double()
+    params = dict(model.named_parameters())
+    data = [(randn(1, 4, dtype=float64), randn(1, 3, dtype=float64))]
+    loss_func = CoupledVectorLoss(reduction=reduction)
+
+    kfac = KFACLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        fisher_type=FisherType.TYPE2,
+        separate_weight_and_bias=False,
+        backend="hooks",
+        check_deterministic=False,
+    )
+    ggn = GGNLinearOperator(
+        model,
+        loss_func,
+        params,
+        data,
+        check_deterministic=False,
+    )
+
+    assert allclose_report(kfac @ eye_like(kfac), ggn @ eye_like(ggn))
+
+
+def test_kfac_type2_custom_loss_requires_reduction_attr():
+    """Test that custom KFAC losses must expose ``reduction``."""
+    model = Linear(3, 2)
+
+    with raises(ValueError, match="loss_func.reduction"):
+        KFACLinearOperator(
+            model,
+            ReductionFreeLoss(),
+            dict(model.named_parameters()),
+            [(rand(4, 3), rand(4, 2))],
+            fisher_type=FisherType.TYPE2,
+            backend="hooks",
+        )
+
+
+def test_kfac_type2_custom_loss_rejects_make_fx_backend():
+    """Test that generic exact TYPE2 losses are rejected on the FX backend."""
+    model = Linear(3, 2)
+
+    with raises(ValueError, match="backend='make_fx' does not support"):
+        KFACLinearOperator(
+            model,
+            CoupledVectorLoss(),
+            dict(model.named_parameters()),
+            [(rand(4, 3), rand(4, 2))],
+            fisher_type=FisherType.TYPE2,
+            backend="make_fx",
+        )
+
+
+@mark.parametrize("reduction", ["mean", "sum"])
+def test_kfac_type2_custom_loss_rejects_structured_outputs(reduction: str):
+    """Test that generic exact TYPE2 losses reject higher-dimensional outputs."""
+    manual_seed(0)
+
+    model = ReshapeLinearModel()
+    params = dict(model.named_parameters())
+    data = [(rand(2, 4), rand(2, 2, 3))]
+    loss_func = StructuredCoupledLoss(reduction=reduction)
+
+    with raises(ValueError, match="currently require 2d model outputs"):
+        KFACLinearOperator(
+            model,
+            loss_func,
+            params,
+            data,
+            fisher_type=FisherType.TYPE2,
+            backend="hooks",
+        )
+
+
+def test_kfac_mc_rejects_custom_loss():
+    """Test that MC KFAC still rejects losses outside the analytic whitelist."""
+    model = Linear(3, 2)
+
+    with raises(ValueError, match="requires loss"):
+        KFACLinearOperator(
+            model,
+            RegularizedMSELoss(),
+            dict(model.named_parameters()),
+            [(rand(4, 3), rand(4, 2))],
+            fisher_type=FisherType.MC,
+        )
 
 
 @mark.parametrize("fisher_type", ["type-2", "mc", "empirical", "forward-only"])

@@ -52,7 +52,7 @@ class _BaseKFACComputer(_EmpiricalRiskMixin):
         self,
         model_func: Module
         | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
-        loss_func: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
+        loss_func: Module,
         params: dict[str, Tensor],
         data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
@@ -130,18 +130,33 @@ class _BaseKFACComputer(_EmpiricalRiskMixin):
                 entry of the iterates from ``data`` and return their batch size.
 
         Raises:
-            ValueError: If the loss function is not supported.
+            ValueError: If the loss function is not supported for the selected
+                Fisher type.
+            ValueError: If ``loss_func.reduction`` is missing or unsupported.
             ValueError: If ``fisher_type != FisherType.MC`` and ``mc_samples != 1``.
             ValueError: If ``kfac_approx`` is not supported.
         """
-        if not isinstance(loss_func, self._SUPPORTED_LOSSES):
-            raise ValueError(
-                f"Invalid loss: {loss_func}. Supported: {self._SUPPORTED_LOSSES}."
-            )
         if fisher_type not in self._SUPPORTED_FISHER_TYPE:
             raise ValueError(
                 f"Invalid fisher_type: {fisher_type}. "
                 f"Supported: {self._SUPPORTED_FISHER_TYPE}."
+            )
+        if fisher_type in (FisherType.MC, FisherType.EMPIRICAL):
+            if not isinstance(loss_func, self._SUPPORTED_LOSSES):
+                raise ValueError(
+                    f"{fisher_type} requires loss in {self._SUPPORTED_LOSSES}. "
+                    f"Got: {loss_func}."
+                )
+        elif not isinstance(loss_func, Module):
+            raise ValueError(
+                f"loss_func must be an nn.Module for fisher_type={fisher_type}. "
+                f"Got {type(loss_func).__name__}."
+            )
+        reduction = getattr(loss_func, "reduction", None)
+        if reduction not in {"mean", "sum"}:
+            raise ValueError(
+                "KFAC requires loss_func.reduction to be 'mean' or 'sum'. "
+                f"Got {reduction!r} for {type(loss_func).__name__}."
             )
         if fisher_type != FisherType.MC and mc_samples != 1:
             raise ValueError(
@@ -198,7 +213,7 @@ class _BaseKFACComputer(_EmpiricalRiskMixin):
 
     @staticmethod
     def _set_up_grad_outputs_computer(
-        loss_func: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
+        loss_func: Module,
         fisher_type: FisherType,
         mc_samples: int,
     ) -> Callable[[Tensor, Tensor, Generator | None], Tensor]:
@@ -254,7 +269,22 @@ class _BaseKFACComputer(_EmpiricalRiskMixin):
 
         Returns:
             The rearranged output and target.
+
+        Raises:
+            ValueError: If a generic exact ``TYPE2`` loss sees higher-dimensional
+                outputs that would need to be flattened into independent loss terms.
         """
+        generic_type2_loss = (
+            self._fisher_type == FisherType.TYPE2
+            and not isinstance(self._loss_func, self._SUPPORTED_LOSSES)
+        )
+        if generic_type2_loss and output.ndim > 2:
+            raise ValueError(
+                "Generic exact TYPE2 losses currently require 2d model outputs "
+                "of shape [batch, features]. Higher-dimensional non-analytic "
+                "losses would be flattened into independent loss terms, which "
+                "changes the loss Hessian."
+            )
         if isinstance(self._loss_func, CrossEntropyLoss):
             # einops: "batch c ... -> (batch ...) c" and "batch ... -> (batch ...)"
             output = output.movedim(1, -1).flatten(0, -2)

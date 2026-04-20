@@ -19,12 +19,7 @@ and generalized to all linear layers with weight sharing in
 from collections.abc import Callable, Iterable, MutableMapping
 
 from torch import Tensor
-from torch.nn import (
-    BCEWithLogitsLoss,
-    CrossEntropyLoss,
-    Module,
-    MSELoss,
-)
+from torch.nn import Module
 
 from curvlinops._torch_base import _ChainPyTorchLinearOperator
 from curvlinops.blockdiagonal import BlockDiagonalLinearOperator
@@ -96,7 +91,7 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
         self,
         model_func: Module
         | Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
-        loss_func: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
+        loss_func: Module,
         params: dict[str, Tensor],
         data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
@@ -149,6 +144,11 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
                 identity matrices, see the FOOF method in
                 `Benzing, 2022 <https://arxiv.org/abs/2201.12250>`_ or ISAAC in
                 `Petersen et al., 2023 <https://arxiv.org/abs/2305.00604>`_.
+                Generic per-datum loss modules are supported in exact
+                ``FisherType.TYPE2`` mode when they define
+                ``loss_func.reduction`` as ``"mean"`` or ``"sum"`` and the
+                model output has shape ``[batch, features]``. For such losses,
+                use ``backend="hooks"``.
                 Defaults to ``FisherType.MC``.
             mc_samples: The number of Monte-Carlo samples to use per data point.
                 Has to be set to ``1`` when ``fisher_type != FisherType.MC``.
@@ -183,6 +183,8 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
             backend: The backend to use for computing Kronecker factors.
                 ``"hooks"`` uses forward/backward hooks (default).
                 ``"make_fx"`` uses FX graph tracing via the IO collector.
+                Generic losses in exact ``fisher_type=FisherType.TYPE2`` mode
+                are only supported with ``"hooks"``.
                 Defaults to ``"hooks"``.
 
                 Note: The ``"make_fx"`` backend incurs a significant one-time
@@ -198,6 +200,15 @@ class KFACLinearOperator(_ChainPyTorchLinearOperator):
         if backend not in self._BACKENDS:
             raise ValueError(
                 f"Invalid backend: {backend!r}. Supported: {tuple(self._BACKENDS)}."
+            )
+        if (
+            backend == "make_fx"
+            and fisher_type == FisherType.TYPE2
+            and not isinstance(loss_func, _BaseKFACComputer._SUPPORTED_LOSSES)
+        ):
+            raise ValueError(
+                "backend='make_fx' does not support generic exact TYPE2 losses. "
+                "Use backend='hooks'."
             )
         computer_cls = self._BACKENDS[backend]
         computer = computer_cls(
