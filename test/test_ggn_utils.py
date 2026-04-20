@@ -222,7 +222,9 @@ def test_loss_hessian_matrix_sqrt_autodiff_fallback(
     hess_from_sqrt = _hessian_from_loss_hessian_matrix_sqrt(
         output_one_datum, target_one_datum, loss_func
     )
-    true_hess = _single_datum_loss_hessian(output_one_datum, target_one_datum, loss_func)
+    true_hess = _single_datum_loss_hessian(
+        output_one_datum, target_one_datum, loss_func
+    )
 
     assert allclose_report(hess_from_sqrt, true_hess)
 
@@ -241,7 +243,9 @@ def test_loss_hessian_matrix_sqrt_autodiff_fallback_regularized_loss(
     hess_from_sqrt = _hessian_from_loss_hessian_matrix_sqrt(
         output_one_datum, target_one_datum, loss_func
     )
-    true_hess = _single_datum_loss_hessian(output_one_datum, target_one_datum, loss_func)
+    true_hess = _single_datum_loss_hessian(
+        output_one_datum, target_one_datum, loss_func
+    )
 
     assert allclose_report(hess_from_sqrt, true_hess)
 

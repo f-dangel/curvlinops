@@ -274,9 +274,8 @@ class _BaseKFACComputer(_EmpiricalRiskMixin):
             ValueError: If a generic exact ``TYPE2`` loss sees higher-dimensional
                 outputs that would need to be flattened into independent loss terms.
         """
-        generic_type2_loss = (
-            self._fisher_type == FisherType.TYPE2
-            and not isinstance(self._loss_func, self._SUPPORTED_LOSSES)
+        generic_type2_loss = self._fisher_type == FisherType.TYPE2 and not isinstance(
+            self._loss_func, self._SUPPORTED_LOSSES
         )
         if generic_type2_loss and output.ndim > 2:
             raise ValueError(
