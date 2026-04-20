@@ -68,11 +68,21 @@ def _reconstruct_ggn_blocks(
             d_out = g.shape[-1]
             d_in = a.shape[-1]
             block = einsum(
-                g, g, a, a, "v n t o, v n t p, n t i, n t j -> o i p j"
+                g,
+                g,
+                a,
+                a,
+                "vec batch shared out_row, vec batch shared out_col, "
+                "batch shared in_row, batch shared in_col "
+                "-> out_row in_row out_col in_col",
             ).reshape(d_out * d_in, d_out * d_in)
             blocks[group["W"]] = block
         else:
-            blocks[group["b"]] = einsum(g, g, "v n t o, v n t p -> o p")
+            blocks[group["b"]] = einsum(
+                g,
+                g,
+                "vec batch shared out_row, vec batch shared out_col -> out_row out_col",
+            )
     return blocks
 
 
