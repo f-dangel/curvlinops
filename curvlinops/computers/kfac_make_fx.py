@@ -293,8 +293,7 @@ def make_compute_kfac_io_batch(
                 output_for_grad = output.flatten(0, -2)
                 y_for_grad = y.flatten(0, -2)
         else:
-            output_for_grad = output
-            y_for_grad = y
+            output_for_grad, y_for_grad = output, y
         grad_outputs = grad_outputs_computer(output_for_grad.detach(), y_for_grad, None)
         # Equivalent to the hooks backend's two-step scaling (pre-multiply
         # ``grad_outputs`` by ``1/num_loss_terms``, then apply
