@@ -65,14 +65,14 @@ def _reconstruct_ggn_blocks(
         g = group_grads(group, layer_output_grads)  # (V, N, T, d_out)
         if "W" in group:
             a = group_inputs(group, layer_inputs)  # (N, T, d_in)
-            # Per-sample vec(W) gradient: g (otimes) a at each (v, n, t).
+            # Per-sample vec(W) gradient: sum_t g (otimes) a.
             per_sample_grads = einsum(
-                g, a, "vec batch shared out, batch shared in -> vec batch shared out in"
+                g, a, "vec batch shared out, batch shared in -> vec batch out in"
             ).flatten(start_dim=-2)
             blocks[group["W"]] = einsum(
                 per_sample_grads,
                 per_sample_grads,
-                "vec batch shared row, vec batch shared col -> row col",
+                "vec batch row, vec batch col -> row col",
             )
         else:
             blocks[group["b"]] = einsum(
