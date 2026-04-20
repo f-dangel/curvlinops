@@ -12,7 +12,7 @@ from collections.abc import Iterable
 
 from einops import einsum
 from pytest import raises
-from torch import Tensor, float64, manual_seed, rand
+from torch import Tensor, block_diag, float64, manual_seed, rand
 from torch.nn import Linear, Module, MSELoss, Sequential
 
 from curvlinops import GGNLinearOperator
@@ -128,8 +128,6 @@ def _assert_io_unflattened_reconstructs_ggn(
         params,
         X,
         FisherType.TYPE2,
-        1,
-        True,  # separate_weight_and_bias
         intermediate_as_batch=False,
     )
     layer_inputs, layer_output_grads = fn(params, X, y)
@@ -144,13 +142,8 @@ def _assert_io_unflattened_reconstructs_ggn(
         kfac_approx,
     )
 
-    offset = 0
-    for name, p in params.items():
-        n = p.numel()
-        if name in blocks:
-            ggn_block = ggn[offset : offset + n, offset : offset + n]
-            assert allclose_report(blocks[name], ggn_block, atol=1e-6, rtol=1e-5)
-        offset += n
+    reconstructed = block_diag(*(blocks[name] for name in params))
+    assert allclose_report(reconstructed, ggn, atol=1e-6, rtol=1e-5)
 
 
 def test_kfac_io_unflattened_reconstructs_ggn(
