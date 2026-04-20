@@ -143,7 +143,7 @@ def _assert_io_unflattened_reconstructs_ggn(
     )
 
     reconstructed = block_diag(*(blocks[name] for name in params))
-    assert allclose_report(reconstructed, ggn, atol=1e-10, rtol=1e-11)
+    assert allclose_report(reconstructed, ggn)
 
 
 def test_kfac_io_unflattened_reconstructs_ggn(
