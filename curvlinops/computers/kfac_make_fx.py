@@ -185,7 +185,7 @@ def make_compute_kfac_io_batch(
     mc_samples: int = 1,
     separate_weight_and_bias: bool = True,
     output_check_fn: Callable[[Tensor], None] | None = None,
-    merge_shared_into_batch: bool = True,
+    intermediate_as_batch: bool = True,
 ) -> tuple[
     Callable[
         [dict[str, Tensor], Tensor | MutableMapping, Tensor],
@@ -217,16 +217,17 @@ def make_compute_kfac_io_batch(
         output_check_fn: Optional callback ``(output) -> None`` called with
             the model output during setup. Raise inside this callback to
             reject unsupported output shapes (e.g., EKFAC's 2d restriction).
-        merge_shared_into_batch: Whether to merge shared (non-batch,
-            non-class) output axes into the batch axis before computing
-            gradient outputs. ``True`` (default) reproduces KFAC-expand
+        intermediate_as_batch: Whether to treat the model output's
+            intermediate (non-batch, non-class) axes as additional batch
+            samples. ``True`` (default) reproduces KFAC-expand
             (Eschenhagen et al., 2023): per-token grad_outputs are computed
             on a flattened ``[B*prod(D), C]`` view of the model output.
-            ``False`` keeps shared axes separate so each ``(*D, C)`` slice
-            is treated as one per-sample output, and the per-sample
-            decomposition ``sum_{v,n,t} g g^T (otimes) a a^T`` reconstructs
-            the exact per-layer GGN block (for position-wise layers with
-            ``FisherType.TYPE2``). Not supported with ``FisherType.EMPIRICAL``.
+            ``False`` keeps the intermediate axes separate so each
+            ``(*D, C)`` slice is treated as one per-sample output, and the
+            per-sample decomposition ``sum_{v,n,t} g g^T (otimes) a a^T``
+            reconstructs the exact per-layer GGN block (for position-wise
+            layers with ``FisherType.TYPE2``). Not supported with
+            ``FisherType.EMPIRICAL``.
 
     Returns:
         Tuple of ``(inputs_and_grad_outputs_batch_fn, mapping, io_groups, io_param_names,
@@ -239,13 +240,13 @@ def make_compute_kfac_io_batch(
         additional reduction-dependent correction.
 
     Raises:
-        ValueError: If ``merge_shared_into_batch=False`` is combined with
+        ValueError: If ``intermediate_as_batch=False`` is combined with
             ``FisherType.EMPIRICAL`` (the empirical per-datum loss helper
             assumes a 1d prediction shape).
     """
-    if not merge_shared_into_batch and fisher_type == FisherType.EMPIRICAL:
+    if not intermediate_as_batch and fisher_type == FisherType.EMPIRICAL:
         raise ValueError(
-            "merge_shared_into_batch=False is not supported with "
+            "intermediate_as_batch=False is not supported with "
             "FisherType.EMPIRICAL because the per-datum loss helper assumes "
             "a 1d prediction shape."
         )
@@ -283,7 +284,7 @@ def make_compute_kfac_io_batch(
         if fisher_type == FisherType.FORWARD_ONLY:
             return layer_inputs, {}
 
-        if merge_shared_into_batch:
+        if intermediate_as_batch:
             # CrossEntropyLoss expects class dim second; other losses last.
             if isinstance(loss_func, CrossEntropyLoss):
                 output_for_grad = output.movedim(1, -1).flatten(0, -2)

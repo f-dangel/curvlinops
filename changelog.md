@@ -90,7 +90,7 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
 
 ### Internal
 
-- Add `merge_shared_into_batch` flag to the FX backend's
+- Add `intermediate_as_batch` flag to the FX backend's
   `make_compute_kfac_io_batch` (opt-in unflattened IO — with
   `FisherType.TYPE2`, the collector output directly reconstructs the exact
   per-layer GGN block). Also fold the FX backend's reduction scaling into a

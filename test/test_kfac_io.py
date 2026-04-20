@@ -1,6 +1,6 @@
 r"""Tests for :func:`make_compute_kfac_io_batch` IO collection.
 
-Focus is on the ``merge_shared_into_batch`` flag. When turned off, the
+Focus is on the ``intermediate_as_batch`` flag. When turned off, the
 per-sample rank-one decomposition the IO collector returns should reconstruct
 the exact per-parameter GGN block. The check runs on two fixture pools: the
 ``GGNLinearOperator`` ``case`` fixture (broad loss and architecture coverage)
@@ -87,7 +87,7 @@ def _assert_io_unflattened_reconstructs_ggn(
 ) -> None:
     """Run the IO collector and verify exact per-parameter GGN reconstruction.
 
-    With ``merge_shared_into_batch=False`` + ``FisherType.TYPE2``, the
+    With ``intermediate_as_batch=False`` + ``FisherType.TYPE2``, the
     per-sample rank-one decomposition must equal the exact per-parameter
     block of the GGN (for position-wise layers).
 
@@ -120,7 +120,7 @@ def _assert_io_unflattened_reconstructs_ggn(
         FisherType.TYPE2,
         1,
         True,  # separate_weight_and_bias
-        merge_shared_into_batch=False,
+        intermediate_as_batch=False,
     )
     layer_inputs, layer_output_grads = fn(params, X, y)
 
@@ -152,7 +152,7 @@ def test_kfac_io_unflattened_reconstructs_ggn(
         object,
     ],
 ):
-    """IO collector with ``merge_shared_into_batch=False`` reconstructs the GGN.
+    """IO collector with ``intermediate_as_batch=False`` reconstructs the GGN.
 
     Parametrized over the same cases as ``GGNLinearOperator``'s matvec test so
     CE/BCE/MSE, both reductions, 2D/3D inputs, and dict-style inputs are all
@@ -204,7 +204,7 @@ def test_kfac_io_unflattened_reconstructs_ggn_weight_sharing(
 
 
 def test_empirical_rejects_unflattened():
-    """``merge_shared_into_batch=False`` raises with ``FisherType.EMPIRICAL``."""
+    """``intermediate_as_batch=False`` raises with ``FisherType.EMPIRICAL``."""
     manual_seed(0)
     model = Sequential(Linear(4, 2))
     loss_func = MSELoss()
@@ -217,5 +217,5 @@ def test_empirical_rejects_unflattened():
             params,
             X,
             fisher_type=FisherType.EMPIRICAL,
-            merge_shared_into_batch=False,
+            intermediate_as_batch=False,
         )
