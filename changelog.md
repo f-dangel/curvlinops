@@ -25,6 +25,14 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
 
 ### Added/New
 
+- Add `KFOCLinearOperator` — Frobenius-optimal rank-one Kronecker
+  approximation of each per-layer GGN block, obtained via the top singular
+  pair of the block's Van Loan rearrangement. Subclasses `KFACLinearOperator`
+  and reuses the inherited matvec/inverse/eigh machinery; only the
+  factor-computation step is replaced. Scope: single-batch data,
+  `FisherType.TYPE2`, `KFACType.EXPAND`, FX backend only.
+  References: Schnaus, Lee, Triebel (BDL@NeurIPS 2021); Koroko et al. (arXiv:2201.10285)
+
 - Add preconditioner support to `NeumannInverseLinearOperator` via a new
   `preconditioner` argument, enabling the preconditioned Neumann/Richardson
   iteration `A⁻¹ ≈ α Σₖ (I - α P A)ᵏ P` (inspired by Wang et al., NeurIPS 2025).
