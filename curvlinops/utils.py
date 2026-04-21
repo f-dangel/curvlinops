@@ -98,6 +98,32 @@ def fork_rng_with_seed(seed: int | None) -> Iterator[None]:
             yield
 
 
+def _assert_single_element(iterable: Iterable) -> None:
+    """Validate that ``iterable`` yields exactly one element.
+
+    Advances the underlying iterator at most two steps, so a lazy iterable
+    (e.g., a generator or ``DataLoader``) accidentally passed in is not
+    materialized. Callers that need to use the element afterwards should
+    pass a reusable iterable and re-iterate it themselves.
+
+    Args:
+        iterable: Iterable expected to yield exactly one element.
+
+    Raises:
+        ValueError: If ``iterable`` yields zero or more than one element.
+    """
+    it = iter(iterable)
+    try:
+        next(it)
+    except StopIteration as err:
+        raise ValueError("Iterable must contain exactly one element, got 0.") from err
+    try:
+        next(it)
+    except StopIteration:
+        return
+    raise ValueError("Iterable must contain exactly one element, got more than one.")
+
+
 def split_list(x: list | tuple, sizes: list[int]) -> list[list]:
     """Split a list into multiple lists of specified size.
 

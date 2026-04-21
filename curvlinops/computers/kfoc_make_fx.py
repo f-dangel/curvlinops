@@ -29,6 +29,7 @@ from curvlinops.computers.kfac_make_fx import (
     make_group_gatherers,
 )
 from curvlinops.kfac_utils import FisherType, KFACType
+from curvlinops.utils import _assert_single_element
 
 
 class _RearrangedGGNLinearOperator(PyTorchLinearOperator):
@@ -123,20 +124,12 @@ class _RearrangedGGNLinearOperator(PyTorchLinearOperator):
 
     @property
     def device(self) -> device:
-        """Device of ``per_sample_grads``.
-
-        Returns:
-            The device.
-        """
+        """Device of ``per_sample_grads``."""
         return self._P.device
 
     @property
     def dtype(self) -> dtype:
-        """Data type of ``per_sample_grads``.
-
-        Returns:
-            The dtype.
-        """
+        """Data type of ``per_sample_grads``."""
         return self._P.dtype
 
 
@@ -236,16 +229,8 @@ class MakeFxKFOCComputer(_BaseKFACComputer):
             raise ValueError(
                 f"KFOC requires KFACType.EXPAND, got {self._kfac_approx!r}."
             )
-        data_iter = iter(self._data)
-        try:
-            X, y = next(data_iter)
-        except StopIteration as err:
-            raise ValueError("KFOC requires exactly one batch, got zero.") from err
-        try:
-            next(data_iter)
-            raise ValueError("KFOC requires exactly one batch, got more than one.")
-        except StopIteration:
-            pass
+        _assert_single_element(self._data)
+        X, y = next(iter(self._data))
 
         (
             inputs_and_grad_outputs_batch,
@@ -258,9 +243,9 @@ class MakeFxKFOCComputer(_BaseKFACComputer):
             self._loss_func,
             self._params,
             X,
-            self._fisher_type,
-            self._mc_samples,
-            self._separate_weight_and_bias,
+            fisher_type=self._fisher_type,
+            mc_samples=self._mc_samples,
+            separate_weight_and_bias=self._separate_weight_and_bias,
             intermediate_as_batch=False,
         )
         layer_inputs, layer_output_grads = inputs_and_grad_outputs_batch(

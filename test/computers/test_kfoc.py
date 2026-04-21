@@ -16,18 +16,9 @@ Checks three things:
 from collections.abc import Iterable
 
 from einops import einsum
-from pytest import raises
-from torch import (
-    Tensor,
-    eye,
-    float64,
-    kron,
-    manual_seed,
-    rand,
-)
-from torch import (
-    einsum as torch_einsum,
-)
+from pytest import mark, raises
+from torch import Tensor, float64, kron, manual_seed, rand
+from torch import einsum as torch_einsum
 from torch.linalg import svd as torch_svd
 from torch.nn import Linear, Module, MSELoss, Sequential
 
@@ -39,7 +30,7 @@ from curvlinops.computers.kfac_make_fx import (
 from curvlinops.computers.kfoc_make_fx import _RearrangedGGNLinearOperator
 from curvlinops.kfac_utils import FisherType, KFACType
 from curvlinops.utils import allclose_report, make_functional_call
-from test.utils import block_diagonal, change_dtype
+from test.utils import block_diagonal, change_dtype, eye_like
 
 
 def _collect_per_sample_grads(
@@ -117,7 +108,7 @@ def test_kfoc_factors_match_dense_svd(
         check_deterministic=False,
         batch_size_fn=batch_size_fn,
     )
-    K = kfoc @ eye(kfoc.shape[1], dtype=kfoc.dtype)
+    K = kfoc @ eye_like(kfoc)
 
     per_sample_grads = _collect_per_sample_grads(model, loss_func, params, X, y)
 
@@ -162,7 +153,7 @@ def test_kfoc_recovers_exact_rank_one_kron():
         [(X, y)],
         check_deterministic=False,
     )
-    K = kfoc @ eye(kfoc.shape[1], dtype=kfoc.dtype)
+    K = kfoc @ eye_like(kfoc)
 
     ggn = block_diagonal(GGNLinearOperator, model, loss_func, params, [(X, y)])
     # The GGN block for a single linear layer with scalar output is exactly
@@ -199,7 +190,7 @@ def test_kfoc_first_order_optimality(
         check_deterministic=False,
         batch_size_fn=batch_size_fn,
     )
-    K = kfoc @ eye(kfoc.shape[1], dtype=kfoc.dtype)
+    K = kfoc @ eye_like(kfoc)
     per_sample_grads = _collect_per_sample_grads(model, loss_func, params, X, y)
 
     offset = 0
@@ -238,59 +229,38 @@ def test_kfoc_rejects_multi_batch():
     loss_func = MSELoss()
     params = dict(model.named_parameters())
     data = [(rand(2, 4), rand(2, 2)), (rand(3, 4), rand(3, 2))]
-    with raises(ValueError, match="exactly one batch"):
+    with raises(ValueError, match="more than one"):
         KFOCLinearOperator(model, loss_func, params, data, check_deterministic=False)
 
 
-def test_kfoc_handles_degenerate_svds_shapes():
-    """``svds`` requires ``k < min(shape)``; the dense fallback covers ``d_out = 1`` and ``d_in = 1``.
+@mark.parametrize(
+    "d_in,d_out",
+    [(4, 1), (1, 3)],
+    ids=["scalar_out", "scalar_in"],
+)
+def test_kfoc_handles_degenerate_svds_shapes(d_in: int, d_out: int):
+    """``svds`` requires ``k < min(shape)``; the dense fallback covers scalar ends.
 
-    Constructs two single-linear-layer scenarios whose rearranged operators
-    have a trivial dimension (``d_out**2 == 1`` and ``d_in**2 == 1``) and
-    checks the factors match the dense reference.
+    Single-linear-layer scenarios where the rearranged operator has a
+    trivial dimension (``d_out**2 == 1`` or ``d_in**2 == 1``) and
+    ``scipy.svds`` cannot handle ``k = 1``.
+
+    Args:
+        d_in: Input feature dimension.
+        d_out: Output feature dimension.
     """
     manual_seed(0)
-    # d_out = 1: rearranged shape (1, d_in**2), svds unable to run k=1.
-    model_scalar_out = Sequential(Linear(4, 1, bias=False)).double()
+    model = Sequential(Linear(d_in, d_out, bias=False)).double()
     loss_func = MSELoss(reduction="sum")
-    params = {n: p.detach().clone() for n, p in model_scalar_out.named_parameters()}
-    X = rand(3, 4, dtype=float64)
-    y = rand(3, 1, dtype=float64)
+    params = {n: p.detach().clone() for n, p in model.named_parameters()}
+    X = rand(3, d_in, dtype=float64)
+    y = rand(3, d_out, dtype=float64)
     kfoc = KFOCLinearOperator(
-        model_scalar_out,
+        model,
         loss_func,
         params,
         [(X, y)],
         check_deterministic=False,
     )
-    K = kfoc @ eye(kfoc.shape[1], dtype=kfoc.dtype)
-    ggn = block_diagonal(
-        GGNLinearOperator,
-        model_scalar_out,
-        loss_func,
-        params,
-        [(X, y)],
-    )
-    assert allclose_report(K, ggn)
-
-    # d_in = 1: rearranged shape (d_out**2, 1), svds unable to run k=1.
-    model_scalar_in = Sequential(Linear(1, 3, bias=False)).double()
-    params = {n: p.detach().clone() for n, p in model_scalar_in.named_parameters()}
-    X = rand(3, 1, dtype=float64)
-    y = rand(3, 3, dtype=float64)
-    kfoc = KFOCLinearOperator(
-        model_scalar_in,
-        loss_func,
-        params,
-        [(X, y)],
-        check_deterministic=False,
-    )
-    K = kfoc @ eye(kfoc.shape[1], dtype=kfoc.dtype)
-    ggn = block_diagonal(
-        GGNLinearOperator,
-        model_scalar_in,
-        loss_func,
-        params,
-        [(X, y)],
-    )
-    assert allclose_report(K, ggn)
+    ggn = block_diagonal(GGNLinearOperator, model, loss_func, params, [(X, y)])
+    assert allclose_report(kfoc @ eye_like(kfoc), ggn)
