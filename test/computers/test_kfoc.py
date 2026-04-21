@@ -262,6 +262,10 @@ def test_kfoc_factors_are_psd(
     input_covariances, gradient_covariances, _ = computer.compute()
     for key, A in input_covariances.items():
         G = gradient_covariances[key]
+        # Traces share sign (both non-negative after the PSD gauge flip),
+        # excluding the edge case of mixed-sign indefinite factor pairs that
+        # a joint sign flip cannot resolve.
+        assert A.trace().item() * G.trace().item() >= 0
         # PSD (up to float64 eigenvalue noise); symmetrize to strip float asymmetry.
         assert torch.linalg.eigvalsh((A + A.T) / 2).min().item() > -1e-10
         assert torch.linalg.eigvalsh((G + G.T) / 2).min().item() > -1e-10

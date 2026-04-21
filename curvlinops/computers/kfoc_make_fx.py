@@ -178,11 +178,12 @@ def _top_rank_one_kron_factors(
         .mul_(scale)
     )
     # Joint-sign gauge: ``(G, A)`` and ``(-G, -A)`` give the same Kron product.
-    # For a PSD ``B_l``, the optimal factors are either both PSD or both NSD;
-    # SVD's sign choice is arbitrary. Flip so both have non-negative trace,
-    # which yields the PSD pair in the typical case (indefinite factor pairs
-    # — only possible at tied singular values — are unaffected).
-    if G_star.trace() < 0:
+    # For PSD ``B_l``, the optimal factors are either both PSD (``tr > 0``) or
+    # both NSD (``tr < 0``); flip only when both traces are negative, yielding
+    # the PSD pair. Indefinite factor pairs — only reachable at tied top
+    # singular values — have mixed-sign traces and can't be reconciled by a
+    # joint sign flip, so we leave them untouched.
+    if G_star.trace() < 0 and A_star.trace() < 0:
         G_star.neg_()
         A_star.neg_()
     return G_star, A_star
