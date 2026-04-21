@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from linear_operator.utils.linear_cg import linear_cg
 from numpy import column_stack
 from scipy.sparse.linalg import lsmr
@@ -63,8 +65,42 @@ class CGInverseLinearOperator(_InversePyTorchLinearOperator):
             A: PyTorch linear operator whose inverse is formed. Must represent a
                 symmetric and positive-definite matrix.
             cg_hyperparameters: Keyword arguments for GPyTorch's CG implementation.
+                In particular, this includes optional arguments such as ``max_iter``,
+                ``tolerance``, and ``preconditioner``.
+                The ``preconditioner`` should be a callable that applies a left
+                preconditioning operation to a supplied vector. This can be
+                implemented via a ``PyTorchLinearOperator``'s ``__matmul__`` method.
                 For details, see the documentation of the ``linear_cg`` function in
                 https://github.com/cornellius-gp/linear_operator/blob/main/linear_operator/utils/linear_cg.py.
+
+        Example:
+            >>> from torch import allclose, tensor
+            >>> from torch.linalg import inv
+            >>> from curvlinops import CGInverseLinearOperator
+            >>> from curvlinops.diag import DiagonalLinearOperator
+            >>> from curvlinops.examples import TensorLinearOperator
+            >>> A = tensor([[4.0, 1.0, 0.0], [1.0, 3.0, 1.0], [0.0, 1.0, 2.0]])
+            >>> b = tensor([1.0, 2.0, 3.0])
+            >>> A_linop = TensorLinearOperator(A)
+            >>> A_inv_b = CGInverseLinearOperator(
+            ...     A_linop, max_iter=3, max_tridiag_iter=3, tolerance=1e-7
+            ... ) @ b
+            >>> # Use CG with a simple diagonal preconditioner.
+            >>> inverse_diagonal = DiagonalLinearOperator([A.diag().reciprocal()])
+            >>> A_inv_b_preconditioned = CGInverseLinearOperator(
+            ...     A_linop,
+            ...     max_iter=3,
+            ...     max_tridiag_iter=3,
+            ...     tolerance=1e-7,
+            ...     preconditioner=inverse_diagonal.__matmul__,
+            ... ) @ b
+            >>> A_inv_b_exact = inv(A) @ b
+            >>> A_inv_b.round(decimals=4)
+            tensor([0.2222, 0.1111, 1.4444])
+            >>> A_inv_b_preconditioned.round(decimals=4)
+            tensor([0.2222, 0.1111, 1.4444])
+            >>> allclose(A_inv_b_exact, A_inv_b_preconditioned)
+            True
         """
         super().__init__(A)
         self._cg_hyperparameters = cg_hyperparameters
@@ -174,6 +210,10 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
     - Lorraine, J., Vicol, P., & Duvenaud, D. (2020). Optimizing millions of
       hyperparameters by implicit differentiation. In International Conference on
       Artificial Intelligence and Statistics (AISTATS).
+    - Wang, A., Nguyen, E., Yang, R., Bae, J., McIlraith, S. A., & Grosse,
+      R. B. (2025). Better Training Data Attribution via Better Inverse
+      Hessian-Vector Products. In Advances in Neural Information Processing
+      Systems (NeurIPS 2025).
 
     .. warning::
         The Neumann series can be non-convergent. In this case, the iterations
@@ -181,7 +221,7 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
 
     .. warning::
         The Neumann series can converge slowly.
-        Use :py:class:`curvlinops.CGInverLinearOperator` for better accuracy.
+        Use :py:class:`curvlinops.CGInverseLinearOperator` for better accuracy.
     """
 
     def __init__(
@@ -190,6 +230,7 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
         num_terms: int = 100,
         scale: float = 1.0,
         check_nan: bool = True,
+        preconditioner: None | Callable[[Tensor], Tensor] = None,
     ):
         r"""Store the linear operator whose inverse should be represented.
 
@@ -199,12 +240,12 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
             \mathbf{A}^{-1}
             =
             \sum_{k=0}^{\infty}
-            \left(\mathbf{I} - \mathbf{A} \right)^k\,.
+            \left(\mathbf{I} - \mathbf{A} \right)^k\,,
 
-        and is convergent if all eigenvalues satisfy
+        which is convergent if all eigenvalues satisfy
         :math:`0 < \lambda(\mathbf{A}) < 2`.
 
-        By re-rescaling the matrix by ``scale`` (:math:`\alpha`), we have:
+        By re-scaling the matrix by ``scale`` (:math:`\alpha`), we have:
 
         .. math::
             \mathbf{A}^{-1}
@@ -214,7 +255,7 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
             \alpha \sum_{k=0}^{\infty}
             \left(\mathbf{I} - \alpha \mathbf{A} \right)^k\,,
 
-        which and is convergent if :math:`0 < \lambda(\mathbf{A}) < \frac{2}{\alpha}`.
+        which is convergent if :math:`0 < \lambda(\mathbf{A}) < \frac{2}{\alpha}`.
 
         Additionally, we truncate the series at ``num_terms`` (:math:`K`):
 
@@ -232,11 +273,22 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
                 for convergence of Neumann series (details above). Default: ``1.0``.
             check_nan: Whether to check for NaNs while applying the truncated Neumann
                 series. Default: ``True``.
+            preconditioner: Optional preconditioner :math:`\mathbf{P}` used in the
+                preconditioned Neumann/Richardson iteration
+                :math:`\mathbf{A}^{-1} \approx \alpha \sum_{k=0}^{K}
+                (\mathbf{I} - \alpha \mathbf{P}\mathbf{A})^k \mathbf{P}`,
+                where :math:`\alpha` is given by ``scale``. This preconditioned
+                formulation is inspired by Wang et al. (NeurIPS 2025).
+                ``preconditioner`` should be a callable that applies a left
+                preconditioning operation to a supplied vector or matrix in tensor
+                format, e.g. a ``PyTorchLinearOperator``'s ``__matmul__`` method.
+                Default: ``None``.
         """
         super().__init__(A)
         self._num_terms = num_terms
         self._scale = scale
         self._check_nan = check_nan
+        self._preconditioner = preconditioner
 
     def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         """Multiply the inverse of A onto a matrix in list format.
@@ -245,17 +297,41 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
              X: Matrix for multiplication in list format.
 
         Returns:
-             Result of inverse matrix-vector multiplication, ``A⁻¹ @ x``.
+             Result of inverse matrix-matrix multiplication, ``A⁻¹ @ X``.
 
         Raises:
             ValueError: If ``NaN`` check is turned on and ``NaN`` values are detected.
         """
-        result_list, v_list = [x.clone() for x in X], [x.clone() for x in X]
+        preconditioned = self._preconditioner is not None
+
+        if not preconditioned:
+            rhs_list = X
+            apply_iteration_operator = self._A._matmat
+        else:
+            # Apply the left preconditioner to a vector in list of tensor.
+            def P(X: list[Tensor]) -> list[Tensor]:
+                X_flat = cat([x.flatten(end_dim=-2) for x in X])
+                PX_flat = self._preconditioner(X_flat)
+                _, num_vecs = PX_flat.shape
+                return [
+                    r.reshape(*s, num_vecs)
+                    for r, s in zip(
+                        PX_flat.split(self._out_shape_flat), self._out_shape
+                    )
+                ]
+
+            rhs_list = P(X)
+
+            def apply_iteration_operator(v_list: list[Tensor]) -> list[Tensor]:
+                return P(self._A @ v_list)
+
+        result_list = [x.clone() for x in rhs_list]
+        v_list = [x.clone() for x in rhs_list]
 
         for idx in range(self._num_terms):
+            A_v_list = apply_iteration_operator(v_list)
             v_list = [
-                v.sub_(Av, alpha=self._scale)
-                for v, Av in zip(v_list, self._A._matmat(v_list))
+                v.sub_(A_v, alpha=self._scale) for v, A_v in zip(v_list, A_v_list)
             ]
             result_list = [result.add_(v) for result, v in zip(result_list, v_list)]
 
@@ -273,10 +349,25 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
 
         Returns:
             A linear operator representing the adjoint.
+
+        Raises:
+            NotImplementedError: If the preconditioner's adjoint cannot be inferred.
         """
+        preconditioner = None
+        if self._preconditioner is not None:
+            preconditioner_linop = getattr(self._preconditioner, "__self__", None)
+            if isinstance(preconditioner_linop, PyTorchLinearOperator):
+                preconditioner = preconditioner_linop.adjoint().__matmul__
+            else:
+                raise NotImplementedError(
+                    "Adjoint with a preconditioner is only supported when the "
+                    "preconditioner is a bound PyTorchLinearOperator.__matmul__ "
+                    "method."
+                )
         return NeumannInverseLinearOperator(
             self._A._adjoint(),
             num_terms=self._num_terms,
             scale=self._scale,
             check_nan=self._check_nan,
+            preconditioner=preconditioner,
         )
