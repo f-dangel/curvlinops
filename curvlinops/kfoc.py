@@ -41,9 +41,17 @@ class KFOCLinearOperator(KFACLinearOperator):
     block's Van Loan rearrangement.
 
     The factors are stored exactly as the SVD reshape produces them — no
-    symmetrization, no PSD projection. Downstream ``inverse``, ``eigh``, or
-    ``logdet`` may fail or return NaNs in degenerate cases unless sufficient
-    damping is supplied.
+    symmetrization, no PSD projection.
+
+    - **Symmetry** holds by construction: :math:`B_l` is symmetric, so
+      :math:`\mathcal{R}(B_l)` commutes with the vec-transpose permutation
+      and its top singular triplet lives in the symmetric subspace, making
+      ``G_star`` and ``A_star`` symmetric to machine precision.
+    - **Positive semi-definiteness is not guaranteed**: even for PSD
+      :math:`B_l`, the dominant Kronecker direction can correspond to an
+      indefinite factor pair. Downstream ``inverse``, ``eigh``, or
+      ``logdet`` may fail or return NaNs in such cases unless sufficient
+      damping is supplied.
 
     Scope:
         - Single-batch data only (``len(list(data)) == 1``).
