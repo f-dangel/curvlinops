@@ -1,8 +1,10 @@
-"""Contains functionality for examples in the documentation."""
+"""Utilities used throughout the documentation examples."""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, MutableMapping
+from dataclasses import dataclass
+from math import sqrt
 
 from torch import (
     Tensor,
@@ -59,6 +61,142 @@ def gradient_and_loss(
         check_deterministic=False,
     )
     return mixin._gradient_and_loss()
+
+
+def gradient_l2_norm(gradient: Iterable[Tensor | None]) -> Tensor:
+    """Compute the Euclidean norm of a gradient stored as tensors.
+
+    Args:
+        gradient: Iterable containing gradient tensors. Entries can be ``None`` and
+            will be ignored.
+
+    Returns:
+        Euclidean norm of the concatenated gradient.
+
+    Raises:
+        ValueError: If no gradient tensor is provided.
+    """
+    sq_norm = None
+    for g in gradient:
+        if g is None:
+            continue
+        sq_norm = g.pow(2).sum() if sq_norm is None else sq_norm + g.pow(2).sum()
+
+    if sq_norm is None:
+        raise ValueError("Expected at least one gradient tensor.")
+
+    return sq_norm.sqrt()
+
+
+def _check_damping_hyperparameters(damping_scale: float, min_damping: float):
+    """Validate the scalar hyperparameters for gradient-norm damping.
+
+    Args:
+        damping_scale: Non-negative scale factor in the damping rule.
+        min_damping: Non-negative lower bound on the damping value.
+
+    Raises:
+        ValueError: If ``damping_scale`` or ``min_damping`` is negative.
+    """
+    if damping_scale < 0.0:
+        raise ValueError(f"Expected damping_scale >= 0. Got {damping_scale = }.")
+    if min_damping < 0.0:
+        raise ValueError(f"Expected min_damping >= 0. Got {min_damping = }.")
+
+
+def gradient_norm_damping(
+    gradient: Iterable[Tensor | None], damping_scale: float, min_damping: float = 0.0
+) -> float:
+    r"""Compute adaptive damping from gradient tensors.
+
+    This damping rule appears in
+    `Mishchenko, 2023 <https://doi.org/10.1137/22M1488752>`_ as a cheap
+    Levenberg-Marquardt interpretation of cubic regularization.
+
+    Args:
+        gradient: Iterable containing gradient tensors. Entries can be ``None`` and
+            will be ignored.
+        damping_scale: Non-negative constant ``c`` in the rule
+            ``sqrt(c * ||g||_2)``.
+        min_damping: Non-negative lower bound on the damping value.
+            Default: ``0.0``.
+
+    Returns:
+        Adaptive damping value as a Python ``float``.
+
+    Example:
+        If ``gradients`` is a list of tensors with the same structure as the
+        model parameters, the damping is simply
+
+        ``gradient_norm_damping(gradients, damping_scale=1e-1, min_damping=1e-4)``.
+    """
+    _check_damping_hyperparameters(damping_scale, min_damping)
+    return max(min_damping, sqrt(damping_scale * gradient_l2_norm(gradient).item()))
+
+
+@dataclass(frozen=True)
+class GradientNormDamping:
+    r"""Callable gradient-norm damping policy.
+
+    This is a small convenience wrapper around :func:`gradient_norm_damping`.
+    It is useful when the hyperparameters are fixed for an entire run:
+
+    .. code-block:: python
+
+        damping_rule = GradientNormDamping(damping_scale=1e-1, min_damping=1e-4)
+        damping = damping_rule(gradients)
+
+    If you need one damping value per KFAC/EKFAC block, use :meth:`per_block`
+    with one gradient collection per block.
+
+    The policy computes
+
+    .. math::
+
+        \lambda = \max(\lambda_{\min}, \sqrt{c \lVert g \rVert_2})
+
+    from a collection of gradient tensors.
+
+    Attributes:
+        damping_scale: Non-negative constant ``c`` in the damping rule.
+        min_damping: Non-negative lower bound on the damping value.
+    """
+
+    damping_scale: float
+    min_damping: float = 0.0
+
+    def __post_init__(self):
+        """Validate the damping policy hyperparameters."""
+        _check_damping_hyperparameters(self.damping_scale, self.min_damping)
+
+    def __call__(self, gradient: Iterable[Tensor | None]) -> float:
+        """Evaluate the damping rule on a gradient collection.
+
+        Args:
+            gradient: Iterable containing gradient tensors. Entries can be ``None`` and
+                will be ignored.
+
+        Returns:
+            Damping value as a Python ``float``.
+        """
+        return gradient_norm_damping(gradient, self.damping_scale, self.min_damping)
+
+    def per_block(
+        self, block_gradients: Iterable[Iterable[Tensor | None]]
+    ) -> tuple[float, ...]:
+        """Evaluate the damping rule independently for each block.
+
+        This is useful with APIs that accept one damping value per canonical block,
+        such as ``KFACLinearOperator.inverse`` and ``EKFACLinearOperator.inverse``.
+
+        Args:
+            block_gradients: Iterable where each entry contains the gradient tensors
+                associated with one block.
+
+        Returns:
+            Tuple containing one damping value per block.
+        """
+        return tuple(self(gradient) for gradient in block_gradients)
 
 
 class TensorLinearOperator(PyTorchLinearOperator):

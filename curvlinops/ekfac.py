@@ -1,5 +1,7 @@
 """Contains LinearOperator implementation of EKFAC approximation of the Fisher/GGN."""
 
+from collections.abc import Sequence
+
 from curvlinops._torch_base import _ChainPyTorchLinearOperator
 from curvlinops.blockdiagonal import BlockDiagonalLinearOperator
 from curvlinops.computers._base import ParamGroup
@@ -66,21 +68,26 @@ class EKFACLinearOperator(KFACLinearOperator):
         # EKFAC in the canonical basis
         return BlockDiagonalLinearOperator(blocks), mapping
 
-    def inverse(self, damping: float = 0.0) -> _ChainPyTorchLinearOperator:
+    def inverse(
+        self, damping: float | Sequence[float] = 0.0
+    ) -> _ChainPyTorchLinearOperator:
         """Return the inverse of the EKFAC approximation.
 
         Inverts each eigendecomposed block of the canonical operator
         and returns the result in parameter space.
 
         Args:
-            damping: Damping term added to eigenvalues before inversion.
-                Default: ``0.0``.
+            damping: Damping value applied to each canonical block. If it is a scalar,
+                the same value is used for all blocks. If it is a sequence, it must
+                contain one damping value per canonical block. Default: ``0.0``.
 
         Returns:
             Inverse of the EKFAC approximation as a linear operator.
         """
         P, K, PT = self
+        damping_per_block = self._broadcast_damping(damping, len(K))
         K_inv = BlockDiagonalLinearOperator([
-            block.inverse(damping=damping) for block in K
+            block.inverse(damping=block_damping)
+            for block, block_damping in zip(K, damping_per_block)
         ])
         return _ChainPyTorchLinearOperator(P, K_inv, PT)
