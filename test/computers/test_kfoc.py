@@ -271,6 +271,28 @@ def test_kfoc_factors_are_psd(
         assert torch.linalg.eigvalsh((G + G.T) / 2).min().item() > -1e-10
 
 
+def test_kfoc_handles_zero_ggn():
+    """Zero ``B_l`` (e.g. all-zero inputs) short-circuits to zero factors.
+
+    ``svds`` otherwise fails with ARPACK error -9 ("starting vector is
+    zero") on a zero operator.
+    """
+    manual_seed(0)
+    model = Sequential(Linear(4, 2, bias=False)).double()
+    loss_func = MSELoss(reduction="sum")
+    params = {n: p.detach().clone() for n, p in model.named_parameters()}
+    X = torch.zeros(3, 4, dtype=float64)
+    y = rand(3, 2, dtype=float64)
+
+    kfoc = KFOCLinearOperator(
+        model, loss_func, params, [(X, y)], check_deterministic=False
+    )
+    K = kfoc @ eye_like(kfoc)
+    ggn = block_diagonal(GGNLinearOperator, model, loss_func, params, [(X, y)])
+    assert allclose_report(K, ggn)
+    assert K.abs().max().item() == 0.0
+
+
 def test_kfoc_rejects_multi_batch():
     """Multi-batch input raises at factor computation."""
     manual_seed(0)

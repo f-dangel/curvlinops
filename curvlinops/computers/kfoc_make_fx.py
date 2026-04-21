@@ -158,6 +158,13 @@ def _top_rank_one_kron_factors(
         Frobenius rank-one Kronecker approximation of :math:`B_l`.
     """
     _, _, d_out, d_in = per_sample_grads.shape
+    if not per_sample_grads.any():
+        # ``B_l = 0`` (e.g., zero inputs or frozen upstream layer): the
+        # optimal rank-one Kronecker approximation is the zero pair.
+        # Short-circuit because ``svds`` raises ARPACK error -9 (zero
+        # starting vector) on a zero operator.
+        zeros = per_sample_grads.new_zeros
+        return zeros(d_out, d_out), zeros(d_in, d_in)
     op = _RearrangedGGNLinearOperator(per_sample_grads)
     scipy_op = op.to_scipy()
     if min(d_out**2, d_in**2) < 2:
