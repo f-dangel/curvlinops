@@ -15,6 +15,7 @@ Checks three things:
 
 from collections.abc import Iterable
 
+import torch
 from einops import einsum
 from pytest import mark, raises
 from torch import Tensor, float64, kron, manual_seed, rand
@@ -27,7 +28,10 @@ from curvlinops.computers.kfac_make_fx import (
     make_compute_kfac_io_batch,
     make_group_gatherers,
 )
-from curvlinops.computers.kfoc_make_fx import _RearrangedGGNLinearOperator
+from curvlinops.computers.kfoc_make_fx import (
+    MakeFxKFOCComputer,
+    _RearrangedGGNLinearOperator,
+)
 from curvlinops.kfac_utils import FisherType, KFACType
 from curvlinops.utils import allclose_report, make_functional_call
 from test.utils import block_diagonal, change_dtype, eye_like
@@ -220,6 +224,47 @@ def test_kfoc_first_order_optimality(
             assert allclose_report(R_A, A_star.pow(2).sum() * G_star)
             assert allclose_report(R_G, G_star.pow(2).sum() * A_star)
         offset += n
+
+
+def test_kfoc_factors_are_psd(
+    case: tuple[
+        Module,
+        Module,
+        dict[str, Tensor],
+        Iterable[tuple[Tensor, Tensor]],
+        object,
+    ],
+):
+    """KFOC applies a trace-based gauge to yield PSD factors for PSD ``B_l``.
+
+    For the GGN blocks the ``case`` fixture produces, the factors are either
+    jointly PSD or jointly NSD from the SVD; the trace convention in
+    ``_top_rank_one_kron_factors`` flips to the PSD pair. This test asserts
+    the expected side of the gauge.
+
+    Args:
+        case: Model, loss, parameters, data, and optional batch-size function.
+    """
+    model, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
+    X, y = next(iter(data))
+    computer = MakeFxKFOCComputer(
+        model,
+        loss_func,
+        params,
+        [(X, y)],
+        progressbar=False,
+        check_deterministic=False,
+        fisher_type=FisherType.TYPE2,
+        mc_samples=1,
+        kfac_approx=KFACType.EXPAND,
+        batch_size_fn=batch_size_fn,
+    )
+    input_covariances, gradient_covariances, _ = computer.compute()
+    for key, A in input_covariances.items():
+        G = gradient_covariances[key]
+        # PSD (up to float64 eigenvalue noise); symmetrize to strip float asymmetry.
+        assert torch.linalg.eigvalsh((A + A.T) / 2).min().item() > -1e-10
+        assert torch.linalg.eigvalsh((G + G.T) / 2).min().item() > -1e-10
 
 
 def test_kfoc_rejects_multi_batch():

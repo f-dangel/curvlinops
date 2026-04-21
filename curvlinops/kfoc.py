@@ -40,18 +40,22 @@ class KFOCLinearOperator(KFACLinearOperator):
     where :math:`(G^\star, A^\star)` come from the top singular pair of the
     block's Van Loan rearrangement.
 
-    The factors are stored exactly as the SVD reshape produces them — no
-    symmetrization, no PSD projection.
+    The factors come straight from the SVD reshape, with a trace-based
+    sign convention applied to resolve the joint-sign gauge.
 
     - **Symmetry** holds by construction: :math:`B_l` is symmetric, so
       :math:`\mathcal{R}(B_l)` commutes with the vec-transpose permutation
       and its top singular triplet lives in the symmetric subspace, making
       ``G_star`` and ``A_star`` symmetric to machine precision.
-    - **Positive semi-definiteness is not guaranteed**: even for PSD
-      :math:`B_l`, the dominant Kronecker direction can correspond to an
-      indefinite factor pair. Downstream ``inverse``, ``eigh``, or
-      ``logdet`` may fail or return NaNs in such cases unless sufficient
-      damping is supplied.
+    - **PSD-ness holds for well-conditioned** :math:`B_l`: the optimal
+      factors are either both PSD or both NSD (Kron of mixed-sign factors
+      is indefinite and can't be optimal for PSD :math:`B_l`). The sign
+      gauge is fixed by requiring ``tr(G_star) >= 0``. In near-degenerate
+      cases (tied top singular values) the optimal factor pair can be
+      genuinely indefinite; the trace convention still applies but cannot
+      make the factors PSD, so downstream ``inverse`` / ``eigh`` /
+      ``logdet`` may fail or return NaNs unless sufficient damping is
+      supplied.
 
     Scope:
         - Single-batch data only (``len(list(data)) == 1``).
