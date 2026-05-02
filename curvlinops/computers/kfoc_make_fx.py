@@ -94,25 +94,14 @@ class _RearrangedGGNLinearOperator(PyTorchLinearOperator):
             Single-element list with the output matrix stack.
         """
         (M,) = X
-        if self._is_adjoint:
-            return [
-                einsum(
-                    self._P,
-                    M,
-                    self._P,
-                    "vec batch out_row in_row, out_row out_col col, "
-                    "vec batch out_col in_col -> in_row in_col col",
-                )
-            ]
-        return [
-            einsum(
-                self._P,
-                M,
-                self._P,
-                "vec batch out_row in_row, in_row in_col col, "
-                "vec batch out_col in_col -> out_row out_col col",
-            )
-        ]
+        equation = (
+            "vec batch out_row in_row, out_row out_col col, "
+            "vec batch out_col in_col -> in_row in_col col"
+            if self._is_adjoint
+            else "vec batch out_row in_row, in_row in_col col, "
+            "vec batch out_col in_col -> out_row out_col col"
+        )
+        return [einsum(self._P, M, self._P, equation)]
 
     def _adjoint(self) -> _RearrangedGGNLinearOperator:
         """Return the adjoint operator sharing the same ``P``.
