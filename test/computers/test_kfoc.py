@@ -121,7 +121,6 @@ def test_kfoc_factors_match_dense_svd(
         n = p.numel()
         if p.ndim == 2:
             d_out, d_in = p.shape
-            # Dense top-1 Kron reference: materialize R(B_l) and take top-1 SVD.
             P = per_sample_grads[(name,)]
             R = torch_einsum("vnoi,vnpj->opij", P, P).reshape(d_out**2, d_in**2)
             U, S, Vh = torch_svd(R, full_matrices=False)
@@ -129,8 +128,7 @@ def test_kfoc_factors_match_dense_svd(
             G_ref = scale * U[:, 0].reshape(d_out, d_out)
             A_ref = scale * Vh[0].reshape(d_in, d_in)
             K_l = K[offset : offset + n, offset : offset + n]
-            # Compare the Kron product, not individual factors: sign of
-            # (G, A) is joint-arbitrary but their Kron product is not.
+            # Individual factor signs are joint-arbitrary, but their Kron product is not.
             assert allclose_report(K_l, kron(G_ref, A_ref))
         offset += n
 
@@ -160,8 +158,6 @@ def test_kfoc_recovers_exact_rank_one_kron():
     K = kfoc @ eye_like(kfoc)
 
     ggn = block_diagonal(GGNLinearOperator, model, loss_func, params, [(X, y)])
-    # The GGN block for a single linear layer with scalar output is exactly
-    # 2 * sum_n a_n a_n^T (rank-one Kron in the form G (otimes) A with G=[2]).
     assert allclose_report(K, ggn)
 
 
@@ -186,44 +182,28 @@ def test_kfoc_first_order_optimality(
     model, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
     X, y = next(iter(data))
 
-    kfoc = KFOCLinearOperator(
+    computer = MakeFxKFOCComputer(
         model,
         loss_func,
         params,
         [(X, y)],
+        progressbar=False,
         check_deterministic=False,
+        fisher_type=FisherType.TYPE2,
+        mc_samples=1,
+        kfac_approx=KFACType.EXPAND,
         batch_size_fn=batch_size_fn,
     )
-    K = kfoc @ eye_like(kfoc)
+    input_covariances, gradient_covariances, _ = computer.compute()
     per_sample_grads = _collect_per_sample_grads(model, loss_func, params, X, y)
 
-    offset = 0
-    for name, p in params.items():
-        n = p.numel()
-        if p.ndim == 2:
-            d_out, d_in = p.shape
-            # Extract G_star, A_star from the KFOC Kronecker block K_l
-            K_l = K[offset : offset + n, offset : offset + n]
-            # K_l = G_star (kron) A_star → un-kron via rearrangement + rank-1 SVD
-            R_K = (
-                K_l
-                .reshape(d_out, d_in, d_out, d_in)
-                .movedim(1, 2)
-                .reshape(d_out**2, d_in**2)
-            )
-            U, S, Vh = torch_svd(R_K, full_matrices=False)
-            scale = S[0].sqrt()
-            G_star = scale * U[:, 0].reshape(d_out, d_out)
-            A_star = scale * Vh[0].reshape(d_in, d_in)
-
-            P = per_sample_grads[(name,)]
-            op = _RearrangedGGNLinearOperator(P)
-            R_A = op._matmat([A_star.unsqueeze(-1)])[0].squeeze(-1)
-            R_G = op._adjoint()._matmat([G_star.unsqueeze(-1)])[0].squeeze(-1)
-
-            assert allclose_report(R_A, A_star.pow(2).sum() * G_star)
-            assert allclose_report(R_G, G_star.pow(2).sum() * A_star)
-        offset += n
+    for key, A_star in input_covariances.items():
+        G_star = gradient_covariances[key]
+        op = _RearrangedGGNLinearOperator(per_sample_grads[key])
+        [R_A] = op @ [A_star]
+        [R_G] = op.adjoint() @ [G_star]
+        assert allclose_report(R_A, A_star.pow(2).sum() * G_star)
+        assert allclose_report(R_G, G_star.pow(2).sum() * A_star)
 
 
 def test_kfoc_factors_are_psd(
