@@ -20,7 +20,7 @@ from einops import einsum
 from numpy import eye as np_eye
 from numpy.linalg import svd as np_svd
 from scipy.sparse.linalg import ArpackError, svds
-from torch import Tensor, as_tensor, device, dtype
+from torch import Tensor, as_tensor, device, dtype, no_grad
 
 from curvlinops._torch_base import PyTorchLinearOperator
 from curvlinops.computers._base import ParamGroup, ParamGroupKey, _BaseKFACComputer
@@ -29,7 +29,7 @@ from curvlinops.computers.kfac_make_fx import (
     make_group_gatherers,
 )
 from curvlinops.kfac_utils import FisherType, KFACType
-from curvlinops.utils import _assert_single_element
+from curvlinops.utils import _assert_single_element, _enable_requires_grad, _make_fx
 
 
 class _RearrangedGGNLinearOperator(PyTorchLinearOperator):
@@ -195,11 +195,9 @@ class MakeFxKFOCComputer(_BaseKFACComputer):
     _SUPPORTED_KFAC_APPROX: tuple[KFACType, ...] = (KFACType.EXPAND,)
 
     def __init__(self, *args, **kwargs):
-        """Validate single-batch data and enable grad on params."""
+        """Validate single-batch data."""
         super().__init__(*args, **kwargs)
         _assert_single_element(self._data)
-        for p in self._params.values():
-            p.requires_grad_(True)
 
     def compute(
         self,
@@ -239,9 +237,14 @@ class MakeFxKFOCComputer(_BaseKFACComputer):
             separate_weight_and_bias=self._separate_weight_and_bias,
             intermediate_as_batch=False,
         )
-        layer_inputs, layer_output_grads = inputs_and_grad_outputs_batch(
-            self._params, X, y
-        )
+        # Trace the IO getter to lower its ``autograd.grad`` call into explicit
+        # backward aten ops, then replay with autograd disabled. The
+        # ``_enable_requires_grad`` wrap is local to the trace call so the
+        # user's ``requires_grad`` state is untouched after ``compute`` returns.
+        with _enable_requires_grad(list(self._params.values())):
+            traced_io = _make_fx(inputs_and_grad_outputs_batch)(self._params, X, y)
+        with no_grad():
+            layer_inputs, layer_output_grads = traced_io(self._params, X, y)
         group_inputs, group_grads = make_group_gatherers(
             io_groups, io_param_names, layer_hparams, KFACType.EXPAND
         )

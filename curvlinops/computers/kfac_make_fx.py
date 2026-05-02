@@ -24,7 +24,7 @@ from curvlinops.computers.kfac_math import (
     input_to_weight_sharing_format,
 )
 from curvlinops.kfac_utils import FisherType, KFACType
-from curvlinops.utils import _make_fx, fork_rng_with_seed
+from curvlinops.utils import _enable_requires_grad, _make_fx, fork_rng_with_seed
 
 
 def _build_param_groups_from_io(
@@ -436,7 +436,12 @@ def make_compute_kfac_batch(
 
         return input_covs, gradient_covs
 
-    traced_fn = _make_fx(compute_batch)(params, X, y)
+    # ``make_fx`` traces the autograd.grad call inside ``compute_batch`` into
+    # explicit backward aten ops. ``params`` must therefore be differentiable
+    # at trace time; the wrap is local to this call so any prior
+    # ``requires_grad`` state on the user's tensors is restored after tracing.
+    with _enable_requires_grad(list(params.values())):
+        traced_fn = _make_fx(compute_batch)(params, X, y)
 
     return traced_fn, mapping
 
@@ -453,12 +458,6 @@ class MakeFxKFACComputer(_BaseKFACComputer):
 
     Supports plain callable ``model_func``.
     """
-
-    def __init__(self, *args, **kwargs):
-        """Initialize and enable gradients on params for autograd.grad."""
-        super().__init__(*args, **kwargs)
-        for p in self._params.values():
-            p.requires_grad_(True)
 
     def _trace_batch_functions(
         self,

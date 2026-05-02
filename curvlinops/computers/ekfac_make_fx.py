@@ -23,7 +23,7 @@ from curvlinops.computers.kfac_make_fx import (
     make_group_gatherers,
 )
 from curvlinops.kfac_utils import FisherType, KFACType
-from curvlinops.utils import _make_fx, fork_rng_with_seed
+from curvlinops.utils import _enable_requires_grad, _make_fx, fork_rng_with_seed
 
 
 def make_compute_ekfac_eigencorrection_batch(
@@ -150,9 +150,14 @@ def make_compute_ekfac_eigencorrection_batch(
                 d_in, d_in, dtype=p1.dtype, device=p1.device
             )
 
-    traced_fn = _make_fx(compute_eigencorrection_batch)(
-        params, X, y, example_input_eigvecs, example_gradient_eigvecs
-    )
+    # ``make_fx`` traces the autograd.grad call inside the closure into
+    # explicit backward aten ops. ``params`` must therefore be differentiable
+    # at trace time; the wrap is local to this call so any prior
+    # ``requires_grad`` state on the user's tensors is restored after tracing.
+    with _enable_requires_grad(list(params.values())):
+        traced_fn = _make_fx(compute_eigencorrection_batch)(
+            params, X, y, example_input_eigvecs, example_gradient_eigvecs
+        )
 
     return traced_fn, mapping
 

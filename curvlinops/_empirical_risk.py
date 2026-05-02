@@ -1,7 +1,6 @@
 """Mixin for classes that iterate over data to compute empirical risk quantities."""
 
 from collections.abc import Callable, Iterable, Iterator, MutableMapping
-from contextlib import contextmanager
 
 from torch import Tensor, device, dtype, tensor, zeros_like
 from torch.autograd import grad
@@ -10,31 +9,12 @@ from torch.nn import CrossEntropyLoss, Module
 from tqdm import tqdm
 
 from curvlinops.utils import (
+    _enable_requires_grad,
     _infer_device,
     _infer_dtype,
     allclose_report,
     make_functional_call,
 )
-
-
-@contextmanager
-def _enable_requires_grad(tensors: list[Tensor]):
-    """Temporarily enable ``requires_grad`` on tensors, restoring original state after.
-
-    Args:
-        tensors: List of tensors to enable gradients on.
-
-    Yields:
-        None.
-    """
-    original = [t.requires_grad for t in tensors]
-    for t in tensors:
-        t.requires_grad_(True)
-    try:
-        yield
-    finally:
-        for t, rg in zip(tensors, original):
-            t.requires_grad_(rg)
 
 
 class _EmpiricalRiskMixin:
