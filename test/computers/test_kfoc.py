@@ -68,8 +68,9 @@ def test_kfoc_factors_match_dense_svd(
     offset = 0
     for _, p in params.items():
         n = p.numel()
-        if p.ndim == 2:
-            d_out, d_in = p.shape
+        if p.ndim >= 2:
+            d_out = p.shape[0]
+            d_in = n // d_out
             G_l = ggn[offset : offset + n, offset : offset + n]
             R = (
                 G_l
@@ -96,11 +97,14 @@ def test_kfoc_first_order_optimality(
         object,
     ],
 ):
-    """KFOC's factors are stationary points of the Frobenius residual.
+    """KFOC's weight factors are stationary points of the Frobenius residual.
 
-    Set ``requires_grad=True`` on KFOC's per-layer ``(S_1, S_2)``, expand to
-    ``S_1 ⊗ S_2``, compute the residual to the true GGN block, and assert
-    the autograd gradients are near zero.
+    Enable grad on every Kronecker factor of a weight block, materialize
+    KFOC to a dense matrix, and check that the gradient of
+    ``||GGN - K||_F²`` w.r.t. each factor is near zero. ``K`` is
+    block-diagonal so the residual decouples per block. Bias-only blocks
+    are skipped: KFOC stores the ``t``-diagonal of the bias GGN as the
+    sole factor, which is not the Frobenius minimum under weight sharing.
 
     Args:
         case: Model, loss, parameters, data, and optional batch-size function.
@@ -116,7 +120,11 @@ def test_kfoc_first_order_optimality(
         check_deterministic=False,
         batch_size_fn=batch_size_fn,
     )
-    _, K, _ = kfoc
+    _, K_op, _ = kfoc
+    weight_S = [
+        f.requires_grad_(True) for block in K_op if len(block) == 2 for f in block
+    ]
+
     ggn = block_diagonal(
         GGNLinearOperator,
         model,
@@ -125,20 +133,9 @@ def test_kfoc_first_order_optimality(
         [(X, y)],
         batch_size_fn=batch_size_fn,
     )
-
-    offset = 0
-    for block in K:
-        if len(block) == 2:  # weight block: factors (S_1, S_2)
-            S_1, S_2 = (f.detach().requires_grad_(True) for f in block)
-            n = S_1.shape[0] * S_2.shape[0]
-            G_l = ggn[offset : offset + n, offset : offset + n]
-            loss = (G_l - kron(S_1, S_2)).pow(2).sum()
-            grad_S_1, grad_S_2 = grad(loss, (S_1, S_2))
-            assert grad_S_1.abs().max().item() < 1e-8
-            assert grad_S_2.abs().max().item() < 1e-8
-            offset += n
-        else:  # bias-only block: single factor of size d_out × d_out
-            offset += block[0].shape[0]
+    loss = (ggn - kfoc @ eye_like(kfoc)).pow(2).sum()
+    for g in grad(loss, weight_S):
+        assert g.abs().max().item() < 1e-8
 
 
 def test_kfoc_handles_zero_ggn():
