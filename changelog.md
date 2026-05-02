@@ -105,6 +105,24 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
 
 ### Internal
 
+- Introduce `LayerIO` / `LayerIOSnapshot` orchestration layer in
+  `curvlinops/computers/io_collector/layer_io.py`, a setup-once owner of
+  shape-independent IO-collector metadata (parameter groups, IO-layer
+  mappings) plus a per-shape cache of FX-traced `io_fn`s. Snapshots expose
+  on-demand per-group accessors at three granularities (`raw`,
+  `standardized_io`, `per_sample_grads`) so structural-GGN approximators
+  can consume per-batch IO without re-deriving the plumbing. `trace_context`
+  context manager wraps `_enable_requires_grad` so callers don't have to
+  import the autograd-ownership helper directly.
+
+  Migrate `MakeFxKFACComputer` to use `LayerIO`; it bootstraps one `LayerIO`
+  per `compute()` call and reuses it across all batch sizes (today's
+  `make_compute_kfac_batch` redoes IO-collector setup per shape). Move the
+  pure post-processing helpers (`_build_param_groups_from_io`, `_bias_pad`,
+  `make_group_gatherers`) from `kfac_make_fx.py` to a new
+  `io_collector/groups.py`; re-exported from `kfac_make_fx.py` for
+  backward compatibility with `EKFAC` and `KFOC` (migrated in follow-up PRs)
+
 - Scope the FX backends' `requires_grad` mutation to tracing only.
   `MakeFxKFACComputer` / `MakeFxKFOCComputer` previously flipped
   `requires_grad=True` on every tensor in the user's `params` dict at
