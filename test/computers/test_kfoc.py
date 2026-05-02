@@ -221,7 +221,7 @@ def test_kfoc_handles_zero_ggn():
     manual_seed(0)
     model = Sequential(Linear(4, 2, bias=False)).double()
     loss_func = MSELoss(reduction="sum")
-    params = {n: p.detach().clone() for n, p in model.named_parameters()}
+    params = dict(model.named_parameters())
     X = zeros(3, 4, dtype=float64)
     y = rand(3, 2, dtype=float64)
 
@@ -260,7 +260,7 @@ def test_kfoc_handles_degenerate_svds_shapes(d_in: int, d_out: int):
     manual_seed(0)
     model = Sequential(Linear(d_in, d_out, bias=False)).double()
     loss_func = MSELoss(reduction="sum")
-    params = {n: p.detach().clone() for n, p in model.named_parameters()}
+    params = dict(model.named_parameters())
     X = rand(3, d_in, dtype=float64)
     y = rand(3, d_out, dtype=float64)
     kfoc = KFOCLinearOperator(
