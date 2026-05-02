@@ -15,10 +15,9 @@ Checks three things:
 
 from collections.abc import Iterable
 
-import torch
 from einops import einsum
 from pytest import mark, raises
-from torch import Tensor, float64, kron, manual_seed, rand
+from torch import Tensor, float64, kron, manual_seed, rand, zeros
 from torch import einsum as torch_einsum
 from torch.linalg import svd as torch_svd
 from torch.nn import Linear, Module, MSELoss, Sequential
@@ -216,7 +215,7 @@ def test_kfoc_handles_zero_ggn():
     model = Sequential(Linear(4, 2, bias=False)).double()
     loss_func = MSELoss(reduction="sum")
     params = {n: p.detach().clone() for n, p in model.named_parameters()}
-    X = torch.zeros(3, 4, dtype=float64)
+    X = zeros(3, 4, dtype=float64)
     y = rand(3, 2, dtype=float64)
 
     kfoc = KFOCLinearOperator(
