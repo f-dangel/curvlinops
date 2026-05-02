@@ -20,8 +20,6 @@ from torch.linalg import svd as torch_svd
 from torch.nn import Linear, Module, MSELoss, Sequential
 
 from curvlinops import GGNLinearOperator, KFOCLinearOperator
-from curvlinops.computers.kfoc_make_fx import MakeFxKFOCComputer
-from curvlinops.kfac_utils import FisherType, KFACType
 from curvlinops.utils import allclose_report
 from test.utils import block_diagonal, change_dtype, eye_like
 
@@ -109,19 +107,15 @@ def test_kfoc_first_order_optimality(
     model, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
     X, y = next(iter(data))
 
-    computer = MakeFxKFOCComputer(
+    kfoc = KFOCLinearOperator(
         model,
         loss_func,
         params,
         [(X, y)],
-        progressbar=False,
         check_deterministic=False,
-        fisher_type=FisherType.TYPE2,
-        mc_samples=1,
-        kfac_approx=KFACType.EXPAND,
         batch_size_fn=batch_size_fn,
     )
-    input_covariances, gradient_covariances, _ = computer.compute()
+    _, K, _ = kfoc
     ggn = block_diagonal(
         GGNLinearOperator,
         model,
@@ -132,17 +126,17 @@ def test_kfoc_first_order_optimality(
     )
 
     offset = 0
-    for name, p in params.items():
-        n = p.numel()
-        if p.ndim == 2:
+    for block in K:
+        if len(block) == 2:  # weight block: factors (S_1, S_2)
+            S_1, S_2 = (f.detach().requires_grad_(True) for f in block)
+            n = S_1.shape[0] * S_2.shape[0]
             G_l = ggn[offset : offset + n, offset : offset + n]
-            S_1 = gradient_covariances[(name,)].detach().requires_grad_(True)
-            S_2 = input_covariances[(name,)].detach().requires_grad_(True)
-            loss = (G_l - kron(S_1, S_2)).pow(2).sum()
-            loss.backward()
+            (G_l - kron(S_1, S_2)).pow(2).sum().backward()
             assert S_1.grad.abs().max().item() < 1e-8
             assert S_2.grad.abs().max().item() < 1e-8
-        offset += n
+            offset += n
+        else:  # bias-only block: single factor of size d_out × d_out
+            offset += block[0].shape[0]
 
 
 def test_kfoc_handles_zero_ggn():
