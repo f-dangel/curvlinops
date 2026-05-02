@@ -105,6 +105,12 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
 
 ### Internal
 
+- Add `LayerIO`, a reusable abstraction for KFAC-style operators to obtain
+  per-batch layer inputs and output gradients without re-deriving the IO
+  collection plumbing. Migrate the FX KFAC backend to use it; `KFAC`'s
+  public API and behavior are unchanged. EKFAC and KFOC migrations follow
+  in subsequent PRs
+
 - Scope the FX backends' `requires_grad` mutation to tracing only.
   `MakeFxKFACComputer` / `MakeFxKFOCComputer` previously flipped
   `requires_grad=True` on every tensor in the user's `params` dict at

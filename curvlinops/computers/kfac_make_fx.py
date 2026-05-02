@@ -8,172 +8,21 @@ covariance einsums) is traced with ``make_fx``, allowing ``torch.compile``
 to optimize the full per-batch kernel.
 """
 
-from collections import UserDict, defaultdict
 from collections.abc import Callable, MutableMapping
 from math import sqrt
 
 from einops import einsum
-from torch import Tensor, autograd, cat, eye, no_grad
+from torch import Tensor, autograd, eye, no_grad
 from torch.nn import CrossEntropyLoss
 
-from curvlinops._checks import _register_userdict_as_pytree
 from curvlinops.computers._base import ParamGroup, ParamGroupKey, _BaseKFACComputer
-from curvlinops.computers.io_collector import with_kfac_io
-from curvlinops.computers.kfac_math import (
-    grad_to_weight_sharing_format,
-    input_to_weight_sharing_format,
+from curvlinops.computers.io_collector import LayerIO, with_kfac_io
+from curvlinops.computers.io_collector.groups import (
+    _build_param_groups_from_io,
+    make_group_gatherers,
 )
 from curvlinops.kfac_utils import FisherType, KFACType
 from curvlinops.utils import _enable_requires_grad, _make_fx, fork_rng_with_seed
-
-
-def _build_param_groups_from_io(
-    io_param_names: dict[str, dict[str, str]],
-    separate_weight_and_bias: bool,
-) -> tuple[list[ParamGroup], dict[ParamGroupKey, list[str]]]:
-    """Build parameter groups and IO-layer mapping from IO collector detections.
-
-    Groups IO layers by weight name to form virtual modules. Each virtual
-    module produces one group (joint) or separate W/b groups (separate).
-    Also maps each group key to its contributing IO layer names.
-
-    Args:
-        io_param_names: Per-IO-layer parameter names from the IO collector.
-        separate_weight_and_bias: Whether to treat weight and bias separately.
-
-    Returns:
-        Tuple of (parameter groups, IO-layer mapping).
-
-    Raises:
-        ValueError: If joint treatment and a weight has conflicting biases.
-    """
-    # Build virtual modules: one per unique weight (or standalone bias).
-    # Each has a ParamGroup and a list of contributing IO layer names.
-    modules: dict[str, ParamGroup] = {}
-    module_io: dict[str, list[str]] = defaultdict(list)
-
-    for io_name, pnames in io_param_names.items():
-        w, b = pnames.get("W"), pnames.get("b")
-        if w is not None:
-            modules.setdefault(w, {"W": w})
-            module_io[w].append(io_name)
-            if b is not None:
-                existing = modules[w].get("b")
-                if not separate_weight_and_bias and existing and existing != b:
-                    raise ValueError(
-                        f"Weight '{w}' is used with conflicting biases "
-                        f"'{existing}' and '{b}' under joint treatment. "
-                        f"Use separate_weight_and_bias=True."
-                    )
-                modules[w]["b"] = b
-        elif b is not None:
-            modules[b] = {"b": b}
-            module_io[b].append(io_name)
-
-    # Convert virtual modules to parameter groups and IO-layer mapping
-    groups: list[ParamGroup] = []
-    io_groups: dict[ParamGroupKey, list[str]] = {}
-
-    for mod_key, mod in modules.items():
-        io = module_io[mod_key]
-        param_dicts = (
-            [{r: n} for r, n in mod.items()] if separate_weight_and_bias else [mod]
-        )
-        for pd in param_dicts:
-            groups.append(pd)
-            key = tuple(pd.values())
-            # Bias-only groups: only IO layers that actually use the bias
-            io_groups[key] = (
-                [n for n in io if "b" in io_param_names[n]] if "W" not in pd else io
-            )
-
-    return groups, io_groups
-
-
-def _bias_pad(has_joint_wb: bool, io_layer_params: dict[str, str]) -> int | None:
-    """Determine bias padding for a specific IO layer usage.
-
-    Args:
-        has_joint_wb: Whether the parameter group has joint weight+bias.
-        io_layer_params: Parameter roles for this IO layer.
-
-    Returns:
-        ``1`` if bias active, ``0`` if joint but bias inactive, ``None`` otherwise.
-    """
-    if not has_joint_wb:
-        return None
-    return 1 if "b" in io_layer_params else 0
-
-
-def make_group_gatherers(
-    io_groups: dict[ParamGroupKey, list[str]],
-    io_param_names: dict[str, dict[str, str]],
-    layer_hparams: dict[str, dict],
-    kfac_approx: str = KFACType.EXPAND,
-) -> tuple[
-    Callable[[ParamGroup, dict[str, Tensor]], Tensor],
-    Callable[[ParamGroup, dict[str, Tensor]], Tensor],
-]:
-    """Create closures that gather per-group layer inputs/gradients in weight sharing format.
-
-    Args:
-        io_groups: Mapping from parameter group keys to IO layer names.
-        io_param_names: Per-IO-layer parameter name mappings.
-        layer_hparams: Per-IO-layer hyperparameter dicts.
-        kfac_approx: KFAC approximation type. Defaults to ``KFACType.EXPAND``.
-
-    Returns:
-        Tuple of ``(group_inputs, group_grads)`` closures.
-    """
-
-    def group_inputs(group: ParamGroup, layer_inputs: dict[str, Tensor]) -> Tensor:
-        """Gather a group's layer inputs in weight sharing format.
-
-        Args:
-            group: Parameter group dict.
-            layer_inputs: Raw layer inputs keyed by IO layer name.
-
-        Returns:
-            Concatenated tensor of shape ``[batch, shared, d_in]``.
-        """
-        group_key = tuple(group.values())
-        io_names = io_groups[group_key]
-        has_joint_wb = "b" in group
-        xs = [
-            input_to_weight_sharing_format(
-                layer_inputs[n].data.detach(),
-                kfac_approx,
-                layer_hyperparams=layer_hparams[n],
-                bias_pad=_bias_pad(has_joint_wb, io_param_names[n]),
-            )
-            for n in io_names
-        ]
-        return cat(xs, dim=1)
-
-    def group_grads(group: ParamGroup, layer_output_grads: dict[str, Tensor]) -> Tensor:
-        """Gather a group's layer output gradients in weight sharing format.
-
-        Args:
-            group: Parameter group dict.
-            layer_output_grads: Batched output gradients keyed by IO layer name.
-
-        Returns:
-            Concatenated tensor of shape ``[v, batch, shared, d_out]``.
-        """
-        group_key = tuple(group.values())
-        io_names = io_groups[group_key]
-        gs = [
-            grad_to_weight_sharing_format(
-                layer_output_grads[n].data.detach(),
-                kfac_approx,
-                layer_hyperparams=layer_hparams[n],
-                num_leading_dims=2,
-            )
-            for n in io_names
-        ]
-        return cat(gs, dim=2)
-
-    return group_inputs, group_grads
 
 
 def make_compute_kfac_io_batch(
@@ -464,34 +313,84 @@ class MakeFxKFACComputer(_BaseKFACComputer):
     ) -> tuple[dict[int, Callable], list[ParamGroup]]:
         """Trace per-batch KFAC computation for all batch sizes in the data.
 
-        Iterates over the data once, tracing one FX graph per unique batch
-        size.
-
         Returns:
             Tuple of ``(traced_fns, mapping)``.
         """
         traced_fns: dict[int, Callable] = {}
-        mapping: list[ParamGroup] | None = None
+        io: LayerIO | None = None
 
         for X, y in self._loop_over_data(desc="FX tracing"):
             batch_size = self._batch_size_fn(X)
-            if batch_size not in traced_fns:
-                if isinstance(X, UserDict):
-                    _register_userdict_as_pytree()
-                traced_fns[batch_size], mapping = make_compute_kfac_batch(
+            if batch_size in traced_fns:
+                continue
+
+            if io is None:
+                io = LayerIO(
                     self._model_func,
                     self._loss_func,
                     self._params,
                     X,
-                    y,
-                    self._fisher_type,
-                    self._mc_samples,
-                    self._kfac_approx,
-                    self._separate_weight_and_bias,
-                    self._batch_size_fn,
+                    fisher_type=self._fisher_type,
+                    mc_samples=self._mc_samples,
+                    kfac_approx=self._kfac_approx,
+                    separate_weight_and_bias=self._separate_weight_and_bias,
+                    batch_size_fn=self._batch_size_fn,
                 )
 
-        return traced_fns, mapping
+            traced_fns[batch_size] = self._trace_one_batch(io, X, y)
+
+        return traced_fns, io.mapping
+
+    def _trace_one_batch(
+        self, io: LayerIO, X: Tensor | MutableMapping, y: Tensor
+    ) -> Callable:
+        """Trace the per-batch KFAC reduction for one example ``(X, y)`` pair.
+
+        Defines the per-batch computation as ``io.populate`` followed by
+        per-group covariance einsums, and traces the whole thing with
+        :func:`_make_fx` inside :meth:`LayerIO.enable_param_grads`.
+
+        Args:
+            io: The :class:`LayerIO` (must already have an ``io_fn`` cached
+                for ``X``'s batch size).
+            X: Example input batch (shape baked into the trace).
+            y: Example target batch.
+
+        Returns:
+            A traced callable ``(params, X, y) -> (input_covs, gradient_covs)``.
+        """
+
+        def compute_batch(
+            params: dict[str, Tensor], X: Tensor | MutableMapping, y: Tensor
+        ) -> tuple[dict[tuple[str, ...], Tensor], dict[tuple[str, ...], Tensor]]:
+            layer_inputs, layer_output_grads = io.populate(params, X, y)
+            snap = io.snapshot(layer_inputs, layer_output_grads)
+
+            input_covs: dict[tuple[str, ...], Tensor] = {}
+            gradient_covs: dict[tuple[str, ...], Tensor] = {}
+            for group in io.mapping:
+                a, g = snap.standardized_io(group)
+                group_key = tuple(group.values())
+                if a is not None:
+                    xxT = einsum(a, a, "batch shared i, batch shared j -> i j")
+                    # ``a`` has shape ``[batch, shared, d_in]``; the standardized
+                    # gatherer preserves the batch axis through weight-tied cats,
+                    # so ``a.shape[0]`` matches ``self._batch_size_fn(X)`` and we
+                    # avoid threading the per-X helper into the closure.
+                    input_covs[group_key] = xxT.div_(a.shape[0] * a.shape[1])
+                if self._fisher_type == FisherType.FORWARD_ONLY:
+                    W = params[next(iter(group.values()))]
+                    gradient_covs[group_key] = eye(
+                        W.shape[0], dtype=W.dtype, device=W.device
+                    )
+                else:
+                    gradient_covs[group_key] = einsum(
+                        g, g, "v batch shared i, v batch shared j -> i j"
+                    )
+            return input_covs, gradient_covs
+
+        with io.enable_param_grads(self._params):
+            return _make_fx(compute_batch)(self._params, X, y)
 
     def compute(
         self,
