@@ -451,8 +451,18 @@ class LayerIOSnapshot:
         Returns:
             Per-sample parameter gradient tensor; shape varies with group
             structure (see above).
+
+        Raises:
+            RuntimeError: If the owning :class:`LayerIO` was constructed with
+                :attr:`FisherType.FORWARD_ONLY` (no gradient outputs were
+                collected, so per-sample param grads are undefined).
         """
         a, g = self.standardized_io(group)
+        if g is None:
+            raise RuntimeError(
+                "per_sample_grads is undefined for FisherType.FORWARD_ONLY: "
+                "the IO collector did not backpropagate gradient outputs."
+            )
         if "W" in group:
             return einsum(
                 g, a, "vec batch shared out, batch shared inp -> vec batch out inp"

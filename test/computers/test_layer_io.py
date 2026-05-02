@@ -274,6 +274,24 @@ def test_forward_only_populate_returns_empty_grads():
     assert layer_output_grads == {}
 
 
+def test_forward_only_per_sample_grads_raises():
+    """``per_sample_grads`` raises a clear error under ``FORWARD_ONLY``.
+
+    ``standardized_io`` returns ``g=None`` in this mode; calling the einsum on
+    ``None`` would otherwise crash with a cryptic error. Verify the public
+    API fails predictably.
+    """
+    model_func, loss, params = _setup_mlp()
+    X = randn(4, 6)
+    y = randint(0, 4, (4,))
+
+    io = LayerIO(model_func, loss, params, X, fisher_type=FisherType.FORWARD_ONLY)
+    snap = io.snapshot(*io.populate(params, X, y))
+    for group in io.mapping:
+        with raises(RuntimeError, match="FORWARD_ONLY"):
+            snap.per_sample_grads(group)
+
+
 def test_metadata_assertion_on_shape_change():
     """Cached metadata must match across shapes; mock a mismatch and assert raise.
 
