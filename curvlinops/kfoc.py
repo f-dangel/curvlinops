@@ -22,25 +22,10 @@ class KFOCLinearOperator(KFACLinearOperator):
         \lVert \mathbf{G} - \mathbf{S}_1 \otimes \mathbf{S}_2 \rVert_F,
 
     via the top singular pair of the block's Van Loan rearrangement
-    :math:`\mathcal{R}(\mathbf{G})`.
-
-    The factors come straight from the SVD reshape, with a trace-based
-    sign convention applied to resolve the joint-sign gauge.
-
-    - **Symmetry** holds by construction: :math:`\mathbf{G}` is symmetric,
-      so :math:`\mathcal{R}(\mathbf{G})` commutes with the vec-transpose
-      permutation and its top singular triplet lives in the symmetric
-      subspace, making :math:`\mathbf{S}_1` and :math:`\mathbf{S}_2`
-      symmetric to machine precision.
-    - **PSD-ness holds for well-conditioned** :math:`\mathbf{G}`: the
-      optimal factors are either both PSD or both NSD (Kron of mixed-sign
-      factors is indefinite and can't be optimal for PSD
-      :math:`\mathbf{G}`). The joint sign is flipped when both factor
-      traces are negative, mapping NSD pairs to PSD. In near-degenerate
-      cases (tied top singular values) the optimal pair can be genuinely
-      indefinite (mixed-sign traces); the joint-flip rule leaves these
-      untouched, so downstream ``inverse`` / ``eigh`` / ``logdet`` may
-      fail or return NaNs unless sufficient damping is supplied.
+    :math:`\mathcal{R}(\mathbf{G})`. The factors :math:`\mathbf{S}_1`,
+    :math:`\mathbf{S}_2` are always symmetric, and PSD unless
+    :math:`\mathcal{R}(\mathbf{G})`'s top singular vector is degenerate
+    — in which case ``inverse`` / ``eigh`` / ``logdet`` may need damping.
 
     Scope:
         - Single-batch data only (``len(list(data)) == 1``).
