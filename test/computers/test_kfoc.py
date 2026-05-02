@@ -206,51 +206,6 @@ def test_kfoc_first_order_optimality(
         assert allclose_report(Rt_S_1, S_1.pow(2).sum() * S_2)
 
 
-def test_kfoc_factors_are_psd(
-    case: tuple[
-        Module,
-        Module,
-        dict[str, Tensor],
-        Iterable[tuple[Tensor, Tensor]],
-        object,
-    ],
-):
-    """KFOC applies a trace-based gauge to yield PSD factors for PSD ``G``.
-
-    For the GGN blocks the ``case`` fixture produces, the factors are either
-    jointly PSD or jointly NSD from the SVD; the trace convention in
-    ``_top_rank_one_kron_factors`` flips to the PSD pair. This test asserts
-    the expected side of the gauge.
-
-    Args:
-        case: Model, loss, parameters, data, and optional batch-size function.
-    """
-    model, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
-    X, y = next(iter(data))
-    computer = MakeFxKFOCComputer(
-        model,
-        loss_func,
-        params,
-        [(X, y)],
-        progressbar=False,
-        check_deterministic=False,
-        fisher_type=FisherType.TYPE2,
-        mc_samples=1,
-        kfac_approx=KFACType.EXPAND,
-        batch_size_fn=batch_size_fn,
-    )
-    input_covariances, gradient_covariances, _ = computer.compute()
-    for key, S_2 in input_covariances.items():
-        S_1 = gradient_covariances[key]
-        # Traces share sign (both non-negative after the PSD gauge flip),
-        # excluding the edge case of mixed-sign indefinite factor pairs that
-        # a joint sign flip cannot resolve.
-        assert S_1.trace().item() * S_2.trace().item() >= 0
-        # PSD (up to float64 eigenvalue noise); symmetrize to strip float asymmetry.
-        assert torch.linalg.eigvalsh((S_1 + S_1.T) / 2).min().item() > -1e-10
-        assert torch.linalg.eigvalsh((S_2 + S_2.T) / 2).min().item() > -1e-10
-
-
 def test_kfoc_handles_zero_ggn():
     """Zero ``G`` (e.g. all-zero inputs) short-circuits to zero factors.
 

@@ -22,13 +22,12 @@ class KFOCLinearOperator(KFACLinearOperator):
         \lVert \mathbf{G} - \mathbf{S}_1 \otimes \mathbf{S}_2 \rVert_F,
 
     via the top singular pair of the block's Van Loan rearrangement
-    :math:`\mathcal{R}(\mathbf{G})`. The factors :math:`\mathbf{S}_1`,
-    :math:`\mathbf{S}_2` are always symmetric, and PSD unless
-    :math:`\mathcal{R}(\mathbf{G})`'s top singular vector is degenerate.
+    :math:`\mathcal{R}(\mathbf{G})`.
 
     .. warning::
        Symmetry and PSD-ness of :math:`\mathbf{S}_1`, :math:`\mathbf{S}_2`
-       are not checked.
+       are not enforced or checked. Verify before using KFOC factors with
+       routines that assume them (e.g., ``inverse``, ``eigh``, ``logdet``).
 
     Scope:
         - Single-batch data only (``len(list(data)) == 1``).

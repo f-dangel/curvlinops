@@ -143,12 +143,6 @@ def _top_rank_one_kron_factors(
     scalar-output layers (``d_in == 1`` or ``d_out == 1``) ``svds`` cannot
     handle ``k = 1`` and we fall back to a dense SVD.
 
-    Factors come from the SVD reshape modulo a joint-sign flip when both
-    traces are negative (mapping NSD pairs to PSD); not otherwise
-    symmetrized or PSD-projected. Generically they are symmetric PSD up to
-    floating-point noise; near-degenerate (mixed-sign trace) cases may
-    remain indefinite.
-
     Args:
         per_sample_grads: Per-sample ``vec(W)`` gradients, shape
             ``(V, N, d_out, d_in)``.
@@ -157,6 +151,8 @@ def _top_rank_one_kron_factors(
         Tuple ``(S_1, S_2)`` with shapes ``(d_out, d_out)`` and
         ``(d_in, d_in)`` such that ``S_1 (otimes) S_2`` is the best
         Frobenius rank-one Kronecker approximation of :math:`\mathbf{G}`.
+        Factors come straight from the SVD reshape: not symmetrized,
+        sign-normalized, or PSD-projected.
     """
     _, _, d_out, d_in = per_sample_grads.shape
     if not per_sample_grads.any():
@@ -188,15 +184,6 @@ def _top_rank_one_kron_factors(
         .reshape(d_in, d_in)
         .mul_(scale)
     )
-    # Joint-sign gauge: ``(S_1, S_2)`` and ``(-S_1, -S_2)`` give the same Kron
-    # product. For PSD ``G``, the optimal factors are either both PSD
-    # (``tr > 0``) or both NSD (``tr < 0``); flip only when both traces are
-    # negative, yielding the PSD pair. Indefinite factor pairs — only
-    # reachable at tied top singular values — have mixed-sign traces and
-    # can't be reconciled by a joint sign flip, so we leave them untouched.
-    if S_1.trace() < 0 and S_2.trace() < 0:
-        S_1.neg_()
-        S_2.neg_()
     return S_1, S_2
 
 
