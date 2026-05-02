@@ -1,19 +1,4 @@
-r"""Linear operator for the Frobenius-optimal Kronecker-factored GGN (KFOC).
-
-Unlike KFAC, which factorizes each per-layer GGN block as a product of
-per-axis sums, KFOC returns the best Frobenius-norm rank-one Kronecker
-approximation of the exact per-layer block, obtained via the top singular
-pair of the block's Van Loan rearrangement.
-
-References:
-    - Schnaus, D., Lee, J., Triebel, R. (2021). "Kronecker-Factored Optimal
-      Curvature." Bayesian Deep Learning Workshop, NeurIPS 2021.
-      http://bayesiandeeplearning.org/2021/papers/33.pdf
-    - Koroko, A., Anciaux-Sedrakian, A., Gharbia, I. B., Garès, V., Haddou, M.,
-      Tchomba, Q. (2022). "Efficient Approximations of the Fisher Matrix in
-      Neural Networks using Kronecker Product Singular Value Decomposition."
-      arXiv:2201.10285.
-"""
+r"""Linear operator for the Frobenius-optimal Kronecker-factored GGN (KFOC)."""
 
 from collections.abc import Callable, Iterable, MutableMapping
 
@@ -27,6 +12,11 @@ from curvlinops.kfac_utils import FisherType, KFACType
 
 class KFOCLinearOperator(KFACLinearOperator):
     r"""Frobenius-optimal rank-one Kronecker approximation of the GGN.
+
+    Unlike KFAC, which factorizes each per-layer GGN block as a product of
+    per-axis sums, KFOC returns the best Frobenius-norm rank-one Kronecker
+    approximation of the exact per-layer block, obtained via the top singular
+    pair of the block's Van Loan rearrangement.
 
     For each per-layer Gauss-Newton block
     :math:`B_l = \sum_{v, n} \mathrm{vec}(P_{v, n})\,\mathrm{vec}(P_{v, n})^\top`
@@ -49,13 +39,13 @@ class KFOCLinearOperator(KFACLinearOperator):
       ``G_star`` and ``A_star`` symmetric to machine precision.
     - **PSD-ness holds for well-conditioned** :math:`B_l`: the optimal
       factors are either both PSD or both NSD (Kron of mixed-sign factors
-      is indefinite and can't be optimal for PSD :math:`B_l`). The sign
-      gauge is fixed by requiring ``tr(G_star) >= 0``. In near-degenerate
-      cases (tied top singular values) the optimal factor pair can be
-      genuinely indefinite; the trace convention still applies but cannot
-      make the factors PSD, so downstream ``inverse`` / ``eigh`` /
-      ``logdet`` may fail or return NaNs unless sufficient damping is
-      supplied.
+      is indefinite and can't be optimal for PSD :math:`B_l`). The joint
+      sign is flipped when both factor traces are negative, mapping NSD
+      pairs to PSD. In near-degenerate cases (tied top singular values)
+      the optimal pair can be genuinely indefinite (mixed-sign traces);
+      the joint-flip rule leaves these untouched, so downstream
+      ``inverse`` / ``eigh`` / ``logdet`` may fail or return NaNs unless
+      sufficient damping is supplied.
 
     Scope:
         - Single-batch data only (``len(list(data)) == 1``).
@@ -66,6 +56,15 @@ class KFOCLinearOperator(KFACLinearOperator):
 
     Attributes:
         SELF_ADJOINT: Whether the operator is self-adjoint. ``True`` for KFOC.
+
+    References:
+        - Schnaus, D., Lee, J., Triebel, R. (2021). "Kronecker-Factored Optimal
+          Curvature." Bayesian Deep Learning Workshop, NeurIPS 2021.
+          http://bayesiandeeplearning.org/2021/papers/33.pdf
+        - Koroko, A., Anciaux-Sedrakian, A., Gharbia, I. B., Garès, V., Haddou, M.,
+          Tchomba, Q. (2022). "Efficient Approximations of the Fisher Matrix in
+          Neural Networks using Kronecker Product Singular Value Decomposition."
+          arXiv:2201.10285.
     """
 
     _BACKENDS: dict[str, type] = {"make_fx": MakeFxKFOCComputer}
