@@ -45,8 +45,6 @@ class KFOCLinearOperator(KFACLinearOperator):
     Scope:
         - Single-batch data only (``len(list(data)) == 1``).
         - :class:`FisherType.TYPE2` only.
-        - FX backend only (uses :func:`make_compute_kfac_io_batch` with
-          ``intermediate_as_batch=False``).
 
     Attributes:
         SELF_ADJOINT: Whether the operator is self-adjoint. ``True`` for KFOC.
