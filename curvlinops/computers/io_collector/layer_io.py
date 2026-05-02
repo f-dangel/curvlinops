@@ -1,39 +1,4 @@
-r"""High-level orchestration over the IO collector for KFAC-style operators.
-
-Provides:
-
-- :class:`LayerIO`: setup-once owner of shape-independent metadata
-  (parameter groups, IO-layer mappings) plus a per-batch-size cache of
-  FX-traced ``io_fn``\s. Operators consume :class:`LayerIO` to obtain
-  per-batch raw IO without re-deriving the plumbing.
-- :class:`LayerIOSnapshot`: per-batch wrapper over raw layer inputs and output
-  gradients, exposing on-demand per-group accessors at three granularities
-  (raw, standardized weight-sharing format, expanded per-sample ``vec(W)``
-  gradients).
-- :func:`LayerIO.enable_param_grads`: context manager wrapping
-  :func:`_enable_requires_grad` for the trace boundary, so callers don't have
-  to import the autograd-ownership helper directly.
-
-The two-tier state in :class:`LayerIO` separates concerns by shape dependence:
-
-* **Shape-independent (tier 1)** — built once at construction:
-  ``mapping``, ``io_groups``, ``io_param_names``, ``layer_hparams``, the
-  ``grad_outputs`` computer, and the per-group ``(group_inputs, group_grads)``
-  gatherers.
-* **Shape-specialized (tier 2)** — cached per unique batch size:
-  the ``io_fn`` returned by :func:`with_kfac_io`. New batch sizes trigger a
-  fresh trace via :meth:`LayerIO.ensure_io_fn`.
-
-Operators have three integration patterns:
-
-1. **Trace everything** (KFAC-style): wrap the entire per-batch reduction
-   (``populate`` + per-group einsums) in :func:`_make_fx`, inside
-   :meth:`LayerIO.enable_param_grads`.
-2. **Trace IO only** (KFOC-style): wrap just :meth:`LayerIO.populate` in
-   :func:`_make_fx`, replay under :func:`torch.no_grad`, then process per-group
-   eagerly.
-3. **Fully eager**: skip :func:`_make_fx` entirely.
-"""
+"""High-level orchestration over the IO collector for KFAC-style operators."""
 
 from __future__ import annotations
 
@@ -61,9 +26,19 @@ from curvlinops.utils import _enable_requires_grad
 class LayerIO:
     r"""Setup-once orchestrator for per-layer IO collection.
 
-    Owns shape-independent metadata and a per-batch-size cache of FX-traced
-    ``io_fn``\ s. Operators construct one :class:`LayerIO` per ``compute()``
-    call and consume :meth:`populate` / :meth:`snapshot` per batch.
+    Owns shape-independent metadata (parameter groups, IO-layer mappings) and
+    a per-batch-size cache of FX-traced ``io_fn``\ s built by
+    :func:`with_kfac_io`; new batch sizes trigger a fresh trace via
+    :meth:`ensure_io_fn`. Operators construct one :class:`LayerIO` per
+    ``compute()`` call, then per batch call :meth:`populate` for raw layer IO
+    and :meth:`snapshot` to wrap it as a :class:`LayerIOSnapshot` exposing
+    per-group accessors at three granularities (raw, standardized weight-
+    sharing format, expanded per-sample ``vec(W)`` gradients).
+
+    Three integration patterns: (1) trace everything (KFAC) — wrap the
+    per-batch reduction in :func:`_make_fx` under :meth:`enable_param_grads`;
+    (2) trace IO only (KFOC) — wrap :meth:`populate` only, replay under
+    :func:`torch.no_grad`; (3) fully eager — skip :func:`_make_fx`.
 
     Args:
         model_func: Functional model ``(params, X) -> prediction``.
