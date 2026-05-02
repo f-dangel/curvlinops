@@ -24,8 +24,7 @@ class KFOCLinearOperator(KFACLinearOperator):
     via the top singular pair of the block's Van Loan rearrangement
     :math:`\mathcal{R}(\mathbf{G})`. The factors :math:`\mathbf{S}_1`,
     :math:`\mathbf{S}_2` are always symmetric, and PSD unless
-    :math:`\mathcal{R}(\mathbf{G})`'s top singular vector is degenerate
-    — in which case ``inverse`` / ``eigh`` / ``logdet`` may need damping.
+    :math:`\mathcal{R}(\mathbf{G})`'s top singular vector is degenerate.
 
     Scope:
         - Single-batch data only (``len(list(data)) == 1``).
