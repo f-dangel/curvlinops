@@ -190,6 +190,12 @@ class MakeFxKFOCComputer(_BaseKFACComputer):
     in ``data``. The single-batch check runs in :meth:`compute`.
     """
 
+    def __init__(self, *args, **kwargs):
+        """Initialize and turn on grad tracking for the parameters."""
+        super().__init__(*args, **kwargs)
+        for p in self._params.values():
+            p.requires_grad_(True)
+
     def compute(
         self,
     ) -> tuple[
