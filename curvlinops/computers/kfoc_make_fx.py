@@ -253,8 +253,10 @@ class MakeFxKFOCComputer(_BaseKFACComputer):
             io_groups, io_param_names, layer_hparams, KFACType.EXPAND
         )
 
-        input_covariances: dict[ParamGroupKey, Tensor] = {}
-        gradient_covariances: dict[ParamGroupKey, Tensor] = {}
+        # ``S_1 (otimes) S_2`` per group; positional return matches the base
+        # class slots (``input_covariances``, ``gradient_covariances``).
+        first_factors: dict[ParamGroupKey, Tensor] = {}
+        second_factors: dict[ParamGroupKey, Tensor] = {}
         for group in mapping:
             group_key = tuple(group.values())
             g = group_grads(group, layer_output_grads)
@@ -264,17 +266,17 @@ class MakeFxKFOCComputer(_BaseKFACComputer):
                     g, a, "vec batch shared out, batch shared inp -> vec batch out inp"
                 )
                 S_1, S_2 = _top_rank_one_kron_factors(per_sample_grads)
-                input_covariances[group_key] = S_2
-                gradient_covariances[group_key] = S_1
+                first_factors[group_key] = S_1
+                second_factors[group_key] = S_2
             else:
                 # Bias-only block: the Frobenius optimum is the exact GGN
                 # block. The bias is shared across the ``shared`` axis, so
                 # per-sample gradients sum over it before the outer product.
                 g_per_sample = einsum(g, "vec batch shared row -> vec batch row")
-                gradient_covariances[group_key] = einsum(
+                first_factors[group_key] = einsum(
                     g_per_sample,
                     g_per_sample,
                     "vec batch row, vec batch col -> row col",
                 )
 
-        return input_covariances, gradient_covariances, mapping
+        return second_factors, first_factors, mapping
