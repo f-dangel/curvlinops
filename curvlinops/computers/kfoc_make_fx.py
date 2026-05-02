@@ -35,35 +35,24 @@ from curvlinops.utils import _assert_single_element
 class _RearrangedGGNLinearOperator(PyTorchLinearOperator):
     r"""Van Loan rearrangement of a per-layer Gauss-Newton block.
 
-    Consider a single linear layer with weight
-    :math:`\mathbf{W} \in \mathbb{R}^{d_\text{out} \times d_\text{in}}`
-    that shares this weight across :math:`T` positions (e.g., tokens in a
-    transformer, flattened spatial positions in a convolution;
-    :math:`T = 1` for a plain fully-connected layer). One forward and
-    backward pass over a batch of :math:`N` samples produces
+    Operates on a stack of per-sample ``vec(W)`` gradients
+    :math:`P_{v, n} \in \mathbb{R}^{d_\text{out} \times d_\text{in}}`
+    with two extra axes beyond the layer's weight shape:
 
-    - layer inputs :math:`a_{n, t} \in \mathbb{R}^{d_\text{in}}`, and
-    - output gradients :math:`g_{v, n, t} \in \mathbb{R}^{d_\text{out}}`,
+    - :math:`n \in \{1, \dots, N\}` indexes the sample in the batch
+      (per-sample, not summed, because each sample contributes a separate
+      rank-one outer product to the GGN), and
+    - :math:`v \in \{1, \dots, V\}` indexes the backpropagated direction
+      (:math:`V = 1` for the type-2 and empirical Fisher; one direction
+      per MC sample for the MC-Fisher).
 
-    indexed by sample :math:`n \in \{1, \dots, N\}`, sharing position
-    :math:`t \in \{1, \dots, T\}`, and gradient direction
-    :math:`v \in \{1, \dots, V\}` (:math:`V = 1` for the type-2 and
-    empirical Fisher; one direction per MC sample for the MC-Fisher).
-
-    Summing over the sharing axis :math:`t` gives the per-sample
-    ``vec(W)`` gradient
-
-    .. math::
-        P_{v, n} = \sum_t g_{v, n, t}\,a_{n, t}^\top
-        \in \mathbb{R}^{d_\text{out} \times d_\text{in}},
-
-    and the per-layer GGN block is
+    The per-layer GGN block is
 
     .. math::
         \mathbf{G} = \sum_{v, n} \mathrm{vec}(P_{v, n})\,
-        \mathrm{vec}(P_{v, n})^\top.
+        \mathrm{vec}(P_{v, n})^\top,
 
-    Its Van Loan rearrangement
+    and its Van Loan rearrangement
     :math:`\mathcal{R}(\mathbf{G}) \in \mathbb{R}^{d_\text{out}^2 \times d_\text{in}^2}`
     acts on a matrix :math:`M` (respectively :math:`U` for the adjoint) as
 
