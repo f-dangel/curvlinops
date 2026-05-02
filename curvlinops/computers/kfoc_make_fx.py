@@ -35,21 +35,41 @@ from curvlinops.utils import _assert_single_element
 class _RearrangedGGNLinearOperator(PyTorchLinearOperator):
     r"""Van Loan rearrangement of a per-layer Gauss-Newton block.
 
-    Given per-sample ``vec(W)`` gradients
+    Consider a single linear layer with weight
+    :math:`\mathbf{W} \in \mathbb{R}^{d_\text{out} \times d_\text{in}}`
+    that shares this weight across :math:`T` positions (e.g., tokens in a
+    transformer, flattened spatial positions in a convolution;
+    :math:`T = 1` for a plain fully-connected layer). One forward and
+    backward pass over a batch of :math:`N` samples produces
+
+    - layer inputs :math:`a_{n, t} \in \mathbb{R}^{d_\text{in}}`, and
+    - output gradients :math:`g_{v, n, t} \in \mathbb{R}^{d_\text{out}}`,
+
+    indexed by sample :math:`n \in \{1, \dots, N\}`, sharing position
+    :math:`t \in \{1, \dots, T\}`, and gradient direction
+    :math:`v \in \{1, \dots, V\}` (:math:`V = 1` for the type-2 and
+    empirical Fisher; one direction per MC sample for the MC-Fisher).
+
+    Summing over the sharing axis :math:`t` gives the per-sample
+    ``vec(W)`` gradient
 
     .. math::
-        P_{v, n} = \sum_t g_{v, n, t} a_{n, t}^\top
+        P_{v, n} = \sum_t g_{v, n, t}\,a_{n, t}^\top
         \in \mathbb{R}^{d_\text{out} \times d_\text{in}},
 
-    the per-layer GGN block is
-    :math:`\mathbf{G} = \sum_{v, n} \mathrm{vec}(P_{v, n}) \mathrm{vec}(P_{v, n})^\top`
-    and its rearrangement
-    :math:`\mathcal{R}(\mathbf{G}) \in \mathbb{R}^{d_\text{out}^2 \times d_\text{in}^2}`
-    acts on a matrix ``V`` (respectively ``U`` for the adjoint) as
+    and the per-layer GGN block is
 
     .. math::
-        \mathcal{R}(\mathbf{G})\,\mathrm{vec}(V)
-        &= \mathrm{vec}\!\left(\sum_{v, n} P_{v, n}\,V\,P_{v, n}^\top\right),
+        \mathbf{G} = \sum_{v, n} \mathrm{vec}(P_{v, n})\,
+        \mathrm{vec}(P_{v, n})^\top.
+
+    Its Van Loan rearrangement
+    :math:`\mathcal{R}(\mathbf{G}) \in \mathbb{R}^{d_\text{out}^2 \times d_\text{in}^2}`
+    acts on a matrix :math:`M` (respectively :math:`U` for the adjoint) as
+
+    .. math::
+        \mathcal{R}(\mathbf{G})\,\mathrm{vec}(M)
+        &= \mathrm{vec}\!\left(\sum_{v, n} P_{v, n}\,M\,P_{v, n}^\top\right),
         \\
         \mathcal{R}(\mathbf{G})^\top\,\mathrm{vec}(U)
         &= \mathrm{vec}\!\left(\sum_{v, n} P_{v, n}^\top\,U\,P_{v, n}\right).
