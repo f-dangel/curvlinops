@@ -188,16 +188,16 @@ class MakeFxKFOCComputer(_BaseKFACComputer):
     factors from the top singular pair of the rearranged operator.
 
     Requires ``FisherType.TYPE2``, ``KFACType.EXPAND``, and exactly one batch
-    in ``data``. The Fisher/KFAC checks run in :meth:`__init__`; the
-    single-batch check runs in :meth:`compute`.
+    in ``data``. All three preconditions are checked in :meth:`__init__`.
     """
 
     def __init__(self, *args, **kwargs):
-        """Validate KFOC's Fisher/KFAC requirements and enable grad on params.
+        """Validate KFOC's preconditions and enable grad on params.
 
         Raises:
-            ValueError: If ``fisher_type`` is not ``FisherType.TYPE2`` or
-                ``kfac_approx`` is not ``KFACType.EXPAND``.
+            ValueError: If ``fisher_type`` is not ``FisherType.TYPE2``,
+                ``kfac_approx`` is not ``KFACType.EXPAND``, or ``data``
+                yields more than one batch.
         """
         super().__init__(*args, **kwargs)
         if self._fisher_type != FisherType.TYPE2:
@@ -208,6 +208,7 @@ class MakeFxKFOCComputer(_BaseKFACComputer):
             raise ValueError(
                 f"KFOC requires KFACType.EXPAND, got {self._kfac_approx!r}."
             )
+        _assert_single_element(self._data)
         for p in self._params.values():
             p.requires_grad_(True)
 
@@ -227,7 +228,6 @@ class MakeFxKFOCComputer(_BaseKFACComputer):
         Returns:
             Tuple of ``(input_covariances, gradient_covariances, mapping)``.
         """
-        _assert_single_element(self._data)
         X, y = next(iter(self._data))
 
         (
