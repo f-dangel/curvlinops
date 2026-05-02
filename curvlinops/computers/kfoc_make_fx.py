@@ -217,7 +217,11 @@ class MakeFxKFOCComputer(_BaseKFACComputer):
         Returns:
             Tuple of ``(input_covariances, gradient_covariances, mapping)``.
         """
-        X, y = next(iter(self._data))
+        # Use ``_loop_over_data`` so ``X`` / ``y`` land on ``self.device``
+        # — a plain ``next(iter(self._data))`` keeps them on the loader's
+        # device, which fails when the model lives on CUDA but the loader
+        # yields CPU tensors.
+        X, y = next(iter(self._loop_over_data()))
 
         (
             inputs_and_grad_outputs_batch,
