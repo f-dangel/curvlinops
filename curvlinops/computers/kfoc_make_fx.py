@@ -19,7 +19,7 @@ from math import sqrt
 from einops import einsum
 from numpy import eye as np_eye
 from numpy.linalg import svd as np_svd
-from scipy.sparse.linalg import svds
+from scipy.sparse.linalg import ArpackError, svds
 from torch import Tensor, as_tensor, device, dtype
 
 from curvlinops._torch_base import PyTorchLinearOperator
@@ -144,37 +144,38 @@ def _top_rank_one_kron_factors(
         Frobenius rank-one Kronecker approximation of :math:`\mathbf{G}`.
         Factors come straight from the SVD reshape: not symmetrized,
         sign-normalized, or PSD-projected.
+
+    Raises:
+        ArpackError: If ``svds`` fails for a reason other than the
+            zero-GGN case (i.e., real ARPACK convergence failure).
     """
     _, _, d_out, d_in = per_sample_grads.shape
-    if not per_sample_grads.any():
-        # ``G = 0`` (e.g., zero inputs or frozen upstream layer): the
-        # optimal rank-one Kronecker approximation is the zero pair.
-        # Short-circuit because ``svds`` raises ARPACK error -9 (zero
-        # starting vector) on a zero operator.
-        zeros = per_sample_grads.new_zeros
-        return zeros(d_out, d_out), zeros(d_in, d_in)
     op = _RearrangedGGNLinearOperator(per_sample_grads)
     scipy_op = op.to_scipy()
+    meta = {"dtype": op.dtype, "device": op.device}
     if d_out == 1 or d_in == 1:
         # ``svds`` requires ``k < min(shape)``; fall back to a dense SVD
         # materialized from a single matvec against the trivial (1×1) side.
+        # Dense SVD handles the ``G = 0`` case directly (zero singular values).
         identity = np_eye(1, dtype=scipy_op.dtype)
         dense = scipy_op @ identity if d_in == 1 else scipy_op.rmatmat(identity).T
         u, s, vt = np_svd(dense, full_matrices=False)
         u, s, vt = u[:, :1], s[:1], vt[:1, :]
     else:
-        u, s, vt = svds(scipy_op, k=1)
+        try:
+            u, s, vt = svds(scipy_op, k=1)
+        except ArpackError:
+            # ``svds`` raises ARPACK error -9 ("starting vector is zero")
+            # when ``G = 0`` (zero inputs or frozen upstream layer). The
+            # optimal rank-one Kronecker approximation of zero is the zero
+            # pair; re-raise on a real ARPACK failure (non-zero GGN).
+            if per_sample_grads.any():
+                raise
+            zeros = per_sample_grads.new_zeros
+            return zeros(d_out, d_out), zeros(d_in, d_in)
     scale = sqrt(float(s[0]))
-    S_1 = (
-        as_tensor(u[:, 0], dtype=op.dtype, device=op.device)
-        .reshape(d_out, d_out)
-        .mul_(scale)
-    )
-    S_2 = (
-        as_tensor(vt[0], dtype=op.dtype, device=op.device)
-        .reshape(d_in, d_in)
-        .mul_(scale)
-    )
+    S_1 = as_tensor(u[:, 0], **meta).reshape(d_out, d_out).mul_(scale)
+    S_2 = as_tensor(vt[0], **meta).reshape(d_in, d_in).mul_(scale)
     return S_1, S_2
 
 
