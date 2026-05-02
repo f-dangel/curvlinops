@@ -188,26 +188,15 @@ class MakeFxKFOCComputer(_BaseKFACComputer):
     factors from the top singular pair of the rearranged operator.
 
     Requires ``FisherType.TYPE2``, ``KFACType.EXPAND``, and exactly one batch
-    in ``data``. All three preconditions are checked in :meth:`__init__`.
+    in ``data``. All three preconditions fail at construction.
     """
 
-    def __init__(self, *args, **kwargs):
-        """Validate KFOC's preconditions and enable grad on params.
+    _SUPPORTED_FISHER_TYPE: tuple[FisherType, ...] = (FisherType.TYPE2,)
+    _SUPPORTED_KFAC_APPROX: tuple[KFACType, ...] = (KFACType.EXPAND,)
 
-        Raises:
-            ValueError: If ``fisher_type`` is not ``FisherType.TYPE2``,
-                ``kfac_approx`` is not ``KFACType.EXPAND``, or ``data``
-                yields more than one batch.
-        """
+    def __init__(self, *args, **kwargs):
+        """Validate single-batch data and enable grad on params."""
         super().__init__(*args, **kwargs)
-        if self._fisher_type != FisherType.TYPE2:
-            raise ValueError(
-                f"KFOC requires FisherType.TYPE2, got {self._fisher_type!r}."
-            )
-        if self._kfac_approx != KFACType.EXPAND:
-            raise ValueError(
-                f"KFOC requires KFACType.EXPAND, got {self._kfac_approx!r}."
-            )
         _assert_single_element(self._data)
         for p in self._params.values():
             p.requires_grad_(True)
