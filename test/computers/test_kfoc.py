@@ -88,9 +88,11 @@ def _assert_kfoc_factors_match_dense_svd(case):
 def _assert_kfoc_first_order_optimality(case):
     """Assert KFOC's weight factors are stationary points of the Frobenius residual.
 
-    Compare ``K_canonical`` to ``PT @ ggn @ P`` directly in canonical
-    layout (so the test is independent of ``separate_weight_and_bias``).
-    The residual decouples per block since both sides are block-diagonal.
+    Enable grad on every weight Kronecker factor, materialize KFOC and the
+    block-diagonal GGN in the standard (params) basis, and check that the
+    gradient of ``||GGN - K||_F²`` w.r.t. each factor is near zero. Both
+    sides are block-diagonal at the parameter-group level so the residual
+    decouples per block, regardless of ``separate_weight_and_bias``.
 
     Args:
         case: Model, loss, parameters, data, and optional batch-size function.
@@ -106,11 +108,10 @@ def _assert_kfoc_first_order_optimality(case):
         check_deterministic=False,
         batch_size_fn=batch_size_fn,
     )
-    _, K_op, PT = kfoc
+    _, K_op, _ = kfoc
     weight_S = [
         f.requires_grad_(True) for block in K_op if len(block) == 2 for f in block
     ]
-    PT_mat = PT @ eye_like(PT)
     ggn = block_diagonal(
         GGNLinearOperator,
         model,
@@ -119,9 +120,8 @@ def _assert_kfoc_first_order_optimality(case):
         [(X, y)],
         batch_size_fn=batch_size_fn,
     )
-    ggn_canonical = PT_mat @ ggn @ PT_mat.T
-    K_canonical = K_op @ eye_like(K_op)
-    loss = (ggn_canonical - K_canonical).pow(2).sum()
+    K = kfoc @ eye_like(kfoc)
+    loss = (ggn - K).pow(2).sum()
     for g in grad(loss, weight_S):
         assert g.abs().max().item() < 1e-8
 
