@@ -60,8 +60,9 @@ def test_per_batch_size_cache_grows_on_new_size():
     li2, log2 = io.populate(params, X2, y2)
     assert li1["Linear0"].shape == (4, 6)
     assert li2["Linear0"].shape == (7, 6)
-    assert log1["Linear0"].shape[1] == 4
-    assert log2["Linear0"].shape[1] == 7
+    # MC fisher with default mc_samples=1: shape is (V=1, batch, d_out=8)
+    assert log1["Linear0"].shape == (1, 4, 8)
+    assert log2["Linear0"].shape == (1, 7, 8)
 
 
 def test_enable_param_grads_preserves_requires_grad():
@@ -84,7 +85,10 @@ def test_enable_param_grads_preserves_requires_grad():
 def test_empirical_rejects_intermediate_as_batch_false():
     """Constructor raises for the unsupported EMPIRICAL + intermediate_as_batch=False combo."""
     model_func, loss, params = _setup_mlp()
-    with raises(ValueError, match="EMPIRICAL"):
+    with raises(
+        ValueError,
+        match="intermediate_as_batch=False is not supported with FisherType.EMPIRICAL",
+    ):
         LayerIO(
             model_func,
             MSELoss(),
@@ -109,7 +113,10 @@ def test_forward_only_per_sample_grads_raises():
     io = LayerIO(model_func, loss, params, X, fisher_type=FisherType.FORWARD_ONLY)
     snap = io.snapshot(*io.populate(params, X, y))
     for group in io.mapping:
-        with raises(RuntimeError, match="FORWARD_ONLY"):
+        with raises(
+            RuntimeError,
+            match="per_sample_grads is undefined for FisherType.FORWARD_ONLY",
+        ):
             snap.per_sample_grads(group)
 
 
