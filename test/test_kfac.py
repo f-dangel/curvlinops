@@ -1055,6 +1055,55 @@ def test_kfac_does_not_affect_grad():
     _check_does_not_affect_grad(KFACLinearOperator)
 
 
+def _check_does_not_affect_requires_grad(linop_cls, **linop_kwargs):
+    """Make sure that computing a linear operator does not flip ``requires_grad``.
+
+    The FX backend traces ``autograd.grad`` through the model and needs
+    ``requires_grad=True`` on params during tracing — but it must restore the
+    original state afterwards, otherwise a frozen parameter passed by the user
+    silently becomes trainable for the rest of the program.
+
+    Args:
+        linop_cls: The linear operator class to test.
+        **linop_kwargs: Extra keyword arguments forwarded to ``linop_cls``
+            (e.g., ``backend="make_fx"`` for KFAC/EKFAC; KFOC has no
+            ``backend`` arg and forwards nothing).
+    """
+    manual_seed(0)
+    batch_size, D_in, D_hidden, D_out = 4, 3, 5, 2
+    X = rand(batch_size, D_in)
+    y = rand(batch_size, D_out)
+    # Two layers so we can freeze one parameter while the other keeps the
+    # autograd graph alive (with everything frozen, ``autograd.grad`` would
+    # have nothing to differentiate against).
+    model = Sequential(Linear(D_in, D_hidden), Linear(D_hidden, D_out))
+    model[0].bias.requires_grad_(False)
+
+    params = dict(model.named_parameters())
+    requires_grad_before = {n: p.requires_grad for n, p in params.items()}
+    assert requires_grad_before == {
+        "0.weight": True,
+        "0.bias": False,
+        "1.weight": True,
+        "1.bias": True,
+    }
+
+    # Construct each FX backend (constructors run ``compute()`` via the
+    # determinism check, which is the trace path that used to mutate flags).
+    linop_cls(model, MSELoss(), params, [(X, y)], **linop_kwargs)
+
+    for n, p in params.items():
+        assert p.requires_grad == requires_grad_before[n], (
+            f"FX backend mutated requires_grad on {n!r}: "
+            f"{requires_grad_before[n]} -> {p.requires_grad}"
+        )
+
+
+def test_kfac_make_fx_preserves_requires_grad():
+    """KFAC's FX backend must not mutate the user's ``requires_grad`` flags."""
+    _check_does_not_affect_requires_grad(KFACLinearOperator, backend="make_fx")
+
+
 def _check_torch_save_load(linop_cls: type, tmp_path: Path) -> None:
     """Test that an (E)KFAC operator can be saved and loaded with torch.save/load.
 

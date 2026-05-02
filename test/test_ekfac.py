@@ -29,6 +29,7 @@ from test.test_kfac import (
     MC_TOLS,
     _check_callable_model_func,
     _check_does_not_affect_grad,
+    _check_does_not_affect_requires_grad,
     _check_make_fx_flatten_different_batch_sizes,
     _check_torch_save_load,
     _test_weight_tying_type2,
@@ -644,6 +645,11 @@ def test_logdet(inv_case):
 def test_ekfac_does_not_affect_grad():
     """Make sure EKFAC computation does not write to `.grad`."""
     _check_does_not_affect_grad(EKFACLinearOperator)
+
+
+def test_ekfac_make_fx_preserves_requires_grad():
+    """EKFAC's FX backend must not mutate the user's ``requires_grad`` flags."""
+    _check_does_not_affect_requires_grad(EKFACLinearOperator, backend="make_fx")
 
 
 def test_ekfac_torch_save_load(tmp_path: Path) -> None:

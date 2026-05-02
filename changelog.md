@@ -105,6 +105,18 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
 
 ### Internal
 
+- Scope the FX backends' `requires_grad` mutation to tracing only.
+  `MakeFxKFACComputer` / `MakeFxKFOCComputer` previously flipped
+  `requires_grad=True` on every tensor in the user's `params` dict at
+  ``__init__`` with no restore (a silent side effect on user-owned
+  tensors, e.g., re-enabling gradient tracking on a frozen layer).
+  Wrap the `make_fx` call sites with the existing save/restore
+  `_enable_requires_grad` context manager (now in `utils.py`) so any
+  prior `requires_grad` state is preserved after `compute()` returns.
+  KFOC's `compute()` now traces its IO getter and replays under
+  `no_grad()` to keep the autograd-using portion contained inside an
+  FX graph
+
 - Add `intermediate_as_batch` flag to the FX backend's
   `make_compute_kfac_io_batch` (opt-in unflattened IO — with
   `FisherType.TYPE2`, the collector output directly reconstructs the exact

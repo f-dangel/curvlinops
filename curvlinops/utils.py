@@ -76,6 +76,26 @@ def _seed_generator(generator: Generator | None, dev: device, seed: int) -> Gene
 
 
 @contextmanager
+def _enable_requires_grad(tensors: list[Tensor]) -> Iterator[None]:
+    """Temporarily enable ``requires_grad`` on tensors, restoring original state after.
+
+    Args:
+        tensors: List of tensors to enable gradients on.
+
+    Yields:
+        None.
+    """
+    original = [t.requires_grad for t in tensors]
+    for t in tensors:
+        t.requires_grad_(True)
+    try:
+        yield
+    finally:
+        for t, rg in zip(tensors, original):
+            t.requires_grad_(rg)
+
+
+@contextmanager
 def fork_rng_with_seed(seed: int | None) -> Iterator[None]:
     """Fork the global RNG state and seed it, restoring on exit.
 

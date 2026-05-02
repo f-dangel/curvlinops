@@ -22,6 +22,7 @@ from torch.nn import Linear, Module, MSELoss, Sequential
 
 from curvlinops import GGNLinearOperator, KFOCLinearOperator
 from curvlinops.utils import allclose_report
+from test.test_kfac import _check_does_not_affect_requires_grad
 from test.utils import block_diagonal, change_dtype, eye_like
 
 
@@ -228,6 +229,11 @@ def test_kfoc_handles_zero_ggn():
     ggn = block_diagonal(GGNLinearOperator, model, loss_func, params, [(X, y)])
     assert allclose_report(K, ggn)
     assert K.abs().max().item() == 0.0
+
+
+def test_kfoc_make_fx_preserves_requires_grad():
+    """KFOC's FX backend must not mutate the user's ``requires_grad`` flags."""
+    _check_does_not_affect_requires_grad(KFOCLinearOperator)
 
 
 def test_kfoc_rejects_multi_batch():
