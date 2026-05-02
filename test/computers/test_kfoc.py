@@ -16,6 +16,7 @@ from collections.abc import Iterable
 
 from pytest import mark, raises
 from torch import Tensor, float64, kron, manual_seed, rand, zeros
+from torch.autograd import grad
 from torch.linalg import svd as torch_svd
 from torch.nn import Linear, Module, MSELoss, Sequential
 
@@ -131,9 +132,10 @@ def test_kfoc_first_order_optimality(
             S_1, S_2 = (f.detach().requires_grad_(True) for f in block)
             n = S_1.shape[0] * S_2.shape[0]
             G_l = ggn[offset : offset + n, offset : offset + n]
-            (G_l - kron(S_1, S_2)).pow(2).sum().backward()
-            assert S_1.grad.abs().max().item() < 1e-8
-            assert S_2.grad.abs().max().item() < 1e-8
+            loss = (G_l - kron(S_1, S_2)).pow(2).sum()
+            grad_S_1, grad_S_2 = grad(loss, (S_1, S_2))
+            assert grad_S_1.abs().max().item() < 1e-8
+            assert grad_S_2.abs().max().item() < 1e-8
             offset += n
         else:  # bias-only block: single factor of size d_out × d_out
             offset += block[0].shape[0]
