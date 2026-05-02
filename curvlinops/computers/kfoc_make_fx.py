@@ -42,20 +42,20 @@ class _RearrangedGGNLinearOperator(PyTorchLinearOperator):
         \in \mathbb{R}^{d_\text{out} \times d_\text{in}},
 
     the per-layer GGN block is
-    :math:`B_l = \sum_{v, n} \mathrm{vec}(P_{v, n}) \mathrm{vec}(P_{v, n})^\top`
+    :math:`\mathbf{G} = \sum_{v, n} \mathrm{vec}(P_{v, n}) \mathrm{vec}(P_{v, n})^\top`
     and its rearrangement
-    :math:`\mathcal{R}(B_l) \in \mathbb{R}^{d_\text{out}^2 \times d_\text{in}^2}`
+    :math:`\mathcal{R}(\mathbf{G}) \in \mathbb{R}^{d_\text{out}^2 \times d_\text{in}^2}`
     acts on a matrix ``V`` (respectively ``U`` for the adjoint) as
 
     .. math::
-        \mathcal{R}(B_l)\,\mathrm{vec}(V)
+        \mathcal{R}(\mathbf{G})\,\mathrm{vec}(V)
         &= \mathrm{vec}\!\left(\sum_{v, n} P_{v, n}\,V\,P_{v, n}^\top\right),
         \\
-        \mathcal{R}(B_l)^\top\,\mathrm{vec}(U)
+        \mathcal{R}(\mathbf{G})^\top\,\mathrm{vec}(U)
         &= \mathrm{vec}\!\left(\sum_{v, n} P_{v, n}^\top\,U\,P_{v, n}\right).
 
     Factors from the top singular pair reconstruct the Frobenius-optimal
-    rank-one Kronecker approximation of :math:`B_l`.
+    rank-one Kronecker approximation of :math:`\mathbf{G}`.
     """
 
     def __init__(self, per_sample_grads: Tensor, adjoint: bool = False):
@@ -64,8 +64,8 @@ class _RearrangedGGNLinearOperator(PyTorchLinearOperator):
         Args:
             per_sample_grads: Per-sample ``vec(W)`` gradients, shape
                 ``(V, N, d_out, d_in)``.
-            adjoint: Whether this instance represents :math:`\mathcal{R}(B_l)^\top`
-                (``True``) or :math:`\mathcal{R}(B_l)` (``False``, default).
+            adjoint: Whether this instance represents :math:`\mathcal{R}(\mathbf{G})^\top`
+                (``True``) or :math:`\mathcal{R}(\mathbf{G})` (``False``, default).
 
         Raises:
             ValueError: If ``per_sample_grads`` is not 4D.
@@ -118,7 +118,7 @@ class _RearrangedGGNLinearOperator(PyTorchLinearOperator):
         """Return the adjoint operator sharing the same ``P``.
 
         Returns:
-            Adjoint operator (``R(B_l)^T``).
+            Adjoint operator (``R(G)^T``).
         """
         return type(self)(self._P, adjoint=not self._is_adjoint)
 
@@ -154,13 +154,13 @@ def _top_rank_one_kron_factors(
             ``(V, N, d_out, d_in)``.
 
     Returns:
-        Tuple ``(G_star, A_star)`` with shapes ``(d_out, d_out)`` and
-        ``(d_in, d_in)`` such that ``G_star (otimes) A_star`` is the best
-        Frobenius rank-one Kronecker approximation of :math:`B_l`.
+        Tuple ``(S_1, S_2)`` with shapes ``(d_out, d_out)`` and
+        ``(d_in, d_in)`` such that ``S_1 (otimes) S_2`` is the best
+        Frobenius rank-one Kronecker approximation of :math:`\mathbf{G}`.
     """
     _, _, d_out, d_in = per_sample_grads.shape
     if not per_sample_grads.any():
-        # ``B_l = 0`` (e.g., zero inputs or frozen upstream layer): the
+        # ``G = 0`` (e.g., zero inputs or frozen upstream layer): the
         # optimal rank-one Kronecker approximation is the zero pair.
         # Short-circuit because ``svds`` raises ARPACK error -9 (zero
         # starting vector) on a zero operator.
@@ -178,26 +178,26 @@ def _top_rank_one_kron_factors(
     else:
         u, s, vt = svds(scipy_op, k=1)
     scale = sqrt(float(s[0]))
-    G_star = (
+    S_1 = (
         as_tensor(u[:, 0], dtype=op.dtype, device=op.device)
         .reshape(d_out, d_out)
         .mul_(scale)
     )
-    A_star = (
+    S_2 = (
         as_tensor(vt[0], dtype=op.dtype, device=op.device)
         .reshape(d_in, d_in)
         .mul_(scale)
     )
-    # Joint-sign gauge: ``(G, A)`` and ``(-G, -A)`` give the same Kron product.
-    # For PSD ``B_l``, the optimal factors are either both PSD (``tr > 0``) or
-    # both NSD (``tr < 0``); flip only when both traces are negative, yielding
-    # the PSD pair. Indefinite factor pairs — only reachable at tied top
-    # singular values — have mixed-sign traces and can't be reconciled by a
-    # joint sign flip, so we leave them untouched.
-    if G_star.trace() < 0 and A_star.trace() < 0:
-        G_star.neg_()
-        A_star.neg_()
-    return G_star, A_star
+    # Joint-sign gauge: ``(S_1, S_2)`` and ``(-S_1, -S_2)`` give the same Kron
+    # product. For PSD ``G``, the optimal factors are either both PSD
+    # (``tr > 0``) or both NSD (``tr < 0``); flip only when both traces are
+    # negative, yielding the PSD pair. Indefinite factor pairs — only
+    # reachable at tied top singular values — have mixed-sign traces and
+    # can't be reconciled by a joint sign flip, so we leave them untouched.
+    if S_1.trace() < 0 and S_2.trace() < 0:
+        S_1.neg_()
+        S_2.neg_()
+    return S_1, S_2
 
 
 class MakeFxKFOCComputer(_BaseKFACComputer):
@@ -282,9 +282,9 @@ class MakeFxKFOCComputer(_BaseKFACComputer):
                 per_sample_grads = einsum(
                     g, a, "vec batch shared out, batch shared inp -> vec batch out inp"
                 )
-                G_star, A_star = _top_rank_one_kron_factors(per_sample_grads)
-                input_covariances[group_key] = A_star
-                gradient_covariances[group_key] = G_star
+                S_1, S_2 = _top_rank_one_kron_factors(per_sample_grads)
+                input_covariances[group_key] = S_2
+                gradient_covariances[group_key] = S_1
             else:
                 gradient_covariances[group_key] = einsum(
                     g, g, "vec batch shared row, vec batch shared col -> row col"

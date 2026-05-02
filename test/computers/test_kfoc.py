@@ -2,14 +2,14 @@ r"""Tests for :class:`KFOCLinearOperator` and its FX computer.
 
 Checks three things:
 
-1. **Factor reference**: KFOC's ``(G_star, A_star)`` match the top-1 dense SVD
+1. **Factor reference**: KFOC's ``(S_1, S_2)`` match the top-1 dense SVD
    of the materialized rearranged per-layer GGN block.
-2. **Rank-one recovery**: when ``B_l = G (otimes) A`` exactly (single linear
-   layer, no shared axes, one backward vector), KFOC recovers ``(G, A)`` up
-   to a joint sign flip and scale.
+2. **Rank-one recovery**: when ``G = S_1 (otimes) S_2`` exactly (single
+   linear layer, no shared axes, one backward vector), KFOC recovers
+   ``(S_1, S_2)`` up to a joint sign flip and scale.
 3. **First-order optimality**: SVD stationarity
-   ``R(B_l) vec(A_star) = sigma_1 vec(G_star)`` and
-   ``R(B_l)^T vec(G_star) = sigma_1 vec(A_star)`` holds using only the
+   ``R(G) vec(S_2) = sigma_1 vec(S_1)`` and
+   ``R(G)^T vec(S_1) = sigma_1 vec(S_2)`` holds using only the
    operator's matvecs.
 """
 
@@ -93,7 +93,7 @@ def test_kfoc_factors_match_dense_svd(
         object,
     ],
 ):
-    """KFOC's ``(G_star, A_star)`` match the top-1 SVD of the dense rearrangement.
+    """KFOC's ``(S_1, S_2)`` match the top-1 SVD of the dense rearrangement.
 
     Parametrized over the ``GGNLinearOperator`` fixture so CE/BCE/MSE, both
     reductions, 2D/3D/dict-style inputs are covered.
@@ -125,16 +125,16 @@ def test_kfoc_factors_match_dense_svd(
             R = torch_einsum("vnoi,vnpj->opij", P, P).reshape(d_out**2, d_in**2)
             U, S, Vh = torch_svd(R, full_matrices=False)
             scale = S[0].sqrt()
-            G_ref = scale * U[:, 0].reshape(d_out, d_out)
-            A_ref = scale * Vh[0].reshape(d_in, d_in)
+            S_1_ref = scale * U[:, 0].reshape(d_out, d_out)
+            S_2_ref = scale * Vh[0].reshape(d_in, d_in)
             K_l = K[offset : offset + n, offset : offset + n]
             # Individual factor signs are joint-arbitrary, but their Kron product is not.
-            assert allclose_report(K_l, kron(G_ref, A_ref))
+            assert allclose_report(K_l, kron(S_1_ref, S_2_ref))
         offset += n
 
 
 def test_kfoc_recovers_exact_rank_one_kron():
-    """On a constructed ``B_l = G (otimes) A`` problem, KFOC recovers the factors.
+    """On a constructed ``G = S_1 (otimes) S_2`` problem, KFOC recovers the factors.
 
     Single linear layer + MSE with a 1D output and a single batch — the
     GGN block is exactly a rank-one Kronecker product, so KFOC's
@@ -172,9 +172,9 @@ def test_kfoc_first_order_optimality(
 ):
     """Verify SVD stationarity at the returned factors via operator matvecs only.
 
-    For each layer's ``(G_star, A_star)``:
-        ``R(B_l) vec(A_star) ≈ ||A_star||_F^2 vec(G_star)``
-        ``R(B_l)^T vec(G_star) ≈ ||G_star||_F^2 vec(A_star)``
+    For each layer's ``(S_1, S_2)``:
+        ``R(G) vec(S_2) ≈ ||S_2||_F^2 vec(S_1)``
+        ``R(G)^T vec(S_1) ≈ ||S_1||_F^2 vec(S_2)``
 
     Args:
         case: Model, loss, parameters, data, and optional batch-size function.
@@ -197,13 +197,13 @@ def test_kfoc_first_order_optimality(
     input_covariances, gradient_covariances, _ = computer.compute()
     per_sample_grads = _collect_per_sample_grads(model, loss_func, params, X, y)
 
-    for key, A_star in input_covariances.items():
-        G_star = gradient_covariances[key]
+    for key, S_2 in input_covariances.items():
+        S_1 = gradient_covariances[key]
         op = _RearrangedGGNLinearOperator(per_sample_grads[key])
-        [R_A] = op @ [A_star]
-        [R_G] = op.adjoint() @ [G_star]
-        assert allclose_report(R_A, A_star.pow(2).sum() * G_star)
-        assert allclose_report(R_G, G_star.pow(2).sum() * A_star)
+        [R_S_2] = op @ [S_2]
+        [Rt_S_1] = op.adjoint() @ [S_1]
+        assert allclose_report(R_S_2, S_2.pow(2).sum() * S_1)
+        assert allclose_report(Rt_S_1, S_1.pow(2).sum() * S_2)
 
 
 def test_kfoc_factors_are_psd(
@@ -215,7 +215,7 @@ def test_kfoc_factors_are_psd(
         object,
     ],
 ):
-    """KFOC applies a trace-based gauge to yield PSD factors for PSD ``B_l``.
+    """KFOC applies a trace-based gauge to yield PSD factors for PSD ``G``.
 
     For the GGN blocks the ``case`` fixture produces, the factors are either
     jointly PSD or jointly NSD from the SVD; the trace convention in
@@ -240,19 +240,19 @@ def test_kfoc_factors_are_psd(
         batch_size_fn=batch_size_fn,
     )
     input_covariances, gradient_covariances, _ = computer.compute()
-    for key, A in input_covariances.items():
-        G = gradient_covariances[key]
+    for key, S_2 in input_covariances.items():
+        S_1 = gradient_covariances[key]
         # Traces share sign (both non-negative after the PSD gauge flip),
         # excluding the edge case of mixed-sign indefinite factor pairs that
         # a joint sign flip cannot resolve.
-        assert A.trace().item() * G.trace().item() >= 0
+        assert S_1.trace().item() * S_2.trace().item() >= 0
         # PSD (up to float64 eigenvalue noise); symmetrize to strip float asymmetry.
-        assert torch.linalg.eigvalsh((A + A.T) / 2).min().item() > -1e-10
-        assert torch.linalg.eigvalsh((G + G.T) / 2).min().item() > -1e-10
+        assert torch.linalg.eigvalsh((S_1 + S_1.T) / 2).min().item() > -1e-10
+        assert torch.linalg.eigvalsh((S_2 + S_2.T) / 2).min().item() > -1e-10
 
 
 def test_kfoc_handles_zero_ggn():
-    """Zero ``B_l`` (e.g. all-zero inputs) short-circuits to zero factors.
+    """Zero ``G`` (e.g. all-zero inputs) short-circuits to zero factors.
 
     ``svds`` otherwise fails with ARPACK error -9 ("starting vector is
     zero") on a zero operator.

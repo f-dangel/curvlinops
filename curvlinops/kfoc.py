@@ -13,44 +13,38 @@ from curvlinops.kfac_utils import FisherType, KFACType
 class KFOCLinearOperator(KFACLinearOperator):
     r"""Frobenius-optimal rank-one Kronecker approximation of the GGN.
 
-    Unlike KFAC, which factorizes each per-layer GGN block as a product of
-    per-axis sums, KFOC returns the best Frobenius-norm rank-one Kronecker
-    approximation of the exact per-layer block, obtained via the top singular
-    pair of the block's Van Loan rearrangement.
-
-    For each per-layer Gauss-Newton block
-    :math:`B_l = \sum_{v, n} \mathrm{vec}(P_{v, n})\,\mathrm{vec}(P_{v, n})^\top`
-    with per-sample ``vec(W)`` gradients
-    :math:`P_{v, n} = \sum_t g_{v, n, t} a_{n, t}^\top`, KFOC returns the
-    Frobenius-optimal rank-one Kronecker approximation
+    Unlike KFAC, which factorizes each per-layer GGN block
+    :math:`\mathbf{G}` as a product of per-axis sums, KFOC returns the
+    Frobenius-optimal rank-one Kronecker approximation by solving
 
     .. math::
-        B_l \approx G^\star \otimes A^\star,
+        \mathbf{S}_1, \mathbf{S}_2 = \arg\min_{\mathbf{S}_1, \mathbf{S}_2}
+        \lVert \mathbf{G} - \mathbf{S}_1 \otimes \mathbf{S}_2 \rVert_F,
 
-    where :math:`(G^\star, A^\star)` come from the top singular pair of the
-    block's Van Loan rearrangement.
+    via the top singular pair of the block's Van Loan rearrangement
+    :math:`\mathcal{R}(\mathbf{G})`.
 
     The factors come straight from the SVD reshape, with a trace-based
     sign convention applied to resolve the joint-sign gauge.
 
-    - **Symmetry** holds by construction: :math:`B_l` is symmetric, so
-      :math:`\mathcal{R}(B_l)` commutes with the vec-transpose permutation
-      and its top singular triplet lives in the symmetric subspace, making
-      ``G_star`` and ``A_star`` symmetric to machine precision.
-    - **PSD-ness holds for well-conditioned** :math:`B_l`: the optimal
-      factors are either both PSD or both NSD (Kron of mixed-sign factors
-      is indefinite and can't be optimal for PSD :math:`B_l`). The joint
-      sign is flipped when both factor traces are negative, mapping NSD
-      pairs to PSD. In near-degenerate cases (tied top singular values)
-      the optimal pair can be genuinely indefinite (mixed-sign traces);
-      the joint-flip rule leaves these untouched, so downstream
-      ``inverse`` / ``eigh`` / ``logdet`` may fail or return NaNs unless
-      sufficient damping is supplied.
+    - **Symmetry** holds by construction: :math:`\mathbf{G}` is symmetric,
+      so :math:`\mathcal{R}(\mathbf{G})` commutes with the vec-transpose
+      permutation and its top singular triplet lives in the symmetric
+      subspace, making :math:`\mathbf{S}_1` and :math:`\mathbf{S}_2`
+      symmetric to machine precision.
+    - **PSD-ness holds for well-conditioned** :math:`\mathbf{G}`: the
+      optimal factors are either both PSD or both NSD (Kron of mixed-sign
+      factors is indefinite and can't be optimal for PSD
+      :math:`\mathbf{G}`). The joint sign is flipped when both factor
+      traces are negative, mapping NSD pairs to PSD. In near-degenerate
+      cases (tied top singular values) the optimal pair can be genuinely
+      indefinite (mixed-sign traces); the joint-flip rule leaves these
+      untouched, so downstream ``inverse`` / ``eigh`` / ``logdet`` may
+      fail or return NaNs unless sufficient damping is supplied.
 
     Scope:
         - Single-batch data only (``len(list(data)) == 1``).
         - :class:`FisherType.TYPE2` only.
-        - :class:`KFACType.EXPAND` only.
         - FX backend only (uses :func:`make_compute_kfac_io_batch` with
           ``intermediate_as_batch=False``).
 
