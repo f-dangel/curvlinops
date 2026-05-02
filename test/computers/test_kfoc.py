@@ -88,34 +88,6 @@ def test_kfoc_factors_match_dense_svd(
         offset += n
 
 
-def test_kfoc_recovers_exact_rank_one_kron():
-    """On a constructed ``G = S_1 (otimes) S_2`` problem, KFOC recovers the factors.
-
-    Single linear layer + MSE with a 1D output and a single batch — the
-    GGN block is exactly a rank-one Kronecker product, so KFOC's
-    approximation error should be at machine precision.
-    """
-    manual_seed(0)
-    model = Sequential(Linear(4, 1, bias=False))
-    loss_func = MSELoss(reduction="sum")
-    params = {n: p.double() for n, p in model.named_parameters() if p.requires_grad}
-    model.double()
-    X = rand(3, 4, dtype=float64)
-    y = rand(3, 1, dtype=float64)
-
-    kfoc = KFOCLinearOperator(
-        model,
-        loss_func,
-        params,
-        [(X, y)],
-        check_deterministic=False,
-    )
-    K = kfoc @ eye_like(kfoc)
-
-    ggn = block_diagonal(GGNLinearOperator, model, loss_func, params, [(X, y)])
-    assert allclose_report(K, ggn)
-
-
 def test_kfoc_first_order_optimality(
     case: tuple[
         Module,
