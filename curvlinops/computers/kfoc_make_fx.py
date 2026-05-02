@@ -139,14 +139,15 @@ def _top_rank_one_kron_factors(
     r"""Compute Frobenius-optimal rank-1 Kronecker factors of a per-layer GGN block.
 
     Runs the top-1 SVD of the rearranged GGN operator and reshapes the
-    singular vectors into Kronecker factors. When the rearranged operator
-    has a trivial dimension (``min(d_out**2, d_in**2) < 2``, reachable for
-    scalar-output layers) ``svds`` cannot handle ``k = 1`` and we fall back
-    to a dense SVD of the materialized operator.
+    singular vectors into Kronecker factors. For scalar-input or
+    scalar-output layers (``d_in == 1`` or ``d_out == 1``) ``svds`` cannot
+    handle ``k = 1`` and we fall back to a dense SVD.
 
-    Factors are returned raw from the SVD reshape: not symmetrized, not
-    PSD-projected. Generically they are symmetric PSD up to floating-point
-    noise; near-degenerate cases may be indefinite.
+    Factors come from the SVD reshape modulo a joint-sign flip when both
+    traces are negative (mapping NSD pairs to PSD); not otherwise
+    symmetrized or PSD-projected. Generically they are symmetric PSD up to
+    floating-point noise; near-degenerate (mixed-sign trace) cases may
+    remain indefinite.
 
     Args:
         per_sample_grads: Per-sample ``vec(W)`` gradients, shape
@@ -167,8 +168,11 @@ def _top_rank_one_kron_factors(
         return zeros(d_out, d_out), zeros(d_in, d_in)
     op = _RearrangedGGNLinearOperator(per_sample_grads)
     scipy_op = op.to_scipy()
-    if min(d_out**2, d_in**2) < 2:
-        dense = scipy_op @ np_eye(d_in**2, dtype=scipy_op.dtype)
+    if d_out == 1 or d_in == 1:
+        # ``svds`` requires ``k < min(shape)``; fall back to a dense SVD
+        # materialized from a single matvec against the trivial (1×1) side.
+        identity = np_eye(1, dtype=scipy_op.dtype)
+        dense = scipy_op @ identity if d_in == 1 else scipy_op.rmatmat(identity).T
         u, s, vt = np_svd(dense, full_matrices=False)
         u, s, vt = u[:, :1], s[:1], vt[:1, :]
     else:
@@ -197,18 +201,15 @@ def _top_rank_one_kron_factors(
 
 
 class MakeFxKFOCComputer(_BaseKFACComputer):
-    """KFOC computer using the unflattened IO collector and per-layer SVD.
+    """KFOC computer: top-1 SVD on the rearranged per-layer GGN block.
 
-    Collects per-sample activations and output gradients via
-    :func:`make_compute_kfac_io_batch` with ``intermediate_as_batch=False``
-    and ``FisherType.TYPE2``, forms per-sample ``vec(W)`` gradients by
-    summing over the shared axis, and runs a top-1 truncated SVD on the
-    rearranged GGN operator to extract the Frobenius-optimal rank-1
-    Kronecker factors per parameter group.
+    Collects per-sample activations and output gradients via the unflattened
+    IO collector (``intermediate_as_batch=False``), forms per-sample
+    ``vec(W)`` gradients, and extracts the Frobenius-optimal rank-1 Kronecker
+    factors from the top singular pair of the rearranged operator.
 
-    Expects ``FisherType.TYPE2``, ``KFACType.EXPAND``, and exactly one
-    batch in ``data``. Single-batch enforcement happens during
-    :meth:`compute`.
+    Requires ``FisherType.TYPE2``, ``KFACType.EXPAND``, and exactly one batch
+    in ``data``. The single-batch check runs in :meth:`compute`.
     """
 
     def __init__(self, *args, **kwargs):
