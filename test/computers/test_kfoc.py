@@ -25,21 +25,8 @@ from curvlinops.utils import allclose_report
 from test.utils import block_diagonal, change_dtype, eye_like
 
 
-def test_kfoc_factors_match_dense_svd(
-    case: tuple[
-        Module,
-        Module,
-        dict[str, Tensor],
-        Iterable[tuple[Tensor, Tensor]],
-        object,
-    ],
-):
-    """KFOC's per-layer Kron product matches the top-1 SVD of ``R(G_l)``.
-
-    The Eckart-Young theorem on the Van Loan rearrangement is the
-    closed-form Frobenius minimizer; reshape the GGN block to
-    ``R(G_l) ∈ R^(d_out² × d_in²)``, take the top-1 SVD, and check that
-    KFOC's Kron output matches.
+def _assert_kfoc_factors_match_dense_svd(case):
+    """Assert KFOC's per-layer Kron product matches the top-1 SVD of ``R(G_l)``.
 
     Args:
         case: Model, loss, parameters, data, and optional batch-size function.
@@ -88,23 +75,8 @@ def test_kfoc_factors_match_dense_svd(
         offset += n
 
 
-def test_kfoc_first_order_optimality(
-    case: tuple[
-        Module,
-        Module,
-        dict[str, Tensor],
-        Iterable[tuple[Tensor, Tensor]],
-        object,
-    ],
-):
-    """KFOC's weight factors are stationary points of the Frobenius residual.
-
-    Enable grad on every Kronecker factor of a weight block, materialize
-    KFOC to a dense matrix, and check that the gradient of
-    ``||GGN - K||_F²`` w.r.t. each factor is near zero. ``K`` is
-    block-diagonal so the residual decouples per block. Bias-only blocks
-    are skipped: KFOC stores the ``t``-diagonal of the bias GGN as the
-    sole factor, which is not the Frobenius minimum under weight sharing.
+def _assert_kfoc_first_order_optimality(case):
+    """Assert KFOC's weight factors are stationary points of the Frobenius residual.
 
     Args:
         case: Model, loss, parameters, data, and optional batch-size function.
@@ -136,6 +108,90 @@ def test_kfoc_first_order_optimality(
     loss = (ggn - kfoc @ eye_like(kfoc)).pow(2).sum()
     for g in grad(loss, weight_S):
         assert g.abs().max().item() < 1e-8
+
+
+def test_kfoc_factors_match_dense_svd(
+    case: tuple[
+        Module,
+        Module,
+        dict[str, Tensor],
+        Iterable[tuple[Tensor, Tensor]],
+        object,
+    ],
+):
+    """KFOC's per-layer Kron product matches the top-1 SVD of ``R(G_l)`` (Linear).
+
+    The Eckart-Young theorem on the Van Loan rearrangement is the
+    closed-form Frobenius minimizer; reshape the GGN block to
+    ``R(G_l) ∈ R^(d_out² × d_in²)``, take the top-1 SVD, and check that
+    KFOC's Kron output matches.
+
+    Args:
+        case: Model, loss, parameters, data, and optional batch-size function.
+    """
+    _assert_kfoc_factors_match_dense_svd(case)
+
+
+def test_kfoc_factors_match_dense_svd_cnn(
+    cnn_case: tuple[
+        Module,
+        Module,
+        dict[str, Tensor],
+        Iterable[tuple[Tensor, Tensor]],
+        object,
+    ],
+):
+    """Same as :func:`test_kfoc_factors_match_dense_svd`, on CNN models with Conv2d.
+
+    Generalizes the dense-SVD oracle to ``ndim >= 2`` weights — a Conv2d
+    weight ``(C_out, C_in, kH, kW)`` matricizes to ``(C_out, C_in*kH*kW)``
+    for the Van Loan rearrangement.
+
+    Args:
+        cnn_case: Model, loss, parameters, data, and optional batch-size function.
+    """
+    _assert_kfoc_factors_match_dense_svd(cnn_case)
+
+
+def test_kfoc_first_order_optimality(
+    case: tuple[
+        Module,
+        Module,
+        dict[str, Tensor],
+        Iterable[tuple[Tensor, Tensor]],
+        object,
+    ],
+):
+    """KFOC's weight factors are stationary points of the Frobenius residual (Linear).
+
+    Enable grad on every Kronecker factor of a weight block, materialize
+    KFOC to a dense matrix, and check that the gradient of
+    ``||GGN - K||_F²`` w.r.t. each factor is near zero. ``K`` is
+    block-diagonal so the residual decouples per block. Bias-only blocks
+    are skipped: KFOC stores the ``t``-diagonal of the bias GGN as the
+    sole factor, which is not the Frobenius minimum under weight sharing.
+
+    Args:
+        case: Model, loss, parameters, data, and optional batch-size function.
+    """
+    _assert_kfoc_first_order_optimality(case)
+
+
+def test_kfoc_first_order_optimality_cnn(
+    cnn_case: tuple[
+        Module,
+        Module,
+        dict[str, Tensor],
+        Iterable[tuple[Tensor, Tensor]],
+        object,
+    ],
+):
+    """Same as :func:`test_kfoc_first_order_optimality`, on CNN models with Conv2d.
+
+    Args:
+        cnn_case: Model, loss, parameters, data, and optional batch-size function.
+    """
+    _assert_kfoc_first_order_optimality(cnn_case)
 
 
 def test_kfoc_handles_zero_ggn():
