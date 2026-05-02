@@ -25,7 +25,10 @@ class KFOCLinearOperator(KFACLinearOperator):
     :math:`\mathcal{R}(\mathbf{G})`. The factors :math:`\mathbf{S}_1`,
     :math:`\mathbf{S}_2` are always symmetric, and PSD unless
     :math:`\mathcal{R}(\mathbf{G})`'s top singular vector is degenerate.
-    PSD-ness is not verified.
+
+    .. warning::
+       Symmetry and PSD-ness of :math:`\mathbf{S}_1`, :math:`\mathbf{S}_2`
+       are not checked.
 
     Scope:
         - Single-batch data only (``len(list(data)) == 1``).
