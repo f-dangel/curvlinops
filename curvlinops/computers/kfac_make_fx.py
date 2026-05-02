@@ -340,8 +340,6 @@ class MakeFxKFACComputer(_BaseKFACComputer):
                     kfac_approx=self._kfac_approx,
                     separate_weight_and_bias=self._separate_weight_and_bias,
                 )
-            else:
-                io.ensure_io_fn(X, self._params)
 
             traced_fns[batch_size] = self._trace_one_batch(io, X, y)
 
@@ -354,7 +352,7 @@ class MakeFxKFACComputer(_BaseKFACComputer):
 
         Defines the per-batch computation as ``io.populate`` followed by
         per-group covariance einsums, and traces the whole thing with
-        :func:`_make_fx` inside :meth:`LayerIO.trace_context`.
+        :func:`_make_fx` inside :meth:`LayerIO.enable_param_grads`.
 
         Args:
             io: The :class:`LayerIO` (must already have an ``io_fn`` cached
@@ -365,7 +363,6 @@ class MakeFxKFACComputer(_BaseKFACComputer):
         Returns:
             A traced callable ``(params, X, y) -> (input_covs, gradient_covs)``.
         """
-        batch_size_fn = self._batch_size_fn
         fisher_type = self._fisher_type
 
         def compute_batch(
@@ -373,7 +370,6 @@ class MakeFxKFACComputer(_BaseKFACComputer):
         ) -> tuple[dict[tuple[str, ...], Tensor], dict[tuple[str, ...], Tensor]]:
             layer_inputs, layer_output_grads = io.populate(params, X, y)
             snap = io.snapshot(layer_inputs, layer_output_grads)
-            batch_size = batch_size_fn(X)
 
             input_covs: dict[tuple[str, ...], Tensor] = {}
             gradient_covs: dict[tuple[str, ...], Tensor] = {}
@@ -382,7 +378,11 @@ class MakeFxKFACComputer(_BaseKFACComputer):
                 group_key = tuple(group.values())
                 if a is not None:
                     xxT = einsum(a, a, "batch shared i, batch shared j -> i j")
-                    input_covs[group_key] = xxT.div_(batch_size * a.shape[1])
+                    # ``a`` has shape ``[batch, shared, d_in]``; the standardized
+                    # gatherer preserves the batch axis through weight-tied cats,
+                    # so ``a.shape[0]`` matches ``self._batch_size_fn(X)`` and we
+                    # avoid threading the per-X helper into the closure.
+                    input_covs[group_key] = xxT.div_(a.shape[0] * a.shape[1])
                 if fisher_type == FisherType.FORWARD_ONLY:
                     W = params[next(iter(group.values()))]
                     gradient_covs[group_key] = eye(
@@ -394,7 +394,7 @@ class MakeFxKFACComputer(_BaseKFACComputer):
                     )
             return input_covs, gradient_covs
 
-        with io.trace_context(self._params):
+        with io.enable_param_grads(self._params):
             return _make_fx(compute_batch)(self._params, X, y)
 
     def compute(

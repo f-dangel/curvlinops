@@ -57,7 +57,7 @@ from curvlinops.computers.io_collector.groups import (
 from curvlinops.kfac_utils import FisherType, KFACType
 from curvlinops.utils import _enable_requires_grad
 
-ShapeKey = tuple
+ShapeKey = tuple[int, ...] | tuple[tuple[str, tuple[int, ...]], ...]
 
 
 class LayerIO:
@@ -108,12 +108,6 @@ class LayerIO:
         separate_weight_and_bias: bool = True,
         intermediate_as_batch: bool = True,
     ):
-        """Bootstrap shape-independent metadata and trace the first ``io_fn``.
-
-        Raises:
-            ValueError: If ``intermediate_as_batch=False`` is combined with
-                :attr:`FisherType.EMPIRICAL`.
-        """
         if not intermediate_as_batch and fisher_type == FisherType.EMPIRICAL:
             raise ValueError(
                 "intermediate_as_batch=False is not supported with "
@@ -133,23 +127,19 @@ class LayerIO:
             loss_func, fisher_type, mc_samples
         )
 
-        # Bootstrap: trace one ``io_fn`` to extract shape-independent metadata.
-        if isinstance(X_example, UserDict):
-            _register_userdict_as_pytree()
-        first_io_fn, io_param_names, layer_hparams = with_kfac_io(
-            model_func, X_example, params, fisher_type
-        )
-        self._io_param_names = io_param_names
-        self._layer_hparams = layer_hparams
+        # Bootstrap: ensure_io_fn seeds metadata on first call (when
+        # ``_io_param_names`` is None), validates on subsequent calls.
+        self._io_param_names: dict[str, dict[str, str]] | None = None
+        self._layer_hparams: dict[str, dict[str, Any]] | None = None
+        self._io_fns: dict[ShapeKey, Callable] = {}
+        self.ensure_io_fn(X_example, params)
+
         self._mapping, self._io_groups = _build_param_groups_from_io(
-            io_param_names, separate_weight_and_bias
+            self._io_param_names, separate_weight_and_bias
         )
         self._group_inputs, self._group_grads = make_group_gatherers(
             self._io_groups, self._io_param_names, self._layer_hparams, kfac_approx
         )
-        self._io_fns: dict[ShapeKey, Callable] = {
-            self._shape_key(X_example): first_io_fn
-        }
 
     @property
     def mapping(self) -> list[ParamGroup]:
@@ -200,9 +190,9 @@ class LayerIO:
     ) -> Callable:
         """Return the FX-traced ``io_fn`` for ``X``'s shape, building if needed.
 
-        Re-traces ``with_kfac_io`` for unseen shapes and caches the result.
-        Asserts that re-traced metadata matches the bootstrap to detect
-        violations of the shape-independence assumption.
+        First call seeds shape-independent metadata; subsequent calls validate
+        re-traced metadata against the seed to detect violations of the
+        shape-independence assumption.
 
         Args:
             X: Input batch (only its shape is consulted for the cache key).
@@ -225,16 +215,20 @@ class LayerIO:
         io_fn, io_param_names, layer_hparams = with_kfac_io(
             self._model_func, X, params, self._fisher_type
         )
-        if io_param_names != self._io_param_names:
-            raise RuntimeError(
-                "IO-collector parameter-name metadata changed across shapes. "
-                f"Expected {self._io_param_names}, got {io_param_names}."
-            )
-        if layer_hparams != self._layer_hparams:
-            raise RuntimeError(
-                "IO-collector layer hyperparameters changed across shapes. "
-                f"Expected {self._layer_hparams}, got {layer_hparams}."
-            )
+        if self._io_param_names is None:
+            self._io_param_names = io_param_names
+            self._layer_hparams = layer_hparams
+        else:
+            if io_param_names != self._io_param_names:
+                raise RuntimeError(
+                    "IO-collector parameter-name metadata changed across shapes. "
+                    f"Expected {self._io_param_names}, got {io_param_names}."
+                )
+            if layer_hparams != self._layer_hparams:
+                raise RuntimeError(
+                    "IO-collector layer hyperparameters changed across shapes. "
+                    f"Expected {self._layer_hparams}, got {layer_hparams}."
+                )
         self._io_fns[key] = io_fn
         return io_fn
 
@@ -293,8 +287,7 @@ class LayerIO:
         mean_scale = 1.0 / sqrt(output_for_grad.shape[0])
         grad_outputs.mul_({"sum": 1.0, "mean": mean_scale}[self._loss_func.reduction])
 
-        io_layer_names = list(layer_outputs)
-        output_tensors = list(layer_outputs.values())
+        io_layer_names, output_tensors = zip(*layer_outputs.items())
         layer_output_grads_list = autograd.grad(
             output_for_grad,
             output_tensors,
@@ -303,6 +296,34 @@ class LayerIO:
         )
         layer_output_grads = dict(zip(io_layer_names, layer_output_grads_list))
         return layer_inputs, layer_output_grads
+
+    def group_inputs(
+        self, group: ParamGroup, layer_inputs: dict[str, Tensor]
+    ) -> Tensor:
+        """Gather a group's layer inputs in weight-sharing format.
+
+        Args:
+            group: Parameter group dict.
+            layer_inputs: Raw layer inputs keyed by IO layer name.
+
+        Returns:
+            Concatenated tensor of shape ``[batch, shared, d_in]``.
+        """
+        return self._group_inputs(group, layer_inputs)
+
+    def group_grads(
+        self, group: ParamGroup, layer_output_grads: dict[str, Tensor]
+    ) -> Tensor:
+        """Gather a group's layer output gradients in weight-sharing format.
+
+        Args:
+            group: Parameter group dict.
+            layer_output_grads: Batched output gradients keyed by IO layer name.
+
+        Returns:
+            Concatenated tensor of shape ``[v, batch, shared, d_out]``.
+        """
+        return self._group_grads(group, layer_output_grads)
 
     def snapshot(
         self,
@@ -321,19 +342,16 @@ class LayerIO:
         return LayerIOSnapshot(self, layer_inputs, layer_output_grads)
 
     @contextmanager
-    def trace_context(self, params: dict[str, Tensor]):
-        """Context manager around ``_make_fx`` calls that include :meth:`populate`.
+    def enable_param_grads(self, params: dict[str, Tensor]):
+        """Temporarily enable ``requires_grad`` on ``params`` for the trace boundary.
 
-        Wraps :func:`_enable_requires_grad` so the ``autograd.grad`` call
-        inside :meth:`populate` has differentiable inputs at trace time.
-        Restores prior ``requires_grad`` state on exit, satisfying the
-        "owner-of-autograd" contract: callers don't have to import the
-        helper directly.
+        Required around ``_make_fx`` calls that include :meth:`populate`, so
+        the ``autograd.grad`` call inside has differentiable inputs at trace
+        time. Prior ``requires_grad`` state is restored on exit.
 
         Args:
             params: Named parameters whose ``requires_grad`` should be
-                temporarily enabled (typically the same dict passed to
-                :meth:`populate`).
+                temporarily enabled.
 
         Yields:
             None.
@@ -422,13 +440,13 @@ class LayerIOSnapshot:
               or ``None`` for :attr:`FisherType.FORWARD_ONLY`.
         """
         a = (
-            self._owner._group_inputs(group, self._layer_inputs)
+            self._owner.group_inputs(group, self._layer_inputs)
             if "W" in group
             else None
         )
         g = (
-            self._owner._group_grads(group, self._layer_output_grads)
-            if self._owner._fisher_type != FisherType.FORWARD_ONLY
+            self._owner.group_grads(group, self._layer_output_grads)
+            if self._owner.fisher_type != FisherType.FORWARD_ONLY
             else None
         )
         return a, g

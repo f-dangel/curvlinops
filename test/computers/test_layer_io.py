@@ -19,8 +19,8 @@ def _setup_mlp(in_features: int = 6, out_features: int = 4):
     """Build a tiny MLP, its functional model, params, and CE loss.
 
     Params have ``requires_grad=True`` so direct ``populate`` calls (without
-    going through ``trace_context``) can run ``autograd.grad`` successfully.
-    Tests that probe ``trace_context``'s save/restore semantics flip
+    going through ``enable_param_grads``) can run ``autograd.grad`` successfully.
+    Tests that probe ``enable_param_grads``'s save/restore semantics flip
     ``requires_grad`` explicitly.
 
     Args:
@@ -202,8 +202,8 @@ def test_joint_weight_bias_group_includes_bias_pad():
         assert a.shape[-1] in {5, 9}
 
 
-def test_trace_context_preserves_requires_grad():
-    """A frozen param stays frozen after ``trace_context`` exits.
+def test_enable_param_grads_preserves_requires_grad():
+    """A frozen param stays frozen after ``enable_param_grads`` exits.
 
     Canonical unit-level guarantee for the autograd-ownership contract from
     `PR #301 <https://github.com/f-dangel/curvlinops/pull/301>`_. Once
@@ -218,7 +218,7 @@ def test_trace_context_preserves_requires_grad():
     params["1.bias"].requires_grad_(False)
 
     io = LayerIO(model_func, loss, params, randn(4, 6), fisher_type=FisherType.MC)
-    with io.trace_context(params):
+    with io.enable_param_grads(params):
         # Inside: all params should be enabled for the trace
         for p in params.values():
             assert p.requires_grad
@@ -230,7 +230,7 @@ def test_trace_context_preserves_requires_grad():
 
 
 def test_make_fx_traces_populate():
-    """``populate`` traces under ``trace_context`` without raising."""
+    """``populate`` traces under ``enable_param_grads`` without raising."""
     model_func, loss, params = _setup_mlp(in_features=4, out_features=2)
     X = randn(6, 4)
     y = randint(0, 2, (6,))
@@ -240,7 +240,7 @@ def test_make_fx_traces_populate():
     def populate(p, x, t):
         return io.populate(p, x, t)
 
-    with io.trace_context(params):
+    with io.enable_param_grads(params):
         traced = _make_fx(populate)(params, X, y)
     # Sanity: traced graph is callable and returns the right structure
     li, log = traced(params, X, y)

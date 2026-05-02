@@ -111,7 +111,7 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
   mappings) plus a per-shape cache of FX-traced `io_fn`s. Snapshots expose
   on-demand per-group accessors at three granularities (`raw`,
   `standardized_io`, `per_sample_grads`) so structural-GGN approximators
-  can consume per-batch IO without re-deriving the plumbing. `trace_context`
+  can consume per-batch IO without re-deriving the plumbing. `enable_param_grads`
   context manager wraps `_enable_requires_grad` so callers don't have to
   import the autograd-ownership helper directly.
 
