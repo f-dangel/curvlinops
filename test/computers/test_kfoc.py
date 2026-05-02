@@ -1,86 +1,29 @@
 r"""Tests for :class:`KFOCLinearOperator` and its FX computer.
 
-Checks three things:
+Two semantic checks plus a few guards:
 
-1. **Factor reference**: KFOC's ``(S_1, S_2)`` match the top-1 dense SVD
-   of the materialized rearranged per-layer GGN block.
-2. **Rank-one recovery**: when ``G = S_1 (otimes) S_2`` exactly (single
-   linear layer, no shared axes, one backward vector), KFOC recovers
-   ``(S_1, S_2)`` up to a joint sign flip and scale.
-3. **First-order optimality**: SVD stationarity
-   ``R(G) vec(S_2) = sigma_1 vec(S_1)`` and
-   ``R(G)^T vec(S_1) = sigma_1 vec(S_2)`` holds using only the
-   operator's matvecs.
+1. **Factor reference** (``test_kfoc_factors_match_dense_svd``): KFOC's
+   per-layer ``(S_1, S_2)`` match the top-1 dense SVD of the Van Loan
+   rearrangement of the GGN block (the closed-form Frobenius minimizer).
+2. **First-order optimality** (``test_kfoc_first_order_optimality``):
+   KFOC's ``(S_1, S_2)`` are stationary points of
+   ``||G_l - S_1 ⊗ S_2||_F²``, verified via autograd.
+3. Rank-one recovery, zero handling, multi-batch rejection, scalar-layer
+   fallback.
 """
 
 from collections.abc import Iterable
 
-from einops import einsum
 from pytest import mark, raises
 from torch import Tensor, float64, kron, manual_seed, rand, zeros
-from torch import einsum as torch_einsum
 from torch.linalg import svd as torch_svd
 from torch.nn import Linear, Module, MSELoss, Sequential
 
 from curvlinops import GGNLinearOperator, KFOCLinearOperator
-from curvlinops.computers.kfac_make_fx import (
-    make_compute_kfac_io_batch,
-    make_group_gatherers,
-)
-from curvlinops.computers.kfoc_make_fx import (
-    MakeFxKFOCComputer,
-    _RearrangedGGNLinearOperator,
-)
+from curvlinops.computers.kfoc_make_fx import MakeFxKFOCComputer
 from curvlinops.kfac_utils import FisherType, KFACType
-from curvlinops.utils import allclose_report, make_functional_call
+from curvlinops.utils import allclose_report
 from test.utils import block_diagonal, change_dtype, eye_like
-
-
-def _collect_per_sample_grads(
-    model: Module,
-    loss_func: Module,
-    params: dict[str, Tensor],
-    X,
-    y: Tensor,
-) -> dict[tuple[str, ...], Tensor]:
-    """Replay the KFOC collection path and return ``P_{v, n}`` per group.
-
-    Args:
-        model: Neural network (or callable).
-        loss_func: Loss function.
-        params: Named model parameters.
-        X: Input batch.
-        y: Target batch.
-
-    Returns:
-        Dict mapping parameter group keys to the per-sample ``vec(W)``
-        gradient stack ``P`` of shape ``(V, N, d_out, d_in)``.
-    """
-    for p in params.values():
-        p.requires_grad_(True)
-    model_func = make_functional_call(model) if isinstance(model, Module) else model
-    fn, mapping, io_groups, io_pnames, layer_hparams = make_compute_kfac_io_batch(
-        model_func,
-        loss_func,
-        params,
-        X,
-        FisherType.TYPE2,
-        intermediate_as_batch=False,
-    )
-    layer_inputs, layer_output_grads = fn(params, X, y)
-    group_inputs, group_grads = make_group_gatherers(
-        io_groups, io_pnames, layer_hparams, KFACType.EXPAND
-    )
-    per_sample_grads: dict[tuple[str, ...], Tensor] = {}
-    for group in mapping:
-        if "W" not in group:
-            continue
-        g = group_grads(group, layer_output_grads)
-        a = group_inputs(group, layer_inputs)
-        per_sample_grads[tuple(group.values())] = einsum(
-            g, a, "vec batch shared out, batch shared inp -> vec batch out inp"
-        )
-    return per_sample_grads
 
 
 def test_kfoc_factors_match_dense_svd(
@@ -92,10 +35,12 @@ def test_kfoc_factors_match_dense_svd(
         object,
     ],
 ):
-    """KFOC's ``(S_1, S_2)`` match the top-1 SVD of the dense rearrangement.
+    """KFOC's per-layer Kron product matches the top-1 SVD of ``R(G_l)``.
 
-    Parametrized over the ``GGNLinearOperator`` fixture so CE/BCE/MSE, both
-    reductions, 2D/3D/dict-style inputs are covered.
+    The Eckart-Young theorem on the Van Loan rearrangement is the
+    closed-form Frobenius minimizer; reshape the GGN block to
+    ``R(G_l) ∈ R^(d_out² × d_in²)``, take the top-1 SVD, and check that
+    KFOC's Kron output matches.
 
     Args:
         case: Model, loss, parameters, data, and optional batch-size function.
@@ -112,16 +57,27 @@ def test_kfoc_factors_match_dense_svd(
         batch_size_fn=batch_size_fn,
     )
     K = kfoc @ eye_like(kfoc)
-
-    per_sample_grads = _collect_per_sample_grads(model, loss_func, params, X, y)
+    ggn = block_diagonal(
+        GGNLinearOperator,
+        model,
+        loss_func,
+        params,
+        [(X, y)],
+        batch_size_fn=batch_size_fn,
+    )
 
     offset = 0
-    for name, p in params.items():
+    for _, p in params.items():
         n = p.numel()
         if p.ndim == 2:
             d_out, d_in = p.shape
-            P = per_sample_grads[(name,)]
-            R = torch_einsum("vnoi,vnpj->opij", P, P).reshape(d_out**2, d_in**2)
+            G_l = ggn[offset : offset + n, offset : offset + n]
+            R = (
+                G_l
+                .reshape(d_out, d_in, d_out, d_in)
+                .movedim(1, 2)
+                .reshape(d_out**2, d_in**2)
+            )
             U, S, Vh = torch_svd(R, full_matrices=False)
             scale = S[0].sqrt()
             S_1_ref = scale * U[:, 0].reshape(d_out, d_out)
@@ -169,11 +125,11 @@ def test_kfoc_first_order_optimality(
         object,
     ],
 ):
-    """Verify SVD stationarity at the returned factors via operator matvecs only.
+    """KFOC's factors are stationary points of the Frobenius residual.
 
-    For each layer's ``(S_1, S_2)``:
-        ``R(G) vec(S_2) ≈ ||S_2||_F^2 vec(S_1)``
-        ``R(G)^T vec(S_1) ≈ ||S_1||_F^2 vec(S_2)``
+    Set ``requires_grad=True`` on KFOC's per-layer ``(S_1, S_2)``, expand to
+    ``S_1 ⊗ S_2``, compute the residual to the true GGN block, and assert
+    the autograd gradients are near zero.
 
     Args:
         case: Model, loss, parameters, data, and optional batch-size function.
@@ -194,15 +150,27 @@ def test_kfoc_first_order_optimality(
         batch_size_fn=batch_size_fn,
     )
     input_covariances, gradient_covariances, _ = computer.compute()
-    per_sample_grads = _collect_per_sample_grads(model, loss_func, params, X, y)
+    ggn = block_diagonal(
+        GGNLinearOperator,
+        model,
+        loss_func,
+        params,
+        [(X, y)],
+        batch_size_fn=batch_size_fn,
+    )
 
-    for key, S_2 in input_covariances.items():
-        S_1 = gradient_covariances[key]
-        op = _RearrangedGGNLinearOperator(per_sample_grads[key])
-        [R_S_2] = op @ [S_2]
-        [Rt_S_1] = op.adjoint() @ [S_1]
-        assert allclose_report(R_S_2, S_2.pow(2).sum() * S_1)
-        assert allclose_report(Rt_S_1, S_1.pow(2).sum() * S_2)
+    offset = 0
+    for name, p in params.items():
+        n = p.numel()
+        if p.ndim == 2:
+            G_l = ggn[offset : offset + n, offset : offset + n]
+            S_1 = gradient_covariances[(name,)].detach().requires_grad_(True)
+            S_2 = input_covariances[(name,)].detach().requires_grad_(True)
+            loss = (G_l - kron(S_1, S_2)).pow(2).sum()
+            loss.backward()
+            assert S_1.grad.abs().max().item() < 1e-8
+            assert S_2.grad.abs().max().item() < 1e-8
+        offset += n
 
 
 def test_kfoc_handles_zero_ggn():
