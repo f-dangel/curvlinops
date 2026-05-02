@@ -1055,7 +1055,7 @@ def test_kfac_does_not_affect_grad():
     _check_does_not_affect_grad(KFACLinearOperator)
 
 
-def _check_does_not_affect_requires_grad(linop_cls):
+def _check_does_not_affect_requires_grad(linop_cls, **linop_kwargs):
     """Make sure that computing a linear operator does not flip ``requires_grad``.
 
     The FX backend traces ``autograd.grad`` through the model and needs
@@ -1065,6 +1065,9 @@ def _check_does_not_affect_requires_grad(linop_cls):
 
     Args:
         linop_cls: The linear operator class to test.
+        **linop_kwargs: Extra keyword arguments forwarded to ``linop_cls``
+            (e.g., ``backend="make_fx"`` for KFAC/EKFAC; KFOC has no
+            ``backend`` arg and forwards nothing).
     """
     manual_seed(0)
     batch_size, D_in, D_hidden, D_out = 4, 3, 5, 2
@@ -1087,7 +1090,7 @@ def _check_does_not_affect_requires_grad(linop_cls):
 
     # Construct each FX backend (constructors run ``compute()`` via the
     # determinism check, which is the trace path that used to mutate flags).
-    linop_cls(model, MSELoss(), params, [(X, y)], backend="make_fx")
+    linop_cls(model, MSELoss(), params, [(X, y)], **linop_kwargs)
 
     for n, p in params.items():
         assert p.requires_grad == requires_grad_before[n], (
@@ -1098,7 +1101,7 @@ def _check_does_not_affect_requires_grad(linop_cls):
 
 def test_kfac_make_fx_preserves_requires_grad():
     """KFAC's FX backend must not mutate the user's ``requires_grad`` flags."""
-    _check_does_not_affect_requires_grad(KFACLinearOperator)
+    _check_does_not_affect_requires_grad(KFACLinearOperator, backend="make_fx")
 
 
 def _check_torch_save_load(linop_cls: type, tmp_path: Path) -> None:

@@ -649,7 +649,7 @@ def test_ekfac_does_not_affect_grad():
 
 def test_ekfac_make_fx_preserves_requires_grad():
     """EKFAC's FX backend must not mutate the user's ``requires_grad`` flags."""
-    _check_does_not_affect_requires_grad(EKFACLinearOperator)
+    _check_does_not_affect_requires_grad(EKFACLinearOperator, backend="make_fx")
 
 
 def test_ekfac_torch_save_load(tmp_path: Path) -> None:

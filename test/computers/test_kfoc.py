@@ -22,6 +22,7 @@ from torch.nn import Linear, Module, MSELoss, Sequential
 
 from curvlinops import GGNLinearOperator, KFOCLinearOperator
 from curvlinops.utils import allclose_report
+from test.test_kfac import _check_does_not_affect_requires_grad
 from test.utils import block_diagonal, change_dtype, eye_like
 
 
@@ -231,35 +232,8 @@ def test_kfoc_handles_zero_ggn():
 
 
 def test_kfoc_make_fx_preserves_requires_grad():
-    """KFOC's FX backend must not mutate the user's ``requires_grad`` flags.
-
-    The IO getter is traced under an ``_enable_requires_grad`` wrap; the
-    flags on user-owned tensors must be restored after ``compute()`` runs.
-    """
-    manual_seed(0)
-    # Two layers so freezing one parameter still leaves an autograd graph
-    # for ``autograd.grad`` to trace through.
-    model = Sequential(Linear(4, 5), Linear(5, 2))
-    model[0].bias.requires_grad_(False)
-    loss_func = MSELoss(reduction="sum")
-    params = dict(model.named_parameters())
-    requires_grad_before = {n: p.requires_grad for n, p in params.items()}
-    assert requires_grad_before == {
-        "0.weight": True,
-        "0.bias": False,
-        "1.weight": True,
-        "1.bias": True,
-    }
-    X = rand(3, 4)
-    y = rand(3, 2)
-
-    KFOCLinearOperator(model, loss_func, params, [(X, y)])
-
-    for n, p in params.items():
-        assert p.requires_grad == requires_grad_before[n], (
-            f"KFOC mutated requires_grad on {n!r}: "
-            f"{requires_grad_before[n]} -> {p.requires_grad}"
-        )
+    """KFOC's FX backend must not mutate the user's ``requires_grad`` flags."""
+    _check_does_not_affect_requires_grad(KFOCLinearOperator)
 
 
 def test_kfoc_rejects_multi_batch():
