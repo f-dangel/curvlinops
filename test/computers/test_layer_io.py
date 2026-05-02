@@ -203,23 +203,13 @@ def test_joint_weight_bias_group_includes_bias_pad():
 
 
 def test_enable_param_grads_preserves_requires_grad():
-    """A frozen param stays frozen after ``enable_param_grads`` exits.
-
-    Canonical unit-level guarantee for the autograd-ownership contract from
-    `PR #301 <https://github.com/f-dangel/curvlinops/pull/301>`_. Once
-    ``EKFAC`` and ``KFOC`` migrate to ``LayerIO`` (follow-up PRs), the
-    operator-level integration tests
-    (``test_{kfac,ekfac,kfoc}_make_fx_preserves_requires_grad``) become
-    redundant with this one and can be dropped.
-    """
+    """A frozen param stays frozen after ``enable_param_grads`` exits."""
     model_func, loss, params = _setup_mlp()
-    # Freeze one param explicitly
     params["0.weight"].requires_grad_(False)
     params["1.bias"].requires_grad_(False)
 
     io = LayerIO(model_func, loss, params, randn(4, 6), fisher_type=FisherType.MC)
     with io.enable_param_grads(params):
-        # Inside: all params should be enabled for the trace
         for p in params.values():
             assert p.requires_grad
     # After: original state restored

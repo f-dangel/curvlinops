@@ -311,12 +311,7 @@ class MakeFxKFACComputer(_BaseKFACComputer):
     def _trace_batch_functions(
         self,
     ) -> tuple[dict[int, Callable], list[ParamGroup]]:
-        r"""Trace per-batch KFAC computation for all batch sizes in the data.
-
-        Iterates over the data once, tracing one FX graph per unique batch
-        size. Builds one :class:`LayerIO` (shape-independent metadata + cache
-        of per-shape ``io_fn``\ s) on the first batch and reuses it across
-        subsequent shapes.
+        """Trace per-batch KFAC computation for all batch sizes in the data.
 
         Returns:
             Tuple of ``(traced_fns, mapping)``.
@@ -363,7 +358,6 @@ class MakeFxKFACComputer(_BaseKFACComputer):
         Returns:
             A traced callable ``(params, X, y) -> (input_covs, gradient_covs)``.
         """
-        fisher_type = self._fisher_type
 
         def compute_batch(
             params: dict[str, Tensor], X: Tensor | MutableMapping, y: Tensor
@@ -383,7 +377,7 @@ class MakeFxKFACComputer(_BaseKFACComputer):
                     # so ``a.shape[0]`` matches ``self._batch_size_fn(X)`` and we
                     # avoid threading the per-X helper into the closure.
                     input_covs[group_key] = xxT.div_(a.shape[0] * a.shape[1])
-                if fisher_type == FisherType.FORWARD_ONLY:
+                if self._fisher_type == FisherType.FORWARD_ONLY:
                     W = params[next(iter(group.values()))]
                     gradient_covs[group_key] = eye(
                         W.shape[0], dtype=W.dtype, device=W.device

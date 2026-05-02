@@ -105,23 +105,11 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
 
 ### Internal
 
-- Introduce `LayerIO` / `LayerIOSnapshot` orchestration layer in
-  `curvlinops/computers/io_collector/layer_io.py`, a setup-once owner of
-  shape-independent IO-collector metadata (parameter groups, IO-layer
-  mappings) plus a per-shape cache of FX-traced `io_fn`s. Snapshots expose
-  on-demand per-group accessors at three granularities (`raw`,
-  `standardized_io`, `per_sample_grads`) so structural-GGN approximators
-  can consume per-batch IO without re-deriving the plumbing. `enable_param_grads`
-  context manager wraps `_enable_requires_grad` so callers don't have to
-  import the autograd-ownership helper directly.
-
-  Migrate `MakeFxKFACComputer` to use `LayerIO`; it bootstraps one `LayerIO`
-  per `compute()` call and reuses it across all batch sizes (today's
-  `make_compute_kfac_batch` redoes IO-collector setup per shape). Move the
-  pure post-processing helpers (`_build_param_groups_from_io`, `_bias_pad`,
-  `make_group_gatherers`) from `kfac_make_fx.py` to a new
-  `io_collector/groups.py`; re-exported from `kfac_make_fx.py` for
-  backward compatibility with `EKFAC` and `KFOC` (migrated in follow-up PRs)
+- Add `LayerIO`, a reusable abstraction for KFAC-style operators to obtain
+  per-batch layer inputs and output gradients without re-deriving the IO
+  collection plumbing. Migrate the FX KFAC backend to use it; `KFAC`'s
+  public API and behavior are unchanged. EKFAC and KFOC migrations follow
+  in subsequent PRs
 
 - Scope the FX backends' `requires_grad` mutation to tracing only.
   `MakeFxKFACComputer` / `MakeFxKFOCComputer` previously flipped

@@ -10,7 +10,7 @@ Provides:
   gradients, exposing on-demand per-group accessors at three granularities
   (raw, standardized weight-sharing format, expanded per-sample ``vec(W)``
   gradients).
-- :func:`LayerIO.trace_context`: context manager wrapping
+- :func:`LayerIO.enable_param_grads`: context manager wrapping
   :func:`_enable_requires_grad` for the trace boundary, so callers don't have
   to import the autograd-ownership helper directly.
 
@@ -28,7 +28,7 @@ Operators have three integration patterns:
 
 1. **Trace everything** (KFAC-style): wrap the entire per-batch reduction
    (``populate`` + per-group einsums) in :func:`_make_fx`, inside
-   :meth:`LayerIO.trace_context`.
+   :meth:`LayerIO.enable_param_grads`.
 2. **Trace IO only** (KFOC-style): wrap just :meth:`LayerIO.populate` in
    :func:`_make_fx`, replay under :func:`torch.no_grad`, then process per-group
    eagerly.
@@ -108,6 +108,12 @@ class LayerIO:
         separate_weight_and_bias: bool = True,
         intermediate_as_batch: bool = True,
     ):
+        """Bootstrap shape-independent metadata and trace the first ``io_fn``.
+
+        Raises:
+            ValueError: If ``intermediate_as_batch=False`` is combined with
+                :attr:`FisherType.EMPIRICAL`.
+        """
         if not intermediate_as_batch and fisher_type == FisherType.EMPIRICAL:
             raise ValueError(
                 "intermediate_as_batch=False is not supported with "
