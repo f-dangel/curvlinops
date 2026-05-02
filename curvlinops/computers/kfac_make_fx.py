@@ -18,16 +18,11 @@ from torch.nn import CrossEntropyLoss
 from curvlinops.computers._base import ParamGroup, ParamGroupKey, _BaseKFACComputer
 from curvlinops.computers.io_collector import LayerIO, with_kfac_io
 from curvlinops.computers.io_collector.groups import (
-    _bias_pad,
     _build_param_groups_from_io,
     make_group_gatherers,
 )
 from curvlinops.kfac_utils import FisherType, KFACType
 from curvlinops.utils import _enable_requires_grad, _make_fx, fork_rng_with_seed
-
-# Re-export for backward compatibility with existing imports in
-# ``ekfac_make_fx``, ``kfoc_make_fx``, and ``test/computers/test_kfac_io.py``.
-__all__ = ["_bias_pad", "_build_param_groups_from_io", "make_group_gatherers"]
 
 
 def make_compute_kfac_io_batch(
