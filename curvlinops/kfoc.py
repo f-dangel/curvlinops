@@ -34,9 +34,6 @@ class KFOCLinearOperator(KFACLinearOperator):
         - Single-batch data only (``len(list(data)) == 1``).
         - :class:`FisherType.TYPE2` only.
 
-    Attributes:
-        SELF_ADJOINT: Whether the operator is self-adjoint. ``True`` for KFOC.
-
     References:
         - Schnaus, D., Lee, J., Triebel, R. (2021). "Kronecker-Factored Optimal
           Curvature." Bayesian Deep Learning Workshop, NeurIPS 2021.
