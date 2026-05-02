@@ -334,6 +334,7 @@ class MakeFxKFACComputer(_BaseKFACComputer):
                     mc_samples=self._mc_samples,
                     kfac_approx=self._kfac_approx,
                     separate_weight_and_bias=self._separate_weight_and_bias,
+                    batch_size_fn=self._batch_size_fn,
                 )
 
             traced_fns[batch_size] = self._trace_one_batch(io, X, y)
@@ -351,7 +352,7 @@ class MakeFxKFACComputer(_BaseKFACComputer):
 
         Args:
             io: The :class:`LayerIO` (must already have an ``io_fn`` cached
-                for ``X``'s shape).
+                for ``X``'s batch size).
             X: Example input batch (shape baked into the trace).
             y: Example target batch.
 

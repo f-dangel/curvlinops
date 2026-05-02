@@ -3,9 +3,9 @@ r"""High-level orchestration over the IO collector for KFAC-style operators.
 Provides:
 
 - :class:`LayerIO`: setup-once owner of shape-independent metadata
-  (parameter groups, IO-layer mappings) plus a per-shape cache of FX-traced
-  ``io_fn``\s. Operators consume :class:`LayerIO` to obtain per-batch raw IO
-  without re-deriving the plumbing.
+  (parameter groups, IO-layer mappings) plus a per-batch-size cache of
+  FX-traced ``io_fn``\s. Operators consume :class:`LayerIO` to obtain
+  per-batch raw IO without re-deriving the plumbing.
 - :class:`LayerIOSnapshot`: per-batch wrapper over raw layer inputs and output
   gradients, exposing on-demand per-group accessors at three granularities
   (raw, standardized weight-sharing format, expanded per-sample ``vec(W)``
@@ -20,9 +20,9 @@ The two-tier state in :class:`LayerIO` separates concerns by shape dependence:
   ``mapping``, ``io_groups``, ``io_param_names``, ``layer_hparams``, the
   ``grad_outputs`` computer, and the per-group ``(group_inputs, group_grads)``
   gatherers.
-* **Shape-specialized (tier 2)** — cached per unique input shape:
-  the ``io_fn`` returned by :func:`with_kfac_io`. New shapes trigger a fresh
-  trace via :meth:`LayerIO.ensure_io_fn`.
+* **Shape-specialized (tier 2)** — cached per unique batch size:
+  the ``io_fn`` returned by :func:`with_kfac_io`. New batch sizes trigger a
+  fresh trace via :meth:`LayerIO.ensure_io_fn`.
 
 Operators have three integration patterns:
 
@@ -57,13 +57,11 @@ from curvlinops.computers.io_collector.groups import (
 from curvlinops.kfac_utils import FisherType, KFACType
 from curvlinops.utils import _enable_requires_grad
 
-ShapeKey = tuple[int, ...] | tuple[tuple[str, tuple[int, ...]], ...]
-
 
 class LayerIO:
     r"""Setup-once orchestrator for per-layer IO collection.
 
-    Owns shape-independent metadata and a per-shape cache of FX-traced
+    Owns shape-independent metadata and a per-batch-size cache of FX-traced
     ``io_fn``\ s. Operators construct one :class:`LayerIO` per ``compute()``
     call and consume :meth:`populate` / :meth:`snapshot` per batch.
 
@@ -90,6 +88,9 @@ class LayerIO:
             KFAC-expand. ``False`` keeps the intermediate axes separate
             (consumed by KFOC). Not supported with
             :attr:`FisherType.EMPIRICAL`.
+        batch_size_fn: Maps an input batch to its size. Used as the
+            ``io_fn`` cache key. Defaults to ``X.shape[0]`` (must be supplied
+            for non-Tensor inputs like :class:`UserDict`).
 
     Raises:
         ValueError: If ``intermediate_as_batch=False`` is combined with
@@ -107,6 +108,7 @@ class LayerIO:
         kfac_approx: str = KFACType.EXPAND,
         separate_weight_and_bias: bool = True,
         intermediate_as_batch: bool = True,
+        batch_size_fn: Callable[[Tensor | MutableMapping], int] | None = None,
     ):
         """Bootstrap shape-independent metadata and trace the first ``io_fn``.
 
@@ -128,6 +130,7 @@ class LayerIO:
         self._kfac_approx = kfac_approx
         self._separate_weight_and_bias = separate_weight_and_bias
         self._intermediate_as_batch = intermediate_as_batch
+        self._batch_size_fn = batch_size_fn or (lambda X: X.shape[0])
 
         self._grad_outputs_computer = _BaseKFACComputer._set_up_grad_outputs_computer(
             loss_func, fisher_type, mc_samples
@@ -137,7 +140,7 @@ class LayerIO:
         # ``_io_param_names`` is None), validates on subsequent calls.
         self._io_param_names: dict[str, dict[str, str]] | None = None
         self._layer_hparams: dict[str, dict[str, Any]] | None = None
-        self._io_fns: dict[ShapeKey, Callable] = {}
+        self._io_fns: dict[int, Callable] = {}
         self.ensure_io_fn(X_example, params)
 
         self._mapping, self._io_groups = _build_param_groups_from_io(
@@ -177,41 +180,27 @@ class LayerIO:
         """KFAC approximation type used by the per-group gatherers."""
         return self._kfac_approx
 
-    @staticmethod
-    def _shape_key(X: Tensor | MutableMapping) -> ShapeKey:
-        """Hashable shape signature for cache keying.
-
-        Args:
-            X: Input tensor or dict of input tensors.
-
-        Returns:
-            A hashable tuple representing ``X``'s shape structure.
-        """
-        if isinstance(X, Tensor):
-            return tuple(X.shape)
-        return tuple((k, tuple(v.shape)) for k, v in sorted(X.items()))
-
     def ensure_io_fn(
         self, X: Tensor | MutableMapping, params: dict[str, Tensor]
     ) -> Callable:
-        """Return the FX-traced ``io_fn`` for ``X``'s shape, building if needed.
+        """Return the FX-traced ``io_fn`` for ``X``'s batch size, building if needed.
 
         First call seeds shape-independent metadata; subsequent calls validate
         re-traced metadata against the seed to detect violations of the
         shape-independence assumption.
 
         Args:
-            X: Input batch (only its shape is consulted for the cache key).
+            X: Input batch (only its batch size is consulted for the cache key).
             params: Named parameters, passed through to :func:`with_kfac_io`.
 
         Returns:
             A traced callable ``(params, X) -> (output, layer_inputs, layer_outputs)``.
 
         Raises:
-            RuntimeError: If re-traced metadata for a new shape disagrees with
-                the bootstrap metadata.
+            RuntimeError: If re-traced metadata for a new batch size disagrees
+                with the bootstrap metadata.
         """
-        key = self._shape_key(X)
+        key = self._batch_size_fn(X)
         if key in self._io_fns:
             return self._io_fns[key]
 
@@ -227,12 +216,12 @@ class LayerIO:
         else:
             if io_param_names != self._io_param_names:
                 raise RuntimeError(
-                    "IO-collector parameter-name metadata changed across shapes. "
+                    "IO-collector parameter-name metadata changed across batch sizes. "
                     f"Expected {self._io_param_names}, got {io_param_names}."
                 )
             if layer_hparams != self._layer_hparams:
                 raise RuntimeError(
-                    "IO-collector layer hyperparameters changed across shapes. "
+                    "IO-collector layer hyperparameters changed across batch sizes. "
                     f"Expected {self._layer_hparams}, got {layer_hparams}."
                 )
         self._io_fns[key] = io_fn
@@ -246,7 +235,7 @@ class LayerIO:
     ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
         """Run forward + backward; return per-layer raw IO.
 
-        Reuses the cached ``io_fn`` for ``X``'s shape (or builds one).
+        Reuses the cached ``io_fn`` for ``X``'s batch size (or builds one).
         Backpropagates the Fisher-type-specific gradient outputs to produce
         per-layer inputs and batched output gradients. ``layer_output_grads``
         is scaled so that ``sum_v g g^T`` equals the batch loss Hessian
