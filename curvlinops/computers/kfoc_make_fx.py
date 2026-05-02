@@ -205,9 +205,9 @@ class MakeFxKFOCComputer(_BaseKFACComputer):
 
         Runs one forward+backward pass to collect per-layer activations and
         output gradients, forms per-sample ``vec(W)`` gradients, and extracts
-        the top rank-one Kronecker factors via SVD per parameter group.
-        Bias-only groups reuse KFAC's gradient covariance (the formulas
-        coincide when there is no input factor).
+        the top rank-one Kronecker factors via SVD per parameter group. For
+        bias-only groups (no Kronecker structure), stores the exact bias GGN
+        block, which is the Frobenius optimum for a single-factor approximation.
 
         Returns:
             Tuple of ``(input_covariances, gradient_covariances, mapping)``.
@@ -264,8 +264,14 @@ class MakeFxKFOCComputer(_BaseKFACComputer):
                 input_covariances[group_key] = S_2
                 gradient_covariances[group_key] = S_1
             else:
+                # Bias-only block: the Frobenius optimum is the exact GGN
+                # block. The bias is shared across the ``shared`` axis, so
+                # per-sample gradients sum over it before the outer product.
+                g_per_sample = einsum(g, "vec batch shared row -> vec batch row")
                 gradient_covariances[group_key] = einsum(
-                    g, g, "vec batch shared row, vec batch shared col -> row col"
+                    g_per_sample,
+                    g_per_sample,
+                    "vec batch row, vec batch col -> row col",
                 )
 
         return input_covariances, gradient_covariances, mapping

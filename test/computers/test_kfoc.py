@@ -81,14 +81,19 @@ def _assert_kfoc_factors_match_dense_svd(case):
             # Individual factor signs are joint-arbitrary, but their Kron product is not.
             assert allclose_report(K_l, kron(S_1_ref, S_2_ref))
             offset += n
-        else:  # bias-only block: single factor (no SVD reference)
-            offset += block[0].shape[0]
+        else:  # bias-only block: single factor — exact GGN block
+            n = block[0].shape[0]
+            G_l = ggn_canonical[offset : offset + n, offset : offset + n]
+            K_l = K_canonical[offset : offset + n, offset : offset + n]
+            assert allclose_report(K_l, G_l)
+            offset += n
 
 
 def _assert_kfoc_first_order_optimality(case):
-    """Assert KFOC's weight factors are stationary points of the Frobenius residual.
+    """Assert KFOC's factors are stationary points of the Frobenius residual.
 
-    Enable grad on every weight Kronecker factor, materialize KFOC and the
+    Enable grad on every factor in every block (Kronecker pairs for weight
+    blocks, single factors for bias-only blocks), materialize KFOC and the
     block-diagonal GGN in the standard (params) basis, and check that the
     gradient of ``||GGN - K||_F²`` w.r.t. each factor is near zero. Both
     sides are block-diagonal at the parameter-group level so the residual
@@ -109,9 +114,7 @@ def _assert_kfoc_first_order_optimality(case):
         batch_size_fn=batch_size_fn,
     )
     _, K_op, _ = kfoc
-    weight_S = [
-        f.requires_grad_(True) for block in K_op if len(block) == 2 for f in block
-    ]
+    factors = [f.requires_grad_(True) for block in K_op for f in block]
     ggn = block_diagonal(
         GGNLinearOperator,
         model,
@@ -122,7 +125,7 @@ def _assert_kfoc_first_order_optimality(case):
     )
     K = kfoc @ eye_like(kfoc)
     loss = (ggn - K).pow(2).sum()
-    for g in grad(loss, weight_S):
+    for g in grad(loss, factors):
         assert g.abs().max().item() < 1e-8
 
 
@@ -178,14 +181,13 @@ def test_kfoc_first_order_optimality(
         object,
     ],
 ):
-    """KFOC's weight factors are stationary points of the Frobenius residual (Linear).
+    """KFOC's factors are stationary points of the Frobenius residual (Linear).
 
-    Enable grad on every Kronecker factor of a weight block, materialize
-    KFOC to a dense matrix, and check that the gradient of
-    ``||GGN - K||_F²`` w.r.t. each factor is near zero. ``K`` is
-    block-diagonal so the residual decouples per block. Bias-only blocks
-    are skipped: KFOC stores the ``t``-diagonal of the bias GGN as the
-    sole factor, which is not the Frobenius minimum under weight sharing.
+    Enable grad on every factor in every block, materialize KFOC to a dense
+    matrix, and check that the gradient of ``||GGN - K||_F²`` w.r.t. each
+    factor is near zero. ``K`` is block-diagonal so the residual decouples
+    per block; bias-only blocks store the exact bias GGN, so their stationary
+    condition is the trivially-zero residual.
 
     Args:
         case: Model, loss, parameters, data, and optional batch-size function.
