@@ -77,15 +77,7 @@ class _RearrangedGGNLinearOperator(PyTorchLinearOperator):
                 ``(V, N, d_out, d_in)``.
             adjoint: Whether this instance represents :math:`\mathcal{R}(\mathbf{G})^\top`
                 (``True``) or :math:`\mathcal{R}(\mathbf{G})` (``False``, default).
-
-        Raises:
-            ValueError: If ``per_sample_grads`` is not 4D.
         """
-        if per_sample_grads.ndim != 4:
-            raise ValueError(
-                "per_sample_grads must be 4D (V, N, d_out, d_in), got shape "
-                f"{tuple(per_sample_grads.shape)}."
-            )
         _, _, d_out, d_in = per_sample_grads.shape
         if adjoint:
             super().__init__(in_shape=[(d_out, d_out)], out_shape=[(d_in, d_in)])
