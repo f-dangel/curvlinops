@@ -105,6 +105,14 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
   EKFAC-fx's eigcorr. `KFACLinearOperator`/`EKFACLinearOperator` behavior
   unchanged ([PR](https://github.com/f-dangel/curvlinops/pull/295))
 
+- Move the FX backend's `requires_grad=True` setup from
+  `MakeFxKFACComputer.__init__` (blanket mutation, no restore) into
+  `make_compute_kfac_io_batch`'s closure using the existing
+  `_enable_requires_grad` context manager (save+restore). Previously the
+  constructor silently unfroze user params with `requires_grad=False`; now
+  they're preserved across KFAC construction and subsequent matvecs
+  ([PR](https://github.com/f-dangel/curvlinops/pull/300))
+
 - Benchmark tutorial: shorten plot labels (GGN, MC Fisher, ^{-1}), nest JSON
   data under `eager`/`compiled` keys, merge compiled overlay into main plots
   (5 plot types down to 3), remove stale compiled peakmem for (E)KFAC
