@@ -79,10 +79,9 @@ class _RearrangedGGNLinearOperator(PyTorchLinearOperator):
                 (``True``) or :math:`\mathcal{R}(\mathbf{G})` (``False``, default).
         """
         _, _, d_out, d_in = per_sample_grads.shape
-        if adjoint:
-            super().__init__(in_shape=[(d_out, d_out)], out_shape=[(d_in, d_in)])
-        else:
-            super().__init__(in_shape=[(d_in, d_in)], out_shape=[(d_out, d_out)])
+        in_shape = [(d_out, d_out)] if adjoint else [(d_in, d_in)]
+        out_shape = [(d_in, d_in)] if adjoint else [(d_out, d_out)]
+        super().__init__(in_shape=in_shape, out_shape=out_shape)
         self._P = per_sample_grads
         self._is_adjoint = adjoint
 
@@ -190,12 +189,6 @@ class MakeFxKFOCComputer(_BaseKFACComputer):
     Requires ``FisherType.TYPE2``, ``KFACType.EXPAND``, and exactly one batch
     in ``data``. The single-batch check runs in :meth:`compute`.
     """
-
-    def __init__(self, *args, **kwargs):
-        """Initialize and turn on grad tracking for the parameters."""
-        super().__init__(*args, **kwargs)
-        for p in self._params.values():
-            p.requires_grad_(True)
 
     def compute(
         self,
