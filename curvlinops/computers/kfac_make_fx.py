@@ -17,6 +17,7 @@ from torch import Tensor, autograd, cat, eye, no_grad
 from torch.nn import CrossEntropyLoss
 
 from curvlinops._checks import _register_userdict_as_pytree
+from curvlinops._empirical_risk import _enable_requires_grad
 from curvlinops.computers._base import ParamGroup, ParamGroupKey, _BaseKFACComputer
 from curvlinops.computers.io_collector import with_kfac_io
 from curvlinops.computers.kfac_math import (
@@ -276,40 +277,43 @@ def make_compute_kfac_io_batch(
             name. ``layer_output_grads`` is empty when the IO collector
             did not store outputs (e.g. ``FORWARD_ONLY``).
         """
-        output, layer_inputs, layer_outputs = io_fn(params, X)
+        with _enable_requires_grad(list(params.values())):
+            output, layer_inputs, layer_outputs = io_fn(params, X)
 
-        if output_check_fn is not None:
-            output_check_fn(output)
+            if output_check_fn is not None:
+                output_check_fn(output)
 
-        if fisher_type == FisherType.FORWARD_ONLY:
-            return layer_inputs, {}
+            if fisher_type == FisherType.FORWARD_ONLY:
+                return layer_inputs, {}
 
-        if intermediate_as_batch:
-            # CrossEntropyLoss expects class dim second; other losses last.
-            if isinstance(loss_func, CrossEntropyLoss):
-                output_for_grad = output.movedim(1, -1).flatten(0, -2)
-                y_for_grad = y.flatten()
+            if intermediate_as_batch:
+                # CrossEntropyLoss expects class dim second; other losses last.
+                if isinstance(loss_func, CrossEntropyLoss):
+                    output_for_grad = output.movedim(1, -1).flatten(0, -2)
+                    y_for_grad = y.flatten()
+                else:
+                    output_for_grad = output.flatten(0, -2)
+                    y_for_grad = y.flatten(0, -2)
             else:
-                output_for_grad = output.flatten(0, -2)
-                y_for_grad = y.flatten(0, -2)
-        else:
-            output_for_grad, y_for_grad = output, y
-        grad_outputs = grad_outputs_computer(output_for_grad.detach(), y_for_grad, None)
-        # Equivalent to the hooks backend's two-step scaling (pre-multiply
-        # ``grad_outputs`` by ``1/num_loss_terms``, then apply
-        # ``compute_loss_correction`` on ``ggT``): combining both into a single
-        # ``1/sqrt(N)`` per vector squares to the same ``1/N`` on ``ggT``.
-        mean_scale = 1.0 / sqrt(output_for_grad.shape[0])
-        grad_outputs.mul_({"sum": 1.0, "mean": mean_scale}[loss_func.reduction])
+                output_for_grad, y_for_grad = output, y
+            grad_outputs = grad_outputs_computer(
+                output_for_grad.detach(), y_for_grad, None
+            )
+            # Equivalent to the hooks backend's two-step scaling (pre-multiply
+            # ``grad_outputs`` by ``1/num_loss_terms``, then apply
+            # ``compute_loss_correction`` on ``ggT``): combining both into a single
+            # ``1/sqrt(N)`` per vector squares to the same ``1/N`` on ``ggT``.
+            mean_scale = 1.0 / sqrt(output_for_grad.shape[0])
+            grad_outputs.mul_({"sum": 1.0, "mean": mean_scale}[loss_func.reduction])
 
-        io_layer_names = list(layer_outputs)
-        output_tensors = list(layer_outputs.values())
-        layer_output_grads_list = autograd.grad(
-            output_for_grad,
-            output_tensors,
-            grad_outputs=grad_outputs,
-            is_grads_batched=True,
-        )
+            io_layer_names = list(layer_outputs)
+            output_tensors = list(layer_outputs.values())
+            layer_output_grads_list = autograd.grad(
+                output_for_grad,
+                output_tensors,
+                grad_outputs=grad_outputs,
+                is_grads_batched=True,
+            )
         layer_output_grads = dict(zip(io_layer_names, layer_output_grads_list))
         return layer_inputs, layer_output_grads
 
@@ -453,12 +457,6 @@ class MakeFxKFACComputer(_BaseKFACComputer):
 
     Supports plain callable ``model_func``.
     """
-
-    def __init__(self, *args, **kwargs):
-        """Initialize and enable gradients on params for autograd.grad."""
-        super().__init__(*args, **kwargs)
-        for p in self._params.values():
-            p.requires_grad_(True)
 
     def _trace_batch_functions(
         self,
