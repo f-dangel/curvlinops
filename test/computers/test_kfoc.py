@@ -243,11 +243,7 @@ def test_kfoc_rejects_multi_batch():
         KFOCLinearOperator(model, loss_func, params, data, check_deterministic=False)
 
 
-@mark.parametrize(
-    "d_in,d_out",
-    [(4, 1), (1, 3)],
-    ids=["scalar_out", "scalar_in"],
-)
+@mark.parametrize("d_in,d_out", [(4, 1), (1, 3)], ids=["scalar_out", "scalar_in"])
 def test_kfoc_handles_degenerate_svds_shapes(d_in: int, d_out: int):
     """``svds`` requires ``k < min(shape)``; the dense fallback covers scalar ends.
 
