@@ -42,9 +42,11 @@ class _RearrangedGGNLinearOperator(PyTorchLinearOperator):
     - :math:`n \in \{1, \dots, N\}` indexes the sample in the batch
       (per-sample, not summed, because each sample contributes a separate
       rank-one outer product to the GGN), and
-    - :math:`v \in \{1, \dots, V\}` indexes the backpropagated direction
-      (:math:`V = 1` for the type-2 and empirical Fisher; one direction
-      per MC sample for the MC-Fisher).
+    - :math:`v \in \{1, \dots, V\}` indexes the backpropagated direction.
+      :math:`V` equals the model's per-datum output count for the type-2
+      Fisher (one direction per column of a per-datum loss Hessian square
+      root), the number of MC samples for the MC-Fisher, and
+      :math:`1` for the empirical Fisher.
 
     The per-layer GGN block is
 
