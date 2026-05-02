@@ -45,7 +45,6 @@ def _assert_kfoc_factors_match_dense_svd(case):
         loss_func,
         params,
         [(X, y)],
-        check_deterministic=False,
         batch_size_fn=batch_size_fn,
     )
     _, K_op, PT = kfoc
@@ -110,7 +109,6 @@ def _assert_kfoc_first_order_optimality(case):
         loss_func,
         params,
         [(X, y)],
-        check_deterministic=False,
         batch_size_fn=batch_size_fn,
     )
     _, K_op, _ = kfoc
@@ -225,9 +223,7 @@ def test_kfoc_handles_zero_ggn():
     X = zeros(3, 4, dtype=float64)
     y = rand(3, 2, dtype=float64)
 
-    kfoc = KFOCLinearOperator(
-        model, loss_func, params, [(X, y)], check_deterministic=False
-    )
+    kfoc = KFOCLinearOperator(model, loss_func, params, [(X, y)])
     K = kfoc @ eye_like(kfoc)
     ggn = block_diagonal(GGNLinearOperator, model, loss_func, params, [(X, y)])
     assert allclose_report(K, ggn)
@@ -242,7 +238,7 @@ def test_kfoc_rejects_multi_batch():
     params = dict(model.named_parameters())
     data = [(rand(2, 4), rand(2, 2)), (rand(3, 4), rand(3, 2))]
     with raises(ValueError, match="more than one"):
-        KFOCLinearOperator(model, loss_func, params, data, check_deterministic=False)
+        KFOCLinearOperator(model, loss_func, params, data)
 
 
 @mark.parametrize("d_in,d_out", [(4, 1), (1, 3)], ids=["scalar_out", "scalar_in"])
@@ -263,12 +259,6 @@ def test_kfoc_handles_degenerate_svds_shapes(d_in: int, d_out: int):
     params = dict(model.named_parameters())
     X = rand(3, d_in, dtype=float64)
     y = rand(3, d_out, dtype=float64)
-    kfoc = KFOCLinearOperator(
-        model,
-        loss_func,
-        params,
-        [(X, y)],
-        check_deterministic=False,
-    )
+    kfoc = KFOCLinearOperator(model, loss_func, params, [(X, y)])
     ggn = block_diagonal(GGNLinearOperator, model, loss_func, params, [(X, y)])
     assert allclose_report(kfoc @ eye_like(kfoc), ggn)
