@@ -28,6 +28,12 @@ from test.utils import block_diagonal, change_dtype, eye_like
 def _assert_kfoc_factors_match_dense_svd(case):
     """Assert KFOC's per-layer Kron product matches the top-1 SVD of ``R(G_l)``.
 
+    Works in canonical layout: ``K_canonical`` (the middle of ``kfoc``'s
+    chain) is block-diagonal with one block per parameter group, and
+    ``PT @ ggn @ P`` brings the GGN into the same basis. Block iteration
+    on ``K_op`` then lines up directly with diagonal slices of
+    ``ggn_canonical`` regardless of ``separate_weight_and_bias``.
+
     Args:
         case: Model, loss, parameters, data, and optional batch-size function.
     """
@@ -42,7 +48,9 @@ def _assert_kfoc_factors_match_dense_svd(case):
         check_deterministic=False,
         batch_size_fn=batch_size_fn,
     )
-    K = kfoc @ eye_like(kfoc)
+    _, K_op, PT = kfoc
+    K_canonical = K_op @ eye_like(K_op)
+    PT_mat = PT @ eye_like(PT)
     ggn = block_diagonal(
         GGNLinearOperator,
         model,
@@ -51,14 +59,14 @@ def _assert_kfoc_factors_match_dense_svd(case):
         [(X, y)],
         batch_size_fn=batch_size_fn,
     )
+    ggn_canonical = PT_mat @ ggn @ PT_mat.T
 
     offset = 0
-    for _, p in params.items():
-        n = p.numel()
-        if p.ndim >= 2:
-            d_out = p.shape[0]
-            d_in = n // d_out
-            G_l = ggn[offset : offset + n, offset : offset + n]
+    for block in K_op:
+        if len(block) == 2:  # weight (or joint W+b) block: factors (S_1, S_2)
+            d_out, d_in = block[0].shape[0], block[1].shape[0]
+            n = d_out * d_in
+            G_l = ggn_canonical[offset : offset + n, offset : offset + n]
             R = (
                 G_l
                 .reshape(d_out, d_in, d_out, d_in)
@@ -69,14 +77,20 @@ def _assert_kfoc_factors_match_dense_svd(case):
             scale = S[0].sqrt()
             S_1_ref = scale * U[:, 0].reshape(d_out, d_out)
             S_2_ref = scale * Vh[0].reshape(d_in, d_in)
-            K_l = K[offset : offset + n, offset : offset + n]
+            K_l = K_canonical[offset : offset + n, offset : offset + n]
             # Individual factor signs are joint-arbitrary, but their Kron product is not.
             assert allclose_report(K_l, kron(S_1_ref, S_2_ref))
-        offset += n
+            offset += n
+        else:  # bias-only block: single factor (no SVD reference)
+            offset += block[0].shape[0]
 
 
 def _assert_kfoc_first_order_optimality(case):
     """Assert KFOC's weight factors are stationary points of the Frobenius residual.
+
+    Compare ``K_canonical`` to ``PT @ ggn @ P`` directly in canonical
+    layout (so the test is independent of ``separate_weight_and_bias``).
+    The residual decouples per block since both sides are block-diagonal.
 
     Args:
         case: Model, loss, parameters, data, and optional batch-size function.
@@ -92,11 +106,11 @@ def _assert_kfoc_first_order_optimality(case):
         check_deterministic=False,
         batch_size_fn=batch_size_fn,
     )
-    _, K_op, _ = kfoc
+    _, K_op, PT = kfoc
     weight_S = [
         f.requires_grad_(True) for block in K_op if len(block) == 2 for f in block
     ]
-
+    PT_mat = PT @ eye_like(PT)
     ggn = block_diagonal(
         GGNLinearOperator,
         model,
@@ -105,7 +119,9 @@ def _assert_kfoc_first_order_optimality(case):
         [(X, y)],
         batch_size_fn=batch_size_fn,
     )
-    loss = (ggn - kfoc @ eye_like(kfoc)).pow(2).sum()
+    ggn_canonical = PT_mat @ ggn @ PT_mat.T
+    K_canonical = K_op @ eye_like(K_op)
+    loss = (ggn_canonical - K_canonical).pow(2).sum()
     for g in grad(loss, weight_S):
         assert g.abs().max().item() < 1e-8
 
