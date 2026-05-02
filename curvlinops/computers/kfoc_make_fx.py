@@ -188,12 +188,26 @@ class MakeFxKFOCComputer(_BaseKFACComputer):
     factors from the top singular pair of the rearranged operator.
 
     Requires ``FisherType.TYPE2``, ``KFACType.EXPAND``, and exactly one batch
-    in ``data``. The single-batch check runs in :meth:`compute`.
+    in ``data``. The Fisher/KFAC checks run in :meth:`__init__`; the
+    single-batch check runs in :meth:`compute`.
     """
 
     def __init__(self, *args, **kwargs):
-        """Initialize and turn on grad tracking for the parameters."""
+        """Validate KFOC's Fisher/KFAC requirements and enable grad on params.
+
+        Raises:
+            ValueError: If ``fisher_type`` is not ``FisherType.TYPE2`` or
+                ``kfac_approx`` is not ``KFACType.EXPAND``.
+        """
         super().__init__(*args, **kwargs)
+        if self._fisher_type != FisherType.TYPE2:
+            raise ValueError(
+                f"KFOC requires FisherType.TYPE2, got {self._fisher_type!r}."
+            )
+        if self._kfac_approx != KFACType.EXPAND:
+            raise ValueError(
+                f"KFOC requires KFACType.EXPAND, got {self._kfac_approx!r}."
+            )
         for p in self._params.values():
             p.requires_grad_(True)
 
@@ -212,19 +226,7 @@ class MakeFxKFOCComputer(_BaseKFACComputer):
 
         Returns:
             Tuple of ``(input_covariances, gradient_covariances, mapping)``.
-
-        Raises:
-            ValueError: If the data loader yields more than one batch, or if
-                the fisher type or KFAC approximation type are not supported.
         """
-        if self._fisher_type != FisherType.TYPE2:
-            raise ValueError(
-                f"KFOC requires FisherType.TYPE2, got {self._fisher_type!r}."
-            )
-        if self._kfac_approx != KFACType.EXPAND:
-            raise ValueError(
-                f"KFOC requires KFACType.EXPAND, got {self._kfac_approx!r}."
-            )
         _assert_single_element(self._data)
         X, y = next(iter(self._data))
 
