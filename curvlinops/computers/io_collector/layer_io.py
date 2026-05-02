@@ -6,14 +6,13 @@ from collections import UserDict
 from collections.abc import Callable, MutableMapping
 from contextlib import contextmanager
 from math import sqrt
-from typing import Any
 
 from einops import einsum
 from torch import Tensor, autograd
 from torch.nn import CrossEntropyLoss
 
 from curvlinops._checks import _register_userdict_as_pytree
-from curvlinops.computers._base import ParamGroup, ParamGroupKey, _BaseKFACComputer
+from curvlinops.computers._base import ParamGroup, _BaseKFACComputer
 from curvlinops.computers.io_collector.collector import with_kfac_io
 from curvlinops.computers.io_collector.groups import (
     _build_param_groups_from_io,
@@ -100,9 +99,9 @@ class LayerIO:
 
         self._model_func = model_func
         self._loss_func = loss_func
-        self._fisher_type = fisher_type
+        self.fisher_type = fisher_type
         self._mc_samples = mc_samples
-        self._kfac_approx = kfac_approx
+        self.kfac_approx = kfac_approx
         self._separate_weight_and_bias = separate_weight_and_bias
         self._intermediate_as_batch = intermediate_as_batch
         self._batch_size_fn = batch_size_fn or (lambda X: X.shape[0])
@@ -111,58 +110,29 @@ class LayerIO:
             loss_func, fisher_type, mc_samples
         )
 
-        # Bootstrap: ensure_io_fn seeds metadata on first call (when
-        # ``_io_param_names`` is None), validates on subsequent calls.
-        self._io_param_names: dict[str, dict[str, str]] | None = None
-        self._layer_hparams: dict[str, dict[str, Any]] | None = None
-        self._io_fns: dict[int, Callable] = {}
-        self.ensure_io_fn(X_example, params)
-
-        self._mapping, self._io_groups = _build_param_groups_from_io(
-            self._io_param_names, separate_weight_and_bias
+        # Bootstrap: trace once to seed shape-independent metadata; subsequent
+        # batch sizes go through ensure_io_fn which validates against the seed.
+        if isinstance(X_example, UserDict):
+            _register_userdict_as_pytree()
+        io_fn, self.io_param_names, self.layer_hparams = with_kfac_io(
+            model_func, X_example, params, fisher_type
         )
-        self._group_inputs, self._group_grads = make_group_gatherers(
-            self._io_groups, self._io_param_names, self._layer_hparams, kfac_approx
+        self._io_fns: dict[int, Callable] = {self._batch_size_fn(X_example): io_fn}
+
+        self.mapping, self.io_groups = _build_param_groups_from_io(
+            self.io_param_names, separate_weight_and_bias
         )
-
-    @property
-    def mapping(self) -> list[ParamGroup]:
-        """Parameter groups (list of dicts mapping role → param name)."""
-        return self._mapping
-
-    @property
-    def io_groups(self) -> dict[ParamGroupKey, list[str]]:
-        """Per-group IO-layer name lists (for weight-tied layers)."""
-        return self._io_groups
-
-    @property
-    def io_param_names(self) -> dict[str, dict[str, str]]:
-        """Per-IO-layer parameter name mappings."""
-        return self._io_param_names
-
-    @property
-    def layer_hparams(self) -> dict[str, dict[str, Any]]:
-        """Per-IO-layer hyperparameter dicts."""
-        return self._layer_hparams
-
-    @property
-    def fisher_type(self) -> FisherType:
-        """Fisher type passed at construction."""
-        return self._fisher_type
-
-    @property
-    def kfac_approx(self) -> str:
-        """KFAC approximation type used by the per-group gatherers."""
-        return self._kfac_approx
+        self.group_inputs, self.group_grads = make_group_gatherers(
+            self.io_groups, self.io_param_names, self.layer_hparams, kfac_approx
+        )
 
     def ensure_io_fn(
         self, X: Tensor | MutableMapping, params: dict[str, Tensor]
     ) -> Callable:
         """Return the FX-traced ``io_fn`` for ``X``'s batch size, building if needed.
 
-        First call seeds shape-independent metadata; subsequent calls validate
-        re-traced metadata against the seed to detect violations of the
-        shape-independence assumption.
+        Validates that re-traced metadata matches the seed from construction
+        to detect violations of the shape-independence assumption.
 
         Args:
             X: Input batch (only its batch size is consulted for the cache key).
@@ -183,22 +153,18 @@ class LayerIO:
             _register_userdict_as_pytree()
 
         io_fn, io_param_names, layer_hparams = with_kfac_io(
-            self._model_func, X, params, self._fisher_type
+            self._model_func, X, params, self.fisher_type
         )
-        if self._io_param_names is None:
-            self._io_param_names = io_param_names
-            self._layer_hparams = layer_hparams
-        else:
-            if io_param_names != self._io_param_names:
-                raise RuntimeError(
-                    "IO-collector parameter-name metadata changed across batch sizes. "
-                    f"Expected {self._io_param_names}, got {io_param_names}."
-                )
-            if layer_hparams != self._layer_hparams:
-                raise RuntimeError(
-                    "IO-collector layer hyperparameters changed across batch sizes. "
-                    f"Expected {self._layer_hparams}, got {layer_hparams}."
-                )
+        if io_param_names != self.io_param_names:
+            raise RuntimeError(
+                "IO-collector parameter-name metadata changed across batch sizes. "
+                f"Expected {self.io_param_names}, got {io_param_names}."
+            )
+        if layer_hparams != self.layer_hparams:
+            raise RuntimeError(
+                "IO-collector layer hyperparameters changed across batch sizes. "
+                f"Expected {self.layer_hparams}, got {layer_hparams}."
+            )
         self._io_fns[key] = io_fn
         return io_fn
 
@@ -234,7 +200,7 @@ class LayerIO:
         io_fn = self.ensure_io_fn(X, params)
         output, layer_inputs, layer_outputs = io_fn(params, X)
 
-        if self._fisher_type == FisherType.FORWARD_ONLY:
+        if self.fisher_type == FisherType.FORWARD_ONLY:
             return layer_inputs, {}
 
         if self._intermediate_as_batch:
@@ -266,34 +232,6 @@ class LayerIO:
         )
         layer_output_grads = dict(zip(io_layer_names, layer_output_grads_list))
         return layer_inputs, layer_output_grads
-
-    def group_inputs(
-        self, group: ParamGroup, layer_inputs: dict[str, Tensor]
-    ) -> Tensor:
-        """Gather a group's layer inputs in weight-sharing format.
-
-        Args:
-            group: Parameter group dict.
-            layer_inputs: Raw layer inputs keyed by IO layer name.
-
-        Returns:
-            Concatenated tensor of shape ``[batch, shared, d_in]``.
-        """
-        return self._group_inputs(group, layer_inputs)
-
-    def group_grads(
-        self, group: ParamGroup, layer_output_grads: dict[str, Tensor]
-    ) -> Tensor:
-        """Gather a group's layer output gradients in weight-sharing format.
-
-        Args:
-            group: Parameter group dict.
-            layer_output_grads: Batched output gradients keyed by IO layer name.
-
-        Returns:
-            Concatenated tensor of shape ``[v, batch, shared, d_out]``.
-        """
-        return self._group_grads(group, layer_output_grads)
 
     def snapshot(
         self,
@@ -333,12 +271,12 @@ class LayerIO:
 class LayerIOSnapshot:
     """Per-batch raw IO with on-demand per-group accessors.
 
-    Built via :meth:`LayerIO.snapshot`. Provides three granularities of
-    access at increasing computational cost:
+    Built via :meth:`LayerIO.snapshot`. Provides two granularities of
+    per-group access at increasing computational cost (raw per IO-layer dicts
+    are exposed as :attr:`layer_inputs` / :attr:`layer_output_grads`):
 
-    1. :meth:`raw_inputs` / :meth:`raw_output_grads` — per IO-layer view.
-    2. :meth:`standardized_io` — per-group ``(a, g)`` in weight-sharing format.
-    3. :meth:`per_sample_grads` — per-group per-sample ``vec(W)`` gradients.
+    1. :meth:`standardized_io` — per-group ``(a, g)`` in weight-sharing format.
+    2. :meth:`per_sample_grads` — per-group per-sample ``vec(W)`` gradients.
     """
 
     def __init__(
@@ -356,40 +294,8 @@ class LayerIOSnapshot:
             layer_output_grads: Per IO-layer batched output grads.
         """
         self._owner = owner
-        self._layer_inputs = layer_inputs
-        self._layer_output_grads = layer_output_grads
-
-    @property
-    def layer_inputs(self) -> dict[str, Tensor]:
-        """Raw per-IO-layer input tensors."""
-        return self._layer_inputs
-
-    @property
-    def layer_output_grads(self) -> dict[str, Tensor]:
-        """Raw per-IO-layer output gradient tensors."""
-        return self._layer_output_grads
-
-    def raw_inputs(self, io_layer_name: str) -> Tensor:
-        """Return the raw input tensor for a single IO layer.
-
-        Args:
-            io_layer_name: IO-layer name (e.g. ``"Linear0"``).
-
-        Returns:
-            The raw input tensor stored under ``io_layer_name``.
-        """
-        return self._layer_inputs[io_layer_name]
-
-    def raw_output_grads(self, io_layer_name: str) -> Tensor:
-        """Return the raw batched output-grad tensor for a single IO layer.
-
-        Args:
-            io_layer_name: IO-layer name (e.g. ``"Linear0"``).
-
-        Returns:
-            The raw batched output-gradient tensor stored under ``io_layer_name``.
-        """
-        return self._layer_output_grads[io_layer_name]
+        self.layer_inputs = layer_inputs
+        self.layer_output_grads = layer_output_grads
 
     def standardized_io(self, group: ParamGroup) -> tuple[Tensor | None, Tensor | None]:
         r"""Return per-group ``(a, g)`` in weight-sharing format.
@@ -409,13 +315,9 @@ class LayerIOSnapshot:
             * ``g`` has shape ``[V, B, S, d_out]`` for stochastic Fisher types,
               or ``None`` for :attr:`FisherType.FORWARD_ONLY`.
         """
-        a = (
-            self._owner.group_inputs(group, self._layer_inputs)
-            if "W" in group
-            else None
-        )
+        a = self._owner.group_inputs(group, self.layer_inputs) if "W" in group else None
         g = (
-            self._owner.group_grads(group, self._layer_output_grads)
+            self._owner.group_grads(group, self.layer_output_grads)
             if self._owner.fisher_type != FisherType.FORWARD_ONLY
             else None
         )

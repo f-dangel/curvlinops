@@ -132,6 +132,6 @@ def test_metadata_assertion_on_batch_size_change():
 
     io = LayerIO(model_func, loss, params, X1, fisher_type=FisherType.MC)
     # Simulate divergence: corrupt the cached metadata
-    io._io_param_names = {**io._io_param_names, "FakeLayer": {"W": "fake.weight"}}
+    io.io_param_names = {**io.io_param_names, "FakeLayer": {"W": "fake.weight"}}
     with raises(RuntimeError, match="parameter-name metadata"):
         io.ensure_io_fn(X2, params)
