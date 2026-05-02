@@ -158,7 +158,7 @@ def _top_rank_one_kron_factors(
         # materialized from a single matvec against the trivial (1×1) side.
         # Dense SVD handles the ``G = 0`` case directly (zero singular values).
         identity = np_eye(1, dtype=scipy_op.dtype)
-        dense = scipy_op @ identity if d_in == 1 else scipy_op.rmatmat(identity).T
+        dense = scipy_op @ identity if d_in == 1 else identity @ scipy_op
         u, s, vt = np_svd(dense, full_matrices=False)
         u, s, vt = u[:, :1], s[:1], vt[:1, :]
     else:
