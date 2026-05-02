@@ -111,6 +111,11 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
   public API and behavior are unchanged. EKFAC and KFOC migrations follow
   in subsequent PRs
 
+- Migrate `MakeFxKFOCComputer` to use `LayerIO` (with
+  `intermediate_as_batch=False`) and `LayerIOSnapshot.per_sample_grads`
+  instead of the lower-level `make_compute_kfac_io_batch` /
+  `make_group_gatherers` helpers. Public KFOC API and numerics are unchanged
+
 - Scope the FX backends' `requires_grad` mutation to tracing only.
   `MakeFxKFACComputer` / `MakeFxKFOCComputer` previously flipped
   `requires_grad=True` on every tensor in the user's `params` dict at
