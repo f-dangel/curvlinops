@@ -164,24 +164,46 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
 
     Extends ``MakeFxKFACComputer`` (which already drives KFAC factor tracing
     through :class:`LayerIO`) with eigenvalue correction tracing via the
-    same abstraction. EKFAC's only extra constraint — a 2d model output — is
-    validated once at construction.
+    same abstraction. The 2d-output restriction is enforced inside the
+    trace via :class:`LayerIO`'s ``output_check_fn`` hook.
     """
 
-    def __init__(self, *args, **kwargs):
-        """Validate that the model output is 2d (per-data point loss terms).
+    def _trace_batch_functions(
+        self,
+    ) -> tuple[dict[int, Callable], list[ParamGroup]]:
+        """Trace KFAC factor computation with EKFAC's 2d-output check.
 
-        EKFAC's per-sample gradient implementation does not support loss
-        terms that depend on each other, which the FX backend previously
-        enforced by passing ``output_check_fn`` into the IO setup. A single
-        forward pass over the first batch is enough since the output rank is
-        a model-level invariant.
+        Overrides the parent only to thread ``output_check_fn`` into the
+        :class:`LayerIO` constructor.
+
+        Returns:
+            Tuple of ``(traced_fns, mapping)``.
         """
-        super().__init__(*args, **kwargs)
-        X, y = next(iter(self._loop_over_data()))
-        with no_grad():
-            output = self._model_func(self._params, X)
-        self._rearrange_for_larger_than_2d_output(output, y)
+        traced_fns: dict[int, Callable] = {}
+        io: LayerIO | None = None
+
+        for X, y in self._loop_over_data(desc="FX tracing"):
+            batch_size = self._batch_size_fn(X)
+            if batch_size in traced_fns:
+                continue
+
+            if io is None:
+                io = LayerIO(
+                    self._model_func,
+                    self._loss_func,
+                    self._params,
+                    X,
+                    fisher_type=self._fisher_type,
+                    mc_samples=self._mc_samples,
+                    kfac_approx=self._kfac_approx,
+                    separate_weight_and_bias=self._separate_weight_and_bias,
+                    batch_size_fn=self._batch_size_fn,
+                    output_check_fn=self._rearrange_for_larger_than_2d_output,
+                )
+
+            traced_fns[batch_size] = self._trace_one_batch(io, X, y)
+
+        return traced_fns, io.mapping
 
     def _trace_eigencorrection_batch_functions(
         self,
@@ -214,6 +236,7 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
                     kfac_approx=KFACType.EXPAND,
                     separate_weight_and_bias=self._separate_weight_and_bias,
                     batch_size_fn=self._batch_size_fn,
+                    output_check_fn=self._rearrange_for_larger_than_2d_output,
                 )
 
             traced_fns[batch_size] = self._trace_eigencorrection_one_batch(io, X, y)

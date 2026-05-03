@@ -65,6 +65,11 @@ class LayerIO:
         batch_size_fn: Maps an input batch to its size. Used as the
             ``io_fn`` cache key. Defaults to ``X.shape[0]`` (must be supplied
             for non-Tensor inputs like :class:`UserDict`).
+        output_check_fn: Optional callback ``(output, y) -> object`` invoked
+            inside :meth:`populate` (and therefore inside the ``make_fx``
+            trace) right after the model output is computed. Raise inside
+            the callback to reject unsupported output/target shapes (e.g.,
+            EKFAC's 2d-output restriction). The return value is ignored.
 
     Raises:
         ValueError: If ``intermediate_as_batch=False`` is combined with
@@ -83,6 +88,7 @@ class LayerIO:
         separate_weight_and_bias: bool = True,
         intermediate_as_batch: bool = True,
         batch_size_fn: Callable[[Tensor | MutableMapping], int] | None = None,
+        output_check_fn: Callable[[Tensor, Tensor], object] | None = None,
     ):
         """Bootstrap shape-independent metadata and trace the first ``io_fn``.
 
@@ -105,6 +111,7 @@ class LayerIO:
         self._separate_weight_and_bias = separate_weight_and_bias
         self._intermediate_as_batch = intermediate_as_batch
         self._batch_size_fn = batch_size_fn or (lambda X: X.shape[0])
+        self._output_check_fn = output_check_fn
 
         self._grad_outputs_computer = _BaseKFACComputer._set_up_grad_outputs_computer(
             loss_func, fisher_type, mc_samples
@@ -199,6 +206,9 @@ class LayerIO:
         """
         io_fn = self.ensure_io_fn(X, params)
         output, layer_inputs, layer_outputs = io_fn(params, X)
+
+        if self._output_check_fn is not None:
+            self._output_check_fn(output, y)
 
         if self.fisher_type == FisherType.FORWARD_ONLY:
             return layer_inputs, {}
