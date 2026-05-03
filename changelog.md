@@ -110,6 +110,13 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
   collection plumbing. Migrate the FX KFAC backend to use it; `KFAC`'s
   public API and behavior are unchanged. EKFAC and KFOC migrations follow
   in subsequent PRs
+  ([PR](https://github.com/f-dangel/curvlinops/pull/302))
+
+- Migrate `MakeFxKFOCComputer` to use `LayerIO` (with
+  `intermediate_as_batch=False`) and `LayerIOSnapshot.per_sample_grads`
+  instead of the lower-level `make_compute_kfac_io_batch` /
+  `make_group_gatherers` helpers. Public KFOC API and numerics are unchanged
+  ([PR](https://github.com/f-dangel/curvlinops/pull/303))
 
 - Scope the FX backends' `requires_grad` mutation to tracing only.
   `MakeFxKFACComputer` / `MakeFxKFOCComputer` previously flipped
@@ -122,6 +129,7 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
   KFOC's `compute()` now traces its IO getter and replays under
   `no_grad()` to keep the autograd-using portion contained inside an
   FX graph
+  ([PR](https://github.com/f-dangel/curvlinops/pull/301))
 
 - Add `intermediate_as_batch` flag to the FX backend's
   `make_compute_kfac_io_batch` (opt-in unflattened IO — with

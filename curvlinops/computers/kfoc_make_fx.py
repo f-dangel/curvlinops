@@ -6,10 +6,9 @@ Provides:
   Gauss-Newton block, exposed as a rectangular PyTorch linear operator whose
   matvec consumes per-sample ``vec(W)`` gradients.
 - :class:`MakeFxKFOCComputer`: FX-based computer that obtains per-sample
-  activations and output gradients via :func:`make_compute_kfac_io_batch`
-  with ``intermediate_as_batch=False``, forms per-sample ``vec(W)`` gradients,
-  and extracts Kronecker factors per layer via truncated SVD on the
-  rearranged operator.
+  activations and output gradients via :class:`LayerIO` with
+  ``intermediate_as_batch=False`` and extracts Kronecker factors per layer via
+  truncated SVD on the rearranged operator.
 """
 
 from __future__ import annotations
@@ -24,12 +23,9 @@ from torch import Tensor, as_tensor, device, dtype, no_grad
 
 from curvlinops._torch_base import PyTorchLinearOperator
 from curvlinops.computers._base import ParamGroup, ParamGroupKey, _BaseKFACComputer
-from curvlinops.computers.kfac_make_fx import (
-    make_compute_kfac_io_batch,
-    make_group_gatherers,
-)
+from curvlinops.computers.io_collector import LayerIO
 from curvlinops.kfac_utils import FisherType, KFACType
-from curvlinops.utils import _assert_single_element, _enable_requires_grad, _make_fx
+from curvlinops.utils import _assert_single_element, _make_fx
 
 
 class _RearrangedGGNLinearOperator(PyTorchLinearOperator):
@@ -182,10 +178,10 @@ def _top_rank_one_kron_factors(
 class MakeFxKFOCComputer(_BaseKFACComputer):
     """KFOC computer: top-1 SVD on the rearranged per-layer GGN block.
 
-    Collects per-sample activations and output gradients via the unflattened
-    IO collector (``intermediate_as_batch=False``), forms per-sample
-    ``vec(W)`` gradients, and extracts the Frobenius-optimal rank-1 Kronecker
-    factors from the top singular pair of the rearranged operator.
+    Collects per-sample activations and output gradients via :class:`LayerIO`
+    with ``intermediate_as_batch=False``, forms per-sample ``vec(W)`` gradients,
+    and extracts the Frobenius-optimal rank-1 Kronecker factors from the top
+    singular pair of the rearranged operator.
 
     Requires ``FisherType.TYPE2``, ``KFACType.EXPAND``, and exactly one batch
     in ``data``. All three preconditions fail at construction.
@@ -221,58 +217,52 @@ class MakeFxKFOCComputer(_BaseKFACComputer):
         # yields CPU tensors.
         X, y = next(iter(self._loop_over_data()))
 
-        (
-            inputs_and_grad_outputs_batch,
-            mapping,
-            io_groups,
-            io_param_names,
-            layer_hparams,
-        ) = make_compute_kfac_io_batch(
+        io = LayerIO(
             self._model_func,
             self._loss_func,
             self._params,
             X,
             fisher_type=self._fisher_type,
             mc_samples=self._mc_samples,
+            kfac_approx=self._kfac_approx,
             separate_weight_and_bias=self._separate_weight_and_bias,
             intermediate_as_batch=False,
+            batch_size_fn=self._batch_size_fn,
         )
-        # Trace the IO getter to lower its ``autograd.grad`` call into explicit
-        # backward aten ops, then replay with autograd disabled. The
-        # ``_enable_requires_grad`` wrap is local to the trace call so the
-        # user's ``requires_grad`` state is untouched after ``compute`` returns.
-        with _enable_requires_grad(list(self._params.values())):
-            traced_io = _make_fx(inputs_and_grad_outputs_batch)(self._params, X, y)
+        # Trace IO collection only (the SVD per group is non-traceable due to
+        # ``svds`` + ARPACK error handling), then replay under ``no_grad`` to
+        # keep the autograd-using portion contained inside the FX graph.
+        # The wrapper hides ``io.populate``'s bound ``self`` from ``make_fx``,
+        # which otherwise counts it as a tracing argument.
+
+        def populate(params, X, y):
+            return io.populate(params, X, y)
+
+        with io.enable_param_grads(self._params):
+            traced_populate = _make_fx(populate)(self._params, X, y)
         with no_grad():
-            layer_inputs, layer_output_grads = traced_io(self._params, X, y)
-        group_inputs, group_grads = make_group_gatherers(
-            io_groups, io_param_names, layer_hparams, KFACType.EXPAND
-        )
+            layer_inputs, layer_output_grads = traced_populate(self._params, X, y)
+        snap = io.snapshot(layer_inputs, layer_output_grads)
 
         # ``S_1 (otimes) S_2`` per group; positional return matches the base
         # class slots (``input_covariances``, ``gradient_covariances``).
         first_factors: dict[ParamGroupKey, Tensor] = {}
         second_factors: dict[ParamGroupKey, Tensor] = {}
-        for group in mapping:
+        for group in io.mapping:
             group_key = tuple(group.values())
-            g = group_grads(group, layer_output_grads)
+            per_sample_grads = snap.per_sample_grads(group)
             if "W" in group:
-                a = group_inputs(group, layer_inputs)
-                per_sample_grads = einsum(
-                    g, a, "vec batch shared out, batch shared inp -> vec batch out inp"
-                )
                 S_1, S_2 = _top_rank_one_kron_factors(per_sample_grads)
                 first_factors[group_key] = S_1
                 second_factors[group_key] = S_2
             else:
                 # Bias-only block: the Frobenius optimum is the exact GGN
-                # block. The bias is shared across the ``shared`` axis, so
-                # per-sample gradients sum over it before the outer product.
-                g_per_sample = einsum(g, "vec batch shared row -> vec batch row")
+                # block. ``per_sample_grads`` already sums over the shared
+                # axis, so the outer product runs straight on ``[V, B, d_out]``.
                 first_factors[group_key] = einsum(
-                    g_per_sample,
-                    g_per_sample,
+                    per_sample_grads,
+                    per_sample_grads,
                     "vec batch row, vec batch col -> row col",
                 )
 
-        return second_factors, first_factors, mapping
+        return second_factors, first_factors, io.mapping
