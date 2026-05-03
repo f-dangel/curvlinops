@@ -5,20 +5,17 @@ This module provides ``MakeFxEKFACComputer``, which extends
 collector (``with_kfac_io``) instead of forward/backward hooks.
 """
 
-from collections import UserDict
 from collections.abc import Callable, MutableMapping
-from functools import partial
 
 from torch import Tensor, empty, no_grad
 
-from curvlinops._checks import _register_userdict_as_pytree
 from curvlinops.computers._base import ParamGroup, ParamGroupKey, _EKFACMixin
 from curvlinops.computers.ekfac_hooks import (
     compute_eigenvalue_correction_linear_weight_sharing,
 )
+from curvlinops.computers.io_collector import LayerIO
 from curvlinops.computers.kfac_make_fx import (
     MakeFxKFACComputer,
-    make_compute_kfac_batch,
     make_compute_kfac_io_batch,
     make_group_gatherers,
 )
@@ -165,47 +162,26 @@ def make_compute_ekfac_eigencorrection_batch(
 class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
     """EKFAC computer that uses FX graph tracing for eigenvalue correction.
 
-    Extends ``MakeFxKFACComputer`` with eigenvalue correction computation.
-    Kronecker factor computation is inherited from ``MakeFxKFACComputer``.
-    Both KFAC factors and eigenvalue correction use traced batch functions.
+    Extends ``MakeFxKFACComputer`` (which already drives KFAC factor tracing
+    through :class:`LayerIO`) with eigenvalue correction tracing via the
+    same abstraction. EKFAC's only extra constraint — a 2d model output — is
+    validated once at construction.
     """
 
-    def _trace_batch_functions(
-        self,
-    ) -> tuple[dict[int, Callable], list[ParamGroup]]:
-        """Trace per-batch KFAC computation for all batch sizes in the data.
+    def __init__(self, *args, **kwargs):
+        """Validate that the model output is 2d (per-data point loss terms).
 
-        Overrides parent to pass ``output_check_fn`` for EKFAC's 2d output
-        restriction.
-
-        Returns:
-            Tuple of ``(traced_fns, mapping)``.
+        EKFAC's per-sample gradient implementation does not support loss
+        terms that depend on each other, which the FX backend previously
+        enforced by passing ``output_check_fn`` into the IO setup. A single
+        forward pass over the first batch is enough since the output rank is
+        a model-level invariant.
         """
-        traced_fns: dict[int, Callable] = {}
-        mapping: list[ParamGroup] | None = None
-
-        for X, y in self._loop_over_data(desc="Batch tracing"):
-            batch_size = self._batch_size_fn(X)
-            if batch_size not in traced_fns:
-                if isinstance(X, UserDict):
-                    _register_userdict_as_pytree()
-                traced_fns[batch_size], mapping = make_compute_kfac_batch(
-                    self._model_func,
-                    self._loss_func,
-                    self._params,
-                    X,
-                    y,
-                    self._fisher_type,
-                    self._mc_samples,
-                    self._kfac_approx,
-                    self._separate_weight_and_bias,
-                    self._batch_size_fn,
-                    output_check_fn=partial(
-                        self._rearrange_for_larger_than_2d_output, y=y
-                    ),
-                )
-
-        return traced_fns, mapping
+        super().__init__(*args, **kwargs)
+        X, y = next(iter(self._loop_over_data()))
+        with no_grad():
+            output = self._model_func(self._params, X)
+        self._rearrange_for_larger_than_2d_output(output, y)
 
     def _trace_eigencorrection_batch_functions(
         self,
@@ -216,30 +192,93 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
             Tuple of ``(traced_fns, mapping)``.
         """
         traced_fns: dict[int, Callable] = {}
-        mapping: list[ParamGroup] | None = None
+        io: LayerIO | None = None
 
         for X, y in self._loop_over_data(desc="Eigencorrection tracing"):
             batch_size = self._batch_size_fn(X)
-            if batch_size not in traced_fns:
-                if isinstance(X, UserDict):
-                    _register_userdict_as_pytree()
-                traced_fns[batch_size], mapping = (
-                    make_compute_ekfac_eigencorrection_batch(
-                        self._model_func,
-                        self._loss_func,
-                        self._params,
-                        X,
-                        y,
-                        self._fisher_type,
-                        self._mc_samples,
-                        self._separate_weight_and_bias,
-                        output_check_fn=partial(
-                            self._rearrange_for_larger_than_2d_output, y=y
-                        ),
-                    )
+            if batch_size in traced_fns:
+                continue
+
+            if io is None:
+                # ``kfac_approx`` is hardcoded to :attr:`KFACType.EXPAND`:
+                # :func:`compute_eigenvalue_correction_linear_weight_sharing`
+                # consumes EXPAND-format ``(a, g)`` regardless of the operator's
+                # ``kfac_approx`` (which only controls factor accumulation).
+                io = LayerIO(
+                    self._model_func,
+                    self._loss_func,
+                    self._params,
+                    X,
+                    fisher_type=self._fisher_type,
+                    mc_samples=self._mc_samples,
+                    kfac_approx=KFACType.EXPAND,
+                    separate_weight_and_bias=self._separate_weight_and_bias,
+                    batch_size_fn=self._batch_size_fn,
                 )
 
-        return traced_fns, mapping
+            traced_fns[batch_size] = self._trace_eigencorrection_one_batch(io, X, y)
+
+        return traced_fns, io.mapping
+
+    def _trace_eigencorrection_one_batch(
+        self, io: LayerIO, X: Tensor | MutableMapping, y: Tensor
+    ) -> Callable:
+        """Trace per-batch eigencorrection for one example ``(X, y)`` pair.
+
+        Args:
+            io: The :class:`LayerIO` (must already have an ``io_fn`` cached
+                for ``X``'s batch size).
+            X: Example input batch (shape baked into the trace).
+            y: Example target batch.
+
+        Returns:
+            Traced callable
+            ``(params, X, y, input_eigvecs, gradient_eigvecs) -> eigencorrections``.
+        """
+
+        def compute_eigencorrection_batch(
+            params: dict[str, Tensor],
+            X: Tensor | MutableMapping,
+            y: Tensor,
+            input_eigvecs: dict[ParamGroupKey, Tensor],
+            gradient_eigvecs: dict[ParamGroupKey, Tensor],
+        ) -> dict[tuple[str, ...], Tensor]:
+            layer_inputs, layer_output_grads = io.populate(params, X, y)
+            snap = io.snapshot(layer_inputs, layer_output_grads)
+
+            eigencorrections: dict[tuple[str, ...], Tensor] = {}
+            for group in io.mapping:
+                group_key = tuple(group.values())
+                a, g = snap.standardized_io(group)
+                aaT_eigvecs = input_eigvecs[group_key] if "W" in group else None
+                eigencorrections[group_key] = (
+                    compute_eigenvalue_correction_linear_weight_sharing(
+                        g, gradient_eigvecs[group_key], a, aaT_eigvecs
+                    )
+                )
+            return eigencorrections
+
+        # Example eigvec shapes are derived from params:
+        # ``d_out = W.shape[0]``; ``d_in = W[0].numel() (+1 for bias pad)``.
+        example_input_eigvecs: dict[ParamGroupKey, Tensor] = {}
+        example_gradient_eigvecs: dict[ParamGroupKey, Tensor] = {}
+        for group in io.mapping:
+            group_key = tuple(group.values())
+            p1 = self._params[next(iter(group.values()))]
+            d_out = p1.shape[0]
+            example_gradient_eigvecs[group_key] = empty(
+                d_out, d_out, dtype=p1.dtype, device=p1.device
+            )
+            if "W" in group:
+                d_in = p1.numel() // p1.shape[0] + ("b" in group)
+                example_input_eigvecs[group_key] = empty(
+                    d_in, d_in, dtype=p1.dtype, device=p1.device
+                )
+
+        with io.enable_param_grads(self._params):
+            return _make_fx(compute_eigencorrection_batch)(
+                self._params, X, y, example_input_eigvecs, example_gradient_eigvecs
+            )
 
     def compute(
         self,
