@@ -118,19 +118,17 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
   `make_group_gatherers` helpers. Public KFOC API and numerics are unchanged
   ([PR](https://github.com/f-dangel/curvlinops/pull/303))
 
-- Migrate `MakeFxEKFACComputer` to use `LayerIO`. KFAC factor tracing
-  reuses the parent's `_trace_one_batch`; eigencorrection tracing builds
-  a dedicated :class:`LayerIO` (pinned to `KFACType.EXPAND` since
-  `compute_eigenvalue_correction_linear_weight_sharing` consumes
-  EXPAND-format `(a, g)` regardless of the operator's `kfac_approx`) and
-  uses `LayerIOSnapshot.standardized_io`. The 2d-output check that EKFAC
-  previously plumbed via `output_check_fn` is preserved by extending
-  `LayerIO` with an `output_check_fn(output, y)` hook called inside
-  :meth:`LayerIO.populate` (and therefore inside the trace). Drop the
-  per-backend `*_make_fx_preserves_requires_grad` tests for
-  KFAC/EKFAC/KFOC: now redundant with
+- Migrate `MakeFxEKFACComputer` to use `LayerIO` (mirroring KFAC #302 /
+  KFOC #303). Public EKFAC API and numerics are unchanged. To keep the
+  backend's existing 2d-output validation, extend `LayerIO` with an
+  `output_check_fn(output, y)` hook called inside `populate` (and
+  therefore inside the trace).
+
+- Drop the per-backend `*_make_fx_preserves_requires_grad` tests for
+  KFAC/EKFAC/KFOC: redundant with
   `test_enable_param_grads_preserves_requires_grad` which guards the
-  shared `LayerIO.enable_param_grads` save/restore
+  shared `LayerIO.enable_param_grads` save/restore that all three
+  backends now flow through.
 
 - Scope the FX backends' `requires_grad` mutation to tracing only.
   `MakeFxKFACComputer` / `MakeFxKFOCComputer` previously flipped
