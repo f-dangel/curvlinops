@@ -130,6 +130,16 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
   shared `LayerIO.enable_param_grads` save/restore that all three
   backends now flow through.
 
+- Consolidate the FX KFAC/EKFAC plumbing on `LayerIO`. The functional
+  factories `make_compute_kfac_batch` / `make_compute_ekfac_eigencorrection_batch`
+  are rewritten to use `LayerIO` internally (mirroring how
+  `make_batch_ggn_vector_product` and friends back the corresponding
+  LinearOperators) and `MakeFxKFACComputer` / `MakeFxEKFACComputer`
+  delegate per-batch tracing to them. Drop the now-unused
+  `make_compute_kfac_io_batch` helper. `test/computers/test_kfac_io.py`
+  is retargeted to `LayerIO` directly (same GGN-block reconstruction
+  asserts, new entry point).
+
 - Scope the FX backends' `requires_grad` mutation to tracing only.
   `MakeFxKFACComputer` / `MakeFxKFOCComputer` previously flipped
   `requires_grad=True` on every tensor in the user's `params` dict at

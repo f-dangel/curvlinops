@@ -1,174 +1,27 @@
 """KFAC computer using FX graph tracing instead of hooks.
 
 This module provides ``MakeFxKFACComputer``, which computes Kronecker factors
-by tracing the model's forward+backward pass with ``torch.fx`` via the IO
-collector, collecting layer inputs/outputs rather than using forward/backward
-hooks. The entire per-batch computation (IO collection, backward pass, and
-covariance einsums) is traced with ``make_fx``, allowing ``torch.compile``
-to optimize the full per-batch kernel.
+by tracing the model's forward+backward pass with ``torch.fx`` via
+:class:`LayerIO`, collecting layer inputs/outputs rather than using
+forward/backward hooks. The entire per-batch computation (IO collection,
+backward pass, and covariance einsums) is traced with ``make_fx``, allowing
+``torch.compile`` to optimize the full per-batch kernel.
+
+The standalone factory :func:`make_compute_kfac_batch` returns a traced
+per-batch closure for users who want a functional API without going through
+:class:`MakeFxKFACComputer` (mirrors :func:`make_batch_ggn_vector_product`
+and friends).
 """
 
 from collections.abc import Callable, MutableMapping
-from math import sqrt
 
 from einops import einsum
-from torch import Tensor, autograd, eye, no_grad
-from torch.nn import CrossEntropyLoss
+from torch import Tensor, eye, no_grad
 
 from curvlinops.computers._base import ParamGroup, ParamGroupKey, _BaseKFACComputer
-from curvlinops.computers.io_collector import LayerIO, with_kfac_io
-from curvlinops.computers.io_collector.groups import (
-    _build_param_groups_from_io,
-    make_group_gatherers,
-)
+from curvlinops.computers.io_collector import LayerIO
 from curvlinops.kfac_utils import FisherType, KFACType
-from curvlinops.utils import _enable_requires_grad, _make_fx, fork_rng_with_seed
-
-
-def make_compute_kfac_io_batch(
-    model_func: Callable,
-    loss_func: Callable,
-    params: dict[str, Tensor],
-    X: Tensor | MutableMapping,
-    fisher_type: FisherType = FisherType.MC,
-    mc_samples: int = 1,
-    separate_weight_and_bias: bool = True,
-    output_check_fn: Callable[[Tensor], None] | None = None,
-    intermediate_as_batch: bool = True,
-) -> tuple[
-    Callable[
-        [dict[str, Tensor], Tensor | MutableMapping, Tensor],
-        tuple[dict[str, Tensor], dict[str, Tensor]],
-    ],
-    list[ParamGroup],
-    dict[ParamGroupKey, list[str]],
-    dict[str, dict[str, str]],
-    dict[str, dict],
-]:
-    """Set up per-batch IO collection and backward pass for KFAC.
-
-    Returns an **untraced** closure that, given ``(params, X, y)``, runs the
-    forward pass with IO collection and backpropagates the Fisher-type-specific
-    gradient outputs to produce per-layer inputs and batched output gradients.
-
-    Args:
-        model_func: Functional model ``(params, X) -> prediction``.
-        loss_func: Loss function (``MSELoss``, ``CrossEntropyLoss``, or
-            ``BCEWithLogitsLoss``).
-        params: Named parameter dict (example for IO tracing).
-        X: Example input tensor (shapes determine the traced graph).
-        fisher_type: Type of Fisher information. Defaults to
-            ``FisherType.MC``.
-        mc_samples: Number of Monte-Carlo samples (only used when
-            ``fisher_type=FisherType.MC``). Defaults to ``1``.
-        separate_weight_and_bias: Whether to treat weights and biases
-            separately. Defaults to ``True``.
-        output_check_fn: Optional callback ``(output) -> None`` called with
-            the model output during setup. Raise inside this callback to
-            reject unsupported output shapes (e.g., EKFAC's 2d restriction).
-        intermediate_as_batch: Whether to treat the model output's
-            intermediate (non-batch, non-class) axes as additional batch
-            samples. ``True`` (default) reproduces KFAC-expand
-            (Eschenhagen et al., 2023): per-token grad_outputs are computed
-            on a flattened ``[B*prod(D), C]`` view of the model output.
-            ``False`` keeps the intermediate axes separate so each
-            ``(*D, C)`` slice is treated as one per-sample output, and the
-            per-sample decomposition ``sum_{v,n,t} g g^T (otimes) a a^T``
-            reconstructs the exact per-layer GGN block (for position-wise
-            layers with ``FisherType.TYPE2``). Not supported with
-            ``FisherType.EMPIRICAL``.
-
-    Returns:
-        Tuple of ``(inputs_and_grad_outputs_batch_fn, mapping, io_groups, io_param_names,
-        layer_hparams)`` where ``inputs_and_grad_outputs_batch_fn(params, X, y)`` returns
-        ``(layer_inputs, layer_output_grads)`` dicts keyed by IO layer name.
-        For mean reduction, ``layer_output_grads`` is scaled so that
-        ``sum_v grad_outputs grad_outputs^T`` equals the batch loss Hessian
-        (i.e., the ``1/N`` reduction factor is folded in once as ``1/sqrt(N)``
-        per vector). Downstream consumers therefore do not need to apply any
-        additional reduction-dependent correction.
-
-    Raises:
-        ValueError: If ``intermediate_as_batch=False`` is combined with
-            ``FisherType.EMPIRICAL`` (the empirical per-datum loss helper
-            assumes a 1d prediction shape).
-    """
-    if not intermediate_as_batch and fisher_type == FisherType.EMPIRICAL:
-        raise ValueError(
-            "intermediate_as_batch=False is not supported with "
-            "FisherType.EMPIRICAL because the per-datum loss helper assumes "
-            "a 1d prediction shape."
-        )
-
-    grad_outputs_computer = _BaseKFACComputer._set_up_grad_outputs_computer(
-        loss_func, fisher_type, mc_samples
-    )
-    io_fn, io_param_names, layer_hparams = with_kfac_io(
-        model_func, X, params, fisher_type
-    )
-    mapping, io_groups = _build_param_groups_from_io(
-        io_param_names, separate_weight_and_bias
-    )
-
-    def inputs_and_grad_outputs_batch(
-        params: dict[str, Tensor], X: Tensor | MutableMapping, y: Tensor
-    ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
-        """Run forward pass with IO collection and backpropagate grad outputs.
-
-        Args:
-            params: Named model parameters.
-            X: Input batch.
-            y: Target batch.
-
-        Returns:
-            ``(layer_inputs, layer_output_grads)`` dicts keyed by IO layer
-            name. ``layer_output_grads`` is empty when the IO collector
-            did not store outputs (e.g. ``FORWARD_ONLY``).
-        """
-        output, layer_inputs, layer_outputs = io_fn(params, X)
-
-        if output_check_fn is not None:
-            output_check_fn(output)
-
-        if fisher_type == FisherType.FORWARD_ONLY:
-            return layer_inputs, {}
-
-        if intermediate_as_batch:
-            # CrossEntropyLoss expects class dim second; other losses last.
-            if isinstance(loss_func, CrossEntropyLoss):
-                output_for_grad = output.movedim(1, -1).flatten(0, -2)
-                y_for_grad = y.flatten()
-            else:
-                output_for_grad = output.flatten(0, -2)
-                y_for_grad = y.flatten(0, -2)
-        else:
-            output_for_grad, y_for_grad = output, y
-        grad_outputs = grad_outputs_computer(output_for_grad.detach(), y_for_grad, None)
-        # Equivalent to the hooks backend's two-step scaling (pre-multiply
-        # ``grad_outputs`` by ``1/num_loss_terms``, then apply
-        # ``compute_loss_correction`` on ``ggT``): combining both into a single
-        # ``1/sqrt(N)`` per vector squares to the same ``1/N`` on ``ggT``.
-        mean_scale = 1.0 / sqrt(output_for_grad.shape[0])
-        grad_outputs.mul_({"sum": 1.0, "mean": mean_scale}[loss_func.reduction])
-
-        io_layer_names = list(layer_outputs)
-        output_tensors = list(layer_outputs.values())
-        layer_output_grads_list = autograd.grad(
-            output_for_grad,
-            output_tensors,
-            grad_outputs=grad_outputs,
-            is_grads_batched=True,
-        )
-        layer_output_grads = dict(zip(io_layer_names, layer_output_grads_list))
-        return layer_inputs, layer_output_grads
-
-    return (
-        inputs_and_grad_outputs_batch,
-        mapping,
-        io_groups,
-        io_param_names,
-        layer_hparams,
-    )
+from curvlinops.utils import _make_fx, fork_rng_with_seed
 
 
 def make_compute_kfac_batch(
@@ -182,20 +35,21 @@ def make_compute_kfac_batch(
     kfac_approx: str = KFACType.EXPAND,
     separate_weight_and_bias: bool = True,
     batch_size_fn: Callable[[Tensor | MutableMapping], int] | None = None,
-    output_check_fn: Callable[[Tensor], None] | None = None,
+    output_check_fn: Callable[[Tensor, Tensor], object] | None = None,
 ) -> tuple[
     Callable[
         [dict[str, Tensor], Tensor | MutableMapping, Tensor],
-        tuple[list[Tensor], list[Tensor]],
+        tuple[dict[ParamGroupKey, Tensor], dict[ParamGroupKey, Tensor]],
     ],
     list[ParamGroup],
 ]:
-    """Set up and trace the per-batch KFAC Kronecker factor computation.
+    """Set up and trace per-batch KFAC Kronecker factor computation.
 
-    Builds on :func:`make_compute_kfac_io_batch` by adding the covariance
-    computation (weight-sharing format conversion + einsum) and tracing the
-    entire pipeline with ``make_fx`` into a single FX graph with zero graph
-    breaks.
+    Builds a :class:`LayerIO` configured for the given Fisher/KFAC settings,
+    wraps the per-batch reduction (IO collection, backward pass, per-group
+    covariance einsums) in :func:`_make_fx`, and returns the traced function
+    along with the parameter-group mapping. Each call produces a
+    shape-specific traced function (the ``X`` shape is baked in).
 
     Args:
         model_func: Functional model ``(params, X) -> prediction``.
@@ -214,7 +68,9 @@ def make_compute_kfac_batch(
             separately. Defaults to ``True``.
         batch_size_fn: Function to extract batch size from ``X``.
             Defaults to ``X.shape[0]``.
-        output_check_fn: Passed to :func:`make_compute_kfac_io_batch`.
+        output_check_fn: Optional ``(output, y) -> object`` callback
+            forwarded to :class:`LayerIO`; raise inside it to reject
+            unsupported output/target shapes.
 
     Returns:
         Tuple of ``(traced_fn, mapping)`` where ``traced_fn`` is a compiled
@@ -222,31 +78,22 @@ def make_compute_kfac_batch(
         dict mapping parameter group keys to tensors) and ``mapping`` is the
         list of parameter groups.
     """
-    inputs_and_grad_outputs_batch, mapping, io_groups, io_param_names, layer_hparams = (
-        make_compute_kfac_io_batch(
-            model_func,
-            loss_func,
-            params,
-            X,
-            fisher_type,
-            mc_samples,
-            separate_weight_and_bias,
-            output_check_fn,
-        )
-    )
-
-    if batch_size_fn is None:
-
-        def batch_size_fn(X):
-            return X.shape[0]
-
-    group_inputs, group_grads = make_group_gatherers(
-        io_groups, io_param_names, layer_hparams, kfac_approx
+    io = LayerIO(
+        model_func,
+        loss_func,
+        params,
+        X,
+        fisher_type=fisher_type,
+        mc_samples=mc_samples,
+        kfac_approx=kfac_approx,
+        separate_weight_and_bias=separate_weight_and_bias,
+        batch_size_fn=batch_size_fn,
+        output_check_fn=output_check_fn,
     )
 
     def compute_batch(
         params: dict[str, Tensor], X: Tensor | MutableMapping, y: Tensor
-    ) -> tuple[dict[tuple[str, ...], Tensor], dict[tuple[str, ...], Tensor]]:
+    ) -> tuple[dict[ParamGroupKey, Tensor], dict[ParamGroupKey, Tensor]]:
         """Compute per-batch input and gradient covariances for all groups.
 
         Args:
@@ -257,56 +104,55 @@ def make_compute_kfac_batch(
         Returns:
             Tuple of ``(input_covs, gradient_covs)`` dicts.
         """
-        layer_inputs, layer_output_grads = inputs_and_grad_outputs_batch(params, X, y)
-        batch_size = batch_size_fn(X)
+        layer_inputs, layer_output_grads = io.populate(params, X, y)
+        snap = io.snapshot(layer_inputs, layer_output_grads)
 
-        input_covs: dict[tuple[str, ...], Tensor] = {}
-        for group in mapping:
-            if "W" not in group:
-                continue
-            x = group_inputs(group, layer_inputs)
+        input_covs: dict[ParamGroupKey, Tensor] = {}
+        gradient_covs: dict[ParamGroupKey, Tensor] = {}
+        for group in io.mapping:
+            a, g = snap.standardized_io(group)
             group_key = tuple(group.values())
-            xxT = einsum(x, x, "batch shared i, batch shared j -> i j")
-            input_covs[group_key] = xxT.div_(batch_size * x.shape[1])
-
-        gradient_covs: dict[tuple[str, ...], Tensor] = {}
-        for group in mapping:
-            group_key = tuple(group.values())
+            if a is not None:
+                xxT = einsum(a, a, "batch shared i, batch shared j -> i j")
+                # ``a`` has shape ``[batch, shared, d_in]``; the standardized
+                # gatherer preserves the batch axis through weight-tied cats,
+                # so ``a.shape[0]`` matches ``batch_size_fn(X)``.
+                input_covs[group_key] = xxT.div_(a.shape[0] * a.shape[1])
             if fisher_type == FisherType.FORWARD_ONLY:
                 W = params[next(iter(group.values()))]
                 gradient_covs[group_key] = eye(
                     W.shape[0], dtype=W.dtype, device=W.device
                 )
-                continue
-            g = group_grads(group, layer_output_grads)
-            gradient_covs[group_key] = einsum(
-                g, g, "v batch shared i, v batch shared j -> i j"
-            )
-
+            else:
+                gradient_covs[group_key] = einsum(
+                    g, g, "v batch shared i, v batch shared j -> i j"
+                )
         return input_covs, gradient_covs
 
-    # ``make_fx`` traces the autograd.grad call inside ``compute_batch`` into
-    # explicit backward aten ops. ``params`` must therefore be differentiable
-    # at trace time; the wrap is local to this call so any prior
-    # ``requires_grad`` state on the user's tensors is restored after tracing.
-    with _enable_requires_grad(list(params.values())):
+    with io.enable_param_grads(params):
         traced_fn = _make_fx(compute_batch)(params, X, y)
 
-    return traced_fn, mapping
+    return traced_fn, io.mapping
 
 
 class MakeFxKFACComputer(_BaseKFACComputer):
     """KFAC computer that uses FX graph tracing instead of hooks.
 
-    Uses the IO collector (``with_kfac_io``) to detect affine layers and collect
-    their inputs/outputs via ``torch.fx``, then computes Kronecker factors from
-    these collected values. The entire per-batch computation (forward pass with
-    IO collection, backward pass, and covariance einsums) is traced with
-    ``make_fx``, allowing ``torch.compile`` to optimize the full per-batch
-    kernel.
-
+    Thin wrapper over :func:`make_compute_kfac_batch`: iterates the data
+    once per unique batch size to build a traced per-batch reduction, then
+    accumulates Kronecker factors across all batches in a second pass.
     Supports plain callable ``model_func``.
     """
+
+    def _output_check_fn(self) -> Callable[[Tensor, Tensor], object] | None:
+        """Return an optional output-shape validator (subclass hook).
+
+        Returns:
+            ``None`` by default. Subclasses (e.g., EKFAC) override to return
+            a ``(output, y) -> object`` callable that raises on rejected
+            shapes; the result is forwarded to :func:`make_compute_kfac_batch`.
+        """
+        return None
 
     def _trace_batch_functions(
         self,
@@ -317,80 +163,27 @@ class MakeFxKFACComputer(_BaseKFACComputer):
             Tuple of ``(traced_fns, mapping)``.
         """
         traced_fns: dict[int, Callable] = {}
-        io: LayerIO | None = None
+        mapping: list[ParamGroup] | None = None
 
         for X, y in self._loop_over_data(desc="FX tracing"):
             batch_size = self._batch_size_fn(X)
             if batch_size in traced_fns:
                 continue
+            traced_fns[batch_size], mapping = make_compute_kfac_batch(
+                self._model_func,
+                self._loss_func,
+                self._params,
+                X,
+                y,
+                fisher_type=self._fisher_type,
+                mc_samples=self._mc_samples,
+                kfac_approx=self._kfac_approx,
+                separate_weight_and_bias=self._separate_weight_and_bias,
+                batch_size_fn=self._batch_size_fn,
+                output_check_fn=self._output_check_fn(),
+            )
 
-            if io is None:
-                io = LayerIO(
-                    self._model_func,
-                    self._loss_func,
-                    self._params,
-                    X,
-                    fisher_type=self._fisher_type,
-                    mc_samples=self._mc_samples,
-                    kfac_approx=self._kfac_approx,
-                    separate_weight_and_bias=self._separate_weight_and_bias,
-                    batch_size_fn=self._batch_size_fn,
-                )
-
-            traced_fns[batch_size] = self._trace_one_batch(io, X, y)
-
-        return traced_fns, io.mapping
-
-    def _trace_one_batch(
-        self, io: LayerIO, X: Tensor | MutableMapping, y: Tensor
-    ) -> Callable:
-        """Trace the per-batch KFAC reduction for one example ``(X, y)`` pair.
-
-        Defines the per-batch computation as ``io.populate`` followed by
-        per-group covariance einsums, and traces the whole thing with
-        :func:`_make_fx` inside :meth:`LayerIO.enable_param_grads`.
-
-        Args:
-            io: The :class:`LayerIO` (must already have an ``io_fn`` cached
-                for ``X``'s batch size).
-            X: Example input batch (shape baked into the trace).
-            y: Example target batch.
-
-        Returns:
-            A traced callable ``(params, X, y) -> (input_covs, gradient_covs)``.
-        """
-
-        def compute_batch(
-            params: dict[str, Tensor], X: Tensor | MutableMapping, y: Tensor
-        ) -> tuple[dict[tuple[str, ...], Tensor], dict[tuple[str, ...], Tensor]]:
-            layer_inputs, layer_output_grads = io.populate(params, X, y)
-            snap = io.snapshot(layer_inputs, layer_output_grads)
-
-            input_covs: dict[tuple[str, ...], Tensor] = {}
-            gradient_covs: dict[tuple[str, ...], Tensor] = {}
-            for group in io.mapping:
-                a, g = snap.standardized_io(group)
-                group_key = tuple(group.values())
-                if a is not None:
-                    xxT = einsum(a, a, "batch shared i, batch shared j -> i j")
-                    # ``a`` has shape ``[batch, shared, d_in]``; the standardized
-                    # gatherer preserves the batch axis through weight-tied cats,
-                    # so ``a.shape[0]`` matches ``self._batch_size_fn(X)`` and we
-                    # avoid threading the per-X helper into the closure.
-                    input_covs[group_key] = xxT.div_(a.shape[0] * a.shape[1])
-                if self._fisher_type == FisherType.FORWARD_ONLY:
-                    W = params[next(iter(group.values()))]
-                    gradient_covs[group_key] = eye(
-                        W.shape[0], dtype=W.dtype, device=W.device
-                    )
-                else:
-                    gradient_covs[group_key] = einsum(
-                        g, g, "v batch shared i, v batch shared j -> i j"
-                    )
-            return input_covs, gradient_covs
-
-        with io.enable_param_grads(self._params):
-            return _make_fx(compute_batch)(self._params, X, y)
+        return traced_fns, mapping
 
     def compute(
         self,
