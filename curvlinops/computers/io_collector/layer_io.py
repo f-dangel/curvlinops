@@ -68,8 +68,8 @@ class LayerIO:
         output_check_fn: Optional callback ``(output, y) -> object`` invoked
             inside :meth:`populate` (and therefore inside the ``make_fx``
             trace) right after the model output is computed. Raise inside
-            the callback to reject unsupported output/target shapes (e.g.,
-            EKFAC's 2d-output restriction). The return value is ignored.
+            the callback to reject unsupported output/target shapes. The
+            return value is ignored.
 
     Raises:
         ValueError: If ``intermediate_as_batch=False`` is combined with
