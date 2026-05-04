@@ -118,11 +118,9 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
   `make_group_gatherers` helpers. Public KFOC API and numerics are unchanged
   ([PR](https://github.com/f-dangel/curvlinops/pull/303))
 
-- Migrate `MakeFxEKFACComputer` to use `LayerIO` (mirroring KFAC #302 /
-  KFOC #303). Public EKFAC API and numerics are unchanged. To keep the
-  backend's existing 2d-output validation, extend `LayerIO` with an
-  `output_check_fn(output, y)` hook called inside `populate` (and
-  therefore inside the trace).
+- Migrate `MakeFxEKFACComputer` to use `LayerIO`. Adds an optional
+  `output_check_fn` hook to `LayerIO` to preserve EKFAC's 2d-output
+  validation inside the trace. Public EKFAC API and numerics are unchanged.
 
 - Drop the per-backend `*_make_fx_preserves_requires_grad` tests for
   KFAC/EKFAC/KFOC: redundant with

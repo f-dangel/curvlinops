@@ -156,8 +156,8 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
 
     Extends :class:`MakeFxKFACComputer` with eigencorrection tracing via
     :func:`make_compute_ekfac_eigencorrection_batch`. The 2d-output
-    restriction is enforced inside the trace by the parent's
-    ``output_check_fn`` hook (overridden below).
+    restriction is enforced inside the trace by overriding the parent's
+    :meth:`_output_check_fn` hook.
     """
 
     def _output_check_fn(self) -> Callable[[Tensor, Tensor], object]:
