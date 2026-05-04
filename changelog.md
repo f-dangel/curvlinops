@@ -118,6 +118,12 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
   `make_group_gatherers` helpers. Public KFOC API and numerics are unchanged
   ([PR](https://github.com/f-dangel/curvlinops/pull/303))
 
+- Unify the FX backends for KFAC and EKFAC on the shared `LayerIO`
+  IO-collection abstraction (already used by KFOC), so all three FX-traced
+  operators flow through one IO/`requires_grad` lifecycle. Public API and
+  numerics are unchanged
+  ([PR](https://github.com/f-dangel/curvlinops/pull/304))
+
 - Scope the FX backends' `requires_grad` mutation to tracing only.
   `MakeFxKFACComputer` / `MakeFxKFOCComputer` previously flipped
   `requires_grad=True` on every tensor in the user's `params` dict at

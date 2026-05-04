@@ -1,8 +1,8 @@
-r"""Tests for :func:`make_compute_kfac_io_batch` IO collection.
+r"""Tests for :class:`LayerIO`'s unflattened IO collection.
 
-Focus is on the ``intermediate_as_batch`` flag. When turned off, the
-per-sample rank-one decomposition the IO collector returns should reconstruct
-the exact per-parameter GGN block. The check runs on two fixture pools: the
+Focus is on the ``intermediate_as_batch=False`` setting. The per-sample
+rank-one decomposition the IO collector returns must reconstruct the exact
+per-parameter GGN block. The check runs on two fixture pools: the
 ``GGNLinearOperator`` ``case`` fixture (broad loss and architecture coverage)
 and the ``kfac_weight_sharing_exact_case`` fixture (closes the
 convolutional-weight-sharing gap).
@@ -11,28 +11,18 @@ convolutional-weight-sharing gap).
 from collections.abc import Iterable
 
 from einops import einsum
-from pytest import raises
-from torch import Tensor, block_diag, float64, manual_seed, rand
-from torch.nn import Linear, Module, MSELoss, Sequential
+from torch import Tensor, block_diag, float64
+from torch.nn import Module, MSELoss
 
 from curvlinops import GGNLinearOperator
-from curvlinops.computers.kfac_make_fx import (
-    make_compute_kfac_io_batch,
-    make_group_gatherers,
-)
+from curvlinops.computers.io_collector import LayerIO, LayerIOSnapshot
 from curvlinops.kfac_utils import FisherType, KFACType
 from curvlinops.utils import allclose_report, make_functional_call
 from test.utils import Conv2dModel, WeightShareModel, block_diagonal, change_dtype
 
 
 def _reconstruct_ggn_blocks(
-    layer_inputs: dict[str, Tensor],
-    layer_output_grads: dict[str, Tensor],
-    mapping: list[dict[str, str]],
-    io_groups: dict,
-    io_param_names: dict,
-    layer_hparams: dict,
-    kfac_approx: str,
+    snap: LayerIOSnapshot, mapping: list[dict[str, str]]
 ) -> dict[str, Tensor]:
     """Reconstruct per-parameter GGN blocks from the unflattened IO collection.
 
@@ -43,28 +33,19 @@ def _reconstruct_ggn_blocks(
     padding slot, so the same formula applies).
 
     Args:
-        layer_inputs: Per-IO-layer inputs from the collector.
-        layer_output_grads: Per-IO-layer backpropped grad_outputs from the
-            collector (already scaled by ``make_compute_kfac_io_batch`` for
-            the given reduction).
-        mapping: Parameter groups returned by the collector.
-        io_groups: IO-layer grouping from the collector.
-        io_param_names: Per-IO-layer parameter names from the collector.
-        layer_hparams: Per-IO-layer hyperparameters from the collector.
-        kfac_approx: KFAC approximation setting for the group gatherers.
+        snap: Snapshot produced by :meth:`LayerIO.snapshot` after
+            :meth:`LayerIO.populate` ran with
+            ``intermediate_as_batch=False`` and ``FisherType.TYPE2``.
+        mapping: Parameter groups (use ``io.mapping``).
 
     Returns:
         A dict mapping each parameter name to the reconstructed
         ``(numel, numel)`` GGN block.
     """
-    group_inputs, group_grads = make_group_gatherers(
-        io_groups, io_param_names, layer_hparams, kfac_approx
-    )
     blocks: dict[str, Tensor] = {}
     for group in mapping:
-        g = group_grads(group, layer_output_grads)  # (V, N, T, d_out)
+        a, g = snap.standardized_io(group)
         if "W" in group:
-            a = group_inputs(group, layer_inputs)  # (N, T, d_in)
             # Per-sample vec(W) gradient: sum_t g (otimes) a, reshaped to
             # a ``(vec*batch, d_out*d_in)`` matrix so its Gram is the GGN block.
             per_sample_grads = einsum(
@@ -85,7 +66,6 @@ def _assert_io_unflattened_reconstructs_ggn(
     X,
     y: Tensor,
     batch_size_fn,
-    kfac_approx: str,
 ) -> None:
     """Run the IO collector and verify exact per-parameter GGN reconstruction.
 
@@ -100,7 +80,6 @@ def _assert_io_unflattened_reconstructs_ggn(
         X: A single input batch (tensor or dict).
         y: The corresponding target batch.
         batch_size_fn: Function extracting the batch size from ``X``.
-        kfac_approx: KFAC approximation setting for the group gatherers.
     """
     ggn = block_diagonal(
         GGNLinearOperator,
@@ -114,26 +93,19 @@ def _assert_io_unflattened_reconstructs_ggn(
     for p in params.values():
         p.requires_grad_(True)
     model_func = make_functional_call(model) if isinstance(model, Module) else model
-    (fn, mapping, io_groups, io_pnames, layer_hparams) = make_compute_kfac_io_batch(
+    io = LayerIO(
         model_func,
         loss_func,
         params,
         X,
-        FisherType.TYPE2,
+        fisher_type=FisherType.TYPE2,
+        kfac_approx=KFACType.EXPAND,
         intermediate_as_batch=False,
+        batch_size_fn=batch_size_fn,
     )
-    layer_inputs, layer_output_grads = fn(params, X, y)
+    snap = io.snapshot(*io.populate(params, X, y))
 
-    blocks = _reconstruct_ggn_blocks(
-        layer_inputs,
-        layer_output_grads,
-        mapping,
-        io_groups,
-        io_pnames,
-        layer_hparams,
-        kfac_approx,
-    )
-
+    blocks = _reconstruct_ggn_blocks(snap, io.mapping)
     reconstructed = block_diag(*(blocks[name] for name in params))
     assert allclose_report(reconstructed, ggn)
 
@@ -160,7 +132,7 @@ def test_kfac_io_unflattened_reconstructs_ggn(
     model, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
     X, y = next(iter(data))
     _assert_io_unflattened_reconstructs_ggn(
-        model, loss_func, params, X, y, batch_size_fn, KFACType.EXPAND
+        model, loss_func, params, X, y, batch_size_fn
     )
 
 
@@ -194,23 +166,5 @@ def test_kfac_io_unflattened_reconstructs_ggn_weight_sharing(
     )
     X, y = next(iter(data))
     _assert_io_unflattened_reconstructs_ggn(
-        model, loss_func, params, X, y, batch_size_fn, KFACType.EXPAND
+        model, loss_func, params, X, y, batch_size_fn
     )
-
-
-def test_empirical_rejects_unflattened():
-    """``intermediate_as_batch=False`` raises with ``FisherType.EMPIRICAL``."""
-    manual_seed(0)
-    model = Sequential(Linear(4, 2))
-    loss_func = MSELoss()
-    params = dict(model.named_parameters())
-    X = rand(2, 4)
-    with raises(ValueError, match="EMPIRICAL"):
-        make_compute_kfac_io_batch(
-            make_functional_call(model),
-            loss_func,
-            params,
-            X,
-            fisher_type=FisherType.EMPIRICAL,
-            intermediate_as_batch=False,
-        )
