@@ -118,25 +118,11 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
   `make_group_gatherers` helpers. Public KFOC API and numerics are unchanged
   ([PR](https://github.com/f-dangel/curvlinops/pull/303))
 
-- Migrate `MakeFxEKFACComputer` to use `LayerIO`. Adds an optional
-  `output_check_fn` hook to `LayerIO` to preserve EKFAC's 2d-output
-  validation inside the trace. Public EKFAC API and numerics are unchanged.
-
-- Drop the per-backend `*_make_fx_preserves_requires_grad` tests for
-  KFAC/EKFAC/KFOC: redundant with
-  `test_enable_param_grads_preserves_requires_grad` which guards the
-  shared `LayerIO.enable_param_grads` save/restore that all three
-  backends now flow through.
-
-- Consolidate the FX KFAC/EKFAC plumbing on `LayerIO`. The functional
-  factories `make_compute_kfac_batch` / `make_compute_ekfac_eigencorrection_batch`
-  are rewritten to use `LayerIO` internally (mirroring how
-  `make_batch_ggn_vector_product` and friends back the corresponding
-  LinearOperators) and `MakeFxKFACComputer` / `MakeFxEKFACComputer`
-  delegate per-batch tracing to them. Drop the now-unused
-  `make_compute_kfac_io_batch` helper. `test/computers/test_kfac_io.py`
-  is retargeted to `LayerIO` directly (same GGN-block reconstruction
-  asserts, new entry point).
+- Unify the FX backends for KFAC and EKFAC on the shared `LayerIO`
+  IO-collection abstraction (already used by KFOC), so all three FX-traced
+  operators flow through one IO/`requires_grad` lifecycle. Public API and
+  numerics are unchanged
+  ([PR](https://github.com/f-dangel/curvlinops/pull/304))
 
 - Scope the FX backends' `requires_grad` mutation to tracing only.
   `MakeFxKFACComputer` / `MakeFxKFOCComputer` previously flipped
