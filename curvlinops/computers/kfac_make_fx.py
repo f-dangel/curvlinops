@@ -138,7 +138,6 @@ class MakeFxKFACComputer(_BaseKFACComputer):
     def _make_layer_io(
         self,
         X: Tensor | MutableMapping,
-        *,
         kfac_approx: str | None = None,
     ) -> LayerIO:
         """Build a :class:`LayerIO` configured for this operator.
