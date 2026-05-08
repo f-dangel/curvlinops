@@ -194,8 +194,7 @@ class MakeFxKFACComputer(_BaseKFACComputer):
                 io = self._make_layer_io(X, kfac_approx)
                 closure = make_closure(io)
                 extra_args = () if make_extra_args is None else make_extra_args(io)
-            else:
-                io.ensure_io_fn(X, self._params)
+            io.ensure_io_fn(X, self._params)
             with io.enable_param_grads(self._params):
                 traced_fns[bs] = _make_fx(closure)(self._params, X, y, *extra_args)
         return traced_fns, io.mapping
