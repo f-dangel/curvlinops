@@ -174,9 +174,9 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
         """
         return self._trace_per_batch_size(
             _make_eigcorrection_closure,
-            desc="Eigencorrection tracing",
+            "Eigencorrection tracing",
+            KFACType.EXPAND,
             make_extra_args=lambda io: _build_example_eigvecs(io, self._params),
-            kfac_approx=KFACType.EXPAND,
         )
 
     def compute(

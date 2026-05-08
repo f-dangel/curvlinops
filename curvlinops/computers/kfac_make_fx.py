@@ -191,7 +191,7 @@ class MakeFxKFACComputer(_BaseKFACComputer):
             if bs in traced_fns:
                 continue
             if io is None:
-                io = self._make_layer_io(X, kfac_approx=kfac_approx)
+                io = self._make_layer_io(X, kfac_approx)
                 closure = make_closure(io)
                 extra_args = () if make_extra_args is None else make_extra_args(io)
             else:
@@ -209,7 +209,7 @@ class MakeFxKFACComputer(_BaseKFACComputer):
             Tuple of ``(traced_fns, mapping)`` keyed by batch size.
         """
         return self._trace_per_batch_size(
-            _make_kfac_closure, desc="FX tracing", kfac_approx=self._kfac_approx
+            _make_kfac_closure, "FX tracing", self._kfac_approx
         )
 
     def compute(
