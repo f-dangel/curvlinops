@@ -46,13 +46,10 @@ def _make_kfac_closure(io: LayerIO) -> Callable:
                 input_covs[group_key] = aaT.div_(a.shape[0] * a.shape[1])
             if io.fisher_type == FisherType.FORWARD_ONLY:
                 W = params[next(iter(group.values()))]
-                gradient_covs[group_key] = eye(
-                    W.shape[0], dtype=W.dtype, device=W.device
-                )
+                ggT = eye(W.shape[0], dtype=W.dtype, device=W.device)
             else:
-                gradient_covs[group_key] = einsum(
-                    g, g, "v batch shared i, v batch shared j -> i j"
-                )
+                ggT = einsum(g, g, "v batch shared i, v batch shared j -> i j")
+            gradient_covs[group_key] = ggT
         return input_covs, gradient_covs
 
     return compute_batch
