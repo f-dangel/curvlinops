@@ -42,8 +42,8 @@ def _make_kfac_closure(io: LayerIO) -> Callable:
             a, g = snap.standardized_io(group)
             group_key = tuple(group.values())
             if a is not None:
-                xxT = einsum(a, a, "batch shared i, batch shared j -> i j")
-                input_covs[group_key] = xxT.div_(a.shape[0] * a.shape[1])
+                aaT = einsum(a, a, "batch shared i, batch shared j -> i j")
+                input_covs[group_key] = aaT.div_(a.shape[0] * a.shape[1])
             if io.fisher_type == FisherType.FORWARD_ONLY:
                 W = params[next(iter(group.values()))]
                 gradient_covs[group_key] = eye(
@@ -289,8 +289,8 @@ class MakeFxKFACComputer(_BaseKFACComputer):
                 # The traced batch function returns per-batch averages.
                 # Accumulate with batch_size / N_data weighting.
                 weight = batch_size / self._N_data
-                for key, xxT in input_covs.items():
-                    self._set_or_add_(input_covariances, key, xxT.mul_(weight))
+                for key, aaT in input_covs.items():
+                    self._set_or_add_(input_covariances, key, aaT.mul_(weight))
 
                 is_averaged = (
                     self._loss_func.reduction == "mean"
