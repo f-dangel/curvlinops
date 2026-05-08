@@ -79,15 +79,12 @@ def _build_example_eigvecs(
     for group in io.mapping:
         group_key = tuple(group.values())
         p1 = params[next(iter(group.values()))]
+        meta = {"dtype": p1.dtype, "device": p1.device}
         d_out = p1.shape[0]
-        example_gradient_eigvecs[group_key] = empty(
-            d_out, d_out, dtype=p1.dtype, device=p1.device
-        )
+        example_gradient_eigvecs[group_key] = empty(d_out, d_out, **meta)
         if "W" in group:
             d_in = p1.numel() // p1.shape[0] + ("b" in group)
-            example_input_eigvecs[group_key] = empty(
-                d_in, d_in, dtype=p1.dtype, device=p1.device
-            )
+            example_input_eigvecs[group_key] = empty(d_in, d_in, **meta)
     return example_input_eigvecs, example_gradient_eigvecs
 
 
