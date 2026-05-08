@@ -10,6 +10,7 @@ functional API without going through :class:`MakeFxEKFACComputer`.
 """
 
 from collections.abc import Callable, MutableMapping
+from functools import partial
 
 from torch import Tensor, empty, no_grad
 
@@ -23,37 +24,38 @@ from curvlinops.kfac_utils import FisherType, KFACType
 from curvlinops.utils import _make_fx, fork_rng_with_seed
 
 
-def _make_eigcorrection_closure(io: LayerIO) -> Callable:
-    """Build the per-batch eigencorrection closure operating on a shared ``io``.
+def _compute_ekfac_eigencorrection_batch(
+    io: LayerIO,
+    params: dict[str, Tensor],
+    X: Tensor | MutableMapping,
+    y: Tensor,
+    input_eigvecs: dict[ParamGroupKey, Tensor],
+    gradient_eigvecs: dict[ParamGroupKey, Tensor],
+) -> dict[ParamGroupKey, Tensor]:
+    """Per-batch EKFAC eigencorrection running on the supplied ``io``.
+
+    Curry ``io`` with :func:`functools.partial` to obtain a callable
+    suitable for :func:`_make_fx` (its remaining
+    ``(params, X, y, input_eigvecs, gradient_eigvecs)`` are the traced
+    graph's inputs).
 
     Returns:
-        A closure ``(params, X, y, input_eigvecs, gradient_eigvecs) ->
-        eigencorrections``.
+        ``eigencorrections`` for the parameter groups of ``io``.
     """
+    layer_inputs, layer_output_grads = io.populate(params, X, y)
+    snap = io.snapshot(layer_inputs, layer_output_grads)
 
-    def compute_eigencorrection_batch(
-        params: dict[str, Tensor],
-        X: Tensor | MutableMapping,
-        y: Tensor,
-        input_eigvecs: dict[ParamGroupKey, Tensor],
-        gradient_eigvecs: dict[ParamGroupKey, Tensor],
-    ) -> dict[ParamGroupKey, Tensor]:
-        layer_inputs, layer_output_grads = io.populate(params, X, y)
-        snap = io.snapshot(layer_inputs, layer_output_grads)
-
-        eigencorrections: dict[ParamGroupKey, Tensor] = {}
-        for group in io.mapping:
-            group_key = tuple(group.values())
-            a, g = snap.standardized_io(group)
-            aaT_eigvecs = input_eigvecs[group_key] if "W" in group else None
-            eigencorrections[group_key] = (
-                compute_eigenvalue_correction_linear_weight_sharing(
-                    g, gradient_eigvecs[group_key], a, aaT_eigvecs
-                )
+    eigencorrections: dict[ParamGroupKey, Tensor] = {}
+    for group in io.mapping:
+        group_key = tuple(group.values())
+        a, g = snap.standardized_io(group)
+        aaT_eigvecs = input_eigvecs[group_key] if "W" in group else None
+        eigencorrections[group_key] = (
+            compute_eigenvalue_correction_linear_weight_sharing(
+                g, gradient_eigvecs[group_key], a, aaT_eigvecs
             )
-        return eigencorrections
-
-    return compute_eigencorrection_batch
+        )
+    return eigencorrections
 
 
 def _build_example_eigvecs(
@@ -145,10 +147,11 @@ def make_compute_ekfac_eigencorrection_batch(
         batch_size_fn=batch_size_fn,
         output_check_fn=output_check_fn,
     )
-    closure = _make_eigcorrection_closure(io)
     examples = _build_example_eigvecs(io, params)
     with io.enable_param_grads(params):
-        traced_fn = _make_fx(closure)(params, X, y, *examples)
+        traced_fn = _make_fx(partial(_compute_ekfac_eigencorrection_batch, io))(
+            params, X, y, *examples
+        )
     return traced_fn, io.mapping
 
 
