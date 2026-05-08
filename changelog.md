@@ -118,6 +118,20 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
   `make_group_gatherers` helpers. Public KFOC API and numerics are unchanged
   ([PR](https://github.com/f-dangel/curvlinops/pull/303))
 
+- Unify the FX backends for KFAC and EKFAC on the `LayerIO` IO-collection
+  abstraction (already used by KFOC). Each FX class now delegates to a
+  per-batch-size functional factory (`make_compute_kfac_batch`,
+  `make_compute_ekfac_eigencorrection_batch`) that builds a `LayerIO` for
+  the batch shape and traces the per-batch reduction with `make_fx`; the
+  class loops over the dataset, building one traced function per unique
+  batch size and accumulating results. As a byproduct, `LayerIO` itself
+  was simplified to bind to a single bootstrap shape — removed the
+  multi-batch-size `_io_fns` cache, the `ensure_io_fn` method, and the
+  now-redundant `batch_size_fn` constructor parameter. Public
+  `KFACLinearOperator` / `EKFACLinearOperator` API and numerics are
+  unchanged
+  ([PR](https://github.com/f-dangel/curvlinops/pull/304))
+
 - Scope the FX backends' `requires_grad` mutation to tracing only.
   `MakeFxKFACComputer` / `MakeFxKFOCComputer` previously flipped
   `requires_grad=True` on every tensor in the user's `params` dict at
