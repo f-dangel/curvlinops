@@ -55,25 +55,6 @@ def _make_kfac_closure(io: LayerIO) -> Callable:
     return compute_batch
 
 
-def _trace_with_io(
-    io: LayerIO,
-    closure: Callable,
-    params: dict[str, Tensor],
-    *args: object,
-) -> Callable:
-    """Trace ``closure(params, *args)`` with ``make_fx`` under ``enable_param_grads``.
-
-    Centralises the invariant that the closure's ``autograd.grad`` calls need
-    differentiable parameters at trace time, while leaving the user's
-    ``requires_grad`` state intact afterward.
-
-    Returns:
-        The traced :class:`torch.fx.GraphModule`.
-    """
-    with io.enable_param_grads(params):
-        return _make_fx(closure)(params, *args)
-
-
 def make_compute_kfac_batch(
     model_func: Callable,
     loss_func: Callable,
@@ -140,7 +121,9 @@ def make_compute_kfac_batch(
         batch_size_fn=batch_size_fn,
         output_check_fn=output_check_fn,
     )
-    traced_fn = _trace_with_io(io, _make_kfac_closure(io), params, X, y)
+    closure = _make_kfac_closure(io)
+    with io.enable_param_grads(params):
+        traced_fn = _make_fx(closure)(params, X, y)
     return traced_fn, io.mapping
 
 
@@ -220,9 +203,8 @@ class MakeFxKFACComputer(_BaseKFACComputer):
                 extra_args = () if make_extra_args is None else make_extra_args(io)
             else:
                 io.ensure_io_fn(X, self._params)
-            traced_fns[bs] = _trace_with_io(
-                io, closure, self._params, X, y, *extra_args
-            )
+            with io.enable_param_grads(self._params):
+                traced_fns[bs] = _make_fx(closure)(self._params, X, y, *extra_args)
         return traced_fns, io.mapping
 
     def _trace_batch_functions(

@@ -18,9 +18,9 @@ from curvlinops.computers.ekfac_hooks import (
     compute_eigenvalue_correction_linear_weight_sharing,
 )
 from curvlinops.computers.io_collector import LayerIO
-from curvlinops.computers.kfac_make_fx import MakeFxKFACComputer, _trace_with_io
+from curvlinops.computers.kfac_make_fx import MakeFxKFACComputer
 from curvlinops.kfac_utils import FisherType, KFACType
-from curvlinops.utils import fork_rng_with_seed
+from curvlinops.utils import _make_fx, fork_rng_with_seed
 
 
 def _make_eigcorrection_closure(io: LayerIO) -> Callable:
@@ -147,7 +147,8 @@ def make_compute_ekfac_eigencorrection_batch(
     )
     closure = _make_eigcorrection_closure(io)
     examples = _build_example_eigvecs(io, params)
-    traced_fn = _trace_with_io(io, closure, params, X, y, *examples)
+    with io.enable_param_grads(params):
+        traced_fn = _make_fx(closure)(params, X, y, *examples)
     return traced_fn, io.mapping
 
 
