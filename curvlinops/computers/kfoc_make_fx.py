@@ -227,7 +227,6 @@ class MakeFxKFOCComputer(_BaseKFACComputer):
             kfac_approx=self._kfac_approx,
             separate_weight_and_bias=self._separate_weight_and_bias,
             intermediate_as_batch=False,
-            batch_size_fn=self._batch_size_fn,
         )
         # Trace IO collection only (the SVD per group is non-traceable due to
         # ``svds`` + ARPACK error handling), then replay under ``no_grad`` to

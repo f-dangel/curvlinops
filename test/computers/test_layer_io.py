@@ -37,34 +37,6 @@ def _setup_mlp(in_features: int = 6, out_features: int = 4):
     return model_func, loss, params
 
 
-def test_per_batch_size_cache_grows_on_new_size():
-    """``ensure_io_fn`` reuses cached io_fn for known batch sizes, builds for new ones."""
-    model_func, loss, params = _setup_mlp()
-    X1 = randn(4, 6)
-    X2 = randn(7, 6)
-    y1 = randint(0, 4, (4,))
-    y2 = randint(0, 4, (7,))
-
-    io = LayerIO(model_func, loss, params, X1, fisher_type=FisherType.MC)
-    assert len(io._io_fns) == 1
-
-    fn1_again = io.ensure_io_fn(X1, params)
-    assert fn1_again is next(iter(io._io_fns.values()))
-    assert len(io._io_fns) == 1  # cache hit
-
-    io.ensure_io_fn(X2, params)
-    assert len(io._io_fns) == 2  # new batch size → new entry
-
-    # Both batch sizes are usable
-    li1, log1 = io.populate(params, X1, y1)
-    li2, log2 = io.populate(params, X2, y2)
-    assert li1["Linear0"].shape == (4, 6)
-    assert li2["Linear0"].shape == (7, 6)
-    # MC fisher with default mc_samples=1: shape is (V=1, batch, d_out=8)
-    assert log1["Linear0"].shape == (1, 4, 8)
-    assert log2["Linear0"].shape == (1, 7, 8)
-
-
 def test_enable_param_grads_preserves_requires_grad():
     """A frozen param stays frozen after ``enable_param_grads`` exits."""
     model_func, loss, params = _setup_mlp()
@@ -118,20 +90,3 @@ def test_forward_only_per_sample_grads_raises():
             match="per_sample_grads is undefined for FisherType.FORWARD_ONLY",
         ):
             snap.per_sample_grads(group)
-
-
-def test_metadata_assertion_on_batch_size_change():
-    """Cached metadata must match across batch sizes; mock a mismatch and assert raise.
-
-    We poke the bootstrap metadata after construction so that ``ensure_io_fn``
-    sees a divergence on the next-batch-size trace, exercising the safety net.
-    """
-    model_func, loss, params = _setup_mlp()
-    X1 = randn(4, 6)
-    X2 = randn(7, 6)
-
-    io = LayerIO(model_func, loss, params, X1, fisher_type=FisherType.MC)
-    # Simulate divergence: corrupt the cached metadata
-    io.io_param_names = {**io.io_param_names, "FakeLayer": {"W": "fake.weight"}}
-    with raises(RuntimeError, match="parameter-name metadata"):
-        io.ensure_io_fn(X2, params)

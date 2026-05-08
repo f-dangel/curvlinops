@@ -54,7 +54,6 @@ def make_compute_ekfac_eigencorrection_batch(
     fisher_type: FisherType = FisherType.MC,
     mc_samples: int = 1,
     separate_weight_and_bias: bool = True,
-    batch_size_fn: Callable[[Tensor | MutableMapping], int] | None = None,
     output_check_fn: Callable[[Tensor, Tensor], object] | None = None,
 ) -> tuple[
     Callable[
@@ -88,8 +87,6 @@ def make_compute_ekfac_eigencorrection_batch(
         mc_samples: Number of Monte-Carlo samples. Defaults to ``1``.
         separate_weight_and_bias: Whether to treat weights and biases
             separately. Defaults to ``True``.
-        batch_size_fn: Function to extract batch size from ``X``.
-            Defaults to ``X.shape[0]``.
         output_check_fn: Optional ``(output, y) -> object`` callback
             forwarded to :class:`LayerIO`; raise inside it to reject
             unsupported output/target shapes.
@@ -109,7 +106,6 @@ def make_compute_ekfac_eigencorrection_batch(
         mc_samples=mc_samples,
         kfac_approx=KFACType.EXPAND,
         separate_weight_and_bias=separate_weight_and_bias,
-        batch_size_fn=batch_size_fn,
         output_check_fn=output_check_fn,
     )
     examples = _build_example_eigvecs(io, params)
@@ -125,9 +121,7 @@ def make_compute_ekfac_eigencorrection_batch(
         snap = io.snapshot(layer_inputs, layer_output_grads)
 
         eigencorrections: dict[ParamGroupKey, Tensor] = {}
-        for group in io.mapping:
-            group_key = tuple(group.values())
-            a, g = snap.standardized_io(group)
+        for group_key, group, a, g in snap.iter_groups():
             aaT_eigvecs = input_eigvecs[group_key] if "W" in group else None
             eigencorrections[group_key] = (
                 compute_eigenvalue_correction_linear_weight_sharing(
@@ -148,10 +142,10 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
     :func:`make_compute_ekfac_eigencorrection_batch`.
     """
 
-    # ``__dict__`` lookup grabs the ``staticmethod`` descriptor as-stored;
-    # plain ``_EKFACMixin._rearrange_for_larger_than_2d_output`` would unwrap
-    # to the function and then auto-bind to ``self`` on attribute access.
-    _output_check_fn = _EKFACMixin.__dict__["_rearrange_for_larger_than_2d_output"]
+    @property
+    def _output_check_fn(self) -> Callable[[Tensor, Tensor], object]:
+        """EKFAC's 2d-output guard, exposed to :class:`LayerIO` via ``populate``."""
+        return self._rearrange_for_larger_than_2d_output
 
     def _trace_eigencorrection_batch_functions(
         self,
@@ -180,7 +174,6 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
                 fisher_type=self._fisher_type,
                 mc_samples=self._mc_samples,
                 separate_weight_and_bias=self._separate_weight_and_bias,
-                batch_size_fn=self._batch_size_fn,
                 output_check_fn=self._output_check_fn,
             )
         return traced_fns, mapping

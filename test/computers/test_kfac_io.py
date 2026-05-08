@@ -101,7 +101,6 @@ def _assert_io_unflattened_reconstructs_ggn(
         fisher_type=FisherType.TYPE2,
         kfac_approx=KFACType.EXPAND,
         intermediate_as_batch=False,
-        batch_size_fn=batch_size_fn,
     )
     snap = io.snapshot(*io.populate(params, X, y))
 

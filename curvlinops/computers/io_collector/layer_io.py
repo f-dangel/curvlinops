@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import UserDict
-from collections.abc import Callable, MutableMapping
+from collections.abc import Callable, Iterator, MutableMapping
 from contextlib import contextmanager
 from math import sqrt
 
@@ -12,7 +12,7 @@ from torch import Tensor, autograd
 from torch.nn import CrossEntropyLoss
 
 from curvlinops._checks import _register_userdict_as_pytree
-from curvlinops.computers._base import ParamGroup, _BaseKFACComputer
+from curvlinops.computers._base import ParamGroup, ParamGroupKey, _BaseKFACComputer
 from curvlinops.computers.io_collector.collector import with_kfac_io
 from curvlinops.computers.io_collector.groups import (
     _build_param_groups_from_io,
@@ -26,13 +26,13 @@ class LayerIO:
     r"""Setup-once orchestrator for per-layer IO collection.
 
     Owns shape-independent metadata (parameter groups, IO-layer mappings) and
-    a per-batch-size cache of FX-traced ``io_fn``\ s built by
-    :func:`with_kfac_io`; new batch sizes trigger a fresh trace via
-    :meth:`ensure_io_fn`. Operators construct one :class:`LayerIO` per
-    ``compute()`` call, then per batch call :meth:`populate` for raw layer IO
-    and :meth:`snapshot` to wrap it as a :class:`LayerIOSnapshot` exposing
-    per-group accessors at three granularities (raw, standardized weight-
-    sharing format, expanded per-sample ``vec(W)`` gradients).
+    a single FX-traced ``io_fn`` built by :func:`with_kfac_io` (the bootstrap
+    ``X_example``'s shape is baked into the trace). Operators construct one
+    :class:`LayerIO` per traced batch size, then call :meth:`populate` for
+    raw layer IO and :meth:`snapshot` to wrap it as a
+    :class:`LayerIOSnapshot` exposing per-group accessors at three
+    granularities (raw, standardized weight-sharing format, expanded
+    per-sample ``vec(W)`` gradients).
 
     Three integration patterns: (1) trace everything (KFAC) — wrap the
     per-batch reduction in :func:`_make_fx` under :meth:`enable_param_grads`;
@@ -44,9 +44,9 @@ class LayerIO:
         loss_func: Loss function (``MSELoss``, ``CrossEntropyLoss``, or
             ``BCEWithLogitsLoss``).
         params: Named parameter dict. Used at construction to bootstrap the
-            first ``io_fn`` trace; param values are not retained.
-        X_example: Example input tensor for the bootstrap trace. Determines
-            the cache key for the initial ``io_fn``.
+            ``io_fn`` trace; param values are not retained.
+        X_example: Example input tensor whose shape is baked into the
+            traced ``io_fn``.
         fisher_type: Type of Fisher information. Defaults to
             :attr:`FisherType.MC`.
         mc_samples: Number of Monte-Carlo samples (only used with
@@ -62,9 +62,6 @@ class LayerIO:
             KFAC-expand. ``False`` keeps the intermediate axes separate
             (consumed by KFOC). Not supported with
             :attr:`FisherType.EMPIRICAL`.
-        batch_size_fn: Maps an input batch to its size. Used as the
-            ``io_fn`` cache key. Defaults to ``X.shape[0]`` (must be supplied
-            for non-Tensor inputs like :class:`UserDict`).
         output_check_fn: Optional callback ``(output, y) -> object`` invoked
             inside :meth:`populate` (and therefore inside the ``make_fx``
             trace) right after the model output is computed. Raise inside
@@ -87,10 +84,9 @@ class LayerIO:
         kfac_approx: str = KFACType.EXPAND,
         separate_weight_and_bias: bool = True,
         intermediate_as_batch: bool = True,
-        batch_size_fn: Callable[[Tensor | MutableMapping], int] | None = None,
         output_check_fn: Callable[[Tensor, Tensor], object] | None = None,
     ):
-        """Bootstrap shape-independent metadata and trace the first ``io_fn``.
+        """Bootstrap shape-independent metadata and trace the ``io_fn``.
 
         Raises:
             ValueError: If ``intermediate_as_batch=False`` is combined with
@@ -110,21 +106,17 @@ class LayerIO:
         self.kfac_approx = kfac_approx
         self._separate_weight_and_bias = separate_weight_and_bias
         self._intermediate_as_batch = intermediate_as_batch
-        self._batch_size_fn = batch_size_fn or (lambda X: X.shape[0])
         self._output_check_fn = output_check_fn
 
         self._grad_outputs_computer = _BaseKFACComputer._set_up_grad_outputs_computer(
             loss_func, fisher_type, mc_samples
         )
 
-        # Bootstrap: trace once to seed shape-independent metadata; subsequent
-        # batch sizes go through ensure_io_fn which validates against the seed.
         if isinstance(X_example, UserDict):
             _register_userdict_as_pytree()
-        io_fn, self.io_param_names, self.layer_hparams = with_kfac_io(
+        self._io_fn, self.io_param_names, self.layer_hparams = with_kfac_io(
             model_func, X_example, params, fisher_type
         )
-        self._io_fns: dict[int, Callable] = {self._batch_size_fn(X_example): io_fn}
 
         self.mapping, self.io_groups = _build_param_groups_from_io(
             self.io_param_names, separate_weight_and_bias
@@ -132,48 +124,6 @@ class LayerIO:
         self.group_inputs, self.group_grads = make_group_gatherers(
             self.io_groups, self.io_param_names, self.layer_hparams, kfac_approx
         )
-
-    def ensure_io_fn(
-        self, X: Tensor | MutableMapping, params: dict[str, Tensor]
-    ) -> Callable:
-        """Return the FX-traced ``io_fn`` for ``X``'s batch size, building if needed.
-
-        Validates that re-traced metadata matches the seed from construction
-        to detect violations of the shape-independence assumption.
-
-        Args:
-            X: Input batch (only its batch size is consulted for the cache key).
-            params: Named parameters, passed through to :func:`with_kfac_io`.
-
-        Returns:
-            A traced callable ``(params, X) -> (output, layer_inputs, layer_outputs)``.
-
-        Raises:
-            RuntimeError: If re-traced metadata for a new batch size disagrees
-                with the bootstrap metadata.
-        """
-        key = self._batch_size_fn(X)
-        if key in self._io_fns:
-            return self._io_fns[key]
-
-        if isinstance(X, UserDict):
-            _register_userdict_as_pytree()
-
-        io_fn, io_param_names, layer_hparams = with_kfac_io(
-            self._model_func, X, params, self.fisher_type
-        )
-        if io_param_names != self.io_param_names:
-            raise RuntimeError(
-                "IO-collector parameter-name metadata changed across batch sizes. "
-                f"Expected {self.io_param_names}, got {io_param_names}."
-            )
-        if layer_hparams != self.layer_hparams:
-            raise RuntimeError(
-                "IO-collector layer hyperparameters changed across batch sizes. "
-                f"Expected {self.layer_hparams}, got {layer_hparams}."
-            )
-        self._io_fns[key] = io_fn
-        return io_fn
 
     def populate(
         self,
@@ -183,12 +133,11 @@ class LayerIO:
     ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
         """Run forward + backward; return per-layer raw IO.
 
-        Reuses the cached ``io_fn`` for ``X``'s batch size (or builds one).
-        Backpropagates the Fisher-type-specific gradient outputs to produce
-        per-layer inputs and batched output gradients. ``layer_output_grads``
-        is scaled so that ``sum_v g g^T`` equals the batch loss Hessian
-        (mean-reduction's ``1/N`` is folded in once as ``1/sqrt(N)`` per
-        vector).
+        Replays the bootstrap ``io_fn`` and backpropagates the
+        Fisher-type-specific gradient outputs to produce per-layer inputs
+        and batched output gradients. ``layer_output_grads`` is scaled so
+        that ``sum_v g g^T`` equals the batch loss Hessian (mean-reduction's
+        ``1/N`` is folded in once as ``1/sqrt(N)`` per vector).
 
         Returns plain ``(dict, dict)`` rather than a :class:`LayerIOSnapshot`
         so the function is trivially trace-friendly with
@@ -197,15 +146,14 @@ class LayerIO:
 
         Args:
             params: Named model parameters.
-            X: Input batch.
+            X: Input batch (must match the bootstrap shape).
             y: Target batch.
 
         Returns:
             ``(layer_inputs, layer_output_grads)`` dicts keyed by IO layer name.
             ``layer_output_grads`` is empty for :attr:`FisherType.FORWARD_ONLY`.
         """
-        io_fn = self.ensure_io_fn(X, params)
-        output, layer_inputs, layer_outputs = io_fn(params, X)
+        output, layer_inputs, layer_outputs = self._io_fn(params, X)
 
         if self._output_check_fn is not None:
             self._output_check_fn(output, y)
@@ -306,6 +254,23 @@ class LayerIOSnapshot:
         self._owner = owner
         self.layer_inputs = layer_inputs
         self.layer_output_grads = layer_output_grads
+
+    def iter_groups(
+        self,
+    ) -> Iterator[tuple[ParamGroupKey, ParamGroup, Tensor | None, Tensor | None]]:
+        """Iterate parameter groups, yielding ``(group_key, group, a, g)`` per group.
+
+        Convenience over :meth:`standardized_io`: precomputes ``group_key =
+        tuple(group.values())`` so callers writing ``per-group-key`` reductions
+        don't have to.
+
+        Yields:
+            ``(group_key, group, a, g)`` tuples, one per group in
+            :attr:`LayerIO.mapping`. ``a``/``g`` follow :meth:`standardized_io`.
+        """
+        for group in self._owner.mapping:
+            a, g = self.standardized_io(group)
+            yield tuple(group.values()), group, a, g
 
     def standardized_io(self, group: ParamGroup) -> tuple[Tensor | None, Tensor | None]:
         r"""Return per-group ``(a, g)`` in weight-sharing format.

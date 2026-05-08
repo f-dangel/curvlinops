@@ -33,7 +33,6 @@ def make_compute_kfac_batch(
     mc_samples: int = 1,
     kfac_approx: str = KFACType.EXPAND,
     separate_weight_and_bias: bool = True,
-    batch_size_fn: Callable[[Tensor | MutableMapping], int] | None = None,
     output_check_fn: Callable[[Tensor, Tensor], object] | None = None,
 ) -> tuple[
     Callable[
@@ -65,8 +64,6 @@ def make_compute_kfac_batch(
             ``KFACType.REDUCE``). Defaults to ``KFACType.EXPAND``.
         separate_weight_and_bias: Whether to treat weights and biases
             separately. Defaults to ``True``.
-        batch_size_fn: Function to extract batch size from ``X``.
-            Defaults to ``X.shape[0]``.
         output_check_fn: Optional ``(output, y) -> object`` callback
             forwarded to :class:`LayerIO`; raise inside it to reject
             unsupported output/target shapes.
@@ -86,7 +83,6 @@ def make_compute_kfac_batch(
         mc_samples=mc_samples,
         kfac_approx=kfac_approx,
         separate_weight_and_bias=separate_weight_and_bias,
-        batch_size_fn=batch_size_fn,
         output_check_fn=output_check_fn,
     )
 
@@ -98,9 +94,7 @@ def make_compute_kfac_batch(
 
         input_covs: dict[ParamGroupKey, Tensor] = {}
         gradient_covs: dict[ParamGroupKey, Tensor] = {}
-        for group in io.mapping:
-            a, g = snap.standardized_io(group)
-            group_key = tuple(group.values())
+        for group_key, group, a, g in snap.iter_groups():
             if a is not None:
                 aaT = einsum(a, a, "batch shared i, batch shared j -> i j")
                 input_covs[group_key] = aaT.div_(a.shape[0] * a.shape[1])
@@ -152,7 +146,6 @@ class MakeFxKFACComputer(_BaseKFACComputer):
                 mc_samples=self._mc_samples,
                 kfac_approx=self._kfac_approx,
                 separate_weight_and_bias=self._separate_weight_and_bias,
-                batch_size_fn=self._batch_size_fn,
                 output_check_fn=self._output_check_fn,
             )
         return traced_fns, mapping
