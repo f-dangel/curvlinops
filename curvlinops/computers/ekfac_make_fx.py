@@ -169,15 +169,32 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
     ) -> tuple[dict[int, Callable], list[ParamGroup]]:
         """Trace per-batch eigencorrection for all batch sizes in the data.
 
+        Calls :func:`make_compute_ekfac_eigencorrection_batch` once per
+        unique batch size; each call builds its own :class:`LayerIO`
+        (pinned to :attr:`KFACType.EXPAND`) and traced function.
+
         Returns:
             Tuple of ``(traced_fns, mapping)`` keyed by batch size.
         """
-        return self._trace_per_batch_size(
-            _make_eigcorrection_closure,
-            "Eigencorrection tracing",
-            KFACType.EXPAND,
-            make_extra_args=lambda io: _build_example_eigvecs(io, self._params),
-        )
+        traced_fns: dict[int, Callable] = {}
+        mapping: list[ParamGroup] | None = None
+        for X, y in self._loop_over_data(desc="Eigencorrection tracing"):
+            bs = self._batch_size_fn(X)
+            if bs in traced_fns:
+                continue
+            traced_fns[bs], mapping = make_compute_ekfac_eigencorrection_batch(
+                self._model_func,
+                self._loss_func,
+                self._params,
+                X,
+                y,
+                fisher_type=self._fisher_type,
+                mc_samples=self._mc_samples,
+                separate_weight_and_bias=self._separate_weight_and_bias,
+                batch_size_fn=self._batch_size_fn,
+                output_check_fn=self._output_check_fn,
+            )
+        return traced_fns, mapping
 
     def compute(
         self,

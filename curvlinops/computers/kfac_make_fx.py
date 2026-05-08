@@ -135,81 +135,37 @@ class MakeFxKFACComputer(_BaseKFACComputer):
 
     _output_check_fn: Callable[[Tensor, Tensor], object] | None = None
 
-    def _make_layer_io(self, X: Tensor | MutableMapping, kfac_approx: str) -> LayerIO:
-        """Build a :class:`LayerIO` configured for this operator.
-
-        Args:
-            X: Bootstrap input batch.
-            kfac_approx: Value for ``LayerIO``'s ``kfac_approx``.
-
-        Returns:
-            The configured :class:`LayerIO`.
-        """
-        return LayerIO(
-            self._model_func,
-            self._loss_func,
-            self._params,
-            X,
-            fisher_type=self._fisher_type,
-            mc_samples=self._mc_samples,
-            kfac_approx=kfac_approx,
-            separate_weight_and_bias=self._separate_weight_and_bias,
-            batch_size_fn=self._batch_size_fn,
-            output_check_fn=self._output_check_fn,
-        )
-
-    def _trace_per_batch_size(
-        self,
-        make_closure: Callable[[LayerIO], Callable],
-        desc: str,
-        kfac_approx: str,
-        *,
-        make_extra_args: Callable[[LayerIO], tuple] | None = None,
-    ) -> tuple[dict[int, Callable], list[ParamGroup]]:
-        """Trace ``make_closure(io)`` once per unique batch size, sharing one ``LayerIO``.
-
-        Builds one :class:`LayerIO` lazily on the first batch and reuses it
-        for subsequent batch sizes via :meth:`LayerIO.ensure_io_fn`, so the
-        bootstrap trace and the cross-batch-size ``io_fn`` cache are shared.
-
-        Args:
-            make_closure: Given the shared :class:`LayerIO`, returns the
-                closure traced as ``_make_fx(closure)(params, X, y, *extra)``.
-            desc: Progress description for ``_loop_over_data``.
-            kfac_approx: Value for ``LayerIO``'s ``kfac_approx``.
-            make_extra_args: Given the shared :class:`LayerIO`, returns extra
-                positional trace args appended after ``(params, X, y)``.
-                ``None`` (default) means no extras.
-
-        Returns:
-            Tuple of ``(traced_fns, mapping)`` keyed by batch size.
-        """
-        traced_fns: dict[int, Callable] = {}
-        io: LayerIO | None = None
-        for X, y in self._loop_over_data(desc=desc):
-            bs = self._batch_size_fn(X)
-            if bs in traced_fns:
-                continue
-            if io is None:
-                io = self._make_layer_io(X, kfac_approx)
-                closure = make_closure(io)
-                extra_args = () if make_extra_args is None else make_extra_args(io)
-            io.ensure_io_fn(X, self._params)
-            with io.enable_param_grads(self._params):
-                traced_fns[bs] = _make_fx(closure)(self._params, X, y, *extra_args)
-        return traced_fns, io.mapping
-
     def _trace_batch_functions(
         self,
     ) -> tuple[dict[int, Callable], list[ParamGroup]]:
         """Trace per-batch KFAC computation for all batch sizes in the data.
 
+        Calls :func:`make_compute_kfac_batch` once per unique batch size;
+        each call builds its own :class:`LayerIO` and traced function.
+
         Returns:
             Tuple of ``(traced_fns, mapping)`` keyed by batch size.
         """
-        return self._trace_per_batch_size(
-            _make_kfac_closure, "FX tracing", self._kfac_approx
-        )
+        traced_fns: dict[int, Callable] = {}
+        mapping: list[ParamGroup] | None = None
+        for X, y in self._loop_over_data(desc="FX tracing"):
+            bs = self._batch_size_fn(X)
+            if bs in traced_fns:
+                continue
+            traced_fns[bs], mapping = make_compute_kfac_batch(
+                self._model_func,
+                self._loss_func,
+                self._params,
+                X,
+                y,
+                fisher_type=self._fisher_type,
+                mc_samples=self._mc_samples,
+                kfac_approx=self._kfac_approx,
+                separate_weight_and_bias=self._separate_weight_and_bias,
+                batch_size_fn=self._batch_size_fn,
+                output_check_fn=self._output_check_fn,
+            )
+        return traced_fns, mapping
 
     def compute(
         self,
