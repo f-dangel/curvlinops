@@ -18,21 +18,17 @@ from curvlinops.computers.ekfac_hooks import (
     compute_eigenvalue_correction_linear_weight_sharing,
 )
 from curvlinops.computers.io_collector import LayerIO
-from curvlinops.computers.kfac_make_fx import MakeFxKFACComputer
+from curvlinops.computers.kfac_make_fx import MakeFxKFACComputer, _trace_with_io
 from curvlinops.kfac_utils import FisherType, KFACType
-from curvlinops.utils import _make_fx, fork_rng_with_seed
+from curvlinops.utils import fork_rng_with_seed
 
 
 def _make_eigcorrection_closure(io: LayerIO) -> Callable:
     """Build the per-batch eigencorrection closure operating on a shared ``io``.
 
-    Args:
-        io: The :class:`LayerIO` driving IO collection and standardization
-            (must be configured with :attr:`KFACType.EXPAND`).
-
     Returns:
         A closure ``(params, X, y, input_eigvecs, gradient_eigvecs) ->
-        eigencorrections`` suitable for :func:`_make_fx`.
+        eigencorrections``.
     """
 
     def compute_eigencorrection_batch(
@@ -63,13 +59,7 @@ def _make_eigcorrection_closure(io: LayerIO) -> Callable:
 def _build_example_eigvecs(
     io: LayerIO, params: dict[str, Tensor]
 ) -> tuple[dict[ParamGroupKey, Tensor], dict[ParamGroupKey, Tensor]]:
-    """Allocate example eigvec dicts matching each parameter group's shape.
-
-    Used as trace-time inputs to ``_make_fx``; values are uninitialized.
-
-    Args:
-        io: The :class:`LayerIO` whose ``mapping`` enumerates the groups.
-        params: Named parameter dict (used for dtype/device/shape inference).
+    """Allocate uninitialized example eigvec dicts as trace-time inputs to ``_make_fx``.
 
     Returns:
         ``(example_input_eigvecs, example_gradient_eigvecs)``.
@@ -157,8 +147,7 @@ def make_compute_ekfac_eigencorrection_batch(
     )
     closure = _make_eigcorrection_closure(io)
     examples = _build_example_eigvecs(io, params)
-    with io.enable_param_grads(params):
-        traced_fn = _make_fx(closure)(params, X, y, *examples)
+    traced_fn = _trace_with_io(io, closure, params, X, y, *examples)
     return traced_fn, io.mapping
 
 
@@ -169,7 +158,10 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
     :func:`make_compute_ekfac_eigencorrection_batch`.
     """
 
-    _output_check_fn = staticmethod(_EKFACMixin._rearrange_for_larger_than_2d_output)
+    # ``__dict__`` lookup grabs the ``staticmethod`` descriptor as-stored;
+    # plain ``_EKFACMixin._rearrange_for_larger_than_2d_output`` would unwrap
+    # to the function and then auto-bind to ``self`` on attribute access.
+    _output_check_fn = _EKFACMixin.__dict__["_rearrange_for_larger_than_2d_output"]
 
     def _trace_eigencorrection_batch_functions(
         self,
@@ -177,14 +169,12 @@ class MakeFxEKFACComputer(_EKFACMixin, MakeFxKFACComputer):
         """Trace per-batch eigencorrection for all batch sizes in the data.
 
         Returns:
-            Tuple of ``(traced_fns, mapping)``.
+            Tuple of ``(traced_fns, mapping)`` keyed by batch size.
         """
         return self._trace_per_batch_size(
-            lambda io: (
-                _make_eigcorrection_closure(io),
-                _build_example_eigvecs(io, self._params),
-            ),
+            _make_eigcorrection_closure,
             desc="Eigencorrection tracing",
+            make_extra_args=lambda io: _build_example_eigvecs(io, self._params),
             kfac_approx=KFACType.EXPAND,
         )
 

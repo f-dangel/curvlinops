@@ -23,16 +23,11 @@ from curvlinops.kfac_utils import FisherType, KFACType
 from curvlinops.utils import _make_fx, fork_rng_with_seed
 
 
-def _make_kfac_closure(io: LayerIO, fisher_type: FisherType) -> Callable:
+def _make_kfac_closure(io: LayerIO) -> Callable:
     """Build the per-batch KFAC reduction closure operating on a shared ``io``.
 
-    Args:
-        io: The :class:`LayerIO` driving IO collection and standardization.
-        fisher_type: Type of Fisher information.
-
     Returns:
-        A closure ``(params, X, y) -> (input_covs, gradient_covs)`` suitable
-        for :func:`_make_fx`.
+        A closure ``(params, X, y) -> (input_covs, gradient_covs)``.
     """
 
     def compute_batch(
@@ -49,7 +44,7 @@ def _make_kfac_closure(io: LayerIO, fisher_type: FisherType) -> Callable:
             if a is not None:
                 xxT = einsum(a, a, "batch shared i, batch shared j -> i j")
                 input_covs[group_key] = xxT.div_(a.shape[0] * a.shape[1])
-            if fisher_type == FisherType.FORWARD_ONLY:
+            if io.fisher_type == FisherType.FORWARD_ONLY:
                 W = params[next(iter(group.values()))]
                 gradient_covs[group_key] = eye(
                     W.shape[0], dtype=W.dtype, device=W.device
@@ -61,6 +56,25 @@ def _make_kfac_closure(io: LayerIO, fisher_type: FisherType) -> Callable:
         return input_covs, gradient_covs
 
     return compute_batch
+
+
+def _trace_with_io(
+    io: LayerIO,
+    closure: Callable,
+    params: dict[str, Tensor],
+    *args: object,
+) -> Callable:
+    """Trace ``closure(params, *args)`` with ``make_fx`` under ``enable_param_grads``.
+
+    Centralises the invariant that the closure's ``autograd.grad`` calls need
+    differentiable parameters at trace time, while leaving the user's
+    ``requires_grad`` state intact afterward.
+
+    Returns:
+        The traced :class:`torch.fx.GraphModule`.
+    """
+    with io.enable_param_grads(params):
+        return _make_fx(closure)(params, *args)
 
 
 def make_compute_kfac_batch(
@@ -129,9 +143,7 @@ def make_compute_kfac_batch(
         batch_size_fn=batch_size_fn,
         output_check_fn=output_check_fn,
     )
-    closure = _make_kfac_closure(io, fisher_type)
-    with io.enable_param_grads(params):
-        traced_fn = _make_fx(closure)(params, X, y)
+    traced_fn = _trace_with_io(io, _make_kfac_closure(io), params, X, y)
     return traced_fn, io.mapping
 
 
@@ -174,22 +186,25 @@ class MakeFxKFACComputer(_BaseKFACComputer):
 
     def _trace_per_batch_size(
         self,
-        setup: Callable[[LayerIO], tuple[Callable, tuple]],
+        make_closure: Callable[[LayerIO], Callable],
         desc: str,
         *,
+        make_extra_args: Callable[[LayerIO], tuple] | None = None,
         kfac_approx: str | None = None,
     ) -> tuple[dict[int, Callable], list[ParamGroup]]:
-        """Trace ``setup(io)``'s closure once per unique batch size.
+        """Trace ``make_closure(io)`` once per unique batch size, sharing one ``LayerIO``.
 
         Builds one :class:`LayerIO` lazily on the first batch and reuses it
         for subsequent batch sizes via :meth:`LayerIO.ensure_io_fn`, so the
         bootstrap trace and the cross-batch-size ``io_fn`` cache are shared.
 
         Args:
-            setup: Given the shared :class:`LayerIO`, returns
-                ``(closure, extra_args)``. The closure is traced as
-                ``_make_fx(closure)(params, X, y, *extra_args)``.
+            make_closure: Given the shared :class:`LayerIO`, returns the
+                closure traced as ``_make_fx(closure)(params, X, y, *extra)``.
             desc: Progress description for ``_loop_over_data``.
+            make_extra_args: Given the shared :class:`LayerIO`, returns extra
+                positional trace args appended after ``(params, X, y)``.
+                ``None`` (default) means no extras.
             kfac_approx: Override for ``LayerIO``'s ``kfac_approx``.
                 Defaults to ``self._kfac_approx``.
 
@@ -198,19 +213,19 @@ class MakeFxKFACComputer(_BaseKFACComputer):
         """
         traced_fns: dict[int, Callable] = {}
         io: LayerIO | None = None
-        closure: Callable | None = None
-        extra_args: tuple = ()
         for X, y in self._loop_over_data(desc=desc):
             bs = self._batch_size_fn(X)
             if bs in traced_fns:
                 continue
             if io is None:
                 io = self._make_layer_io(X, kfac_approx=kfac_approx)
-                closure, extra_args = setup(io)
+                closure = make_closure(io)
+                extra_args = () if make_extra_args is None else make_extra_args(io)
             else:
                 io.ensure_io_fn(X, self._params)
-            with io.enable_param_grads(self._params):
-                traced_fns[bs] = _make_fx(closure)(self._params, X, y, *extra_args)
+            traced_fns[bs] = _trace_with_io(
+                io, closure, self._params, X, y, *extra_args
+            )
         return traced_fns, io.mapping
 
     def _trace_batch_functions(
@@ -219,12 +234,9 @@ class MakeFxKFACComputer(_BaseKFACComputer):
         """Trace per-batch KFAC computation for all batch sizes in the data.
 
         Returns:
-            Tuple of ``(traced_fns, mapping)``.
+            Tuple of ``(traced_fns, mapping)`` keyed by batch size.
         """
-        return self._trace_per_batch_size(
-            lambda io: (_make_kfac_closure(io, self._fisher_type), ()),
-            desc="FX tracing",
-        )
+        return self._trace_per_batch_size(_make_kfac_closure, desc="FX tracing")
 
     def compute(
         self,
