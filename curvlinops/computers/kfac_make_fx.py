@@ -135,17 +135,12 @@ class MakeFxKFACComputer(_BaseKFACComputer):
 
     _output_check_fn: Callable[[Tensor, Tensor], object] | None = None
 
-    def _make_layer_io(
-        self,
-        X: Tensor | MutableMapping,
-        kfac_approx: str | None = None,
-    ) -> LayerIO:
+    def _make_layer_io(self, X: Tensor | MutableMapping, kfac_approx: str) -> LayerIO:
         """Build a :class:`LayerIO` configured for this operator.
 
         Args:
             X: Bootstrap input batch.
-            kfac_approx: Override for ``LayerIO``'s ``kfac_approx``.
-                Defaults to ``self._kfac_approx``.
+            kfac_approx: Value for ``LayerIO``'s ``kfac_approx``.
 
         Returns:
             The configured :class:`LayerIO`.
@@ -157,7 +152,7 @@ class MakeFxKFACComputer(_BaseKFACComputer):
             X,
             fisher_type=self._fisher_type,
             mc_samples=self._mc_samples,
-            kfac_approx=kfac_approx if kfac_approx is not None else self._kfac_approx,
+            kfac_approx=kfac_approx,
             separate_weight_and_bias=self._separate_weight_and_bias,
             batch_size_fn=self._batch_size_fn,
             output_check_fn=self._output_check_fn,
@@ -167,9 +162,9 @@ class MakeFxKFACComputer(_BaseKFACComputer):
         self,
         make_closure: Callable[[LayerIO], Callable],
         desc: str,
+        kfac_approx: str,
         *,
         make_extra_args: Callable[[LayerIO], tuple] | None = None,
-        kfac_approx: str | None = None,
     ) -> tuple[dict[int, Callable], list[ParamGroup]]:
         """Trace ``make_closure(io)`` once per unique batch size, sharing one ``LayerIO``.
 
@@ -181,11 +176,10 @@ class MakeFxKFACComputer(_BaseKFACComputer):
             make_closure: Given the shared :class:`LayerIO`, returns the
                 closure traced as ``_make_fx(closure)(params, X, y, *extra)``.
             desc: Progress description for ``_loop_over_data``.
+            kfac_approx: Value for ``LayerIO``'s ``kfac_approx``.
             make_extra_args: Given the shared :class:`LayerIO`, returns extra
                 positional trace args appended after ``(params, X, y)``.
                 ``None`` (default) means no extras.
-            kfac_approx: Override for ``LayerIO``'s ``kfac_approx``.
-                Defaults to ``self._kfac_approx``.
 
         Returns:
             Tuple of ``(traced_fns, mapping)`` keyed by batch size.
@@ -214,7 +208,9 @@ class MakeFxKFACComputer(_BaseKFACComputer):
         Returns:
             Tuple of ``(traced_fns, mapping)`` keyed by batch size.
         """
-        return self._trace_per_batch_size(_make_kfac_closure, desc="FX tracing")
+        return self._trace_per_batch_size(
+            _make_kfac_closure, desc="FX tracing", kfac_approx=self._kfac_approx
+        )
 
     def compute(
         self,
