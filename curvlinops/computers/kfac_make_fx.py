@@ -13,7 +13,6 @@ per-batch closure for users who want a functional API without going through
 """
 
 from collections.abc import Callable, MutableMapping
-from functools import partial
 
 from einops import einsum
 from torch import Tensor, eye, no_grad
@@ -22,41 +21,6 @@ from curvlinops.computers._base import ParamGroup, ParamGroupKey, _BaseKFACCompu
 from curvlinops.computers.io_collector import LayerIO
 from curvlinops.kfac_utils import FisherType, KFACType
 from curvlinops.utils import _make_fx, fork_rng_with_seed
-
-
-def _compute_kfac_batch(
-    io: LayerIO,
-    params: dict[str, Tensor],
-    X: Tensor | MutableMapping,
-    y: Tensor,
-) -> tuple[dict[ParamGroupKey, Tensor], dict[ParamGroupKey, Tensor]]:
-    """Per-batch KFAC reduction running on the supplied ``io``.
-
-    Curry ``io`` with :func:`functools.partial` to obtain a callable
-    suitable for :func:`_make_fx` (its remaining ``(params, X, y)`` are
-    the traced graph's inputs).
-
-    Returns:
-        ``(input_covs, gradient_covs)`` for the parameter groups of ``io``.
-    """
-    layer_inputs, layer_output_grads = io.populate(params, X, y)
-    snap = io.snapshot(layer_inputs, layer_output_grads)
-
-    input_covs: dict[ParamGroupKey, Tensor] = {}
-    gradient_covs: dict[ParamGroupKey, Tensor] = {}
-    for group in io.mapping:
-        a, g = snap.standardized_io(group)
-        group_key = tuple(group.values())
-        if a is not None:
-            aaT = einsum(a, a, "batch shared i, batch shared j -> i j")
-            input_covs[group_key] = aaT.div_(a.shape[0] * a.shape[1])
-        if io.fisher_type == FisherType.FORWARD_ONLY:
-            W = params[next(iter(group.values()))]
-            ggT = eye(W.shape[0], dtype=W.dtype, device=W.device)
-        else:
-            ggT = einsum(g, g, "v batch shared i, v batch shared j -> i j")
-        gradient_covs[group_key] = ggT
-    return input_covs, gradient_covs
 
 
 def make_compute_kfac_batch(
@@ -125,8 +89,31 @@ def make_compute_kfac_batch(
         batch_size_fn=batch_size_fn,
         output_check_fn=output_check_fn,
     )
+
+    def compute_batch(
+        params: dict[str, Tensor], X: Tensor | MutableMapping, y: Tensor
+    ) -> tuple[dict[ParamGroupKey, Tensor], dict[ParamGroupKey, Tensor]]:
+        layer_inputs, layer_output_grads = io.populate(params, X, y)
+        snap = io.snapshot(layer_inputs, layer_output_grads)
+
+        input_covs: dict[ParamGroupKey, Tensor] = {}
+        gradient_covs: dict[ParamGroupKey, Tensor] = {}
+        for group in io.mapping:
+            a, g = snap.standardized_io(group)
+            group_key = tuple(group.values())
+            if a is not None:
+                aaT = einsum(a, a, "batch shared i, batch shared j -> i j")
+                input_covs[group_key] = aaT.div_(a.shape[0] * a.shape[1])
+            if io.fisher_type == FisherType.FORWARD_ONLY:
+                W = params[next(iter(group.values()))]
+                ggT = eye(W.shape[0], dtype=W.dtype, device=W.device)
+            else:
+                ggT = einsum(g, g, "v batch shared i, v batch shared j -> i j")
+            gradient_covs[group_key] = ggT
+        return input_covs, gradient_covs
+
     with io.enable_param_grads(params):
-        traced_fn = _make_fx(partial(_compute_kfac_batch, io))(params, X, y)
+        traced_fn = _make_fx(compute_batch)(params, X, y)
     return traced_fn, io.mapping
 
 
