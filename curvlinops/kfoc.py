@@ -31,7 +31,7 @@ class KFOCLinearOperator(KFACLinearOperator):
 
     Scope:
         - Single-batch data only (``len(list(data)) == 1``).
-        - :class:`FisherType.TYPE2` only.
+        - ``fisher_type`` in ``{FisherType.TYPE2, FisherType.MC}``.
 
     References:
         - Schnaus, D., Lee, J., Triebel, R. (2021). "Kronecker-Factored Optimal
@@ -54,6 +54,9 @@ class KFOCLinearOperator(KFACLinearOperator):
         data: Iterable[tuple[Tensor | MutableMapping, Tensor]],
         progressbar: bool = False,
         check_deterministic: bool = True,
+        seed: int = 2_147_483_647,
+        fisher_type: str = FisherType.MC,
+        mc_samples: int = 1,
         separate_weight_and_bias: bool = True,
         num_data: int | None = None,
         batch_size_fn: Callable[[MutableMapping | Tensor], int] | None = None,
@@ -68,6 +71,17 @@ class KFOCLinearOperator(KFACLinearOperator):
             data: Iterable of a single ``(X, y)`` batch.
             progressbar: Whether to show a progress bar.
             check_deterministic: Whether to run the determinism check on init.
+            seed: Seed for the random number generator used to draw labels
+                from the model's predictive distribution. Only used when
+                ``fisher_type == FisherType.MC``. Defaults to ``2147483647``.
+            fisher_type: The type of Fisher/GGN to approximate. If
+                ``FisherType.TYPE2``, the exact Hessian of the loss w.r.t. the
+                model outputs is used. If ``FisherType.MC``, the expectation is
+                approximated by sampling ``mc_samples`` labels from the model's
+                predictive distribution. Defaults to ``FisherType.MC``.
+            mc_samples: The number of Monte-Carlo samples to use per data
+                point. Has to be set to ``1`` when
+                ``fisher_type != FisherType.MC``. Defaults to ``1``.
             separate_weight_and_bias: Whether to treat weight and bias as
                 separate parameter groups.
             num_data: Total dataset size (here just the single batch size).
@@ -81,8 +95,9 @@ class KFOCLinearOperator(KFACLinearOperator):
             data,
             progressbar=progressbar,
             check_deterministic=check_deterministic,
-            fisher_type=FisherType.TYPE2,
-            mc_samples=1,
+            seed=seed,
+            fisher_type=fisher_type,
+            mc_samples=mc_samples,
             kfac_approx=KFACType.EXPAND,
             separate_weight_and_bias=separate_weight_and_bias,
             num_data=num_data,

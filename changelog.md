@@ -30,9 +30,11 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
   pair of the block's Van Loan rearrangement (bias-only blocks store the
   exact bias GGN). Subclasses `KFACLinearOperator` and reuses the inherited
   matvec/inverse/eigh machinery; only the factor-computation step is
-  replaced. Scope: single-batch data, `FisherType.TYPE2`.
+  replaced. Scope: single-batch data, `fisher_type` in `{TYPE2, MC}`
+  (defaults to `MC`, mirroring `KFACLinearOperator`).
   References: Schnaus, Lee, Triebel (BDL@NeurIPS 2021); Koroko et al. (arXiv:2201.10285)
-  ([PR](https://github.com/f-dangel/curvlinops/pull/299))
+  ([PR](https://github.com/f-dangel/curvlinops/pull/299),
+  [PR](https://github.com/f-dangel/curvlinops/pull/305))
 
 - Add preconditioner support to `NeumannInverseLinearOperator` via a new
   `preconditioner` argument, enabling the preconditioned Neumann/Richardson

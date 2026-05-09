@@ -25,7 +25,7 @@ from curvlinops._torch_base import PyTorchLinearOperator
 from curvlinops.computers._base import ParamGroup, ParamGroupKey, _BaseKFACComputer
 from curvlinops.computers.io_collector import LayerIO
 from curvlinops.kfac_utils import FisherType, KFACType
-from curvlinops.utils import _assert_single_element, _make_fx
+from curvlinops.utils import _assert_single_element, _make_fx, fork_rng_with_seed
 
 
 class _RearrangedGGNLinearOperator(PyTorchLinearOperator):
@@ -183,11 +183,12 @@ class MakeFxKFOCComputer(_BaseKFACComputer):
     and extracts the Frobenius-optimal rank-1 Kronecker factors from the top
     singular pair of the rearranged operator.
 
-    Requires ``FisherType.TYPE2``, ``KFACType.EXPAND``, and exactly one batch
-    in ``data``. All three preconditions fail at construction.
+    Requires ``FisherType`` in ``{TYPE2, MC}``, ``KFACType.EXPAND``, and
+    exactly one batch in ``data``. All three preconditions fail at
+    construction.
     """
 
-    _SUPPORTED_FISHER_TYPE: tuple[FisherType, ...] = (FisherType.TYPE2,)
+    _SUPPORTED_FISHER_TYPE: tuple[FisherType, ...] = (FisherType.TYPE2, FisherType.MC)
     _SUPPORTED_KFAC_APPROX: tuple[KFACType, ...] = (KFACType.EXPAND,)
 
     def __init__(self, *args, **kwargs):
@@ -239,7 +240,10 @@ class MakeFxKFOCComputer(_BaseKFACComputer):
 
         with io.enable_param_grads(self._params):
             traced_populate = _make_fx(populate)(self._params, X, y)
-        with no_grad():
+        # Seed only for stochastic fisher types. fork_rng_with_seed isolates
+        # the seed from the caller's global RNG state.
+        seed = self._seed if self._fisher_type == FisherType.MC else None
+        with fork_rng_with_seed(seed), no_grad():
             layer_inputs, layer_output_grads = traced_populate(self._params, X, y)
         snap = io.snapshot(layer_inputs, layer_output_grads)
 
