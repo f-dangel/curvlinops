@@ -21,11 +21,33 @@ from torch.linalg import svd as torch_svd
 from torch.nn import Linear, Module, MSELoss, Sequential
 
 from curvlinops import GGNLinearOperator, KFOCLinearOperator
+from curvlinops.kfac_utils import FisherType
 from curvlinops.utils import allclose_report
 from test.utils import block_diagonal, change_dtype, eye_like
 
+_MC_SAMPLES = 4
+_MC_SEED = 12345
 
-def _assert_kfoc_factors_match_dense_svd(case):
+
+def _ggn_mc_kwargs(fisher_type: FisherType) -> dict:
+    """``GGNLinearOperator`` kwargs that match a given KFOC ``fisher_type``.
+
+    For ``MC``, force the same ``mc_samples`` and ``seed`` so the per-sample
+    draws inside ``GGNLinearOperator``'s pseudo-loss line up with the draws
+    inside KFOC's traced ``LayerIO.populate``.
+
+    Args:
+        fisher_type: KFOC's curvature flavor.
+
+    Returns:
+        Empty dict for ``TYPE2``; ``{"mc_samples": ..., "seed": ...}`` for ``MC``.
+    """
+    if fisher_type == FisherType.MC:
+        return {"mc_samples": _MC_SAMPLES, "seed": _MC_SEED}
+    return {}
+
+
+def _assert_kfoc_factors_match_dense_svd(case, fisher_type: FisherType):
     """Assert KFOC's per-layer Kron product matches the top-1 SVD of ``R(G_l)``.
 
     Works in canonical layout: ``K_canonical`` (the middle of ``kfoc``'s
@@ -36,6 +58,9 @@ def _assert_kfoc_factors_match_dense_svd(case):
 
     Args:
         case: Model, loss, parameters, data, and optional batch-size function.
+        fisher_type: Curvature flavor (``TYPE2`` or ``MC``). For ``MC`` the
+            reference ``GGNLinearOperator`` is built with matching
+            ``mc_samples`` and ``seed`` so the per-sample draws match.
     """
     model, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
     X, y = next(iter(data))
@@ -46,6 +71,9 @@ def _assert_kfoc_factors_match_dense_svd(case):
         params,
         [(X, y)],
         batch_size_fn=batch_size_fn,
+        fisher_type=fisher_type,
+        mc_samples=_MC_SAMPLES if fisher_type == FisherType.MC else 1,
+        seed=_MC_SEED,
     )
     _, K_op, PT = kfoc
     K_canonical = K_op @ eye_like(K_op)
@@ -57,6 +85,7 @@ def _assert_kfoc_factors_match_dense_svd(case):
         params,
         [(X, y)],
         batch_size_fn=batch_size_fn,
+        optional_linop_args=_ggn_mc_kwargs(fisher_type),
     )
     ggn_canonical = PT_mat @ ggn @ PT_mat.T
 
@@ -88,7 +117,7 @@ def _assert_kfoc_factors_match_dense_svd(case):
             offset += n
 
 
-def _assert_kfoc_first_order_optimality(case):
+def _assert_kfoc_first_order_optimality(case, fisher_type: FisherType):
     """Assert KFOC's factors are stationary points of the Frobenius residual.
 
     Enable grad on every factor in every block (Kronecker pairs for weight
@@ -100,6 +129,9 @@ def _assert_kfoc_first_order_optimality(case):
 
     Args:
         case: Model, loss, parameters, data, and optional batch-size function.
+        fisher_type: Curvature flavor (``TYPE2`` or ``MC``). For ``MC`` the
+            reference ``GGNLinearOperator`` is built with matching
+            ``mc_samples`` and ``seed`` so the per-sample draws match.
     """
     model, loss_func, params, data, batch_size_fn = change_dtype(case, float64)
     X, y = next(iter(data))
@@ -110,6 +142,9 @@ def _assert_kfoc_first_order_optimality(case):
         params,
         [(X, y)],
         batch_size_fn=batch_size_fn,
+        fisher_type=fisher_type,
+        mc_samples=_MC_SAMPLES if fisher_type == FisherType.MC else 1,
+        seed=_MC_SEED,
     )
     _, K_op, _ = kfoc
     factors = [f.requires_grad_(True) for block in K_op for f in block]
@@ -120,6 +155,7 @@ def _assert_kfoc_first_order_optimality(case):
         params,
         [(X, y)],
         batch_size_fn=batch_size_fn,
+        optional_linop_args=_ggn_mc_kwargs(fisher_type),
     )
     K = kfoc @ eye_like(kfoc)
     loss = (ggn - K).pow(2).sum()
@@ -127,6 +163,7 @@ def _assert_kfoc_first_order_optimality(case):
         assert g.abs().max().item() < 1e-8
 
 
+@mark.parametrize("fisher_type", [FisherType.TYPE2, FisherType.MC])
 def test_kfoc_factors_match_dense_svd(
     case: tuple[
         Module,
@@ -135,20 +172,24 @@ def test_kfoc_factors_match_dense_svd(
         Iterable[tuple[Tensor, Tensor]],
         object,
     ],
+    fisher_type: FisherType,
 ):
     """KFOC's per-layer Kron product matches the top-1 SVD of ``R(G_l)`` (Linear).
 
     The Eckart-Young theorem on the Van Loan rearrangement is the
     closed-form Frobenius minimizer; reshape the GGN block to
     ``R(G_l) ∈ R^(d_out² × d_in²)``, take the top-1 SVD, and check that
-    KFOC's Kron output matches.
+    KFOC's Kron output matches. For ``MC`` the reference is the MC-GGN
+    constructed via ``GGNLinearOperator`` with matching seed.
 
     Args:
         case: Model, loss, parameters, data, and optional batch-size function.
+        fisher_type: Curvature flavor (``TYPE2`` or ``MC``).
     """
-    _assert_kfoc_factors_match_dense_svd(case)
+    _assert_kfoc_factors_match_dense_svd(case, fisher_type)
 
 
+@mark.parametrize("fisher_type", [FisherType.TYPE2, FisherType.MC])
 def test_kfoc_factors_match_dense_svd_cnn(
     cnn_case: tuple[
         Module,
@@ -157,6 +198,7 @@ def test_kfoc_factors_match_dense_svd_cnn(
         Iterable[tuple[Tensor, Tensor]],
         object,
     ],
+    fisher_type: FisherType,
 ):
     """Same as :func:`test_kfoc_factors_match_dense_svd`, on CNN models with Conv2d.
 
@@ -166,10 +208,12 @@ def test_kfoc_factors_match_dense_svd_cnn(
 
     Args:
         cnn_case: Model, loss, parameters, data, and optional batch-size function.
+        fisher_type: Curvature flavor (``TYPE2`` or ``MC``).
     """
-    _assert_kfoc_factors_match_dense_svd(cnn_case)
+    _assert_kfoc_factors_match_dense_svd(cnn_case, fisher_type)
 
 
+@mark.parametrize("fisher_type", [FisherType.TYPE2, FisherType.MC])
 def test_kfoc_first_order_optimality(
     case: tuple[
         Module,
@@ -178,6 +222,7 @@ def test_kfoc_first_order_optimality(
         Iterable[tuple[Tensor, Tensor]],
         object,
     ],
+    fisher_type: FisherType,
 ):
     """KFOC's factors are stationary points of the Frobenius residual (Linear).
 
@@ -189,10 +234,12 @@ def test_kfoc_first_order_optimality(
 
     Args:
         case: Model, loss, parameters, data, and optional batch-size function.
+        fisher_type: Curvature flavor (``TYPE2`` or ``MC``).
     """
-    _assert_kfoc_first_order_optimality(case)
+    _assert_kfoc_first_order_optimality(case, fisher_type)
 
 
+@mark.parametrize("fisher_type", [FisherType.TYPE2, FisherType.MC])
 def test_kfoc_first_order_optimality_cnn(
     cnn_case: tuple[
         Module,
@@ -201,13 +248,15 @@ def test_kfoc_first_order_optimality_cnn(
         Iterable[tuple[Tensor, Tensor]],
         object,
     ],
+    fisher_type: FisherType,
 ):
     """Same as :func:`test_kfoc_first_order_optimality`, on CNN models with Conv2d.
 
     Args:
         cnn_case: Model, loss, parameters, data, and optional batch-size function.
+        fisher_type: Curvature flavor (``TYPE2`` or ``MC``).
     """
-    _assert_kfoc_first_order_optimality(cnn_case)
+    _assert_kfoc_first_order_optimality(cnn_case, fisher_type)
 
 
 def test_kfoc_handles_zero_ggn():
@@ -223,7 +272,9 @@ def test_kfoc_handles_zero_ggn():
     X = zeros(3, 4, dtype=float64)
     y = rand(3, 2, dtype=float64)
 
-    kfoc = KFOCLinearOperator(model, loss_func, params, [(X, y)])
+    kfoc = KFOCLinearOperator(
+        model, loss_func, params, [(X, y)], fisher_type=FisherType.TYPE2
+    )
     K = kfoc @ eye_like(kfoc)
     ggn = block_diagonal(GGNLinearOperator, model, loss_func, params, [(X, y)])
     assert allclose_report(K, ggn)
@@ -238,7 +289,7 @@ def test_kfoc_rejects_multi_batch():
     params = dict(model.named_parameters())
     data = [(rand(2, 4), rand(2, 2)), (rand(3, 4), rand(3, 2))]
     with raises(ValueError, match="more than one"):
-        KFOCLinearOperator(model, loss_func, params, data)
+        KFOCLinearOperator(model, loss_func, params, data, fisher_type=FisherType.TYPE2)
 
 
 @mark.parametrize("d_in,d_out", [(4, 1), (1, 3)], ids=["scalar_out", "scalar_in"])
@@ -259,6 +310,8 @@ def test_kfoc_handles_degenerate_svds_shapes(d_in: int, d_out: int):
     params = dict(model.named_parameters())
     X = rand(3, d_in, dtype=float64)
     y = rand(3, d_out, dtype=float64)
-    kfoc = KFOCLinearOperator(model, loss_func, params, [(X, y)])
+    kfoc = KFOCLinearOperator(
+        model, loss_func, params, [(X, y)], fisher_type=FisherType.TYPE2
+    )
     ggn = block_diagonal(GGNLinearOperator, model, loss_func, params, [(X, y)])
     assert allclose_report(kfoc @ eye_like(kfoc), ggn)
