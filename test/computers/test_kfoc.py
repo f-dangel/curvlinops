@@ -29,6 +29,22 @@ _MC_SAMPLES = 4
 _MC_SEED = 12345
 
 
+def _kfoc_mc_kwargs(fisher_type: FisherType) -> dict:
+    """KFOC kwargs pinning ``mc_samples`` and ``seed`` for a given ``fisher_type``.
+
+    Args:
+        fisher_type: KFOC's curvature flavor.
+
+    Returns:
+        ``{fisher_type, mc_samples, seed}`` — ``mc_samples=1`` for non-MC.
+    """
+    return {
+        "fisher_type": fisher_type,
+        "mc_samples": _MC_SAMPLES if fisher_type == FisherType.MC else 1,
+        "seed": _MC_SEED,
+    }
+
+
 def _ggn_mc_kwargs(fisher_type: FisherType) -> dict:
     """``GGNLinearOperator`` kwargs that match a given KFOC ``fisher_type``.
 
@@ -71,9 +87,7 @@ def _assert_kfoc_factors_match_dense_svd(case, fisher_type: FisherType):
         params,
         [(X, y)],
         batch_size_fn=batch_size_fn,
-        fisher_type=fisher_type,
-        mc_samples=_MC_SAMPLES if fisher_type == FisherType.MC else 1,
-        seed=_MC_SEED,
+        **_kfoc_mc_kwargs(fisher_type),
     )
     _, K_op, PT = kfoc
     K_canonical = K_op @ eye_like(K_op)
@@ -142,9 +156,7 @@ def _assert_kfoc_first_order_optimality(case, fisher_type: FisherType):
         params,
         [(X, y)],
         batch_size_fn=batch_size_fn,
-        fisher_type=fisher_type,
-        mc_samples=_MC_SAMPLES if fisher_type == FisherType.MC else 1,
-        seed=_MC_SEED,
+        **_kfoc_mc_kwargs(fisher_type),
     )
     _, K_op, _ = kfoc
     factors = [f.requires_grad_(True) for block in K_op for f in block]

@@ -240,8 +240,8 @@ class MakeFxKFOCComputer(_BaseKFACComputer):
 
         with io.enable_param_grads(self._params):
             traced_populate = _make_fx(populate)(self._params, X, y)
-        # Seed only for stochastic fisher types so MC draws are reproducible
-        # without leaking into the caller's global RNG state.
+        # Seed only for stochastic fisher types. fork_rng_with_seed isolates
+        # the seed from the caller's global RNG state.
         seed = self._seed if self._fisher_type == FisherType.MC else None
         with fork_rng_with_seed(seed), no_grad():
             layer_inputs, layer_output_grads = traced_populate(self._params, X, y)
