@@ -99,11 +99,15 @@ def verify_match_complete(
         max_length = max([len(path) for path in detected_paths_from_p] + [2])
 
         for path in _find_all_paths_from(p, max_length):
-            # Check if this usage path starts with any detected path
+            # A usage path is covered when it and some detected path agree up to the
+            # shorter of the two (one is a prefix of the other). Both directions are
+            # needed: the real path may be shorter (a partial prefix) or longer,
+            # continuing downstream past the matched layer output -- expected for a
+            # weight reused in matmuls of uneven reshape depth (Taylor-mode/jet), not
+            # a real gap.
             is_covered = any(
-                path == detected_path[: len(path)]
-                if len(path) <= len(detected_path)
-                else False
+                path[: len(detected_path)] == detected_path
+                or path == detected_path[: len(path)]
                 for detected_path in detected_paths_from_p
             )
             if not is_covered:

@@ -279,6 +279,12 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
 
 - Generalize IO collector to handle linear layers with >2D inputs
   ([PR](https://github.com/f-dangel/curvlinops/pull/259))
+  - Detect a `Linear`'s weight and bias when the bias is added after
+    last-dim-preserving reshapes, and when one weight is reused across matmuls of
+    differing reshape depth. This enables KFAC/EKFAC (`make_fx` backend) on losses
+    whose graph routes each parameter through such reshapes — e.g. PINN PDE
+    residuals computed via Taylor mode (jet)
+    ([PR](https://github.com/f-dangel/curvlinops/pull/308))
 
 - Add a collector for in/outputs of linear weight sharing layers based on `make_fx`
   ([PR](https://github.com/f-dangel/curvlinops/pull/252))
