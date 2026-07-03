@@ -243,7 +243,7 @@ class _CanonicalizationLinearOperator(PyTorchLinearOperator):
 
     @property
     def device(self):
-        """Return the stored device.
+        """The stored device.
 
         Returns:
             The device of the parameters.
@@ -252,7 +252,7 @@ class _CanonicalizationLinearOperator(PyTorchLinearOperator):
 
     @property
     def dtype(self):
-        """Return the stored dtype.
+        """The stored dtype.
 
         Returns:
             The dtype of the parameters.

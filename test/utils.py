@@ -221,7 +221,7 @@ class WeightShareModel(Sequential):
 
     @property
     def setting(self) -> str:
-        """Return the setting of the model.
+        """The setting of the model.
 
         Returns:
             The setting of the model.
@@ -253,7 +253,7 @@ class WeightShareModel(Sequential):
 
     @property
     def loss(self) -> str:
-        """Return the type of loss function the model is used with.
+        """The type of loss function the model is used with.
 
         Returns:
             The type of loss function.
@@ -437,7 +437,7 @@ class Conv2dModel(Module):
 
     @property
     def setting(self) -> str:
-        """Return the setting of the model.
+        """The setting of the model.
 
         Returns:
             The setting of the model.

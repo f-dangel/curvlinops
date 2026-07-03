@@ -124,7 +124,7 @@ class BlockDiagonalLinearOperator(PyTorchLinearOperator):
 
     @property
     def device(self) -> device:
-        """Get the device of the linear operator.
+        """The device of the linear operator.
 
         Returns:
             Device of the blocks.
@@ -133,7 +133,7 @@ class BlockDiagonalLinearOperator(PyTorchLinearOperator):
 
     @property
     def dtype(self) -> dtype:
-        """Get the dtype of the linear operator.
+        """The dtype of the linear operator.
 
         Returns:
             Data type of the blocks.
