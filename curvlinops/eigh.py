@@ -62,7 +62,7 @@ class EighDecomposedLinearOperator(PyTorchLinearOperator):
 
     @property
     def eigenvalues(self) -> Tensor:
-        """Return the eigenvalues.
+        """The eigenvalues.
 
         Returns:
             1D tensor of eigenvalues.
@@ -106,7 +106,7 @@ class EighDecomposedLinearOperator(PyTorchLinearOperator):
 
     @property
     def device(self) -> device:
-        """Return the device of the eigendecomposition.
+        """The device of the eigendecomposition.
 
         Returns:
             Device of the eigenvalues and eigenvectors.
@@ -115,7 +115,7 @@ class EighDecomposedLinearOperator(PyTorchLinearOperator):
 
     @property
     def dtype(self) -> dtype:
-        """Return the data type of the eigendecomposition.
+        """The data type of the eigendecomposition.
 
         Returns:
             Data type of the eigenvalues and eigenvectors.

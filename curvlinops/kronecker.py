@@ -183,7 +183,7 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
 
     @property
     def device(self) -> device:
-        """Return the device of the Kronecker factors.
+        """The device of the Kronecker factors.
 
         Returns:
             Device of the factors.
@@ -192,7 +192,7 @@ class KroneckerProductLinearOperator(PyTorchLinearOperator):
 
     @property
     def dtype(self) -> dtype:
-        """Return the data type of the Kronecker factors.
+        """The data type of the Kronecker factors.
 
         Returns:
             Data type of the factors.

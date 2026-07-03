@@ -197,7 +197,7 @@ class OuterProductLinearOperator(PyTorchLinearOperator):
 
     @property
     def dtype(self) -> dtype:
-        """Return the data type of the linear operator.
+        """The data type of the linear operator.
 
         Returns:
             The data type of the linear operator.
@@ -206,7 +206,7 @@ class OuterProductLinearOperator(PyTorchLinearOperator):
 
     @property
     def device(self) -> device:
-        """Return the linear operator's device.
+        """The linear operator's device.
 
         Returns:
             The device on which the linear operator is defined.
