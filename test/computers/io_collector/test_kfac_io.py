@@ -386,6 +386,43 @@ def test_kfac_io_cnn(inplace: bool):
         _verify_kfac_io(f, x, params, fisher_type, kfac_io_true)
 
 
+def test_kfac_io_weight_tying_through_reshaped_bias():
+    """KFAC IO for a weight reused across reshape-wrapped coefficient matmuls.
+
+    Mirrors collapsed Taylor mode / jet: one Linear ``(W, b)`` applied to several
+    Taylor coefficients that share the weight, with the bias added to the forward
+    coefficient through a transparent reshape chain (``mm → unsqueeze → squeeze →
+    add(bias)``). Checks that KFAC groups the tied-weight usages into separate layers
+    and collects the correct per-coefficient inputs/outputs across Fisher types.
+    """
+    manual_seed(0)
+    N, D_in, D_out = 2, 3, 4
+
+    def f(params: dict, x: Tensor) -> Tensor:
+        W, b = params["weight"], params["bias"]
+        c0, c1 = x, 2.0 * x
+        y0 = (c0 @ W.t()).unsqueeze(1).squeeze(1) + b  # forward: reshape-wrapped bias
+        y1 = c1 @ W.t()  # derivative coefficient: no bias
+        return y0 + y1
+
+    x = rand(N, D_in)
+    params = {"weight": rand(D_out, D_in), "bias": rand(D_out)}
+    c0, c1 = x, 2.0 * x
+    W = params["weight"]
+
+    for fisher_type in FisherType:
+        kfac_io_true = (
+            f(params, x),
+            {"Linear0": c0, "Linear1": c1},
+            {}
+            if fisher_type == FisherType.FORWARD_ONLY
+            else {"Linear0": linear(c0, W, params["bias"]), "Linear1": linear(c1, W)},
+            {"Linear0": {"W": "weight", "b": "bias"}, "Linear1": {"W": "weight"}},
+            {"Linear0": {}, "Linear1": {}},
+        )
+        _verify_kfac_io(f, x, params, fisher_type, kfac_io_true)
+
+
 def test_kfac_io_flatten_requires_per_batch_size_tracing():
     """Demonstrate that ``nn.Flatten`` bakes in the batch size during real tracing.
 

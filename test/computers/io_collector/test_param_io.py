@@ -305,6 +305,119 @@ def test_supports_multiple_batch_sizes():
         compare_io(io, io_true)
 
 
+@mark.parametrize(
+    "reshape",
+    [
+        lambda y, N, D_out: y.unsqueeze(1).squeeze(1),  # rank-preserving: (N, D_out)
+        lambda y, N, D_out: y.reshape(
+            N, 1, 1, D_out
+        ),  # rank-changing: (N, 1, 1, D_out)
+    ],
+    ids=["rank_preserving", "rank_changing"],
+)
+def test_bias_add_through_transparent_reshapes(reshape):
+    """Detect a Linear whose bias is added after transparent reshapes.
+
+    The traversal is driven purely by the last-dim invariant, so it must match the
+    bias-add whether the transparent reshapes preserve the rank (``unsqueeze.squeeze``)
+    or change it (``reshape`` to more axes), as long as the last dim ``D_out`` stays
+    put. The recorded output is the reshaped tensor, so input and output may differ
+    in rank.
+
+    Args:
+        reshape: Last-dim-preserving reshape applied between the matmul and the bias.
+    """
+    manual_seed(0)
+    N, D_in, D_out = 3, 4, 5
+
+    def f(params: dict, x: Tensor) -> Tensor:
+        y = x @ params["weight"].t()  # mm
+        y = reshape(y, N, D_out)  # transparent: last dim D_out preserved
+        return y + params["bias"]
+
+    x = rand(N, D_in)
+    params = {"weight": rand(D_out, D_in), "bias": rand(D_out)}
+    y = reshape(linear(x, params["weight"], params["bias"]), N, D_out)
+    io_true = ((LINEAR_STR, y, x, "weight", "bias", {}),)
+    _verify_io(f, x, params, io_true)
+
+
+def test_weight_reused_across_reshape_wrapped_matmuls():
+    """Detect one weight reused across matmuls of uneven reshape depth (Taylor mode)."""
+    manual_seed(0)
+    N, D_in, D_out = 3, 4, 5
+
+    def f(params: dict, x: Tensor) -> Tensor:
+        W, b = params["weight"], params["bias"]
+        c0, c1, c2 = x, 2.0 * x, 3.0 * x
+        y0 = (c0 @ W.t()).unsqueeze(1).squeeze(1) + b  # forward: reshape-wrapped bias
+        y1 = c1 @ W.t()  # 1st-order coefficient: no bias, reshape depth 0
+        y2 = (c2 @ W.t()).reshape(N, D_out)  # 2nd-order coefficient: no bias, depth 1
+        return y0 + y1 + y2
+
+    x = rand(N, D_in)
+    params = {"weight": rand(D_out, D_in), "bias": rand(D_out)}
+    c0, c1, c2 = x, 2.0 * x, 3.0 * x
+    W = params["weight"]
+    io_true = (
+        (LINEAR_STR, linear(c0, W, params["bias"]), c0, "weight", "bias", {}),
+        (LINEAR_STR, linear(c1, W), c1, "weight", None, {}),
+        (LINEAR_STR, linear(c2, W), c2, "weight", None, {}),
+    )
+    _verify_io(f, x, params, io_true)
+
+
+def test_bias_after_last_dim_altering_reshape_not_matched():
+    """Transparent-bias traversal must stop at a reshape that alters the last dim.
+
+    ``mm → squeeze (transparent) → reshape (alters last dim) → add(bias)`` must NOT
+    absorb the bias: the reshape changes the feature dimension, so the ``add`` no
+    longer belongs to the matmul. The bias usage is then undetected and rejected. This
+    guards the extended matcher against over-matching through non-transparent shape
+    ops.
+    """
+    manual_seed(0)
+    N, D_in, D_out = 3, 8, 4
+
+    def f(params: dict, x: Tensor) -> Tensor:
+        y = x @ params["weight"].t()  # (N, 4)
+        y = y.unsqueeze(1).squeeze(1)  # transparent (last dim 4 preserved)
+        y = y.reshape(N, 2, 2)  # alters last dim 4 -> 2 (not transparent)
+        return y + params["bias"]
+
+    x_dummy = zeros(N, D_in)
+    params_dummy = {"weight": zeros(D_out, D_in), "bias": zeros(2)}
+
+    with raises(ValueError, match="Some parameters are used in unsupported patterns."):
+        _ = with_param_io(f, x_dummy, params_dummy)
+
+
+def test_bias_through_reused_transparent_node_not_matched():
+    """A transparent node between matmul and bias-add must be private to the bias-add.
+
+    ``mm → unsqueeze → squeeze → add(bias)`` with the intermediate ``unsqueeze``
+    also consumed elsewhere is not a clean linear layer. The forward (weight) walk
+    already stops at the reused node; the backward (bias) walk must stop there too,
+    so the bias fails to match and the usage is rejected. Without the symmetric
+    single-user guard the bias side would reach the matmul, producing an
+    inconsistent match that slips past verification (a silent failure).
+    """
+    manual_seed(0)
+    N, D_in, D_out = 3, 4, 5
+
+    def f(params: dict, x: Tensor) -> Tensor:
+        W, b = params["weight"], params["bias"]
+        t1 = (x @ W.t()).unsqueeze(1)  # transparent node, reused below
+        y = t1.squeeze(1) + b  # bias-add reached past the reused node
+        return y + t1.sum()  # extra consumer of t1
+
+    x_dummy = zeros(N, D_in)
+    params_dummy = {"weight": zeros(D_out, D_in), "bias": zeros(D_out)}
+
+    with raises(ValueError, match="Some parameters are used in unsupported patterns."):
+        _ = with_param_io(f, x_dummy, params_dummy)
+
+
 @mark.parametrize("bias", [True, False], ids=["bias", "no_bias"])
 @mark.parametrize(
     "x_shape",

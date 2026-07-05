@@ -14,6 +14,95 @@ LINEAR_STR = "Linear(y=W@x+b)"
 # Reshape ops inserted by F.linear for >2D inputs (view → mm/addmm → view)
 _VIEW_OPS = {aten._unsafe_view.default, aten.view.default}
 
+# Shape-only ("transparent") ops that may sit between a matmul and its bias add.
+# Transforms that wrap the matmul (e.g. Taylor-mode / jet, which emits
+# ``mm → _unsafe_view → squeeze → add(bias)``) interleave these; they leave the
+# last (feature) dimension untouched, so a bias add reached through a chain of them
+# still belongs to the matmul.
+_TRANSPARENT_OPS = {
+    aten.view.default,
+    aten._unsafe_view.default,
+    aten.reshape.default,
+    aten.squeeze.dim,
+    aten.squeeze.dims,
+    aten.squeeze.default,
+    aten.unsqueeze.default,
+}
+
+
+def _preserves_last_dim(node: Node) -> bool:
+    """Whether a shape-only op leaves the last (feature) dimension unchanged.
+
+    Args:
+        node: A ``call_function`` shape op with a single tensor input.
+
+    Returns:
+        ``True`` if the node's output last dim equals its input's last dim.
+    """
+    try:
+        return node.meta["val"].shape[-1] == node.args[0].meta["val"].shape[-1]
+    except (KeyError, AttributeError, IndexError, TypeError):
+        return False
+
+
+def _is_transparent(node: Node) -> bool:
+    """Whether a node is a last-dim-preserving transparent shape-only op.
+
+    Args:
+        node: The node to check.
+
+    Returns:
+        ``True`` if the node is a shape-only op that preserves the last dimension.
+    """
+    return (
+        node.op == "call_function"
+        and node.target in _TRANSPARENT_OPS
+        and _preserves_last_dim(node)
+    )
+
+
+def _skip_transparent_forward(node: Node) -> tuple[Node, tuple[Node, ...]]:
+    """Walk forward through single-user transparent shape-only ops.
+
+    Args:
+        node: Node to start from.
+
+    Returns:
+        ``(tail, traversed)`` where ``tail`` is the last node reached by following
+        single-user transparent shape-only ops (``node`` itself if there are none),
+        and ``traversed`` is the tuple of transparent nodes stepped through, in order.
+        ``tail`` equals ``traversed[-1]`` whenever any ops were traversed.
+    """
+    traversed: list[Node] = []
+    while len(node.users) == 1:
+        (user,) = node.users
+        if _is_transparent(user):
+            traversed.append(user)
+            node = user
+        else:
+            break
+    return node, tuple(traversed)
+
+
+def _skip_transparent_backward(node: Node) -> Node:
+    """Walk backward through single-user transparent shape-only ops to their producer.
+
+    The single-user guard mirrors ``_skip_transparent_forward``: a transparent node
+    reused by more than one consumer is not private to this bias-add, so the walk
+    stops there rather than crossing it. Without this symmetry the backward (bias)
+    walk could reach a matmul the forward (weight) walk refused to, yielding an
+    inconsistent match that slips past verification.
+
+    Args:
+        node: Node to start from.
+
+    Returns:
+        The first non-transparent (or reused) producer node.
+    """
+    while _is_transparent(node) and len(node.users) == 1 and node.all_input_nodes:
+        node = node.args[0]
+    return node
+
 
 def _is_last_dim_preserving_view(node: Node) -> bool:
     """Check if a node is a last-dim-preserving reshape (``view``/``_unsafe_view``).
@@ -30,19 +119,22 @@ def _is_last_dim_preserving_view(node: Node) -> bool:
     )
 
 
-def _find_add_bias(node: Node) -> tuple[Node, Node] | None:
+def _find_add_bias(node: Node) -> tuple[Node, Node, tuple[Node, ...]] | None:
     """Check if a node feeds into ``aten.add.Tensor`` with a bias parameter.
 
-    Looks for the pattern ``add(node, bias)`` or ``add(bias, node)``
-    among the users of ``node``.
+    Looks for the pattern ``add(node, bias)`` or ``add(bias, node)`` among the users
+    of ``node``, possibly across transparent shape-only ops (e.g. the
+    ``mm → _unsafe_view → squeeze → add`` pattern emitted by Taylor-mode/jet).
 
     Args:
         node: Node whose users to inspect.
 
     Returns:
-        ``(add, bias)`` if a matching add is found, else ``None``.
+        ``(add, bias, traversed)`` if a matching add is found, else ``None``;
+        ``traversed`` are the shape-only nodes between ``node`` and ``add``.
     """
-    for user in node.users:
+    tail, traversed = _skip_transparent_forward(node)
+    for user in tail.users:
         if (
             user.op == "call_function"
             and user.target == aten.add.Tensor
@@ -50,9 +142,9 @@ def _find_add_bias(node: Node) -> tuple[Node, Node] | None:
             and not user.kwargs
         ):
             lhs, rhs = user.args
-            bias = rhs if lhs == node else lhs if rhs == node else None
+            bias = rhs if lhs == tail else lhs if rhs == tail else None
             if bias is not None and bias.meta["val"].ndim == 1:
-                return user, bias
+                return user, bias, traversed
 
 
 def _extract_weight(WT: Node) -> Node | str:
@@ -140,18 +232,27 @@ def _match_mm_weight(
         and _is_last_dim_preserving_view(y_view := next(iter(mm.users)))
     ):
         x = x_view.args[0]
+        # The bias (if any) may be added after the output view, possibly through
+        # transparent shape ops (Taylor-mode/jet: view → add, or → squeeze → add).
+        # The layer output is the bias add when present (post-bias), else the view.
         add_result = _find_add_bias(y_view)
         if add_result is not None:
-            y, bias = add_result
-            return AffineLayerInfo(LINEAR_STR, y, p, x, bias, {}), (y_view, y)
-        y = y_view
-        return AffineLayerInfo(LINEAR_STR, y, p, x, None, {}), (y_view,)
+            add_node, bias, traversed = add_result
+            return AffineLayerInfo(LINEAR_STR, add_node, p, x, bias, {}), (
+                y_view,
+                *traversed,
+                add_node,
+            )
+        return AffineLayerInfo(LINEAR_STR, y_view, p, x, None, {}), (y_view,)
 
     # 2D case: mm [→ add]
     add_result = _find_add_bias(mm)
     if add_result is not None:
-        y, bias = add_result
-        return AffineLayerInfo(LINEAR_STR, y, p, x, bias, {}), (y,)
+        add_node, bias, traversed = add_result
+        return AffineLayerInfo(LINEAR_STR, add_node, p, x, bias, {}), (
+            *traversed,
+            add_node,
+        )
     y = mm
     return AffineLayerInfo(LINEAR_STR, y, p, x, None, {}), ()
 
@@ -209,23 +310,24 @@ def _match_add_bias(
     if len(add.args) != 2 or add.kwargs or p.meta["val"].ndim != 1:
         return None
     lhs, rhs = add.args
-    y_view = lhs if rhs == p else rhs if lhs == p else None
-    if y_view is None:
+    other = lhs if rhs == p else rhs if lhs == p else None
+    if other is None:
         return None
 
-    # Expect: view → mm → view (= y_view) → add
-    if not _is_last_dim_preserving_view(y_view):
-        return None
-    mm = y_view.args[0]
+    # Expect: ... → mm → (transparent shape ops) → add. Skip any transparent ops
+    # (view/_unsafe_view/squeeze/...) back to the producing matmul. This covers both
+    # the plain ``view → mm → view → add`` (>2D F.linear) and the Taylor-mode/jet
+    # ``mm → _unsafe_view → squeeze → add`` pattern.
+    mm = _skip_transparent_backward(other)
     if not (mm.op == "call_function" and mm.target == aten.mm.default):
         return None
     x_view, WT = mm.args
-    if not _is_last_dim_preserving_view(x_view):
-        return None
-
     W = _extract_weight(WT)
-    x, y = x_view.args[0], add
-    return AffineLayerInfo(LINEAR_STR, y, W, x, p, {}), ()
+    # Mirror the weight matcher's input convention (unwrap a last-dim-preserving input
+    # view) so the weight- and bias-side infos are identical and deduplicate. The
+    # output is the bias ``add`` (post-bias), matching the weight matcher.
+    x = x_view.args[0] if _is_last_dim_preserving_view(x_view) else x_view
+    return AffineLayerInfo(LINEAR_STR, add, W, x, p, {}), ()
 
 
 class LinearWeightMatcher(_PatternMatcher):
