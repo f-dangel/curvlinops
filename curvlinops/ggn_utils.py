@@ -18,8 +18,9 @@ from torch import (
     zeros,
     zeros_like,
 )
-from torch.func import grad, vmap
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
+from torch.func import grad, hessian, vmap
+from torch.linalg import cholesky
+from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, Module, MSELoss
 from torch.nn.functional import one_hot
 
 from curvlinops.kfac_utils import FisherType
@@ -29,23 +30,25 @@ from curvlinops.utils import make_functional_call
 def loss_hessian_matrix_sqrt(
     output_one_datum: Tensor,
     target_one_datum: Tensor,
-    loss_func: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
+    loss_func: Module,
 ) -> Tensor:
     r"""Compute the loss function's matrix square root for a sample's output.
 
     Args:
         output_one_datum: The model's prediction on a single datum.
             Has shape ``[C, *D]`` for CE where ``C`` is the number of classes,
-            or ``[*D]`` for MSE/BCE with ``*D`` optional (and potentially multiple)
-            sequence dimensions. Has no batch axis.
-        target_one_datum: The label of the single datum. Has shape ``[*D]``.
-            Has no batch axis.
-        loss_func: The loss function.
+            or ``[*D]`` for MSE/BCE and generic losses with ``*D`` optional (and
+            potentially multiple) sequence dimensions. Has no batch axis.
+        target_one_datum: The label of the single datum. For ``CrossEntropyLoss``
+            it has shape ``[*D]``. For other losses it should be the single-datum
+            target accepted by ``loss_func``. Has no batch axis.
+        loss_func: The loss function module. For losses other than
+            ``MSELoss``, ``CrossEntropyLoss``, and ``BCEWithLogitsLoss``,
+            the Hessian is computed via autodiff and factorized with Cholesky.
 
     Returns:
-        The matrix square root
-        :math:`\mathbf{S}` of the Hessian. Has shape ``[C, *D, C, *D]`` for CE and
-        ``[*D, *D]`` for BCE/MSE loss. Its matrix view satisfies
+        The matrix square root :math:`\mathbf{S}` of the Hessian.
+        Has shape ``[*output.shape, *output.shape]``. Its matrix view satisfies
 
         .. math::
             \mathbf{S} \mathbf{S}^\top
@@ -111,25 +114,20 @@ def loss_hessian_matrix_sqrt(
         where the square root is applied element-wise.
 
     Raises:
-        NotImplementedError: If the loss function is not supported.
+        ValueError: If the autodiff-computed Hessian is not strictly positive
+            definite and therefore has no Cholesky factor.
     """
-    # Number of losses contributed from a datum's sequence-valued prediction
-    num_features = (
-        output_one_datum.numel() / output_one_datum.shape[0]
-        if isinstance(loss_func, CrossEntropyLoss)
-        else output_one_datum.numel()
-    )
-    # Reduction factor from accumulation over losses in a sequence
-    reduction = loss_func.reduction
-    c = {"sum": 1.0, "mean": 1.0 / num_features}[reduction]
-
     # Construct the Hessian square root as matrix (w.r.t. the flattened outputs)
     if isinstance(loss_func, MSELoss):
+        num_features = output_one_datum.numel()
+        c = {"sum": 1.0, "mean": 1.0 / num_features}[loss_func.reduction]
         hess_sqrt_flat = (
             zeros_like(output_one_datum).fill_(sqrt(2 * c)).flatten().diag()
         )
 
     elif isinstance(loss_func, CrossEntropyLoss):
+        num_features = output_one_datum.numel() / output_one_datum.shape[0]
+        c = {"sum": 1.0, "mean": 1.0 / num_features}[loss_func.reduction]
         # Output has shape [C, d1, d2, ...], flatten into [C, d1 * d2 * ...]
         output_flat = output_one_datum.unsqueeze(-1).flatten(start_dim=1)
         C, D = output_flat.shape
@@ -159,12 +157,30 @@ def loss_hessian_matrix_sqrt(
         hess_sqrt_flat = hess_sqrt_flat.reshape(C * D, C * D)
 
     elif isinstance(loss_func, BCEWithLogitsLoss):
+        num_features = output_one_datum.numel()
+        c = {"sum": 1.0, "mean": 1.0 / num_features}[loss_func.reduction]
         p = output_one_datum.flatten().sigmoid()
         hess_sqrt_diag = sqrt(c) * (p * (1 - p)).sqrt()
         hess_sqrt_flat = hess_sqrt_diag.diag()
 
     else:
-        raise NotImplementedError(f"Loss function {loss_func} not supported.")
+        functional_loss = partial(make_functional_call(loss_func), {})
+        output_shape = output_one_datum.shape
+        target_with_batch_axis = target_one_datum.unsqueeze(0)
+
+        def _loss_flat(output_flat: Tensor) -> Tensor:
+            prediction = output_flat.reshape(1, *output_shape)
+            return functional_loss(prediction, target_with_batch_axis)
+
+        hess_flat = hessian(_loss_flat)(output_one_datum.flatten())
+        hess_flat = 0.5 * (hess_flat + hess_flat.mT)
+        try:
+            hess_sqrt_flat = cholesky(hess_flat)
+        except RuntimeError as error:
+            raise ValueError(
+                "Autodiff loss Hessian must be strictly positive definite to "
+                f"compute a Cholesky factor for {type(loss_func).__name__}."
+            ) from error
 
     # Un-flatten the output dimensions
     output_shape = output_one_datum.shape
@@ -272,13 +288,16 @@ def _make_single_datum_sampler(
 
 
 def make_grad_output_fn(
-    loss_func: MSELoss | CrossEntropyLoss | BCEWithLogitsLoss,
+    loss_func: Module,
     fisher_type: FisherType,
     mc_samples: int = 1,
 ) -> Callable[[Tensor, Tensor, Generator | None], Tensor]:
     """Create a function computing gradient output vectors for a single datum.
 
     For ``TYPE2``, returns the columns of the loss Hessian's matrix square root.
+    Besides the analytic ``MSELoss``, ``CrossEntropyLoss``, and
+    ``BCEWithLogitsLoss`` cases, this mode also supports generic per-datum
+    loss modules via autodiff plus Cholesky factorization.
     For ``MC``, returns Monte-Carlo sampled gradient vectors.
     For ``EMPIRICAL``, returns the gradient of the loss w.r.t. the output.
     For ``FORWARD_ONLY``, returns an empty tensor (no backward passes needed).
@@ -311,7 +330,8 @@ def make_grad_output_fn(
             f"Invalid fisher_type {fisher_type!r}. Must be one of {list(FisherType)}."
         )
 
-    sample_grad_output = _make_single_datum_sampler(loss_func)
+    if fisher_type == FisherType.MC:
+        sample_grad_output = _make_single_datum_sampler(loss_func)
 
     if fisher_type == FisherType.EMPIRICAL:
         functional_loss_func = partial(make_functional_call(loss_func), {})
