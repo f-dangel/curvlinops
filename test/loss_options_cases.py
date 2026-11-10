@@ -8,8 +8,7 @@ from collections.abc import Callable
 from copy import deepcopy
 from typing import Any
 
-from einops.layers.torch import Rearrange
-from pytest import param
+from pytest import FixtureRequest, mark, param
 from torch import Tensor, cat, float64, manual_seed, rand, randint, randn, stack, tensor
 from torch.func import functional_call, jacrev
 from torch.nn import (
@@ -30,6 +29,21 @@ SEQ_LEN = 3
 BATCH_SIZES = (3, 4)
 
 LossOptionCase = dict[str, Any]
+
+
+class _SwapLastTwo(Module):
+    """Swap the last two axes; works for batched and unbatched inputs."""
+
+    def forward(self, x: Tensor) -> Tensor:
+        """Swap the last two axes.
+
+        Args:
+            x: Input of shape ``(..., a, b)``.
+
+        Returns:
+            Tensor of shape ``(..., b, a)``.
+        """
+        return x.movedim(-1, -2)
 
 
 def _model_func(
@@ -54,7 +68,7 @@ def _model_func(
             layers.append(ReLU())
         layers.append(Linear(4, out_dim))
         if seq:
-            layers.append(Rearrange("b l c -> b c l"))
+            layers.append(_SwapLastTwo())
         return Sequential(*layers).to(float64)
 
     return build
@@ -196,7 +210,7 @@ def _bce(**kwargs) -> Callable[[str], Module]:
 # (id, criterion factory, target kind, out_dim, seq, ignored entries per batch)
 _OPTION_ROWS = [
     ("ce_default", _ce(), "class", NUM_CLASSES, False, (0, 0)),
-    ("ce_ignore_default", _ce(), "ignore_default", NUM_CLASSES, False, (1, 2)),
+    ("ce_ignore_default", _ce(), "ignore_default", NUM_CLASSES, False, (2, 1)),
     (
         "ce_ignore_custom",
         _ce(ignore_index=1),
@@ -222,7 +236,7 @@ _OPTION_ROWS = [
         (0, 0),
     ),
     ("ce_soft_targets", _ce(), "soft", NUM_CLASSES, False, (0, 0)),
-    ("ce_seq_ignore_default", _ce(), "ignore_default", NUM_CLASSES, True, (2, 5)),
+    ("ce_seq_ignore_default", _ce(), "ignore_default", NUM_CLASSES, True, (3, 5)),
     ("bce_default", _bce(), "binary", NUM_OUTPUTS, False, (0, 0)),
     (
         "bce_weight",
@@ -333,3 +347,133 @@ def reference_ef(
         out = functional_call(model, params_dict, (X,))
         scale = (loss_func(out, y) / loss_sum(out, y)).item()
     return scale * jac.T @ jac
+
+
+# Known failures: (operator_id, case_id, reduction) -> reason. The operator id of
+# KFAC-type operators may carry a ``[backend]`` suffix to single out one backend.
+# Reasons: option_ignored, mean_normalization, target_dependent_hessian, crashes,
+# mc_flaky (the only non-strict one), other.
+# Note: `ignore_*` cells with `reduction='mean'` are close to correct for several
+# approximate operators, because ignored rows are counted like any other row, so
+# MC cells there can pass within tolerance. `sum` cells expose the problem.
+EXPECTED_FAILURES: dict[tuple[str, str, str], str] = {
+    ("ef", "ce_ignore_custom", "mean"): "mean_normalization",
+    ("ef", "ce_ignore_default", "mean"): "mean_normalization",
+    ("ef", "ce_seq_ignore_default", "mean"): "mean_normalization",
+    ("ef", "ce_soft_targets", "mean"): "crashes",
+    ("ef", "ce_soft_targets", "sum"): "crashes",
+    ("ef", "ce_weight", "mean"): "mean_normalization (EF weight semantics TBD)",
+    ("ekfac_ef", "ce_ignore_custom", "mean"): "option_ignored",
+    ("ekfac_ef", "ce_ignore_custom", "sum"): "option_ignored",
+    ("ekfac_ef", "ce_ignore_default", "mean"): "option_ignored",
+    ("ekfac_ef", "ce_ignore_default", "sum"): "option_ignored",
+    ("ekfac_ef", "ce_weight", "mean"): "mean_normalization (EF weight semantics TBD)",
+    ("ekfac_ef[hooks]", "ce_soft_targets", "mean"): "mean_normalization",
+    ("ekfac_ef[make_fx]", "ce_soft_targets", "mean"): "crashes",
+    ("ekfac_ef[make_fx]", "ce_soft_targets", "sum"): "crashes",
+    ("ekfac_type2", "bce_pos_weight", "mean"): "target_dependent_hessian",
+    ("ekfac_type2", "bce_pos_weight", "sum"): "target_dependent_hessian",
+    ("ekfac_type2", "bce_weight", "mean"): "target_dependent_hessian",
+    ("ekfac_type2", "bce_weight", "sum"): "target_dependent_hessian",
+    ("ekfac_type2", "ce_ignore_custom", "mean"): "option_ignored",
+    ("ekfac_type2", "ce_ignore_custom", "sum"): "option_ignored",
+    ("ekfac_type2", "ce_ignore_default", "mean"): "option_ignored",
+    ("ekfac_type2", "ce_ignore_default", "sum"): "option_ignored",
+    ("ekfac_type2", "ce_weight", "sum"): "target_dependent_hessian",
+    ("ekfac_type2[hooks]", "ce_soft_targets", "mean"): "mean_normalization",
+    ("ekfac_type2[make_fx]", "ce_soft_targets", "mean"): "crashes",
+    ("ekfac_type2[make_fx]", "ce_soft_targets", "sum"): "crashes",
+    ("ggn", "ce_ignore_custom", "mean"): "mean_normalization",
+    ("ggn", "ce_ignore_default", "mean"): "mean_normalization",
+    ("ggn", "ce_seq_ignore_default", "mean"): "mean_normalization",
+    ("ggn", "ce_weight", "mean"): "mean_normalization",
+    ("ggn_diag", "bce_pos_weight", "mean"): "target_dependent_hessian",
+    ("ggn_diag", "bce_pos_weight", "sum"): "target_dependent_hessian",
+    ("ggn_diag", "bce_weight", "mean"): "target_dependent_hessian",
+    ("ggn_diag", "bce_weight", "sum"): "target_dependent_hessian",
+    ("ggn_diag", "ce_ignore_custom", "mean"): "option_ignored",
+    ("ggn_diag", "ce_ignore_custom", "sum"): "option_ignored",
+    ("ggn_diag", "ce_ignore_default", "mean"): "option_ignored",
+    ("ggn_diag", "ce_ignore_default", "sum"): "option_ignored",
+    ("ggn_diag", "ce_seq_ignore_default", "mean"): "option_ignored",
+    ("ggn_diag", "ce_seq_ignore_default", "sum"): "option_ignored",
+    ("ggn_diag", "ce_weight", "mean"): "target_dependent_hessian",
+    ("ggn_diag", "ce_weight", "sum"): "target_dependent_hessian",
+    ("ggn_diag_mc", "bce_pos_weight", "mean"): "target_dependent_hessian",
+    ("ggn_diag_mc", "bce_pos_weight", "sum"): "target_dependent_hessian",
+    ("ggn_diag_mc", "bce_weight", "mean"): "target_dependent_hessian",
+    ("ggn_diag_mc", "bce_weight", "sum"): "target_dependent_hessian",
+    ("ggn_diag_mc", "ce_ignore_custom", "sum"): "option_ignored",
+    ("ggn_diag_mc", "ce_ignore_default", "sum"): "option_ignored",
+    ("ggn_diag_mc", "ce_seq_ignore_default", "sum"): "option_ignored",
+    ("ggn_diag_mc", "ce_weight", "mean"): "target_dependent_hessian",
+    ("ggn_diag_mc", "ce_weight", "sum"): "target_dependent_hessian",
+    ("ggn_mc", "bce_pos_weight", "mean"): "target_dependent_hessian",
+    ("ggn_mc", "bce_pos_weight", "sum"): "target_dependent_hessian",
+    ("ggn_mc", "bce_weight", "mean"): "target_dependent_hessian",
+    ("ggn_mc", "bce_weight", "sum"): "target_dependent_hessian",
+    ("ggn_mc", "ce_ignore_custom", "sum"): "option_ignored",
+    ("ggn_mc", "ce_ignore_default", "mean"): "option_ignored",
+    ("ggn_mc", "ce_ignore_default", "sum"): "option_ignored",
+    ("ggn_mc", "ce_seq_ignore_default", "mean"): "option_ignored",
+    ("ggn_mc", "ce_seq_ignore_default", "sum"): "option_ignored",
+    ("ggn_mc", "ce_weight", "mean"): "target_dependent_hessian",
+    ("ggn_mc", "ce_weight", "sum"): "target_dependent_hessian",
+    ("hessian", "ce_ignore_custom", "mean"): "mean_normalization",
+    ("hessian", "ce_ignore_default", "mean"): "mean_normalization",
+    ("hessian", "ce_seq_ignore_default", "mean"): "mean_normalization",
+    ("hessian", "ce_weight", "mean"): "mean_normalization",
+    ("kfac_ef", "ce_ignore_custom", "mean"): "option_ignored",
+    ("kfac_ef", "ce_ignore_custom", "sum"): "option_ignored",
+    ("kfac_ef", "ce_ignore_default", "mean"): "option_ignored",
+    ("kfac_ef", "ce_ignore_default", "sum"): "option_ignored",
+    ("kfac_ef", "ce_soft_targets", "mean"): "crashes",
+    ("kfac_ef", "ce_soft_targets", "sum"): "crashes",
+    ("kfac_ef", "ce_weight", "mean"): "mean_normalization (EF weight semantics TBD)",
+    ("kfac_forward_only", "ce_ignore_custom", "mean"): "option_ignored",
+    ("kfac_forward_only", "ce_ignore_custom", "sum"): "option_ignored",
+    ("kfac_forward_only", "ce_ignore_default", "mean"): "option_ignored",
+    ("kfac_forward_only", "ce_ignore_default", "sum"): "option_ignored",
+    ("kfac_mc", "bce_pos_weight", "mean"): "target_dependent_hessian",
+    ("kfac_mc", "bce_pos_weight", "sum"): "target_dependent_hessian",
+    ("kfac_mc", "bce_weight", "mean"): "target_dependent_hessian",
+    ("kfac_mc", "bce_weight", "sum"): "target_dependent_hessian",
+    ("kfac_mc", "ce_ignore_custom", "sum"): "option_ignored",
+    ("kfac_mc", "ce_ignore_default", "sum"): "option_ignored",
+    ("kfac_mc", "ce_soft_targets", "mean"): "crashes",
+    ("kfac_mc", "ce_soft_targets", "sum"): "crashes",
+    ("kfac_mc", "ce_weight", "sum"): "target_dependent_hessian",
+    ("kfac_type2", "bce_pos_weight", "mean"): "target_dependent_hessian",
+    ("kfac_type2", "bce_pos_weight", "sum"): "target_dependent_hessian",
+    ("kfac_type2", "bce_weight", "mean"): "target_dependent_hessian",
+    ("kfac_type2", "bce_weight", "sum"): "target_dependent_hessian",
+    ("kfac_type2", "ce_ignore_custom", "mean"): "option_ignored",
+    ("kfac_type2", "ce_ignore_custom", "sum"): "option_ignored",
+    ("kfac_type2", "ce_ignore_default", "mean"): "option_ignored",
+    ("kfac_type2", "ce_ignore_default", "sum"): "option_ignored",
+    ("kfac_type2", "ce_soft_targets", "mean"): "crashes",
+    ("kfac_type2", "ce_soft_targets", "sum"): "crashes",
+    ("kfac_type2", "ce_weight", "sum"): "target_dependent_hessian",
+    ("kfoc_mc[make_fx]", "ce_ignore_custom", "sum"): "option_ignored",
+    ("kfoc_mc[make_fx]", "ce_ignore_default", "sum"): "option_ignored",
+}
+
+
+def maybe_xfail(
+    request: FixtureRequest, operator_id: str, case_id: str, reduction: str
+) -> None:
+    """Mark the running test as an expected failure if it is in the table.
+
+    Args:
+        request: The pytest request of the running test.
+        operator_id: Identifier of the operator, optionally with ``[backend]``.
+        case_id: Identifier of the case.
+        reduction: Reduction of the criterion.
+    """
+    base_id = operator_id.split("[")[0]
+    reason = EXPECTED_FAILURES.get(
+        (operator_id, case_id, reduction),
+        EXPECTED_FAILURES.get((base_id, case_id, reduction)),
+    )
+    if reason is not None:
+        request.applymarker(mark.xfail(strict=reason != "mc_flaky", reason=reason))
