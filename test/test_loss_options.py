@@ -450,10 +450,11 @@ def test_xfail_reason(xfail: XFail, reduction: str, backend: str | None):
             assert allclose(sums @ lstsq(sums, mean).solution, mean)
 
         case Reason.IGNORED_INPUTS_COUNTED:
-            # The gradients respect the ignored targets ...
+            # Un-ignoring the targets changes the result, so the gradients respect them
             assert not allclose(matrix(*with_option), matrix(*without_option))
 
-            # ... but the input factor, which all Fisher types share, does not
+            # Forward-only KFAC computes only the input factor, which all Fisher types
+            # share. It does not change, so the ignored data points are in it
             forward_only = Operator.KFAC_FORWARD_ONLY.value
             assert allclose(
                 matrix(*with_option, spec=forward_only),
