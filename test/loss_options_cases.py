@@ -1,484 +1,664 @@
-"""Cases and references for testing loss-function options (``weight``, ...).
+"""Loss-function options (`ignore_index`, `weight`, etc.) and linear operators
+combinations. This is to test that Curvlinops respects the semantics of
+PyTorch's loss functions.
 
-Each case pairs a criterion that uses exactly one non-default option with a model
-and data. See https://github.com/f-dangel/curvlinops/issues/311.
+Each ``Option`` is a criterion with one non-default argument (or `"none"`, as a
+control) plus the targets it is used with. Each ``Operator`` is a curvature
+operator configuration. ``EXPECTED_FAILURES`` lists the cells where Curvlinops
+does not yet match the ground truth.
 """
 
 from collections.abc import Callable
-from copy import deepcopy
-from typing import Any
+from dataclasses import dataclass, replace
+from enum import Enum, auto
+from functools import partial
 
-from pytest import FixtureRequest, mark, param
-from torch import Tensor, cat, float64, manual_seed, rand, randint, randn, stack, tensor
-from torch.func import functional_call, jacrev
+from pytest import FixtureRequest, mark
+from torch import Tensor, float64, manual_seed, rand, randint, randn, tensor
 from torch.nn import (
     BCEWithLogitsLoss,
     CrossEntropyLoss,
+    Identity,
     Linear,
     Module,
     ReLU,
     Sequential,
 )
 
-REDUCTIONS = ["mean", "sum"]
+from curvlinops import (
+    EFLinearOperator,
+    EKFACLinearOperator,
+    FisherType,
+    GGNDiagonalLinearOperator,
+    GGNLinearOperator,
+    HessianLinearOperator,
+    KFACLinearOperator,
+    KFOCLinearOperator,
+)
+from curvlinops._torch_base import PyTorchLinearOperator
 
-NUM_CLASSES = 3  # for cross-entropy cases
-NUM_OUTPUTS = 2  # for BCE cases
-IN_DIM = 5
-SEQ_LEN = 3
+REDUCTIONS = ("mean", "sum")
+SEED = 0
+
+IN_DIM, HIDDEN_DIM, SEQ_LEN = 5, 4, 3
+NUM_CLASSES, NUM_OUTPUTS = 3, 2
 BATCH_SIZES = (3, 4)
 
-LossOptionCase = dict[str, Any]
+KFAC_BACKENDS = tuple(KFACLinearOperator._BACKENDS)
+DENSE_MC_SAMPLES, KFAC_MC_SAMPLES = 100, 3_000
 
 
-class _SwapLastTwo(Module):
-    """Swap the last two axes; works for batched and unbatched inputs."""
+class Targets(Enum):
+    """What the targets of a criterion look like."""
 
-    def forward(self, x: Tensor) -> Tensor:
-        """Swap the last two axes.
+    CLASS = auto()
+    SOFT = auto()
+    BINARY = auto()
 
-        Args:
-            x: Input of shape ``(..., a, b)``.
+    @property
+    def out_dim(self) -> int:
+        """Number of model outputs (per position).
 
         Returns:
-            Tensor of shape ``(..., b, a)``.
+            The output dimension.
+        """
+        return NUM_OUTPUTS if self is Targets.BINARY else NUM_CLASSES
+
+
+@dataclass(frozen=True, eq=False)
+class _OptionSpec:
+    """A criterion with its options and the kind of targets it is used with."""
+
+    criterion: Callable[..., Module]
+    targets: Targets = Targets.CLASS
+    ignore_index: int | None = None
+    seq: bool = False
+
+
+class Option(Enum):
+    """Loss-function option under test."""
+
+    # Plain cross entropy
+    CE_DEFAULT = _OptionSpec(CrossEntropyLoss)
+
+    # Cross entropy with a default ignore index (-100)
+    CE_IGNORE_DEFAULT = _OptionSpec(CrossEntropyLoss, ignore_index=-100)
+
+    # Cross entropy with a custom ignore index (1)
+    CE_IGNORE_CUSTOM = _OptionSpec(
+        partial(CrossEntropyLoss, ignore_index=1), ignore_index=1
+    )
+
+    # Cross entropy with custom class weights
+    CE_WEIGHT = _OptionSpec(
+        partial(CrossEntropyLoss, weight=tensor([0.5, 2.0, 1.5], dtype=float64))
+    )
+
+    # Cross entropy with label smoothing
+    CE_LABEL_SMOOTHING = _OptionSpec(partial(CrossEntropyLoss, label_smoothing=0.1))
+
+    # Cross entropy with soft targets, i.e., probability vector instead of class index
+    CE_SOFT_TARGETS = _OptionSpec(CrossEntropyLoss, Targets.SOFT)
+
+    # Cross entropy with ignore index on sequence outputs, e.g., `(B, L, K)` output,
+    # `(B, L)` target, some are `-100`.
+    CE_SEQ_IGNORE_DEFAULT = _OptionSpec(CrossEntropyLoss, ignore_index=-100, seq=True)
+
+    # Binary cross entropy, default options
+    BCE_DEFAULT = _OptionSpec(BCEWithLogitsLoss, Targets.BINARY)
+
+    # BCE loss with loss weights applied to `(B, 2)`
+    BCE_WEIGHT = _OptionSpec(
+        partial(BCEWithLogitsLoss, weight=tensor([0.5, 2.0], dtype=float64)),
+        Targets.BINARY,
+    )
+
+    # BCE loss with weight added to the positive class in `(B, 2)`
+    BCE_POS_WEIGHT = _OptionSpec(
+        partial(BCEWithLogitsLoss, pos_weight=tensor([3.0, 0.5], dtype=float64)),
+        Targets.BINARY,
+    )
+
+    def criterion(self, reduction: str) -> Module:
+        """Create the criterion.
+
+        Args:
+            reduction: ``'mean'`` or ``'sum'``.
+
+        Returns:
+            The criterion with this option.
+        """
+        return self.value.criterion(reduction=reduction)
+
+    def plain_criterion(self, reduction: str) -> Module:
+        """Create the same kind of criterion without any non-default option.
+
+        Args:
+            reduction: ``'mean'`` or ``'sum'``.
+
+        Returns:
+            ``BCEWithLogitsLoss`` for binary targets, else ``CrossEntropyLoss``.
+        """
+        match self.value.targets:
+            case Targets.BINARY:
+                return BCEWithLogitsLoss(reduction=reduction)
+            case _:
+                return CrossEntropyLoss(reduction=reduction)
+
+    def model(self, deep_linear: bool = False) -> Module:
+        """Create a small double-precision model whose outputs fit the criterion.
+
+        Args:
+            deep_linear: Whether to drop the nonlinearity. KFAC is then exact on
+                one datum.
+
+        Returns:
+            The model.
+        """
+        manual_seed(SEED)
+
+        return Sequential(
+            Linear(IN_DIM, HIDDEN_DIM),
+            Identity() if deep_linear else ReLU(),
+            Linear(HIDDEN_DIM, self.value.targets.out_dim),
+            _ClassDimSecond() if self.value.seq else Identity(),
+        ).to(float64)
+
+    def data(self, one_datum: bool = False) -> list[tuple[Tensor, Tensor]]:
+        """Create mini-batches.
+
+        With an ignore index, every other target of the first batch is ignored.
+        The batches then have different fractions of observed targets, which a
+        per-batch normalization of ``reduction='mean'`` gets wrong.
+
+        Args:
+            one_datum: Whether to create a single batch with a single datum.
+
+        Returns:
+            List of ``(X, y)`` mini-batches.
+        """
+        manual_seed(SEED)
+
+        spec = self.value
+        seq = (SEQ_LEN,) if spec.seq else ()
+        data = []
+
+        for i, batch_size in enumerate((1,) if one_datum else BATCH_SIZES):
+            X = rand(batch_size, *seq, IN_DIM, dtype=float64)
+            y = self._targets(batch_size, seq)
+
+            if i == 0 and spec.ignore_index is not None:
+                y.view(-1)[::2] = spec.ignore_index
+
+            data.append((X, y))
+
+        return data
+
+    def _targets(self, batch_size: int, seq: tuple[int, ...]) -> Tensor:
+        """Draw random targets for one mini-batch.
+
+        Args:
+            batch_size: Number of data points.
+            seq: Sequence dimensions of the outputs.
+
+        Returns:
+            The targets.
+        """
+        spec = self.value
+
+        match spec.targets:
+            case Targets.CLASS:
+                # observed targets must differ from the ignore index
+                classes = tensor([
+                    c for c in range(NUM_CLASSES) if c != spec.ignore_index
+                ])
+                return classes[randint(len(classes), (batch_size, *seq))]
+            case Targets.SOFT:
+                return randn(batch_size, NUM_CLASSES, dtype=float64).softmax(-1)
+            case Targets.BINARY:
+                return rand(batch_size, NUM_OUTPUTS, dtype=float64)
+
+
+class _ClassDimSecond(Module):
+    """Move the class dimension from last to second, ``(B, L, C) -> (B, C, L)``."""
+
+    def forward(self, x: Tensor) -> Tensor:
+        """Swap the last two axes (works with and without batch axis).
+
+        Args:
+            x: Input of shape ``(..., L, C)``.
+
+        Returns:
+            Tensor of shape ``(..., C, L)``.
         """
         return x.movedim(-1, -2)
 
 
-def _model_func(
-    out_dim: int, seed: int, deep_linear: bool = False, seq: bool = False
-) -> Callable[[], Module]:
-    """Create a function that builds a small double-precision model.
+def drop_ignored(
+    data: list[tuple[Tensor, Tensor]], ignore_index: int
+) -> list[tuple[Tensor, Tensor]]:
+    """Remove the data points whose target is ignored.
 
     Args:
-        out_dim: Output dimension.
-        seed: Seed for the parameter initialization.
-        deep_linear: Whether to omit the nonlinearity (KFAC is exact for one datum).
-        seq: Whether to make the model emit ``(batch, out_dim, seq_len)``.
+        data: Mini-batches with targets of shape ``(B,)``.
+        ignore_index: The ignored target value.
 
     Returns:
-        Function without arguments that returns the model.
+        The mini-batches without ignored data points.
+    """
+    return [(X[y != ignore_index], y[y != ignore_index]) for X, y in data]
+
+
+@dataclass(frozen=True, eq=False)
+class _OperatorSpec:
+    """How to build a curvature operator."""
+
+    linop: type[PyTorchLinearOperator]
+    fisher_type: FisherType | None = None
+    mc_samples: int | None = None
+    backends: tuple[str | None, ...] = (None,)
+    single_batch: bool = False
+
+    def exact(self) -> "_OperatorSpec":
+        """Swap MC sampling for the exact type-2 Fisher.
+
+        Returns:
+            The exact counterpart, or the operator itself if it does not sample.
+        """
+        if self.mc_samples is None:
+            return self
+
+        return replace(self, fisher_type=FisherType.TYPE2, mc_samples=None)
+
+    def build(
+        self,
+        model: Module,
+        loss_func: Module,
+        params: dict[str, Tensor],
+        data: list[tuple[Tensor, Tensor]],
+        backend: str | None = None,
+    ) -> PyTorchLinearOperator:
+        """Build the operator.
+
+        Args:
+            model: The neural network.
+            loss_func: The criterion.
+            params: Parameters.
+            data: Mini-batches.
+            backend: Backend of KFAC-type operators. ``None`` uses the default.
+
+        Returns:
+            The linear operator.
+        """
+        kwargs = {
+            "fisher_type": self.fisher_type,
+            "mc_samples": self.mc_samples,
+            "backend": backend,
+        }
+
+        return self.linop(
+            model,
+            loss_func,
+            params,
+            data,
+            **{key: value for key, value in kwargs.items() if value is not None},
+        )
+
+
+class Operator(Enum):
+    """Curvature operator under test."""
+
+    HESSIAN = _OperatorSpec(HessianLinearOperator)
+    GGN = _OperatorSpec(GGNLinearOperator)
+    GGN_DIAG = _OperatorSpec(GGNDiagonalLinearOperator)
+    EF = _OperatorSpec(EFLinearOperator)
+    GGN_MC = _OperatorSpec(GGNLinearOperator, mc_samples=DENSE_MC_SAMPLES)
+    # draws its samples once at construction, so it needs more of them
+    GGN_DIAG_MC = _OperatorSpec(
+        GGNDiagonalLinearOperator, mc_samples=40 * DENSE_MC_SAMPLES
+    )
+    KFAC_TYPE2 = _OperatorSpec(
+        KFACLinearOperator, FisherType.TYPE2, backends=KFAC_BACKENDS
+    )
+    KFAC_MC = _OperatorSpec(
+        KFACLinearOperator, FisherType.MC, KFAC_MC_SAMPLES, KFAC_BACKENDS
+    )
+    KFAC_EF = _OperatorSpec(
+        KFACLinearOperator, FisherType.EMPIRICAL, backends=KFAC_BACKENDS
+    )
+    KFAC_FORWARD_ONLY = _OperatorSpec(
+        KFACLinearOperator, FisherType.FORWARD_ONLY, backends=KFAC_BACKENDS
+    )
+    EKFAC_TYPE2 = _OperatorSpec(
+        EKFACLinearOperator, FisherType.TYPE2, backends=KFAC_BACKENDS
+    )
+    EKFAC_EF = _OperatorSpec(
+        EKFACLinearOperator, FisherType.EMPIRICAL, backends=KFAC_BACKENDS
+    )
+    KFOC_MC = _OperatorSpec(
+        KFOCLinearOperator, FisherType.MC, KFAC_MC_SAMPLES, single_batch=True
+    )
+
+    @property
+    def is_mc(self) -> bool:
+        """Whether the operator is a Monte-Carlo estimate.
+
+        Returns:
+            ``True`` for MC operators.
+        """
+        return self.value.mc_samples is not None
+
+
+class Reason(Enum):
+    """Why a cell of the test matrix fails. ``test_xfail_reason`` checks each one."""
+
+    OPTION_IGNORED = "the operator gives the same result without the option"
+    MEAN_NORMALIZATION = "'sum' is right, 'mean' divides by the wrong number"
+    IGNORED_INPUTS_COUNTED = "ignored data points still enter the input factor"
+    CRASHES = "the operator raises"
+
+
+_TBD_EF_WEIGHT = "should the EF carry w (data duplication) or w^2 (PyTorch)?"
+_TBD_MC_WEIGHT = "what should MC sampling do with a target-dependent loss Hessian?"
+
+
+@dataclass(frozen=True)
+class XFail:
+    """An expected failure. ``None`` for reduction or backend matches all.
+
+    ``raises`` pins the exception of a crash. ``tbd`` notes an open question about
+    what the correct result is.
     """
 
-    def build() -> Module:
-        manual_seed(seed)
-        layers = [Linear(IN_DIM, 4)]
-        if not deep_linear:
-            layers.append(ReLU())
-        layers.append(Linear(4, out_dim))
-        if seq:
-            layers.append(_SwapLastTwo())
-        return Sequential(*layers).to(float64)
+    operator: Operator
+    option: Option
+    reason: Reason
+    reduction: str | None = None
+    backend: str | None = None
+    raises: type[Exception] | None = None
+    tbd: str | None = None
 
-    return build
+    def __post_init__(self):
+        """Check that exactly the crashes pin an exception.
 
+        Raises:
+            ValueError: If ``raises`` is set for a non-crash or missing for a crash.
+        """
+        if (self.reason is Reason.CRASHES) != (self.raises is not None):
+            raise ValueError(f"Set `raises` exactly for crashes: {self}.")
 
-def _targets(kind: str, shape: tuple[int, ...], num_ignored: int) -> Tensor:
-    """Create targets of a given kind.
+    def cells(self) -> list[tuple[str, str | None]]:
+        """List the ``(reduction, backend)`` cells this entry covers.
 
-    Args:
-        kind: One of ``'class'``, ``'ignore_default'``, ``'ignore_custom'``,
-            ``'soft'``, ``'binary'``.
-        shape: Shape of the (class-index) targets, e.g. ``(batch,)``. For ``'soft'``
-            and ``'binary'`` this is the full shape of the targets.
-        num_ignored: Number of entries that are ignored (flattened order from the
-            front). Only used for the ``'ignore_*'`` kinds.
+        Returns:
+            The covered cells.
+        """
+        reductions = REDUCTIONS if self.reduction is None else (self.reduction,)
+        backends = (
+            self.operator.value.backends if self.backend is None else (self.backend,)
+        )
 
-    Returns:
-        The targets.
+        return [(r, b) for r in reductions for b in backends]
 
-    Raises:
-        ValueError: If the kind is unknown.
-    """
-    if kind == "class":
-        return randint(0, NUM_CLASSES, shape)
-    if kind == "ignore_default":
-        y = randint(0, NUM_CLASSES, shape).flatten()
-        y[:num_ignored] = -100
-        return y.reshape(shape)
-    if kind == "ignore_custom":
-        # non-ignored entries must differ from the ignore index 1
-        y = (2 * randint(0, 2, shape)).flatten()
-        y[:num_ignored] = 1
-        return y.reshape(shape)
-    if kind == "soft":
-        return randn(shape, dtype=float64).softmax(dim=-1)
-    if kind == "binary":
-        return rand(shape, dtype=float64)
-    raise ValueError(kind)
+    def matches(
+        self, operator: Operator, option: Option, reduction: str, backend: str | None
+    ) -> bool:
+        """Check whether this entry covers a test cell.
 
+        Args:
+            operator: The operator under test.
+            option: The loss option under test.
+            reduction: The reduction under test.
+            backend: The backend under test, if any.
 
-def _make_case(
-    case_id: str,
-    loss_func: Callable[[str], Module],
-    target_kind: str,
-    out_dim: int,
-    seed: int,
-    family: str,
-    seq: bool = False,
-    num_ignored: tuple[int, int] = (0, 0),
-) -> LossOptionCase:
-    """Assemble a case dictionary.
-
-    Args:
-        case_id: Identifier of the case.
-        loss_func: Function mapping a reduction to the criterion.
-        target_kind: Passed to ``_targets``.
-        out_dim: Model output dimension.
-        seed: Seed for the model and the data.
-        family: ``'dense'``, ``'one_datum'`` or ``'metamorphic'``.
-        seq: Whether outputs are sequences ``(batch, out_dim, seq_len)``.
-        num_ignored: Number of ignored target entries in the two batches.
-
-    Returns:
-        The case dictionary.
-    """
-    deep_linear = family == "one_datum"
-
-    def data() -> list[tuple[Tensor, Tensor]]:
-        manual_seed(seed + 1)
-        batches = []
-        for batch_size, n_ign in zip(
-            (1,) if family == "one_datum" else BATCH_SIZES, num_ignored
-        ):
-            X_shape = (batch_size, SEQ_LEN, IN_DIM) if seq else (batch_size, IN_DIM)
-            X = rand(*X_shape, dtype=float64)
-            if target_kind in {"soft", "binary"}:
-                y = _targets(target_kind, (batch_size, out_dim), 0)
-            else:
-                y_shape = (batch_size, SEQ_LEN) if seq else (batch_size,)
-                y = _targets(target_kind, y_shape, n_ign)
-                # at least one observed target per batch (mean would be NaN)
-                assert (y != _ignore_index(target_kind)).any()
-            batches.append((X, y))
-        return batches
-
-    case = {
-        "id": case_id,
-        "loss_func": loss_func,
-        "model_func": _model_func(out_dim, seed, deep_linear=deep_linear, seq=seq),
-        "data": data,
-        "seed": seed,
-        "family": family,
-    }
-    return case
+        Returns:
+            Whether the cell is expected to fail.
+        """
+        return (
+            (self.operator, self.option) == (operator, option)
+            and self.reduction in (None, reduction)
+            and self.backend in (None, backend)
+        )
 
 
-def _ignore_index(target_kind: str) -> int:
-    """Return the ignored target value for a target kind.
-
-    Args:
-        target_kind: The kind of targets.
-
-    Returns:
-        The ignored value, or ``-1000`` if the kind has none.
-    """
-    return {"ignore_default": -100, "ignore_custom": 1}.get(target_kind, -1000)
-
-
-def _drop_ignored(data_func: Callable, target_kind: str) -> Callable:
-    """Return a data function that removes rows with ignored targets.
-
-    Args:
-        data_func: Function that returns the original mini-batches.
-        target_kind: The kind of targets.
-
-    Returns:
-        Function that returns the mini-batches without ignored rows.
-    """
-
-    def data_reference() -> list[tuple[Tensor, Tensor]]:
-        idx = _ignore_index(target_kind)
-        out = []
-        for X, y in data_func():
-            keep = y != idx
-            out.append((X[keep], y[keep]))
-        return out
-
-    return data_reference
-
-
-def _ce(**kwargs) -> Callable[[str], Module]:
-    return lambda reduction: CrossEntropyLoss(reduction=reduction, **kwargs)
-
-
-def _bce(**kwargs) -> Callable[[str], Module]:
-    return lambda reduction: BCEWithLogitsLoss(reduction=reduction, **kwargs)
-
-
-# (id, criterion factory, target kind, out_dim, seq, ignored entries per batch)
-_OPTION_ROWS = [
-    ("ce_default", _ce(), "class", NUM_CLASSES, False, (0, 0)),
-    ("ce_ignore_default", _ce(), "ignore_default", NUM_CLASSES, False, (2, 1)),
-    (
-        "ce_ignore_custom",
-        _ce(ignore_index=1),
-        "ignore_custom",
-        NUM_CLASSES,
-        False,
-        (1, 2),
+# Notes on the table:
+# - With one datum, the class weight cancels for `CE_WEIGHT` + `'mean'`, so those
+#   one-datum cells pass trivially.
+# - Some MC cells with `'mean'` pass within MC tolerance although the option is
+#   ignored (`CE_SEQ_IGNORE_DEFAULT`, `CE_WEIGHT`). Their `'sum'` cells catch it.
+EXPECTED_FAILURES: list[XFail] = [
+    XFail(
+        Operator.HESSIAN,
+        Option.CE_IGNORE_DEFAULT,
+        Reason.MEAN_NORMALIZATION,
+        reduction="mean",
     ),
-    (
-        "ce_weight",
-        _ce(weight=tensor([0.5, 2.0, 1.5], dtype=float64)),
-        "class",
-        NUM_CLASSES,
-        False,
-        (0, 0),
+    XFail(
+        Operator.HESSIAN,
+        Option.CE_IGNORE_CUSTOM,
+        Reason.MEAN_NORMALIZATION,
+        reduction="mean",
     ),
-    (
-        "ce_label_smoothing",
-        _ce(label_smoothing=0.1),
-        "class",
-        NUM_CLASSES,
-        False,
-        (0, 0),
+    XFail(
+        Operator.HESSIAN, Option.CE_WEIGHT, Reason.MEAN_NORMALIZATION, reduction="mean"
     ),
-    ("ce_soft_targets", _ce(), "soft", NUM_CLASSES, False, (0, 0)),
-    ("ce_seq_ignore_default", _ce(), "ignore_default", NUM_CLASSES, True, (3, 5)),
-    ("bce_default", _bce(), "binary", NUM_OUTPUTS, False, (0, 0)),
-    (
-        "bce_weight",
-        _bce(weight=tensor([0.5, 2.0], dtype=float64)),
-        "binary",
-        NUM_OUTPUTS,
-        False,
-        (0, 0),
+    XFail(
+        Operator.HESSIAN,
+        Option.CE_SEQ_IGNORE_DEFAULT,
+        Reason.MEAN_NORMALIZATION,
+        reduction="mean",
     ),
-    (
-        "bce_pos_weight",
-        _bce(pos_weight=tensor([3.0, 0.5], dtype=float64)),
-        "binary",
-        NUM_OUTPUTS,
-        False,
-        (0, 0),
+    XFail(
+        Operator.GGN,
+        Option.CE_IGNORE_DEFAULT,
+        Reason.MEAN_NORMALIZATION,
+        reduction="mean",
     ),
+    XFail(
+        Operator.GGN,
+        Option.CE_IGNORE_CUSTOM,
+        Reason.MEAN_NORMALIZATION,
+        reduction="mean",
+    ),
+    XFail(Operator.GGN, Option.CE_WEIGHT, Reason.MEAN_NORMALIZATION, reduction="mean"),
+    XFail(
+        Operator.GGN,
+        Option.CE_SEQ_IGNORE_DEFAULT,
+        Reason.MEAN_NORMALIZATION,
+        reduction="mean",
+    ),
+    XFail(Operator.GGN_DIAG, Option.CE_IGNORE_DEFAULT, Reason.OPTION_IGNORED),
+    XFail(Operator.GGN_DIAG, Option.CE_IGNORE_CUSTOM, Reason.OPTION_IGNORED),
+    XFail(Operator.GGN_DIAG, Option.CE_WEIGHT, Reason.OPTION_IGNORED),
+    XFail(Operator.GGN_DIAG, Option.CE_SEQ_IGNORE_DEFAULT, Reason.OPTION_IGNORED),
+    XFail(Operator.GGN_DIAG, Option.BCE_WEIGHT, Reason.OPTION_IGNORED),
+    XFail(Operator.GGN_DIAG, Option.BCE_POS_WEIGHT, Reason.OPTION_IGNORED),
+    XFail(
+        Operator.EF,
+        Option.CE_IGNORE_DEFAULT,
+        Reason.MEAN_NORMALIZATION,
+        reduction="mean",
+    ),
+    XFail(
+        Operator.EF,
+        Option.CE_IGNORE_CUSTOM,
+        Reason.MEAN_NORMALIZATION,
+        reduction="mean",
+    ),
+    XFail(
+        Operator.EF,
+        Option.CE_WEIGHT,
+        Reason.MEAN_NORMALIZATION,
+        reduction="mean",
+        tbd=_TBD_EF_WEIGHT,
+    ),
+    XFail(Operator.EF, Option.CE_SOFT_TARGETS, Reason.CRASHES, raises=ValueError),
+    XFail(
+        Operator.EF,
+        Option.CE_SEQ_IGNORE_DEFAULT,
+        Reason.MEAN_NORMALIZATION,
+        reduction="mean",
+    ),
+    XFail(Operator.GGN_MC, Option.CE_IGNORE_DEFAULT, Reason.OPTION_IGNORED),
+    XFail(Operator.GGN_MC, Option.CE_IGNORE_CUSTOM, Reason.OPTION_IGNORED),
+    XFail(
+        Operator.GGN_MC,
+        Option.CE_WEIGHT,
+        Reason.OPTION_IGNORED,
+        reduction="sum",
+        tbd=_TBD_MC_WEIGHT,
+    ),
+    XFail(
+        Operator.GGN_MC,
+        Option.CE_SEQ_IGNORE_DEFAULT,
+        Reason.OPTION_IGNORED,
+        reduction="sum",
+    ),
+    XFail(
+        Operator.GGN_MC, Option.BCE_WEIGHT, Reason.OPTION_IGNORED, tbd=_TBD_MC_WEIGHT
+    ),
+    XFail(
+        Operator.GGN_MC,
+        Option.BCE_POS_WEIGHT,
+        Reason.OPTION_IGNORED,
+        tbd=_TBD_MC_WEIGHT,
+    ),
+    XFail(Operator.GGN_DIAG_MC, Option.CE_IGNORE_DEFAULT, Reason.OPTION_IGNORED),
+    XFail(Operator.GGN_DIAG_MC, Option.CE_IGNORE_CUSTOM, Reason.OPTION_IGNORED),
+    XFail(
+        Operator.GGN_DIAG_MC,
+        Option.CE_WEIGHT,
+        Reason.OPTION_IGNORED,
+        reduction="sum",
+        tbd=_TBD_MC_WEIGHT,
+    ),
+    XFail(
+        Operator.GGN_DIAG_MC,
+        Option.CE_SEQ_IGNORE_DEFAULT,
+        Reason.OPTION_IGNORED,
+        reduction="sum",
+    ),
+    XFail(
+        Operator.GGN_DIAG_MC,
+        Option.BCE_WEIGHT,
+        Reason.OPTION_IGNORED,
+        tbd=_TBD_MC_WEIGHT,
+    ),
+    XFail(
+        Operator.GGN_DIAG_MC,
+        Option.BCE_POS_WEIGHT,
+        Reason.OPTION_IGNORED,
+        tbd=_TBD_MC_WEIGHT,
+    ),
+    XFail(Operator.KFAC_TYPE2, Option.CE_IGNORE_DEFAULT, Reason.OPTION_IGNORED),
+    XFail(Operator.KFAC_TYPE2, Option.CE_IGNORE_CUSTOM, Reason.OPTION_IGNORED),
+    XFail(
+        Operator.KFAC_TYPE2, Option.CE_WEIGHT, Reason.OPTION_IGNORED, reduction="sum"
+    ),
+    XFail(
+        Operator.KFAC_TYPE2, Option.CE_SOFT_TARGETS, Reason.CRASHES, raises=ValueError
+    ),
+    XFail(Operator.KFAC_TYPE2, Option.BCE_WEIGHT, Reason.OPTION_IGNORED),
+    XFail(Operator.KFAC_TYPE2, Option.BCE_POS_WEIGHT, Reason.OPTION_IGNORED),
+    XFail(Operator.KFAC_MC, Option.CE_IGNORE_DEFAULT, Reason.OPTION_IGNORED),
+    XFail(Operator.KFAC_MC, Option.CE_IGNORE_CUSTOM, Reason.OPTION_IGNORED),
+    XFail(
+        Operator.KFAC_MC,
+        Option.CE_WEIGHT,
+        Reason.OPTION_IGNORED,
+        reduction="sum",
+        tbd=_TBD_MC_WEIGHT,
+    ),
+    XFail(Operator.KFAC_MC, Option.CE_SOFT_TARGETS, Reason.CRASHES, raises=ValueError),
+    XFail(
+        Operator.KFAC_MC, Option.BCE_WEIGHT, Reason.OPTION_IGNORED, tbd=_TBD_MC_WEIGHT
+    ),
+    XFail(
+        Operator.KFAC_MC,
+        Option.BCE_POS_WEIGHT,
+        Reason.OPTION_IGNORED,
+        tbd=_TBD_MC_WEIGHT,
+    ),
+    XFail(Operator.KFAC_EF, Option.CE_IGNORE_DEFAULT, Reason.IGNORED_INPUTS_COUNTED),
+    XFail(Operator.KFAC_EF, Option.CE_IGNORE_CUSTOM, Reason.IGNORED_INPUTS_COUNTED),
+    XFail(
+        Operator.KFAC_EF,
+        Option.CE_WEIGHT,
+        Reason.MEAN_NORMALIZATION,
+        reduction="mean",
+        tbd=_TBD_EF_WEIGHT,
+    ),
+    XFail(Operator.KFAC_EF, Option.CE_SOFT_TARGETS, Reason.CRASHES, raises=ValueError),
+    XFail(Operator.KFAC_FORWARD_ONLY, Option.CE_IGNORE_DEFAULT, Reason.OPTION_IGNORED),
+    XFail(Operator.KFAC_FORWARD_ONLY, Option.CE_IGNORE_CUSTOM, Reason.OPTION_IGNORED),
+    XFail(Operator.EKFAC_TYPE2, Option.CE_IGNORE_DEFAULT, Reason.OPTION_IGNORED),
+    XFail(Operator.EKFAC_TYPE2, Option.CE_IGNORE_CUSTOM, Reason.OPTION_IGNORED),
+    XFail(
+        Operator.EKFAC_TYPE2, Option.CE_WEIGHT, Reason.OPTION_IGNORED, reduction="sum"
+    ),
+    XFail(
+        Operator.EKFAC_TYPE2,
+        Option.CE_SOFT_TARGETS,
+        Reason.CRASHES,
+        backend="make_fx",
+        raises=ValueError,
+    ),
+    XFail(
+        Operator.EKFAC_TYPE2,
+        Option.CE_SOFT_TARGETS,
+        Reason.MEAN_NORMALIZATION,
+        reduction="mean",
+        backend="hooks",
+    ),
+    XFail(Operator.EKFAC_TYPE2, Option.BCE_WEIGHT, Reason.OPTION_IGNORED),
+    XFail(Operator.EKFAC_TYPE2, Option.BCE_POS_WEIGHT, Reason.OPTION_IGNORED),
+    XFail(Operator.EKFAC_EF, Option.CE_IGNORE_DEFAULT, Reason.IGNORED_INPUTS_COUNTED),
+    XFail(Operator.EKFAC_EF, Option.CE_IGNORE_CUSTOM, Reason.IGNORED_INPUTS_COUNTED),
+    XFail(
+        Operator.EKFAC_EF,
+        Option.CE_WEIGHT,
+        Reason.MEAN_NORMALIZATION,
+        reduction="mean",
+        tbd=_TBD_EF_WEIGHT,
+    ),
+    XFail(
+        Operator.EKFAC_EF,
+        Option.CE_SOFT_TARGETS,
+        Reason.CRASHES,
+        backend="make_fx",
+        raises=ValueError,
+    ),
+    XFail(
+        Operator.EKFAC_EF,
+        Option.CE_SOFT_TARGETS,
+        Reason.MEAN_NORMALIZATION,
+        reduction="mean",
+        backend="hooks",
+    ),
+    XFail(Operator.KFOC_MC, Option.CE_IGNORE_DEFAULT, Reason.OPTION_IGNORED),
+    XFail(Operator.KFOC_MC, Option.CE_IGNORE_CUSTOM, Reason.OPTION_IGNORED),
 ]
 
 
-def _build_cases() -> tuple[list, list, list]:
-    """Build the dense, one-datum and metamorphic case lists.
-
-    Returns:
-        The dense, one-datum, and metamorphic cases.
-    """
-    dense, one_datum, metamorphic = [], [], []
-    for i, (cid, lf, kind, out_dim, seq, n_ign) in enumerate(_OPTION_ROWS):
-        seed = 100 + i
-        dense.append(_make_case(cid, lf, kind, out_dim, seed, "dense", seq, n_ign))
-        if "ignore" not in cid:
-            one_datum.append(_make_case(cid, lf, kind, out_dim, seed, "one_datum"))
-        if cid in {"ce_ignore_default", "ce_ignore_custom"}:
-            case = _make_case(cid, lf, kind, out_dim, seed, "metamorphic", seq, n_ign)
-            case["data_reference"] = _drop_ignored(case["data"], kind)
-            case["loss_func_reference"] = _ce()
-            metamorphic.append(case)
-    return dense, one_datum, metamorphic
-
-
-DENSE_CASES, ONE_DATUM_CASES, METAMORPHIC_CASES = _build_cases()
-
-
-def case_params(cases: list[LossOptionCase]) -> list:
-    """Wrap cases into ``pytest.param`` objects with readable ids.
-
-    Args:
-        cases: The cases.
-
-    Returns:
-        List of ``pytest.param``.
-    """
-    return [param(c, id=c["id"]) for c in cases]
-
-
-def reference_ef(
-    model: Module,
-    loss_func: Module,
-    params: dict[str, Tensor],
-    data: list[tuple[Tensor, Tensor]],
-) -> Tensor:
-    """Compute the empirical Fisher of a criterion with its options.
-
-    The EF is ``c * sum_k grad(l_k) grad(l_k)^T``. Loss terms ``l_k`` are one per
-    sequence position for ``CrossEntropyLoss`` and one per output row for
-    ``BCEWithLogitsLoss``; each is the ``reduction='sum'`` criterion (with the same
-    options) on that term alone. For ``'sum'``, ``c = 1``. For ``'mean'``, ``c`` is
-    the ratio of the mean- and sum-reduced losses on all data, which reproduces
-    PyTorch's denominator (observed targets, class weights, ...).
-
-    Args:
-        model: The neural network.
-        loss_func: The criterion, including its reduction.
-        params: Parameters w.r.t. which the EF is computed.
-        data: List of mini-batches.
-
-    Returns:
-        The EF as a dense matrix.
-    """
-    # NOTE(#311): with `weight`/`pos_weight` this uses PyTorch-literal semantics
-    # (the per-term gradient carries w once, so the EF carries w^2). Whether the
-    # EF should instead carry w (data duplication) is an open question (ask Felix).
-    X = cat([x for x, _ in data])
-    y = cat([t for _, t in data])
-    params_dict = {n: p.detach() for n, p in params.items()}
-
-    loss_sum = deepcopy(loss_func)
-    loss_sum.reduction = "sum"
-
-    def terms(p: dict[str, Tensor]) -> Tensor:
-        out = functional_call(model, p, (X,))
-        if isinstance(loss_func, CrossEntropyLoss):
-            soft = y.ndim == out.ndim
-            out_flat = out.movedim(1, -1).reshape(-1, out.shape[1])
-            y_flat = (
-                y.movedim(1, -1).reshape(-1, out.shape[1]) if soft else y.reshape(-1)
-            )
-        else:
-            out_flat = out.reshape(-1, out.shape[-1])
-            y_flat = y.reshape(-1, y.shape[-1])
-        return stack([loss_sum(o, t) for o, t in zip(out_flat, y_flat)])
-
-    jac = jacrev(terms)(params_dict)
-    jac = cat([j.flatten(start_dim=1) for j in jac.values()], dim=1)
-
-    scale = 1.0
-    if loss_func.reduction == "mean":
-        out = functional_call(model, params_dict, (X,))
-        scale = (loss_func(out, y) / loss_sum(out, y)).item()
-    return scale * jac.T @ jac
-
-
-# Known failures: (operator_id, case_id, reduction) -> reason. The operator id of
-# KFAC-type operators may carry a ``[backend]`` suffix to single out one backend.
-# Reasons: option_ignored, mean_normalization, target_dependent_hessian, crashes,
-# mc_flaky (the only non-strict one), other.
-# Note: `ignore_*` cells with `reduction='mean'` are close to correct for several
-# approximate operators, because ignored rows are counted like any other row, so
-# MC cells there can pass within tolerance. `sum` cells expose the problem.
-# `target_dependent_hessian` is only used for MC operators: sampling from the model
-# has no obvious analogue of a target-dependent loss Hessian (semantics TBD). The
-# exact type-2 operators drop `weight`/`pos_weight` and are `option_ignored`.
-# With one datum, the class weight cancels in `ce_weight` + `'mean'`, so those
-# one-datum cells pass trivially and don't detect anything.
-EXPECTED_FAILURES: dict[tuple[str, str, str], str] = {
-    ("ef", "ce_ignore_custom", "mean"): "mean_normalization",
-    ("ef", "ce_ignore_default", "mean"): "mean_normalization",
-    ("ef", "ce_seq_ignore_default", "mean"): "mean_normalization",
-    ("ef", "ce_soft_targets", "mean"): "crashes",
-    ("ef", "ce_soft_targets", "sum"): "crashes",
-    ("ef", "ce_weight", "mean"): "mean_normalization (EF weight semantics TBD)",
-    ("ekfac_ef", "ce_ignore_custom", "mean"): "option_ignored",
-    ("ekfac_ef", "ce_ignore_custom", "sum"): "option_ignored",
-    ("ekfac_ef", "ce_ignore_default", "mean"): "option_ignored",
-    ("ekfac_ef", "ce_ignore_default", "sum"): "option_ignored",
-    ("ekfac_ef", "ce_weight", "mean"): "mean_normalization (EF weight semantics TBD)",
-    ("ekfac_ef[hooks]", "ce_soft_targets", "mean"): "mean_normalization",
-    ("ekfac_ef[make_fx]", "ce_soft_targets", "mean"): "crashes",
-    ("ekfac_ef[make_fx]", "ce_soft_targets", "sum"): "crashes",
-    ("ekfac_type2", "bce_pos_weight", "mean"): "option_ignored",
-    ("ekfac_type2", "bce_pos_weight", "sum"): "option_ignored",
-    ("ekfac_type2", "bce_weight", "mean"): "option_ignored",
-    ("ekfac_type2", "bce_weight", "sum"): "option_ignored",
-    ("ekfac_type2", "ce_ignore_custom", "mean"): "option_ignored",
-    ("ekfac_type2", "ce_ignore_custom", "sum"): "option_ignored",
-    ("ekfac_type2", "ce_ignore_default", "mean"): "option_ignored",
-    ("ekfac_type2", "ce_ignore_default", "sum"): "option_ignored",
-    ("ekfac_type2", "ce_weight", "sum"): "option_ignored",
-    ("ekfac_type2[hooks]", "ce_soft_targets", "mean"): "mean_normalization",
-    ("ekfac_type2[make_fx]", "ce_soft_targets", "mean"): "crashes",
-    ("ekfac_type2[make_fx]", "ce_soft_targets", "sum"): "crashes",
-    ("ggn", "ce_ignore_custom", "mean"): "mean_normalization",
-    ("ggn", "ce_ignore_default", "mean"): "mean_normalization",
-    ("ggn", "ce_seq_ignore_default", "mean"): "mean_normalization",
-    ("ggn", "ce_weight", "mean"): "mean_normalization",
-    ("ggn_diag", "bce_pos_weight", "mean"): "option_ignored",
-    ("ggn_diag", "bce_pos_weight", "sum"): "option_ignored",
-    ("ggn_diag", "bce_weight", "mean"): "option_ignored",
-    ("ggn_diag", "bce_weight", "sum"): "option_ignored",
-    ("ggn_diag", "ce_ignore_custom", "mean"): "option_ignored",
-    ("ggn_diag", "ce_ignore_custom", "sum"): "option_ignored",
-    ("ggn_diag", "ce_ignore_default", "mean"): "option_ignored",
-    ("ggn_diag", "ce_ignore_default", "sum"): "option_ignored",
-    ("ggn_diag", "ce_seq_ignore_default", "mean"): "option_ignored",
-    ("ggn_diag", "ce_seq_ignore_default", "sum"): "option_ignored",
-    ("ggn_diag", "ce_weight", "mean"): "option_ignored",
-    ("ggn_diag", "ce_weight", "sum"): "option_ignored",
-    ("ggn_diag_mc", "bce_pos_weight", "mean"): "target_dependent_hessian",
-    ("ggn_diag_mc", "bce_pos_weight", "sum"): "target_dependent_hessian",
-    ("ggn_diag_mc", "bce_weight", "mean"): "target_dependent_hessian",
-    ("ggn_diag_mc", "bce_weight", "sum"): "target_dependent_hessian",
-    ("ggn_diag_mc", "ce_ignore_custom", "sum"): "option_ignored",
-    ("ggn_diag_mc", "ce_ignore_default", "sum"): "option_ignored",
-    ("ggn_diag_mc", "ce_seq_ignore_default", "sum"): "option_ignored",
-    ("ggn_diag_mc", "ce_weight", "mean"): "target_dependent_hessian",
-    ("ggn_diag_mc", "ce_weight", "sum"): "target_dependent_hessian",
-    ("ggn_mc", "bce_pos_weight", "mean"): "target_dependent_hessian",
-    ("ggn_mc", "bce_pos_weight", "sum"): "target_dependent_hessian",
-    ("ggn_mc", "bce_weight", "mean"): "target_dependent_hessian",
-    ("ggn_mc", "bce_weight", "sum"): "target_dependent_hessian",
-    ("ggn_mc", "ce_ignore_custom", "sum"): "option_ignored",
-    ("ggn_mc", "ce_ignore_default", "mean"): "option_ignored",
-    ("ggn_mc", "ce_ignore_default", "sum"): "option_ignored",
-    ("ggn_mc", "ce_seq_ignore_default", "mean"): "option_ignored",
-    ("ggn_mc", "ce_seq_ignore_default", "sum"): "option_ignored",
-    ("ggn_mc", "ce_weight", "mean"): "target_dependent_hessian",
-    ("ggn_mc", "ce_weight", "sum"): "target_dependent_hessian",
-    ("hessian", "ce_ignore_custom", "mean"): "mean_normalization",
-    ("hessian", "ce_ignore_default", "mean"): "mean_normalization",
-    ("hessian", "ce_seq_ignore_default", "mean"): "mean_normalization",
-    ("hessian", "ce_weight", "mean"): "mean_normalization",
-    ("kfac_ef", "ce_ignore_custom", "mean"): "option_ignored",
-    ("kfac_ef", "ce_ignore_custom", "sum"): "option_ignored",
-    ("kfac_ef", "ce_ignore_default", "mean"): "option_ignored",
-    ("kfac_ef", "ce_ignore_default", "sum"): "option_ignored",
-    ("kfac_ef", "ce_soft_targets", "mean"): "crashes",
-    ("kfac_ef", "ce_soft_targets", "sum"): "crashes",
-    ("kfac_ef", "ce_weight", "mean"): "mean_normalization (EF weight semantics TBD)",
-    ("kfac_forward_only", "ce_ignore_custom", "mean"): "option_ignored",
-    ("kfac_forward_only", "ce_ignore_custom", "sum"): "option_ignored",
-    ("kfac_forward_only", "ce_ignore_default", "mean"): "option_ignored",
-    ("kfac_forward_only", "ce_ignore_default", "sum"): "option_ignored",
-    ("kfac_mc", "bce_pos_weight", "mean"): "target_dependent_hessian",
-    ("kfac_mc", "bce_pos_weight", "sum"): "target_dependent_hessian",
-    ("kfac_mc", "bce_weight", "mean"): "target_dependent_hessian",
-    ("kfac_mc", "bce_weight", "sum"): "target_dependent_hessian",
-    ("kfac_mc", "ce_ignore_custom", "sum"): "option_ignored",
-    ("kfac_mc", "ce_ignore_default", "sum"): "option_ignored",
-    ("kfac_mc", "ce_soft_targets", "mean"): "crashes",
-    ("kfac_mc", "ce_soft_targets", "sum"): "crashes",
-    ("kfac_mc", "ce_weight", "sum"): "target_dependent_hessian",
-    ("kfac_type2", "bce_pos_weight", "mean"): "option_ignored",
-    ("kfac_type2", "bce_pos_weight", "sum"): "option_ignored",
-    ("kfac_type2", "bce_weight", "mean"): "option_ignored",
-    ("kfac_type2", "bce_weight", "sum"): "option_ignored",
-    ("kfac_type2", "ce_ignore_custom", "mean"): "option_ignored",
-    ("kfac_type2", "ce_ignore_custom", "sum"): "option_ignored",
-    ("kfac_type2", "ce_ignore_default", "mean"): "option_ignored",
-    ("kfac_type2", "ce_ignore_default", "sum"): "option_ignored",
-    ("kfac_type2", "ce_soft_targets", "mean"): "crashes",
-    ("kfac_type2", "ce_soft_targets", "sum"): "crashes",
-    ("kfac_type2", "ce_weight", "sum"): "option_ignored",
-    ("kfoc_mc[make_fx]", "ce_ignore_custom", "sum"): "option_ignored",
-    ("kfoc_mc[make_fx]", "ce_ignore_default", "sum"): "option_ignored",
-}
-
-
 def maybe_xfail(
-    request: FixtureRequest, operator_id: str, case_id: str, reduction: str
-) -> None:
-    """Mark the running test as an expected failure if it is in the table.
+    request: FixtureRequest,
+    operator: Operator,
+    option: Option,
+    reduction: str,
+    backend: str | None = None,
+):
+    """Mark the running test as a strict expected failure if the table lists it.
 
     Args:
         request: The pytest request of the running test.
-        operator_id: Identifier of the operator, optionally with ``[backend]``.
-        case_id: Identifier of the case.
-        reduction: Reduction of the criterion.
+        operator: The operator under test.
+        option: The loss option under test.
+        reduction: The reduction under test.
+        backend: The backend under test, if any.
     """
-    base_id = operator_id.split("[")[0]
-    reason = EXPECTED_FAILURES.get(
-        (operator_id, case_id, reduction),
-        EXPECTED_FAILURES.get((base_id, case_id, reduction)),
-    )
-    if reason is not None:
-        request.applymarker(mark.xfail(strict=reason != "mc_flaky", reason=reason))
+    for xfail in EXPECTED_FAILURES:
+        if xfail.matches(operator, option, reduction, backend):
+            request.applymarker(
+                mark.xfail(strict=True, reason=xfail.reason.value, raises=xfail.raises)
+            )
+            return

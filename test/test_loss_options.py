@@ -1,22 +1,15 @@
-"""Test curvature operators against ground truth for loss-function options.
+"""Test curvature operators against ground truth for loss-function options."""
 
-See https://github.com/f-dangel/curvlinops/issues/311.
-"""
+from copy import deepcopy
+from enum import Enum
 
-from pytest import FixtureRequest, mark
-from torch import Tensor, allclose, cat, manual_seed
-from torch.nn import Module
+from pytest import FixtureRequest, mark, param
+from torch import Tensor, allclose, cat, stack
+from torch.func import functional_call, jacrev
+from torch.linalg import lstsq
+from torch.nn import CrossEntropyLoss, Module
 
-from curvlinops import (
-    EFLinearOperator,
-    EKFACLinearOperator,
-    FisherType,
-    GGNDiagonalLinearOperator,
-    GGNLinearOperator,
-    HessianLinearOperator,
-    KFACLinearOperator,
-    KFOCLinearOperator,
-)
+from curvlinops import FisherType
 from curvlinops.examples.functorch import (
     functorch_empirical_fisher,
     functorch_ggn,
@@ -24,13 +17,15 @@ from curvlinops.examples.functorch import (
 )
 from curvlinops.utils import allclose_report
 from test.loss_options_cases import (
-    DENSE_CASES,
-    METAMORPHIC_CASES,
-    ONE_DATUM_CASES,
+    EXPECTED_FAILURES,
     REDUCTIONS,
-    case_params,
+    Operator,
+    Option,
+    Reason,
+    XFail,
+    _OperatorSpec,
+    drop_ignored,
     maybe_xfail,
-    reference_ef,
 )
 from test.test_kfac import MC_TOLS
 from test.utils import (
@@ -40,298 +35,427 @@ from test.utils import (
     eye_like,
 )
 
-# Fewer samples than in the other test files to keep this module fast
-DENSE_MC_SAMPLES = 100
-KFAC_MC_SAMPLES = 1_000
+DENSE_EXACT_OPERATORS = [Operator.HESSIAN, Operator.GGN, Operator.GGN_DIAG, Operator.EF]
+DENSE_MC_OPERATORS = [Operator.GGN_MC, Operator.GGN_DIAG_MC]
+KFAC_OPERATORS = [
+    Operator.KFAC_TYPE2,
+    Operator.KFAC_MC,
+    Operator.KFAC_EF,
+    Operator.EKFAC_TYPE2,
+    Operator.EKFAC_EF,
+]
+KFAC_DROP_OPERATORS = [
+    *KFAC_OPERATORS,
+    Operator.KFAC_FORWARD_ONLY,
+    Operator.KFOC_MC,
+]
+
+# KFAC is exact on one datum, which cannot have both ignored and observed targets
+ONE_DATUM_OPTIONS = [o for o in Option if o.value.ignore_index is None]
+
+# Dropping ignored data points needs one target per data point
+DROP_OPTIONS = [
+    o for o in Option if o.value.ignore_index is not None and not o.value.seq
+]
 
 
-def _setup(case):
-    """Build model, parameters and data of a case.
+def _name(member: Enum) -> str:
+    """Name an enum member in test ids.
 
     Args:
-        case: The loss-option case.
+        member: The enum member.
 
     Returns:
-        Model, parameter dictionary, and data.
+        The lower-case member name.
     """
-    model = case["model_func"]()
+    return member.name.lower()
+
+
+def _with_backends(operators: list[Operator]) -> list:
+    """Pair each operator with each of its backends.
+
+    Args:
+        operators: The operators.
+
+    Returns:
+        List of ``pytest.param(operator, backend)``.
+    """
+    return [
+        param(
+            op, backend, id=_name(op) if backend is None else f"{_name(op)}-{backend}"
+        )
+        for op in operators
+        for backend in op.value.backends
+    ]
+
+
+def _merge(data: list[tuple[Tensor, Tensor]]) -> list[tuple[Tensor, Tensor]]:
+    """Merge mini-batches into one.
+
+    Args:
+        data: Mini-batches.
+
+    Returns:
+        A list with a single mini-batch.
+    """
+    return [(cat([X for X, _ in data]), cat([y for _, y in data]))]
+
+
+def reference_ef(
+    model: Module,
+    loss_func: Module,
+    params: dict[str, Tensor],
+    data: list[tuple[Tensor, Tensor]],
+) -> Tensor:
+    """Compute the empirical Fisher of a criterion with its options.
+
+    The EF is ``c * sum_k grad(l_k) grad(l_k)^T`` over loss terms ``l_k``, one
+    per position for ``CrossEntropyLoss`` and one per output row otherwise. The
+    terms come from the criterion with ``reduction='none'``, so they carry its
+    options. ``c = 1`` for ``'sum'``. For ``'mean'``, ``c`` is the ratio of the
+    mean- to the sum-reduced loss on all data, i.e. PyTorch's denominator.
+
+    Args:
+        model: The neural network.
+        loss_func: The criterion, including its reduction.
+        params: Parameters w.r.t. which the EF is computed.
+        data: Mini-batches.
+
+    Returns:
+        The EF as a dense matrix.
+    """
+    # NOTE(#311): with `weight`/`pos_weight` each term's gradient carries w once,
+    # so the EF carries w^2. Whether it should carry w (data duplication) instead
+    # is open.
+    [(X, y)] = _merge(data)
+    params = {name: p.detach() for name, p in params.items()}
+
+    loss_terms = deepcopy(loss_func)
+    loss_terms.reduction = "none"
+
+    def terms(params: dict[str, Tensor]) -> Tensor:
+        losses = loss_terms(functional_call(model, params, (X,)), y)
+
+        match loss_func:
+            case CrossEntropyLoss():
+                return losses.flatten()
+            case _:
+                return losses.flatten(end_dim=-2).sum(-1)
+
+    jac = cat([j.flatten(start_dim=1) for j in jacrev(terms)(params).values()], dim=1)
+    ef = jac.T @ jac
+
+    if loss_func.reduction == "sum":
+        return ef
+
+    output = functional_call(model, params, (X,))
+
+    return loss_func(output, y) / loss_terms(output, y).sum() * ef
+
+
+def _exact(
+    operator: Operator,
+    model: Module,
+    loss_func: Module,
+    params: dict[str, Tensor],
+    data: list[tuple[Tensor, Tensor]],
+) -> Tensor:
+    """Compute the matrix a dense operator represents (or estimates) via autodiff.
+
+    Args:
+        operator: The operator under test.
+        model: The neural network.
+        loss_func: The criterion.
+        params: Parameters.
+        data: Mini-batches.
+
+    Returns:
+        The ground-truth matrix.
+
+    Raises:
+        ValueError: If the operator has no dense ground truth.
+    """
+    match operator:
+        case Operator.HESSIAN:
+            truth = functorch_hessian(model, loss_func, params, data)
+        case Operator.GGN | Operator.GGN_MC:
+            truth = functorch_ggn(model, loss_func, params, data)
+        case Operator.GGN_DIAG | Operator.GGN_DIAG_MC:
+            truth = functorch_ggn(model, loss_func, params, data).diag().diag()
+        case Operator.EF:
+            truth = reference_ef(model, loss_func, params, data)
+        case _:
+            raise ValueError(f"{operator} has no dense ground truth.")
+
+    return truth.detach()
+
+
+def _assert_close(expected: Tensor, actual: Tensor, mc: bool):
+    """Assert that two matrices agree, with looser tolerances for MC estimates.
+
+    MC comparisons divide by the largest entry of ``expected``, so the
+    tolerances work for both reductions.
+
+    Args:
+        expected: Ground-truth matrix.
+        actual: Matrix of the operator.
+        mc: Whether ``actual`` is an MC estimate.
+    """
+    scale, tols = (expected.abs().max(), MC_TOLS) if mc else (1.0, {})
+    assert allclose_report(expected / scale, actual / scale, **tols)
+
+
+@mark.parametrize("reduction", REDUCTIONS)
+@mark.parametrize("option", [Option.CE_DEFAULT, Option.BCE_DEFAULT], ids=_name)
+def test_reference_ef_matches_functorch(option: Option, reduction: str):
+    """Check ``reference_ef`` against the functorch EF for default criteria."""
+    model, data, loss_func = option.model(), option.data(), option.criterion(reduction)
     params = dict(model.named_parameters())
-    manual_seed(case["seed"])
-    return model, params, case["data"]()
+
+    assert allclose(
+        reference_ef(model, loss_func, params, data),
+        functorch_empirical_fisher(model, loss_func, params, data),
+    )
 
 
 @mark.parametrize("reduction", REDUCTIONS)
-@mark.parametrize(
-    "case",
-    case_params([c for c in DENSE_CASES if c["id"] in {"ce_default", "bce_default"}]),
-)
-def test_reference_ef_matches_functorch_default(case, reduction: str):
-    """Check that ``reference_ef`` matches the functorch EF for default losses.
+@mark.parametrize("option", DROP_OPTIONS, ids=_name)
+def test_drop_ignored_preserves_loss(option: Option, reduction: str):
+    """Check that dropping ignored data points leaves the loss unchanged."""
+    model, data = option.model(), option.data()
 
-    Args:
-        case: Loss-option case with a default criterion.
-        reduction: Reduction of the criterion.
-    """
-    model, params, data = _setup(case)
-    loss_func = case["loss_func"](reduction)
-    ef = reference_ef(model, loss_func, params, data)
-    ef_functorch = functorch_empirical_fisher(model, loss_func, params, data)
-    assert allclose(ef, ef_functorch)
+    [(X, y)] = _merge(data)
+    [(X_ref, y_ref)] = _merge(drop_ignored(data, option.value.ignore_index))
 
+    loss = option.criterion(reduction)(model(X), y)
+    loss_ref = CrossEntropyLoss(reduction=reduction)(model(X_ref), y_ref)
 
-@mark.parametrize("reduction", REDUCTIONS)
-@mark.parametrize("case", case_params(METAMORPHIC_CASES))
-def test_metamorphic_reference_loss_matches(case, reduction: str):
-    """Check that dropping ignored rows reproduces the criterion's semantics.
-
-    Args:
-        case: Metamorphic loss-option case.
-        reduction: Reduction of the criterion.
-    """
-    model, params, data = _setup(case)
-    data_ref = case["data_reference"]()
-
-    X, y = cat([x for x, _ in data]), cat([t for _, t in data])
-    X_ref, y_ref = cat([x for x, _ in data_ref]), cat([t for _, t in data_ref])
-
-    loss = case["loss_func"](reduction)(model(X), y)
-    loss_ref = case["loss_func_reference"](reduction)(model(X_ref), y_ref)
     assert allclose(loss, loss_ref)
 
 
-DENSE_OPERATORS = ["hessian", "ggn", "ggn_diag", "ef"]
+@mark.parametrize("reduction", REDUCTIONS)
+@mark.parametrize("option", Option, ids=_name)
+@mark.parametrize("operator", DENSE_EXACT_OPERATORS, ids=_name)
+def test_dense_exact(
+    request: FixtureRequest, operator: Operator, option: Option, reduction: str
+):
+    """Compare exact operators against autodiff through the real criterion."""
+    maybe_xfail(request, operator, option, reduction)
+
+    model, data, loss_func = option.model(), option.data(), option.criterion(reduction)
+    params = dict(model.named_parameters())
+
+    op = operator.value.build(model, loss_func, params, data)
+
+    compare_matmat(op, _exact(operator, model, loss_func, params, data))
 
 
-def _dense_reference(
-    operator_id: str, model: Module, loss_func: Module, params: dict, data: list
-) -> Tensor:
-    """Compute the ground-truth matrix of a dense-family operator.
+@mark.parametrize("reduction", REDUCTIONS)
+@mark.parametrize("option", Option, ids=_name)
+@mark.parametrize("operator", DENSE_MC_OPERATORS, ids=_name)
+def test_dense_mc(
+    request: FixtureRequest, operator: Operator, option: Option, reduction: str
+):
+    """Compare MC-approximated GGN operators against the exact GGN."""
+    maybe_xfail(request, operator, option, reduction)
 
-    Args:
-        operator_id: Identifier of the operator.
-        model: The neural network.
-        loss_func: The criterion.
-        params: Parameters.
-        data: Mini-batches.
+    model, data, loss_func = option.model(), option.data(), option.criterion(reduction)
+    params = dict(model.named_parameters())
+
+    op = operator.value.build(model, loss_func, params, data)
+    truth = _exact(operator, model, loss_func, params, data)
+
+    match operator:
+        case Operator.GGN_MC:
+            compare_matmat_expectation(
+                op, truth, max_repeats=40, check_every=100, **MC_TOLS
+            )
+        case Operator.GGN_DIAG_MC:
+            # draws its samples once at construction, so there is nothing to repeat
+            _assert_close(truth, op @ eye_like(op), mc=True)
+
+
+@mark.parametrize("reduction", REDUCTIONS)
+@mark.parametrize("option", ONE_DATUM_OPTIONS, ids=_name)
+@mark.parametrize("operator,backend", _with_backends(KFAC_OPERATORS))
+def test_kfac_one_datum(
+    request: FixtureRequest,
+    operator: Operator,
+    backend: str,
+    option: Option,
+    reduction: str,
+):
+    """Compare KFAC-type operators against the block-diagonal truth on one datum."""
+    maybe_xfail(request, operator, option, reduction, backend)
+
+    model = option.model(deep_linear=True)
+    data, loss_func = option.data(one_datum=True), option.criterion(reduction)
+    params = dict(model.named_parameters())
+
+    match operator.value.fisher_type:
+        case FisherType.EMPIRICAL:
+            truth = reference_ef(model, loss_func, params, data)
+        case _:
+            truth = functorch_ggn(model, loss_func, params, data)
+
+    truth = block_diagonal_of(truth.detach(), model, params)
+    op = operator.value.build(model, loss_func, params, data, backend)
+
+    _assert_close(truth, op @ eye_like(op), operator.is_mc)
+
+
+@mark.parametrize("reduction", REDUCTIONS)
+@mark.parametrize("option", DROP_OPTIONS, ids=_name)
+@mark.parametrize("operator,backend", _with_backends(KFAC_DROP_OPERATORS))
+def test_kfac_ignored_equals_dropped(
+    request: FixtureRequest,
+    operator: Operator,
+    backend: str | None,
+    option: Option,
+    reduction: str,
+):
+    """Check that ignored data points are absent from KFAC-type operators.
+
+    The reference is the same operator (exact Fisher in place of MC) on the data
+    without the ignored data points, with a default criterion.
+    """
+    maybe_xfail(request, operator, option, reduction, backend)
+
+    model = option.model()
+    params = dict(model.named_parameters())
+
+    data = option.data()
+    data_ref = drop_ignored(data, option.value.ignore_index)
+
+    if operator.value.single_batch:
+        data, data_ref = _merge(data), _merge(data_ref)
+
+    loss_func_ref = CrossEntropyLoss(reduction=reduction)
+    truth = operator.value.exact().build(
+        model, loss_func_ref, params, data_ref, backend
+    )
+    op = operator.value.build(model, option.criterion(reduction), params, data, backend)
+
+    _assert_close(
+        (truth @ eye_like(truth)).detach(), (op @ eye_like(op)).detach(), operator.is_mc
+    )
+
+
+def _inputs(operator: Operator, option: Option) -> tuple[Module, list]:
+    """Create the model and data that the matrix tests use for a cell.
+
+    KFAC-type operators run on one datum, except for ignored targets, which use
+    the test that drops ignored data points.
 
     Returns:
-        The dense ground-truth matrix.
+        The model and the mini-batches.
     """
-    if operator_id == "hessian":
-        return functorch_hessian(model, loss_func, params, data)
-    if operator_id in {"ggn", "ggn_mc"}:
-        return functorch_ggn(model, loss_func, params, data)
-    if operator_id in {"ggn_diag", "ggn_diag_mc"}:
-        return functorch_ggn(model, loss_func, params, data).diag().diag()
-    return reference_ef(model, loss_func, params, data)
+    one_datum = (
+        operator.value.fisher_type is not None and option.value.ignore_index is None
+    )
+
+    return option.model(deep_linear=one_datum), option.data(one_datum=one_datum)
 
 
-@mark.parametrize("reduction", REDUCTIONS)
-@mark.parametrize("case", case_params(DENSE_CASES))
-@mark.parametrize("operator_id", DENSE_OPERATORS)
-def test_dense_matrix(
-    request: FixtureRequest, operator_id: str, case: dict, reduction: str
-):
-    """Compare exact operators against autodiff through the real criterion.
-
-    Args:
-        request: The pytest request.
-        operator_id: Identifier of the operator.
-        case: Loss-option case.
-        reduction: Reduction of the criterion.
-    """
-    maybe_xfail(request, operator_id, case["id"], reduction)
-    model, params, data = _setup(case)
-    loss_func = case["loss_func"](reduction)
-
-    op_cls = {
-        "hessian": HessianLinearOperator,
-        "ggn": GGNLinearOperator,
-        "ggn_diag": GGNDiagonalLinearOperator,
-        "ef": EFLinearOperator,
-    }[operator_id]
-    op = op_cls(model, loss_func, params, data)
-    mat = _dense_reference(operator_id, model, loss_func, params, data).detach()
-    compare_matmat(op, mat)
-
-
-@mark.parametrize("reduction", REDUCTIONS)
-@mark.parametrize("case", case_params(DENSE_CASES))
-@mark.parametrize("operator_id", ["ggn_mc", "ggn_diag_mc"])
-def test_dense_mc(
-    request: FixtureRequest, operator_id: str, case: dict, reduction: str
-):
-    """Compare MC-approximated GGN operators against the exact GGN.
-
-    Args:
-        request: The pytest request.
-        operator_id: Identifier of the operator.
-        case: Loss-option case.
-        reduction: Reduction of the criterion.
-    """
-    maybe_xfail(request, operator_id, case["id"], reduction)
-    model, params, data = _setup(case)
-    loss_func = case["loss_func"](reduction)
-    mat = _dense_reference(operator_id, model, loss_func, params, data).detach()
-
-    if operator_id == "ggn_mc":
-        op = GGNLinearOperator(
-            model, loss_func, params, data, mc_samples=DENSE_MC_SAMPLES
-        )
-        compare_matmat_expectation(op, mat, max_repeats=40, check_every=100, **MC_TOLS)
-    else:
-        # the diagonal operator draws its samples once at construction
-        op = GGNDiagonalLinearOperator(
-            model, loss_func, params, data, mc_samples=DENSE_MC_SAMPLES * 40
-        )
-        scale = mat.abs().max()
-        assert allclose_report(mat / scale, (op @ eye_like(op)) / scale, **MC_TOLS)
-
-
-KFAC_BACKENDS = list(KFACLinearOperator._BACKENDS)
-ONE_DATUM_OPERATORS = [
-    f"{op}[{backend}]"
-    for op in ["kfac_type2", "kfac_mc", "kfac_ef", "ekfac_type2", "ekfac_ef"]
-    for backend in KFAC_BACKENDS
-]
-METAMORPHIC_OPERATORS = [
-    f"{op}[{backend}]"
-    for op in [
-        "kfac_type2",
-        "kfac_mc",
-        "kfac_ef",
-        "kfac_forward_only",
-        "ekfac_type2",
-        "ekfac_ef",
-    ]
-    for backend in KFAC_BACKENDS
-] + ["kfoc_mc[make_fx]"]
-
-_FISHER = {
-    "type2": FisherType.TYPE2,
-    "mc": FisherType.MC,
-    "ef": FisherType.EMPIRICAL,
-    "forward_only": FisherType.FORWARD_ONLY,
-}
-
-
-def _kfac_family_matrix(
-    operator_id: str,
+def _matrix(
+    spec: _OperatorSpec,
     model: Module,
     loss_func: Module,
-    params: dict,
-    data: list,
-    mc: bool = True,
+    data: list[tuple[Tensor, Tensor]],
+    backend: str | None,
 ) -> Tensor:
-    """Compute the dense matrix of a KFAC-family operator.
-
-    Args:
-        operator_id: Identifier like ``'kfac_type2[hooks]'``.
-        model: The neural network.
-        loss_func: The criterion.
-        params: Parameters.
-        data: Mini-batches.
-        mc: Whether to use MC sampling for ``*_mc`` operators. If ``False``, uses
-            the exact (type-2) Fisher instead.
+    """Build an operator and return its dense matrix.
 
     Returns:
-        The dense matrix of the operator.
+        The operator's matrix.
     """
-    name, backend = operator_id[:-1].split("[")
-    family, fisher = name.split("_", 1)
-    fisher_type = _FISHER[fisher]
-    kwargs = {"backend": backend}
-    if fisher == "mc":
-        if mc:
-            kwargs["mc_samples"] = KFAC_MC_SAMPLES
-        else:
-            fisher_type = FisherType.TYPE2
-    if family == "kfoc":
-        kwargs.pop("backend")
-    op_cls = {
-        "kfac": KFACLinearOperator,
-        "ekfac": EKFACLinearOperator,
-        "kfoc": KFOCLinearOperator,
-    }[family]
-    if family == "kfoc" and fisher_type == FisherType.MC:
-        kwargs["mc_samples"] = KFAC_MC_SAMPLES
-    op = op_cls(model, loss_func, params, data, fisher_type=fisher_type, **kwargs)
-    return op @ eye_like(op)
+    if spec.single_batch:
+        data = _merge(data)
+
+    op = spec.build(model, loss_func, dict(model.named_parameters()), data, backend)
+
+    return (op @ eye_like(op)).detach()
 
 
-def _compare_kfac(operator_id: str, expected: Tensor, actual: Tensor):
-    """Assert that two matrices agree, with MC tolerances for MC operators.
+def _without_option(
+    option: Option, reduction: str, data: list[tuple[Tensor, Tensor]]
+) -> tuple[Module, list[tuple[Tensor, Tensor]]]:
+    """Switch the option off: drop it from the criterion, or un-ignore the targets.
 
-    Args:
-        operator_id: Identifier of the operator.
-        expected: Ground-truth matrix.
-        actual: Matrix of the operator.
+    Returns:
+        The criterion and the mini-batches without the option.
     """
-    if "_mc" in operator_id:
-        scale = expected.abs().max()
-        assert allclose_report(expected / scale, actual / scale, **MC_TOLS)
-    else:
-        assert allclose_report(expected, actual)
+    match option.value.ignore_index:
+        case None:
+            return option.plain_criterion(reduction), data
+        case ignore_index:
+            # class 0 is valid and differs from either ignore index
+            unignored = [(X, y.where(y != ignore_index, 0)) for X, y in data]
+            return option.criterion(reduction), unignored
 
 
-@mark.parametrize("reduction", REDUCTIONS)
-@mark.parametrize("case", case_params(ONE_DATUM_CASES))
-@mark.parametrize("operator_id", ONE_DATUM_OPERATORS)
-def test_kfac_one_datum(
-    request: FixtureRequest, operator_id: str, case: dict, reduction: str
-):
-    """Compare KFAC-type operators against the block-diagonal truth for one datum.
+def _reason_cells() -> list:
+    """List every expected-failure cell whose reason can be checked.
 
-    Args:
-        request: The pytest request.
-        operator_id: Identifier of the operator.
-        case: Loss-option case.
-        reduction: Reduction of the criterion.
+    Crashes are left out: ``raises`` in their xfail already pins the exception.
+
+    Returns:
+        List of ``pytest.param(xfail, reduction, backend)``.
     """
-    maybe_xfail(request, operator_id, case["id"], reduction)
-    model, params, data = _setup(case)
-    loss_func = case["loss_func"](reduction)
-
-    if "_ef" in operator_id:
-        truth = reference_ef(model, loss_func, params, data)
-    else:
-        truth = functorch_ggn(model, loss_func, params, data).detach()
-    truth = block_diagonal_of(truth, model, params)
-
-    mat = _kfac_family_matrix(operator_id, model, loss_func, params, data)
-    _compare_kfac(operator_id, truth, mat)
-
-
-@mark.parametrize("reduction", REDUCTIONS)
-@mark.parametrize("case", case_params(METAMORPHIC_CASES))
-@mark.parametrize("operator_id", METAMORPHIC_OPERATORS)
-def test_kfac_metamorphic(
-    request: FixtureRequest, operator_id: str, case: dict, reduction: str
-):
-    """Check that ignored rows are absent from KFAC-type operators.
-
-    The reference is the same operator (exact Fisher in place of MC) applied to the
-    data without ignored rows, using a default criterion.
-
-    Args:
-        request: The pytest request.
-        operator_id: Identifier of the operator.
-        case: Metamorphic loss-option case.
-        reduction: Reduction of the criterion.
-    """
-    maybe_xfail(request, operator_id, case["id"], reduction)
-    model, params, data = _setup(case)
-    loss_func = case["loss_func"](reduction)
-    data_ref = case["data_reference"]()
-    if operator_id.startswith("kfoc"):
-        # KFOC only supports data with exactly one batch
-        data, data_ref = (
-            [(cat([x for x, _ in d]), cat([y for _, y in d]))] for d in (data, data_ref)
+    return [
+        param(
+            xfail,
+            reduction,
+            backend,
+            id="-".join(
+                [_name(xfail.operator), _name(xfail.option), reduction]
+                + ([] if backend is None else [backend])
+            ),
         )
-    loss_func_ref = case["loss_func_reference"](reduction)
+        for xfail in EXPECTED_FAILURES
+        if xfail.reason is not Reason.CRASHES
+        for reduction, backend in xfail.cells()
+    ]
 
-    truth = _kfac_family_matrix(
-        operator_id, model, loss_func_ref, params, data_ref, mc=False
-    )
-    mat = _kfac_family_matrix(operator_id, model, loss_func, params, data)
-    _compare_kfac(operator_id, truth.detach(), mat.detach())
+
+@mark.parametrize("xfail,reduction,backend", _reason_cells())
+def test_xfail_reason(xfail: XFail, reduction: str, backend: str | None):
+    """Check that a cell fails for the reason the table gives."""
+    operator, option = xfail.operator, xfail.option
+    model, data = _inputs(operator, option)
+
+    def matrix(loss_func: Module, data: list, spec: _OperatorSpec = operator.value):
+        return _matrix(spec, model, loss_func, data, backend)
+
+    with_option = (option.criterion(reduction), data)
+    without_option = _without_option(option, reduction, data)
+
+    match xfail.reason:
+        case Reason.OPTION_IGNORED:
+            assert allclose(matrix(*with_option), matrix(*without_option))
+
+        case Reason.MEAN_NORMALIZATION:
+            # 'sum' passes, and 'mean' is a rescaling of the per-batch 'sum' results
+            assert reduction == "mean"
+            assert not any(
+                x.matches(operator, option, "sum", backend) for x in EXPECTED_FAILURES
+            )
+
+            sums = stack(
+                [matrix(option.criterion("sum"), [batch]).flatten() for batch in data],
+                dim=1,
+            )
+            mean = matrix(*with_option).flatten().unsqueeze(-1)
+
+            assert allclose(sums @ lstsq(sums, mean).solution, mean)
+
+        case Reason.IGNORED_INPUTS_COUNTED:
+            # The gradients respect the ignored targets ...
+            assert not allclose(matrix(*with_option), matrix(*without_option))
+
+            # ... but the input factor, which all Fisher types share, does not
+            forward_only = Operator.KFAC_FORWARD_ONLY.value
+            assert allclose(
+                matrix(*with_option, spec=forward_only),
+                matrix(*without_option, spec=forward_only),
+            )
