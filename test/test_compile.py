@@ -17,6 +17,7 @@ from torch import compile as torch_compile
 from torch import manual_seed, rand
 from torch._dynamo import explain
 from torch._dynamo import reset as dynamo_reset
+from torch._inductor import config as inductor_config
 from torch.nn import Conv2d, Flatten, Linear, MSELoss, Sequential
 from torch.testing import assert_close
 
@@ -90,7 +91,11 @@ def _dynamo_explain(fn, *args):
         yield explain(fn)(*args)
 
         r_eager = fn(*args)
-        r_compiled = torch_compile(fn)(*args)
+        # Inductor generates its own random numbers by default, which do not
+        # match eager mode's under the same seed. Use eager's RNG so that
+        # stochastic computations (e.g. MC sampling) can be compared.
+        with inductor_config.patch(fallback_random=True):
+            r_compiled = torch_compile(fn)(*args)
         assert_close(r_eager, r_compiled, atol=1e-5, rtol=1e-5)
     finally:
         dynamo_reset()
@@ -132,7 +137,12 @@ def test_ggn_mc_matvec_compiles_correctly(setup_fn):
     )
     v = rand(G.shape[1])
     with _dynamo_explain(lambda op, vec: op @ vec, G, v) as result:
-        assert all("fork_rng" in str(br.reason) for br in result.break_reasons)
+        # Newer torch versions report the op inside ``fork_rng`` that breaks the
+        # graph, so look for ``fork_rng`` in the stack rather than the reason.
+        assert all(
+            any(frame.name == "fork_rng" for frame in br.user_stack)
+            for br in result.break_reasons
+        )
 
 
 @mark.parametrize("setup_fn", SETUPS, ids=SETUP_IDS)
