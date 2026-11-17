@@ -1,23 +1,17 @@
 """Contains pytest fixtures that are visible by other files."""
 
-from collections.abc import MutableMapping
-from typing import Callable, Dict, Iterable, List, Optional, Tuple
+from collections.abc import Callable, Iterable, MutableMapping
 
 from numpy import random
 from pytest import fixture
-from torch import Tensor, manual_seed
-from torch.nn import Module, MSELoss, Parameter
+from torch import Tensor, manual_seed, rand_like
+from torch.nn import Module, MSELoss
 
 import test.utils
 from test.cases import (
-    ADJOINT_CASES,
-    ADJOINT_IDS,
-    BLOCK_SIZES_FNS,
     CASES,
     CNN_CASES,
     INV_CASES,
-    IS_VEC_IDS,
-    IS_VECS,
     NON_DETERMINISTIC_CASES,
 )
 from test.kfac_cases import (
@@ -30,20 +24,36 @@ from test.kfac_cases import (
 
 
 def initialize_case(
-    case: Dict,
-) -> Tuple[
+    case: dict,
+) -> tuple[
     Callable[[Tensor], Tensor],
     Callable[[Tensor, Tensor], Tensor],
-    List[Tensor],
-    Iterable[Tuple[Tensor, Tensor]],
-    Optional[Callable[[MutableMapping], int]],
+    dict[str, Tensor],
+    Iterable[tuple[Tensor, Tensor]],
+    Callable[[MutableMapping], int] | None,
 ]:
+    """Instantiate a test case and seed random generators.
+
+    Args:
+        case: Dictionary describing the case configuration.
+
+    Returns:
+        Tuple of model, loss, parameters, data, and optional batch size function.
+    """
     random.seed(case["seed"])
     manual_seed(case["seed"])
 
-    model_func = case["model_func"]().to(case["device"])
+    model_func = case["model_func"]()
     loss_func = case["loss_func"]().to(case["device"])
-    params = [p for p in model_func.parameters() if p.requires_grad]
+    if isinstance(model_func, Module):
+        model_func = model_func.to(case["device"])
+        params = {
+            n: 0.01 * rand_like(p) + p.data
+            for n, p in model_func.named_parameters()
+            if p.requires_grad
+        }
+    else:
+        params = {n: p.to(case["device"]) for n, p in case["params"]().items()}
     data = case["data"]()
 
     # In some KFAC cases,
@@ -62,13 +72,18 @@ def initialize_case(
 @fixture(params=CASES)
 def case(
     request,
-) -> Tuple[
+) -> tuple[
     Callable[[Tensor], Tensor],
     Callable[[Tensor, Tensor], Tensor],
-    List[Tensor],
-    Iterable[Tuple[Tensor, Tensor]],
-    Optional[Callable[[MutableMapping], int]],
+    dict[str, Tensor],
+    Iterable[tuple[Tensor, Tensor]],
+    Callable[[MutableMapping], int] | None,
 ]:
+    """Provide a parametrized test case.
+
+    Yields:
+        Tuple of model, loss, parameters, data, and optional batch size function.
+    """
     case = request.param
     yield initialize_case(case)
 
@@ -76,13 +91,18 @@ def case(
 @fixture(params=INV_CASES)
 def inv_case(
     request,
-) -> Tuple[
+) -> tuple[
     Callable[[Tensor], Tensor],
     Callable[[Tensor, Tensor], Tensor],
-    List[Tensor],
-    Iterable[Tuple[Tensor, Tensor]],
-    Optional[Callable[[MutableMapping], int]],
+    dict[str, Tensor],
+    Iterable[tuple[Tensor, Tensor]],
+    Callable[[MutableMapping], int] | None,
 ]:
+    """Provide a parametrized inverse test case.
+
+    Yields:
+        Tuple of model, loss, parameters, data, and optional batch size function.
+    """
     case = request.param
     yield initialize_case(case)
 
@@ -90,13 +110,18 @@ def inv_case(
 @fixture(params=CNN_CASES)
 def cnn_case(
     request,
-) -> Tuple[
+) -> tuple[
     Callable[[Tensor], Tensor],
     Callable[[Tensor, Tensor], Tensor],
-    List[Tensor],
-    Iterable[Tuple[Tensor, Tensor]],
-    Optional[Callable[[MutableMapping], int]],
+    dict[str, Tensor],
+    Iterable[tuple[Tensor, Tensor]],
+    Callable[[MutableMapping], int] | None,
 ]:
+    """Provide a parametrized CNN test case.
+
+    Yields:
+        Tuple of model, loss, parameters, data, and optional batch size function.
+    """
     cnn_case = request.param
     yield initialize_case(cnn_case)
 
@@ -104,63 +129,36 @@ def cnn_case(
 @fixture(params=NON_DETERMINISTIC_CASES)
 def non_deterministic_case(
     request,
-) -> Tuple[
+) -> tuple[
     Callable[[Tensor], Tensor],
     Callable[[Tensor, Tensor], Tensor],
-    List[Tensor],
-    Iterable[Tuple[Tensor, Tensor]],
-    Optional[Callable[[MutableMapping], int]],
+    dict[str, Tensor],
+    Iterable[tuple[Tensor, Tensor]],
+    Callable[[MutableMapping], int] | None,
 ]:
+    """Provide a parametrized non-deterministic test case.
+
+    Yields:
+        Tuple of model, loss, parameters, data, and optional batch size function.
+    """
     case = request.param
     yield initialize_case(case)
-
-
-@fixture(params=ADJOINT_CASES, ids=ADJOINT_IDS)
-def adjoint(request) -> bool:
-    return request.param
-
-
-@fixture(params=IS_VECS, ids=IS_VEC_IDS)
-def is_vec(request) -> bool:
-    """Whether to test matrix-vector or matrix-matrix multiplication.
-
-    Args:
-        request: Pytest request object.
-
-    Returns:
-        ``True`` if the test is for matrix-vector multiplication, ``False`` otherwise.
-    """
-    return request.param
-
-
-@fixture(params=BLOCK_SIZES_FNS.values(), ids=BLOCK_SIZES_FNS.keys())
-def block_sizes_fn(request) -> Callable[[List[Parameter]], Optional[List[int]]]:
-    """Function to generate the ``block_sizes`` argument for a linear operator.
-
-    Args:
-        request: Pytest request object.
-
-    Returns:
-        A function that generates the block sizes for a linear operator from the
-        parameters.
-    """
-    return request.param
 
 
 @fixture(params=KFAC_EXACT_CASES)
 def kfac_exact_case(
     request,
-) -> Tuple[
+) -> tuple[
     Module,
     MSELoss,
-    List[Tensor],
-    Iterable[Tuple[Tensor, Tensor]],
-    Optional[Callable[[MutableMapping], int]],
+    dict[str, Tensor],
+    Iterable[tuple[Tensor, Tensor]],
+    Callable[[MutableMapping], int] | None,
 ]:
     """Prepare a test case for which KFAC equals the GGN.
 
     Yields:
-        A neural network, the mean-squared error function, a list of parameters, and
+        A neural network, the mean-squared error function, a dict of parameters, and
         a data set.
     """
     case = request.param
@@ -170,17 +168,17 @@ def kfac_exact_case(
 @fixture(params=KFAC_WEIGHT_SHARING_EXACT_CASES)
 def kfac_weight_sharing_exact_case(
     request,
-) -> Tuple[
+) -> tuple[
     Module,
     MSELoss,
-    List[Tensor],
-    Iterable[Tuple[Tensor, Tensor]],
-    Optional[Callable[[MutableMapping], int]],
+    dict[str, Tensor],
+    Iterable[tuple[Tensor, Tensor]],
+    Callable[[MutableMapping], int] | None,
 ]:
     """Prepare a test case with weight-sharing for which KFAC equals the GGN.
 
     Yields:
-        A neural network, the mean-squared error function, a list of parameters, and
+        A neural network, the mean-squared error function, a dict of parameters, and
         a data set.
     """
     case = request.param
@@ -190,17 +188,17 @@ def kfac_weight_sharing_exact_case(
 @fixture(params=KFAC_EXACT_ONE_DATUM_CASES)
 def kfac_exact_one_datum_case(
     request,
-) -> Tuple[
+) -> tuple[
     Module,
     Module,
-    List[Tensor],
-    Iterable[Tuple[Tensor, Tensor]],
-    Optional[Callable[[MutableMapping], int]],
+    dict[str, Tensor],
+    Iterable[tuple[Tensor, Tensor]],
+    Callable[[MutableMapping], int] | None,
 ]:
     """Prepare a test case for which KFAC equals the GGN and one datum is used.
 
     Yields:
-        A neural network, loss function, a list of parameters, and
+        A neural network, loss function, a dict of parameters, and
         a data set with a single datum.
     """
     case = request.param
@@ -210,17 +208,17 @@ def kfac_exact_one_datum_case(
 @fixture(params=SINGLE_LAYER_CASES)
 def single_layer_case(
     request,
-) -> Tuple[
+) -> tuple[
     Module,
     Module,
-    List[Tensor],
-    Iterable[Tuple[Tensor, Tensor]],
-    Optional[Callable[[MutableMapping], int]],
+    dict[str, Tensor],
+    Iterable[tuple[Tensor, Tensor]],
+    Callable[[MutableMapping], int] | None,
 ]:
     """Prepare a test case with a single-layer model for which FOOF is exact.
 
     Yields:
-        A neural network, loss function, a list of parameters, and
+        A neural network, loss function, a dict of parameters, and
         a data set with a single datum.
     """
     case = request.param
@@ -230,17 +228,17 @@ def single_layer_case(
 @fixture(params=SINGLE_LAYER_WEIGHT_SHARING_CASES)
 def single_layer_weight_sharing_case(
     request,
-) -> Tuple[
+) -> tuple[
     Module,
     Module,
-    List[Tensor],
-    Iterable[Tuple[Tensor, Tensor]],
-    Optional[Callable[[MutableMapping], int]],
+    dict[str, Tensor],
+    Iterable[tuple[Tensor, Tensor]],
+    Callable[[MutableMapping], int] | None,
 ]:
     """Test case with a single-layer model with weight-sharing for which FOOF is exact.
 
     Yields:
-        A neural network, loss function, a list of parameters, and
+        A neural network, loss function, a dict of parameters, and
         a data set with a single datum.
     """
     case = request.param

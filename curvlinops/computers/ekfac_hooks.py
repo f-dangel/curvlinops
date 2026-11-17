@@ -1,0 +1,458 @@
+"""Computer for the Fisher/GGN's eigenvalue-corrected KFAC (EKFAC) approximation."""
+
+from functools import partial
+
+from einops import einsum
+from torch import Tensor
+from torch.nn import Module
+from torch.utils.hooks import RemovableHandle
+
+from curvlinops.computers._base import ParamGroup, ParamGroupKey, _EKFACMixin
+from curvlinops.computers.kfac_hooks import (
+    HooksKFACComputer,
+    _module_hyperparams,
+    _use_params,
+)
+from curvlinops.computers.kfac_math import (
+    compute_loss_correction,
+    grad_to_weight_sharing_format,
+    input_to_weight_sharing_format,
+)
+from curvlinops.kfac_utils import KFACType
+from curvlinops.utils import _seed_generator
+
+
+def compute_eigenvalue_correction_linear_weight_sharing(
+    g: Tensor,
+    ggT_eigvecs: Tensor,
+    a: Tensor | None,
+    aaT_eigvecs: Tensor | None,
+    _force_strategy: str | None = None,
+) -> Tensor:
+    r"""Compute eigenvalue corrections for a linear layer with weight sharing.
+
+    Chooses between two computational strategies depending on memory requirements.
+
+    Args:
+        g: Output gradients of the layer with shape
+            ``[V, N, S, D1]``, where ``V`` is the number of gradient vectors
+            (e.g. MC samples; use ``V=1`` for type-2/empirical Fisher),
+            ``N`` is the batch size, ``S`` the weight sharing dimension,
+            and ``D1`` the output dimension.
+        ggT_eigvecs: Eigenvectors of the gradient covariance with shape
+            ``[D1, D1]``.
+        a: Layer inputs with shape ``[N, S, D2]``, where ``D2`` is the input dimension
+            or ``None`` if the layer has no weights (bias only). In that case,
+            `aaT_eigvecs` has to be `None`, too. Shared across the ``V`` vectors.
+        aaT_eigvecs: Eigenvectors of the input covariance with shape
+            ``[D2, D2]`` or ``None`` if the layer has no weights (bias only).
+        _force_strategy: If specified, forces the use of either ``'gramian'`` or
+            ``'per_example_gradients'`` strategy. If ``None``, the strategy is chosen
+            based on memory requirements. Defaults to ``None``. This flag serves mainly
+            for testing purposes.
+
+    Returns:
+        The eigencorrection with shape ``[D1, D2]`` (or ``[D1]`` for the bias case).
+
+    Raises:
+        ValueError: If an invalid ``_force_strategy`` is provided.
+        ValueError: If only one of ``a`` and ``aaT_eigvecs`` is ``None``.
+
+    Below we explain the mathematical details of what this function does. The mapping is
+    is as follows: (``g``, :math:`\mathbf{Y}`), (``ggT_eigvecs``, :math:`\mathbf{Q}_1`),
+    (``a``, :math:`\mathbf{X}`), (``aaT_eigvecs``, :math:`\mathbf{Q}_2`).
+
+    Note:
+        **Introduction:** In the following, let :math:`D_1` be the output dimension
+        of the layer, :math:`D_2` the input dimension, :math:`S` the weight sharing
+        dimension, and :math:`N` the batch size.
+
+        Given the layer inputs :math:`\mathbf{X} \in \mathbb{R}^{N \times S \times D_2}`,
+        output gradients :math:`\mathbf{Y} \in \mathbb{R}^{N \times S \times D_1}`, and a
+        Kronecker-factored basis :math:`\mathbf{Q}_1 \otimes \mathbf{Q}_2` with factors
+        :math:`\mathbf{Q}_i \in \mathbb{R}^{D_i \times D_i}`, our goal is to compute the
+        eigencorrection :math:`\mathbf{E} \in \mathbb{R}^{D_1 \times D_2}` which has the
+        same shape as the layer's weights.
+
+        The common way to do that is to compute the per-example gradients
+        :math:`\mathbf{G} \in \mathbb{R}^{N \times D_1 \times D_2}` with
+
+        .. math::
+            \mathbf{G}_{n,d_1,d_2}
+            =
+            \sum_s \mathbf{Y}_{n,s,d_1} \mathbf{X}_{n,s,d_2},
+
+        rotate them into the Kronecker-factored basis,
+
+        .. math::
+            \mathbf{\tilde{G}}_{n,d_1,d_2}
+            =
+            \sum_{i,j} \mathbf{G}_{n,i,j} \mathbf{Q}_{1,i,d_1} \mathbf{Q}_{2,j,d_2},
+
+        and compute the correction by squaring and summing out the batch dimension,
+
+        .. math::
+            \mathbf{E}_{d_1,d_2}
+            =
+            \sum_{n} \mathbf{\tilde{G}}_{n,d_1,d_2}^2.
+
+        Building up the per-example gradients can be extremely memory-costly.
+        Therefore, we also consider an alternative approach which can have smaller
+        memory footprint if the weight sharing is mild.
+
+    Note:
+        **(1) Cost analysis of per-example gradient approach:** The peak memory of
+        building up per-example gradients is dominated by :math:`N D_1 D_2`.
+
+        We have two options to compute the rotated per-example gradient.
+
+        1. First compute :math:`\mathbf{G}` and then rotate it. The first step costs
+           :math:`N S D_1 D_2` time and the rotation costs
+           :math:`N D_1 D_2 (D_1 + D_2)` time.
+        2. Rotate the activations and output gradients, then compute the rotated
+           per-example gradient. The rotations cost :math:`N S (D_1^2 + D_2^2)` time
+           The last step is :math:`N S D_1 D_2` time.
+
+        So in practise, we should prefer the first approach over the second if
+
+        .. math::
+            D_1 D_2 (D_1 + D_2) < S (D_1^2 + D_2^2).
+
+        In the implementation, ``opt-einsum`` will automatically do that for us.
+
+        Adding the cost for squaring and contracting, the overall cost is
+        :math:`N S D_1 D_2 + N \min(S (D_1^2 + D_2^2), D_1 D_2 (D_1 + D_2)) + 2 N D_1 D_2`.
+
+    Note:
+        **(2) Cost analysis of Gramian contraction approach:** A way to avoid building
+        up per-example gradients is to write the eigencorrection as big contraction of
+        the rotated activations :math:`\mathbf{\tilde{X}}, \mathbf{\tilde{Y}}` and then
+        rearrange the contractions such that the batch dimension can be directly summed:
+
+        .. math::
+            \mathbf{E}_{d_1,d_2}
+            =
+            \sum_{n}
+            \left(
+            \sum_{s} \mathbf{\tilde{Y}}_{n,s,d_1} \mathbf{\tilde{X}}_{n,s,d_2}
+            \right)
+            \left(
+            \sum_{t} \mathbf{\tilde{Y}}_{n,t,d_1} \mathbf{\tilde{X}}_{n,t,d_2}
+            \right)
+            \\
+            =
+            \sum_{n} \sum_{s} \sum_{t}
+            \left(
+            \mathbf{\tilde{Y}}_{n,s,d_1} \mathbf{\tilde{Y}}_{n,t,d_1}
+            \right)
+            \left(
+            \mathbf{\tilde{X}}_{n,s,d_2} \mathbf{\tilde{X}}_{n,t,d_2}
+            \right)
+
+        This requires building up the Gramians
+
+        .. math::
+            \mathbf{G^Y}_{n,s,t,d_1}
+            =
+            \mathbf{\tilde{Y}}_{n,s,d_1} \mathbf{\tilde{Y}}_{n,t,d_1},
+            \\
+            \mathbf{G^X}_{n,s,t,d_2}
+            =
+            \mathbf{\tilde{X}}_{n,s,d_2} \mathbf{\tilde{X}}_{n,t,d_2}.
+
+        Peak memory is dominated by :math:`N S^2 (D_1 + D_2)`.
+        The time is :math:`N S (D_1^2 + D_2^2)` for the rotations,
+        :math:`N S^2 (D_1 + D_2)` for building up the Gramians, and
+        :math:`N S^2 D_1 D_2` for the final contraction.
+        In total, this is :math:`N S (D_1^2 + D_2^2) + N S^2 (D_1 + D_2 + D_1 D_2)`.
+
+    **We select the approach with the smaller memory footprint**, i.e. Gramian
+    contraction if :math:`S^2 (D_1 + D_2) < D_1 D_2`, and squaring per-example
+    gradients otherwise. So generally speaking, the more weight sharing, the
+    better building up per-example gradients will be.
+
+    In the extreme case :math:`S=1` (no weight sharing), the Gramian
+    contraction approach uses only :math:`N (D_1 + D_2) < N D_1 D_2` memory
+    compared to the per-example gradient approach. In terms of time, the
+    Gramian contraction uses :math:`N (D_1^2 + D_2^2 + D_1 + D_2 + D_1 D_2) < N
+    (3 D_1 D_2 + D_1^2 + D_2^2)` compared to the per-example gradient.
+    """
+    strategies = {"gramian", "per_example_gradients", None}
+    if _force_strategy not in strategies:
+        raise ValueError(
+            f"Invalid _force_strategy: {_force_strategy}. Supported: {strategies}."
+        )
+    if (a is None and aaT_eigvecs is not None) or (
+        a is not None and aaT_eigvecs is None
+    ):
+        raise ValueError(
+            "Both (a, aaT_eigvecs) must be None or Tensor. "
+            + f"Got {(type(a), type(aaT_eigvecs))}."
+        )
+
+    Q1, Q2 = ggT_eigvecs, aaT_eigvecs
+    Y, X = g, a
+
+    if Q2 is None and X is None:  # -> 1d (bias) case
+        eigencorrection = (
+            einsum(Q1, Y, "j d1, v batch shared j -> v batch d1").square_().sum((0, 1))
+        )
+
+    else:  # -> 2d (weight or weight+bias) case
+        # Determine approach: Gramian contraction or per-example gradients
+        (_, _, S, D1), (_, _, D2) = g.shape, a.shape
+
+        # Determine approach based on _force_strategy or memory requirements
+        use_gramian = (
+            _force_strategy == "gramian"
+            if _force_strategy is not None
+            # Memory of per-example gradients is dominated by N * D1 * D2
+            # Memory of Gramian contraction is dominated by N * S^2 * (D1 + D2)
+            # We choose the approach that requires less memory.
+            else S**2 * (D1 + D2) < D1 * D2
+        )
+
+        if use_gramian:  # -> Gramian approach
+            X_rot = einsum(X, Q2, "batch shared j, j d2 -> batch shared d2")
+            Y_rot = einsum(Y, Q1, "v batch shared i, i d1 -> v batch shared d1")
+            # In the absence of weight sharing (S=1), this simply computes
+            # (Q^T X_rot)^2 and (Q^T Y_rot)^2, then computes the correction
+            X_gram = einsum(X_rot, X_rot, "batch s d2, batch t d2 -> batch s t d2")
+            Y_gram = einsum(
+                Y_rot, Y_rot, "v batch s d1, v batch t d1 -> v batch s t d1"
+            )
+            eigencorrection = einsum(
+                Y_gram, X_gram, "v batch s t d1, batch s t d2 -> d1 d2"
+            )
+
+        else:  # -> per-example gradient approach
+            rotated_per_example_gradient = einsum(
+                Q1,
+                Y,
+                X,
+                Q2,
+                "i d1, v batch shared i, batch shared j, j d2 -> v batch d1 d2",
+            )
+            eigencorrection = rotated_per_example_gradient.square_().sum(dim=(0, 1))
+
+    return eigencorrection
+
+
+class HooksEKFACComputer(_EKFACMixin, HooksKFACComputer):
+    """Computes EKFAC's eigenvalue-corrected Kronecker factors for the Fisher/GGN.
+
+    Extends :class:`HooksKFACComputer` with eigenvalue decomposition of the Kronecker
+    factors and eigenvalue correction computation.
+
+    Eigenvalue-corrected Kronecker-Factored Approximate Curvature (EKFAC) was originally
+    introduced in
+
+    - George, T., Laurent, C., Bouthillier, X., Ballas, N., Vincent, P. (2018).
+      Fast Approximate Natural Gradient Descent in a Kronecker-factored Eigenbasis
+      (NeurIPS)
+
+    and concurrently in the context of continual learning in
+
+    - Liu, X., Masana, M., Herranz, L., Van de Weijer, J., Lopez, A., Bagdanov, A.
+      (2018). Rotate your networks: Better weight consolidation and less catastrophic
+      forgetting (ICPR).
+
+    """
+
+    def compute(
+        self,
+    ) -> tuple[
+        dict[ParamGroupKey, Tensor],
+        dict[ParamGroupKey, Tensor],
+        dict[ParamGroupKey, Tensor],
+        list[ParamGroup],
+    ]:
+        """Compute eigenvalue-corrected Kronecker factors with params swapped in.
+
+        Returns:
+            Tuple of ``(input_covariance_eigenvectors,
+            gradient_covariance_eigenvectors, corrected_eigenvalues, mapping)``.
+        """
+        with _use_params(self._model_module, self._params):
+            input_covariances, gradient_covariances, mapping = (
+                self._compute_kronecker_factors()
+            )
+            input_covariances, gradient_covariances = self._eigenvectors_(
+                input_covariances, gradient_covariances
+            )
+            corrected_eigenvalues = self.compute_eigenvalue_correction(
+                input_covariances, gradient_covariances, mapping
+            )
+        return input_covariances, gradient_covariances, corrected_eigenvalues, mapping
+
+    def compute_eigenvalue_correction(
+        self,
+        input_covariances_eigenvectors: dict[ParamGroupKey, Tensor],
+        gradient_covariances_eigenvectors: dict[ParamGroupKey, Tensor],
+        mapping: list[ParamGroup],
+    ) -> dict[ParamGroupKey, Tensor]:
+        """Compute the corrected eigenvalues for EKFAC.
+
+        Args:
+            input_covariances_eigenvectors: Dictionary mapping parameter group keys
+                to input covariance eigenvectors.
+            gradient_covariances_eigenvectors: Dictionary mapping parameter group
+                keys to gradient covariance eigenvectors.
+            mapping: List of parameter groups.
+
+        Returns:
+            Dictionary containing corrected eigenvalues for each module.
+        """
+        # Create empty dictionary to be populated by hooks
+        corrected_eigenvalues: dict[ParamGroupKey, Tensor] = {}
+
+        # install forward hooks
+        hook_handles: list[RemovableHandle] = []
+
+        for group in mapping:
+            module = self._get_module(group)
+
+            # compute the corrected eigenvalues using the per-example gradients
+            hook_handles.append(
+                module.register_forward_hook(
+                    partial(
+                        self._register_tensor_hook_on_output_to_accumulate_corrected_eigenvalues,
+                        group=group,
+                        input_covariances_eigenvectors=input_covariances_eigenvectors,
+                        gradient_covariances_eigenvectors=gradient_covariances_eigenvectors,
+                        corrected_eigenvalues=corrected_eigenvalues,
+                    )
+                )
+            )
+
+        self._generator = _seed_generator(self._generator, self.device, self._seed)
+
+        # loop over data set, computing the corrected eigenvalues
+        for X, y in self._loop_over_data(desc="Eigenvalue correction"):
+            output = self._model_module(X)
+            output, y = self._rearrange_for_larger_than_2d_output(output, y)
+            self._compute_loss_and_backward(output, y)
+
+        # clean up
+        for handle in hook_handles:
+            handle.remove()
+
+        return corrected_eigenvalues
+
+    def _register_tensor_hook_on_output_to_accumulate_corrected_eigenvalues(
+        self,
+        module: Module,
+        inputs: tuple[Tensor],
+        output: Tensor,
+        group: ParamGroup,
+        input_covariances_eigenvectors: dict[ParamGroupKey, Tensor],
+        gradient_covariances_eigenvectors: dict[ParamGroupKey, Tensor],
+        corrected_eigenvalues: dict[ParamGroupKey, Tensor],
+    ):
+        """Register tensor hook on layer's output to accumulate the corrected eigenvalues.
+
+        Note:
+            The easier way to compute the corrected eigenvalues would be via a full
+            backward hook on the module itself which performs the computation.
+            However, this approach breaks down if the output of a layer feeds into an
+            activation with `inplace=True` (see
+            https://github.com/pytorch/pytorch/issues/61519). Hence we use the
+            workaround
+            https://github.com/pytorch/pytorch/issues/61519#issuecomment-883524237, and
+            install a module hook which installs a tensor hook on the module's output
+            tensor, which performs the accumulation of the gradient covariance.
+
+        Args:
+            module: Layer onto whose output a tensor hook to accumulate the corrected
+                eigenvalues will be installed.
+            inputs: The layer's input tensors.
+            output: The layer's output tensor.
+            group: Parameter group for this layer.
+            input_covariances_eigenvectors: Dictionary containing input covariance
+                eigenvectors.
+            gradient_covariances_eigenvectors: Dictionary containing gradient
+                covariance eigenvectors.
+            corrected_eigenvalues: Dictionary to store corrected eigenvalues.
+        """
+        tensor_hook = partial(
+            self._accumulate_corrected_eigenvalues,
+            module=module,
+            group=group,
+            input_covariances_eigenvectors=input_covariances_eigenvectors,
+            gradient_covariances_eigenvectors=gradient_covariances_eigenvectors,
+            corrected_eigenvalues=corrected_eigenvalues,
+            inputs=inputs,
+        )
+        output.register_hook(tensor_hook)
+
+    def _accumulate_corrected_eigenvalues(
+        self,
+        grad_output: Tensor,
+        module: Module,
+        group: ParamGroup,
+        input_covariances_eigenvectors: dict[ParamGroupKey, Tensor],
+        gradient_covariances_eigenvectors: dict[ParamGroupKey, Tensor],
+        corrected_eigenvalues: dict[ParamGroupKey, Tensor],
+        inputs: tuple[Tensor],
+    ):
+        r"""Accumulate the corrected eigenvalues.
+
+        The corrected eigenvalues are computed as
+        :math:`\lambda_{\text{corrected}} = (Q_g^T G Q_a)^2`, where
+        :math:`Q_a` and :math:`Q_g` are the eigenvectors of the input and gradient
+        covariances, respectively, and ``G`` is the gradient matrix. The corrected
+        eigenvalues are used to correct the eigenvalues of the KFAC approximation
+        (EKFAC).
+
+        Updates the provided ``corrected_eigenvalues`` dictionary.
+
+        Args:
+            grad_output: The gradient w.r.t. the output.
+            module: The module this gradient belongs to.
+            group: Parameter group for this layer.
+            input_covariances_eigenvectors: Dictionary containing input covariance
+                eigenvectors.
+            gradient_covariances_eigenvectors: Dictionary containing gradient
+                covariance eigenvectors.
+            corrected_eigenvalues: Dictionary to store corrected eigenvalues.
+            inputs: A tuple containing the layer's inputs.
+
+        Raises:
+            ValueError: If the module has multiple inputs.
+        """
+        g = grad_output.data.detach()
+        batch_size = g.shape[0]
+
+        # We only need layer inputs to extract information w.r.t. the weights
+        a_required = "W" in group
+
+        if len(inputs) != 1:
+            raise ValueError("Modules with multiple inputs are not supported.")
+        a = inputs[0].data.detach() if a_required else None
+
+        has_joint_wb = "W" in group and "b" in group
+        hparams = _module_hyperparams(module)
+        g = grad_to_weight_sharing_format(g, KFACType.EXPAND, hparams)
+        g = g.unsqueeze(0)  # [N, S, D] -> [1, N, S, D] (V=1 for hooks backend)
+        if a is not None:
+            a = input_to_weight_sharing_format(
+                a, KFACType.EXPAND, hparams, bias_pad=1 if has_joint_wb else None
+            )
+
+        correction = compute_loss_correction(
+            batch_size,
+            self._num_per_example_loss_terms,
+            self._loss_func.reduction,
+            self._N_data,
+        )
+
+        group_key = tuple(group.values())
+        aaT_eigenvectors = input_covariances_eigenvectors.get(group_key)
+        ggT_eigenvectors = gradient_covariances_eigenvectors[group_key]
+
+        eigencorrection = compute_eigenvalue_correction_linear_weight_sharing(
+            g, ggT_eigenvectors, a, aaT_eigenvectors
+        )
+        self._set_or_add_(
+            corrected_eigenvalues, group_key, eigencorrection.mul_(correction)
+        )

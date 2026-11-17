@@ -2,35 +2,14 @@
 
 from __future__ import annotations
 
-from math import sqrt
-from typing import Any, Dict, List, Optional, Tuple, TypeVar, Union
-from warnings import warn
+from collections.abc import Callable
 
-from einops import rearrange
 from linear_operator.utils.linear_cg import linear_cg
 from numpy import column_stack
 from scipy.sparse.linalg import lsmr
-from torch import (
-    Tensor,
-    as_tensor,
-    cat,
-    cholesky_inverse,
-    device,
-    dtype,
-    eye,
-    float64,
-    isnan,
-    outer,
-)
-from torch.linalg import cholesky, eigh
+from torch import Tensor, as_tensor, cat, device, dtype, isnan
 
 from curvlinops._torch_base import PyTorchLinearOperator
-from curvlinops.ekfac import EKFACLinearOperator
-from curvlinops.kfac import FactorType, KFACLinearOperator
-
-KFACInvType = TypeVar(
-    "KFACInvType", Optional[Tensor], Tuple[Optional[Tensor], Optional[Tensor]]
-)
 
 
 class _InversePyTorchLinearOperator(PyTorchLinearOperator):
@@ -77,6 +56,12 @@ class CGInverseLinearOperator(_InversePyTorchLinearOperator):
 
     Note:
         Internally, this operator uses GPyTorch's implementation of CG.
+
+    .. note::
+        This operator is not compiler-friendly (:func:`torch.compile`). The underlying
+        ``linear_cg`` routine uses data-dependent control flow (convergence checks
+        on tensor values via ``aten.equal`` and Python ``if`` on tensors), which
+        causes graph breaks during tracing.
     """
 
     def __init__(self, A: PyTorchLinearOperator, **cg_hyperparameters):
@@ -86,13 +71,47 @@ class CGInverseLinearOperator(_InversePyTorchLinearOperator):
             A: PyTorch linear operator whose inverse is formed. Must represent a
                 symmetric and positive-definite matrix.
             cg_hyperparameters: Keyword arguments for GPyTorch's CG implementation.
+                In particular, this includes optional arguments such as ``max_iter``,
+                ``tolerance``, and ``preconditioner``.
+                The ``preconditioner`` should be a callable that applies a left
+                preconditioning operation to a supplied vector. This can be
+                implemented via a ``PyTorchLinearOperator``'s ``__matmul__`` method.
                 For details, see the documentation of the ``linear_cg`` function in
                 https://github.com/cornellius-gp/linear_operator/blob/main/linear_operator/utils/linear_cg.py.
+
+        Example:
+            >>> from torch import allclose, tensor
+            >>> from torch.linalg import inv
+            >>> from curvlinops import CGInverseLinearOperator
+            >>> from curvlinops.diag import DiagonalLinearOperator
+            >>> from curvlinops.examples import TensorLinearOperator
+            >>> A = tensor([[4.0, 1.0, 0.0], [1.0, 3.0, 1.0], [0.0, 1.0, 2.0]])
+            >>> b = tensor([1.0, 2.0, 3.0])
+            >>> A_linop = TensorLinearOperator(A)
+            >>> A_inv_b = CGInverseLinearOperator(
+            ...     A_linop, max_iter=3, max_tridiag_iter=3, tolerance=1e-7
+            ... ) @ b
+            >>> # Use CG with a simple diagonal preconditioner.
+            >>> inverse_diagonal = DiagonalLinearOperator([A.diag().reciprocal()])
+            >>> A_inv_b_preconditioned = CGInverseLinearOperator(
+            ...     A_linop,
+            ...     max_iter=3,
+            ...     max_tridiag_iter=3,
+            ...     tolerance=1e-7,
+            ...     preconditioner=inverse_diagonal.__matmul__,
+            ... ) @ b
+            >>> A_inv_b_exact = inv(A) @ b
+            >>> A_inv_b.round(decimals=4)
+            tensor([0.2222, 0.1111, 1.4444])
+            >>> A_inv_b_preconditioned.round(decimals=4)
+            tensor([0.2222, 0.1111, 1.4444])
+            >>> allclose(A_inv_b_exact, A_inv_b_preconditioned)
+            True
         """
         super().__init__(A)
         self._cg_hyperparameters = cg_hyperparameters
 
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         """Multiply X by the inverse of A.
 
         Args:
@@ -130,6 +149,11 @@ class LSMRInverseLinearOperator(_InversePyTorchLinearOperator):
         Internally, this operator uses SciPy's CPU implementation of LSMR as PyTorch
         currently does not offer an LSMR interface that purely relies on matrix-vector
         products.
+
+    .. note::
+        This operator is not compiler-friendly (:func:`torch.compile`). The matrix-vector
+        product converts tensors to NumPy and calls SciPy's ``lsmr``; these non-Torch
+        operations cannot be traced and cause graph breaks.
     """
 
     def __init__(self, A: PyTorchLinearOperator, **lsmr_hyperparameters):
@@ -145,7 +169,7 @@ class LSMRInverseLinearOperator(_InversePyTorchLinearOperator):
         self._A_scipy = A.to_scipy()
         self._lsmr_hyperparameters = lsmr_hyperparameters
 
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         """Multiply the inverse of A onto a matrix X in list format.
 
         Args:
@@ -190,8 +214,6 @@ class LSMRInverseLinearOperator(_InversePyTorchLinearOperator):
 class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
     """Class for inverse linear operators via truncated Neumann series.
 
-    # noqa: B950
-
     See https://en.wikipedia.org/w/index.php?title=Neumann_series&oldid=1131424698#Approximate_matrix_inversion.
 
     Motivated by
@@ -199,6 +221,10 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
     - Lorraine, J., Vicol, P., & Duvenaud, D. (2020). Optimizing millions of
       hyperparameters by implicit differentiation. In International Conference on
       Artificial Intelligence and Statistics (AISTATS).
+    - Wang, A., Nguyen, E., Yang, R., Bae, J., McIlraith, S. A., & Grosse,
+      R. B. (2025). Better Training Data Attribution via Better Inverse
+      Hessian-Vector Products. In Advances in Neural Information Processing
+      Systems (NeurIPS 2025).
 
     .. warning::
         The Neumann series can be non-convergent. In this case, the iterations
@@ -206,7 +232,14 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
 
     .. warning::
         The Neumann series can converge slowly.
-        Use :py:class:`curvlinops.CGInverLinearOperator` for better accuracy.
+        Use :py:class:`curvlinops.CGInverseLinearOperator` for better accuracy.
+
+    .. note::
+        With the default ``check_nan=True``, this operator is not compiler-friendly
+        (:func:`torch.compile`): the per-iteration ``isnan`` check introduces
+        data-dependent branching that causes graph breaks. Passing ``check_nan=False``
+        makes the operator compiler-friendly (the truncated series itself uses only
+        traceable PyTorch ops).
     """
 
     def __init__(
@@ -215,6 +248,7 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
         num_terms: int = 100,
         scale: float = 1.0,
         check_nan: bool = True,
+        preconditioner: None | Callable[[Tensor], Tensor] = None,
     ):
         r"""Store the linear operator whose inverse should be represented.
 
@@ -224,12 +258,12 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
             \mathbf{A}^{-1}
             =
             \sum_{k=0}^{\infty}
-            \left(\mathbf{I} - \mathbf{A} \right)^k\,.
+            \left(\mathbf{I} - \mathbf{A} \right)^k\,,
 
-        and is convergent if all eigenvalues satisfy
+        which is convergent if all eigenvalues satisfy
         :math:`0 < \lambda(\mathbf{A}) < 2`.
 
-        By re-rescaling the matrix by ``scale`` (:math:`\alpha`), we have:
+        By re-scaling the matrix by ``scale`` (:math:`\alpha`), we have:
 
         .. math::
             \mathbf{A}^{-1}
@@ -239,7 +273,7 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
             \alpha \sum_{k=0}^{\infty}
             \left(\mathbf{I} - \alpha \mathbf{A} \right)^k\,,
 
-        which and is convergent if :math:`0 < \lambda(\mathbf{A}) < \frac{2}{\alpha}`.
+        which is convergent if :math:`0 < \lambda(\mathbf{A}) < \frac{2}{\alpha}`.
 
         Additionally, we truncate the series at ``num_terms`` (:math:`K`):
 
@@ -257,30 +291,65 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
                 for convergence of Neumann series (details above). Default: ``1.0``.
             check_nan: Whether to check for NaNs while applying the truncated Neumann
                 series. Default: ``True``.
+            preconditioner: Optional preconditioner :math:`\mathbf{P}` used in the
+                preconditioned Neumann/Richardson iteration
+                :math:`\mathbf{A}^{-1} \approx \alpha \sum_{k=0}^{K}
+                (\mathbf{I} - \alpha \mathbf{P}\mathbf{A})^k \mathbf{P}`,
+                where :math:`\alpha` is given by ``scale``. This preconditioned
+                formulation is inspired by Wang et al. (NeurIPS 2025).
+                ``preconditioner`` should be a callable that applies a left
+                preconditioning operation to a supplied vector or matrix in tensor
+                format, e.g. a ``PyTorchLinearOperator``'s ``__matmul__`` method.
+                Default: ``None``.
         """
         super().__init__(A)
         self._num_terms = num_terms
         self._scale = scale
         self._check_nan = check_nan
+        self._preconditioner = preconditioner
 
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         """Multiply the inverse of A onto a matrix in list format.
 
         Args:
              X: Matrix for multiplication in list format.
 
         Returns:
-             Result of inverse matrix-vector multiplication, ``A⁻¹ @ x``.
+             Result of inverse matrix-matrix multiplication, ``A⁻¹ @ X``.
 
         Raises:
             ValueError: If ``NaN`` check is turned on and ``NaN`` values are detected.
         """
-        result_list, v_list = [x.clone() for x in X], [x.clone() for x in X]
+        preconditioned = self._preconditioner is not None
+
+        if not preconditioned:
+            rhs_list = X
+            apply_iteration_operator = self._A._matmat
+        else:
+            # Apply the left preconditioner to a vector in list of tensor.
+            def P(X: list[Tensor]) -> list[Tensor]:
+                X_flat = cat([x.flatten(end_dim=-2) for x in X])
+                PX_flat = self._preconditioner(X_flat)
+                _, num_vecs = PX_flat.shape
+                return [
+                    r.reshape(*s, num_vecs)
+                    for r, s in zip(
+                        PX_flat.split(self._out_shape_flat), self._out_shape
+                    )
+                ]
+
+            rhs_list = P(X)
+
+            def apply_iteration_operator(v_list: list[Tensor]) -> list[Tensor]:
+                return P(self._A @ v_list)
+
+        result_list = [x.clone() for x in rhs_list]
+        v_list = [x.clone() for x in rhs_list]
 
         for idx in range(self._num_terms):
+            A_v_list = apply_iteration_operator(v_list)
             v_list = [
-                v.sub_(Av, alpha=self._scale)
-                for v, Av in zip(v_list, self._A._matmat(v_list))
+                v.sub_(A_v, alpha=self._scale) for v, A_v in zip(v_list, A_v_list)
             ]
             result_list = [result.add_(v) for result, v in zip(result_list, v_list)]
 
@@ -298,416 +367,25 @@ class NeumannInverseLinearOperator(_InversePyTorchLinearOperator):
 
         Returns:
             A linear operator representing the adjoint.
+
+        Raises:
+            NotImplementedError: If the preconditioner's adjoint cannot be inferred.
         """
+        preconditioner = None
+        if self._preconditioner is not None:
+            preconditioner_linop = getattr(self._preconditioner, "__self__", None)
+            if isinstance(preconditioner_linop, PyTorchLinearOperator):
+                preconditioner = preconditioner_linop.adjoint().__matmul__
+            else:
+                raise NotImplementedError(
+                    "Adjoint with a preconditioner is only supported when the "
+                    "preconditioner is a bound PyTorchLinearOperator.__matmul__ "
+                    "method."
+                )
         return NeumannInverseLinearOperator(
             self._A._adjoint(),
             num_terms=self._num_terms,
             scale=self._scale,
             check_nan=self._check_nan,
+            preconditioner=preconditioner,
         )
-
-
-class KFACInverseLinearOperator(_InversePyTorchLinearOperator):
-    """Class to invert instances of the ``KFACLinearOperator``.
-
-    Attributes:
-        SELF_ADJOINT: Whether the operator is self-adjoint. ``True`` for KFAC-inverse.
-    """
-
-    SELF_ADJOINT: bool = True
-
-    def __init__(
-        self,
-        A: KFACLinearOperator,
-        damping: Union[float, Tuple[float, float]] = 0.0,
-        use_heuristic_damping: bool = False,
-        min_damping: float = 1e-8,
-        use_exact_damping: bool = False,
-        cache: bool = True,
-        retry_double_precision: bool = True,
-    ):
-        r"""Store the linear operator whose inverse should be represented.
-
-        Args:
-            A: ``KFACLinearOperator`` whose inverse is formed.
-            damping: Damping value(s) for all input and gradient covariances. If tuple,
-                the first value is used for the input covariances and the second value
-                for the gradient covariances. Note that if heuristic or exact damping is
-                used the damping cannot be a tuple. Default: ``0.``.
-            use_heuristic_damping: Whether to use a heuristic damping strategy by
-                `Martens and Grosse, 2015 <https://arxiv.org/abs/1503.05671>`_
-                (Section 6.3). For input covariances
-                :math:`A \in \mathbb{R}^{n \times n}` and gradient covariances
-                :math:`B \in \mathbb{R}^{m \times m}`, we define
-                :math:`\pi := \sqrt{\frac{m\; \text{tr}(A)}{n\; \text{tr}(B)}}` and set the
-                damping for the input covariances :math:`A` to
-                :math:`\max(\pi\; \sqrt{\text{damping}}, \text{min_damping})` and for the
-                gradient covariances :math:`B` to
-                :math:`\max(\frac{1}{\pi}\; \sqrt{\text{damping}}, \text{min_damping})`.
-                Default: ``False``.
-            min_damping: Minimum damping value. Only used if ``use_heuristic_damping``
-                is ``True``. Default: ``1e-8``.
-            use_exact_damping: Whether to use exact damping, i.e. to invert
-                :math:`(A \otimes B) + \text{damping}\; \mathbf{I}`. This is implemented
-                via eigendecompositions of the Kronecker factors, e.g. see equation (21)
-                in `Grosse et al., 2023 <https://arxiv.org/abs/2308.03296>`_.
-                Note that the eigendecomposition synchronizes the device with the CPU.
-                Default: ``False``.
-            cache: Whether to cache the inverses of the Kronecker factors.
-                Default: ``True``.
-            retry_double_precision: Whether to retry Cholesky decomposition used for
-                inversion in double precision. Default: ``True``.
-
-        Raises:
-            ValueError: If the linear operator is not a ``KFACLinearOperator``.
-            ValueError: If both heuristic and exact damping are selected.
-            ValueError: If heuristic or exact damping is used and the damping value is a
-                tuple.
-        """
-        if not isinstance(A, KFACLinearOperator):
-            raise ValueError(
-                "The input `A` must be an instance of `KFACLinearOperator`."
-            )
-        super().__init__(A)
-        if use_heuristic_damping and use_exact_damping:
-            raise ValueError("Either use heuristic damping or exact damping, not both.")
-        if (use_heuristic_damping or use_exact_damping) and isinstance(damping, tuple):
-            raise ValueError(
-                "Heuristic and exact damping require a single damping value."
-            )
-        if isinstance(self._A, EKFACLinearOperator) and not use_exact_damping:
-            raise ValueError("Only exact damping is supported for EKFAC.")
-
-        self._damping = damping
-        self._use_heuristic_damping = use_heuristic_damping
-        self._min_damping = min_damping
-        self._use_exact_damping = use_exact_damping
-        self._cache = cache
-        self._retry_double_precision = retry_double_precision
-        self._inverse_input_covariances: Dict[str, FactorType] = {}
-        self._inverse_gradient_covariances: Dict[str, FactorType] = {}
-
-    def _compute_damping(
-        self, aaT: Optional[Tensor], ggT: Optional[Tensor]
-    ) -> Tuple[float, float]:
-        """Compute the damping values for the input and gradient covariances.
-
-        Args:
-            aaT: Input covariance matrix. ``None`` for biases.
-            ggT: Gradient covariance matrix.
-
-        Returns:
-            Damping values for the input and gradient covariances.
-        """
-        if self._use_heuristic_damping and aaT is not None and ggT is not None:
-            # Martens and Grosse, 2015 (https://arxiv.org/abs/1503.05671) (Section 6.3)
-            aaT_eig_mean = aaT.trace() / aaT.shape[0]
-            ggT_eig_mean = ggT.trace() / ggT.shape[0]
-            if aaT_eig_mean >= 0.0 and ggT_eig_mean > 0.0:
-                sqrt_eig_mean_ratio = (aaT_eig_mean / ggT_eig_mean).sqrt()
-                sqrt_damping = sqrt(self._damping)
-                damping_aaT = max(sqrt_damping * sqrt_eig_mean_ratio, self._min_damping)
-                damping_ggT = max(sqrt_damping / sqrt_eig_mean_ratio, self._min_damping)
-                return damping_aaT, damping_ggT
-
-        if isinstance(self._damping, tuple):
-            return self._damping
-
-        return self._damping, self._damping
-
-    def _damped_cholesky(self, M: Tensor, damping: float) -> Tensor:
-        """Compute the Cholesky decomposition of a matrix with damping.
-
-        Args:
-            M: Matrix for Cholesky decomposition.
-            damping: Damping value.
-
-        Returns:
-            Cholesky decomposition of the matrix with damping.
-        """
-        return cholesky(
-            M.add(eye(M.shape[0], dtype=M.dtype, device=M.device), alpha=damping)
-        )
-
-    def _compute_inv_damped_eigenvalues(
-        self, aaT_eigenvalues: Tensor, ggT_eigenvalues: Tensor, name: str
-    ) -> Union[Tensor, Dict[str, Tensor]]:
-        """Compute the inverses of the damped eigenvalues for a given layer.
-
-        Args:
-            aaT_eigenvalues: Eigenvalues of the input covariance matrix.
-            ggT_eigenvalues: Eigenvalues of the gradient covariance matrix.
-            name: Name of the layer for which to damp and invert eigenvalues.
-
-        Returns:
-            Inverses of the damped eigenvalues.
-        """
-        param_pos = self._A._mapping[name]
-        if (
-            not self._A._separate_weight_and_bias
-            and "weight" in param_pos
-            and "bias" in param_pos
-        ):
-            inv_damped_eigenvalues = (
-                outer(ggT_eigenvalues, aaT_eigenvalues).add_(self._damping).pow_(-1)
-            )
-        else:
-            inv_damped_eigenvalues: Dict[str, Tensor] = {}
-            for p_name, pos in param_pos.items():
-                inv_damped_eigenvalues[pos] = (
-                    outer(ggT_eigenvalues, aaT_eigenvalues)
-                    if p_name == "weight"
-                    else ggT_eigenvalues.clone()
-                )
-                inv_damped_eigenvalues[pos].add_(self._damping).pow_(-1)
-        return inv_damped_eigenvalues
-
-    def _compute_factors_eigendecomposition(
-        self, aaT: Optional[Tensor], ggT: Optional[Tensor]
-    ) -> Tuple[FactorType, FactorType]:
-        """Compute the eigendecompositions of the Kronecker factors for a given layer.
-
-        Used to perform damped preconditioning in Kronecker-factored eigenbasis (KFE).
-
-        Args:
-            aaT: Input covariance matrix. ``None`` for biases.
-            ggT: Gradient covariance matrix.
-
-        Returns:
-            Tuple of eigenvalues and eigenvectors of the input and gradient covariance
-            Kronecker factors. Can be ``None`` if the input or gradient covariance is
-            ``None`` (e.g. the input covariances for biases).
-        """
-        aaT_eigenvalues, aaT_eigenvectors = (None, None) if aaT is None else eigh(aaT)
-        ggT_eigenvalues, ggT_eigenvectors = (None, None) if ggT is None else eigh(ggT)
-        return (aaT_eigenvalues, aaT_eigenvectors), (ggT_eigenvalues, ggT_eigenvectors)
-
-    def _compute_inverse_factors(
-        self, aaT: Optional[Tensor], ggT: Optional[Tensor]
-    ) -> Tuple[FactorType, FactorType]:
-        """Compute the inverses of the Kronecker factors for a given layer.
-
-        Args:
-            aaT: Input covariance matrix. ``None`` for biases.
-            ggT: Gradient covariance matrix.
-
-        Returns:
-            Tuple of inverses (or eigendecompositions) of the input and gradient
-            covariance Kronecker factors and optionally eigenvalues. Can be ``None`` if
-            the input or gradient covariance is ``None`` (e.g. the input covariances for
-            biases).
-
-        Raises:
-            RuntimeError: If a Cholesky decomposition (and optionally the retry in
-                double precision) fails.
-        """
-        inverse_factors = []
-        for factor, damping in zip((aaT, ggT), self._compute_damping(aaT, ggT)):
-            # Compute inverse of factor matrix via Cholesky decomposition
-            try:
-                factor_chol = (
-                    None if factor is None else self._damped_cholesky(factor, damping)
-                )
-            except RuntimeError as error:
-                if self._retry_double_precision and factor.dtype != float64:
-                    warn(
-                        f"Failed to compute Cholesky decomposition in {factor.dtype} "
-                        f"precision with error {error}. "
-                        "Retrying in double precision...",
-                        stacklevel=2,
-                    )
-                    # Retry in double precision
-                    original_type = factor.dtype
-                    factor_chol = self._damped_cholesky(factor.to(float64), damping)
-                    factor_chol = factor_chol.to(original_type)
-                else:
-                    raise error
-            factor_inv = None if factor_chol is None else cholesky_inverse(factor_chol)
-            inverse_factors.append(factor_inv)
-        return tuple(inverse_factors)
-
-    def _compute_or_get_cached_inverse(
-        self, name: str
-    ) -> Tuple[FactorType, FactorType]:
-        """Invert the Kronecker factors of the KFACLinearOperator or retrieve them.
-
-        Args:
-            name: Name of the layer for which to invert Kronecker factors.
-
-        Returns:
-            Tuple of inverses (or eigendecompositions) of the input and gradient
-            covariance Kronecker factors and optionally eigenvalues. Can be ``None`` if
-            the input or gradient covariance is ``None`` (e.g. the input covariances for
-            biases).
-        """
-        if isinstance(self._A, EKFACLinearOperator):
-            aaT_eigenvectors = self._A._input_covariances_eigenvectors.get(name)
-            ggT_eigenvectors = self._A._gradient_covariances_eigenvectors.get(name)
-            eigenvalues = self._A._corrected_eigenvalues[name]
-            if isinstance(eigenvalues, dict):
-                inv_damped_eigenvalues = {
-                    k: v.add(self._damping).pow_(-1) for k, v in eigenvalues.items()
-                }
-            elif isinstance(eigenvalues, Tensor):
-                inv_damped_eigenvalues = eigenvalues.add(self._damping).pow_(-1)
-            return aaT_eigenvectors, ggT_eigenvectors, inv_damped_eigenvalues
-
-        if name in self._inverse_input_covariances:
-            aaT_inv = self._inverse_input_covariances.get(name)
-            ggT_inv = self._inverse_gradient_covariances.get(name)
-            if self._use_exact_damping:
-                aaT_eigenvectors, aaT_eigenvalues = aaT_inv
-                ggT_eigenvectors, ggT_eigenvalues = ggT_inv
-                inv_damped_eigenvalues = self._compute_inv_damped_eigenvalues(
-                    aaT_eigenvalues, ggT_eigenvalues, name
-                )
-                return aaT_eigenvectors, ggT_eigenvectors, inv_damped_eigenvalues
-            return aaT_inv, ggT_inv, None
-
-        aaT = self._A._input_covariances.get(name)
-        ggT = self._A._gradient_covariances.get(name)
-        if self._use_exact_damping:
-            (
-                (aaT_eigenvalues, aaT_eigenvectors),
-                (ggT_eigenvalues, ggT_eigenvectors),
-            ) = self._compute_factors_eigendecomposition(aaT, ggT)
-            aaT_inv = (aaT_eigenvectors, aaT_eigenvalues)
-            ggT_inv = (ggT_eigenvectors, ggT_eigenvalues)
-            inv_damped_eigenvalues = self._compute_inv_damped_eigenvalues(
-                aaT_eigenvalues, ggT_eigenvalues, name
-            )
-        else:
-            aaT_inv, ggT_inv = self._compute_inverse_factors(aaT, ggT)
-            inv_damped_eigenvalues = None
-
-        if self._cache:
-            self._inverse_input_covariances[name] = aaT_inv
-            self._inverse_gradient_covariances[name] = ggT_inv
-
-        return (
-            aaT_inv[0] if self._use_exact_damping else aaT_inv,
-            ggT_inv[0] if self._use_exact_damping else ggT_inv,
-            inv_damped_eigenvalues,
-        )
-
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
-        """Matrix-matrix multiplication with the KFAC inverse.
-
-        Args:
-            X: Matrix for multiplication. Is a list of tensors where each entry has the
-                same shape as a parameter with an additional trailing dimension of size
-                ``K`` for the columns, i.e. ``[(*p1.shape, K), (*p2.shape, K), ...]``.
-
-        Returns:
-            Matrix-multiplication result ``KFAC⁻¹ @ X``. Has same shape as ``X``.
-        """
-        # Maybe compute (E)KFAC if not already done.
-        if isinstance(self._A, EKFACLinearOperator):
-            self._A._maybe_compute_ekfac()
-        elif not (self._A._input_covariances or self._A._gradient_covariances):
-            self._A.compute_kronecker_factors()
-
-        KX: List[Tensor | None] = [None] * len(X)
-
-        for mod_name, param_pos in self._A._mapping.items():
-            # retrieve the inverses of the Kronecker factors from cache or invert them.
-            # aaT_inv/ggT_inv are the eigenvectors of aaT/ggT if exact damping is used.
-            (
-                aaT_inv,
-                ggT_inv,
-                inv_damped_eigenvalues,
-            ) = self._compute_or_get_cached_inverse(mod_name)
-            # cache the weight shape to ensure correct shapes are returned
-            if "weight" in param_pos:
-                weight_shape = X[param_pos["weight"]].shape
-
-            # bias and weights are treated jointly
-            if (
-                not self._A._separate_weight_and_bias
-                and "weight" in param_pos.keys()
-                and "bias" in param_pos.keys()
-            ):
-                w_pos, b_pos = param_pos["weight"], param_pos["bias"]
-                X_w = rearrange(X[w_pos], "c_out ... m -> c_out (...) m")
-                X_joint = cat([X_w, X[b_pos].unsqueeze(1)], dim=1)
-                X_joint = self._A._left_and_right_multiply(
-                    X_joint, aaT_inv, ggT_inv, inv_damped_eigenvalues
-                )
-                w_cols = X_w.shape[1]
-                KX[w_pos], KX[b_pos] = X_joint.split([w_cols, 1], dim=1)
-                KX[b_pos].squeeze_(1)
-            else:
-                self._A._separate_left_and_right_multiply(
-                    KX, X, param_pos, aaT_inv, ggT_inv, inv_damped_eigenvalues
-                )
-
-            # restore original shapes
-            if "weight" in param_pos:
-                KX[param_pos["weight"]] = KX[param_pos["weight"]].view(weight_shape)
-
-        return KX
-
-    def state_dict(self) -> Dict[str, Any]:
-        """Return the state of the inverse KFAC linear operator.
-
-        Returns:
-            State dictionary.
-        """
-        return {
-            "A": self._A.state_dict(),
-            # Attributes
-            "damping": self._damping,
-            "use_heuristic_damping": self._use_heuristic_damping,
-            "min_damping": self._min_damping,
-            "use_exact_damping": self._use_exact_damping,
-            "cache": self._cache,
-            "retry_double_precision": self._retry_double_precision,
-            # Inverse Kronecker factors (if computed and cached)
-            "inverse_input_covariances": self._inverse_input_covariances,
-            "inverse_gradient_covariances": self._inverse_gradient_covariances,
-        }
-
-    def load_state_dict(self, state_dict: Dict[str, Any]):
-        """Load the state of the inverse KFAC linear operator.
-
-        Args:
-            state_dict: State dictionary.
-        """
-        self._A.load_state_dict(state_dict["A"])
-
-        # Set attributes
-        self._damping = state_dict["damping"]
-        self._use_heuristic_damping = state_dict["use_heuristic_damping"]
-        self._min_damping = state_dict["min_damping"]
-        self._use_exact_damping = state_dict["use_exact_damping"]
-        self._cache = state_dict["cache"]
-        self._retry_double_precision = state_dict["retry_double_precision"]
-
-        # Set inverse Kronecker factors (if computed and cached)
-        self._inverse_input_covariances = state_dict["inverse_input_covariances"]
-        self._inverse_gradient_covariances = state_dict["inverse_gradient_covariances"]
-
-    @classmethod
-    def from_state_dict(
-        cls, state_dict: Dict[str, Any], A: KFACLinearOperator
-    ) -> "KFACInverseLinearOperator":
-        """Load an inverse KFAC linear operator from a state dictionary.
-
-        Args:
-            state_dict: State dictionary.
-            A: ``KFACLinearOperator`` whose inverse is formed.
-
-        Returns:
-            Linear operator of inverse KFAC approximation.
-        """
-        inv_kfac = cls(
-            A,
-            damping=state_dict["damping"],
-            use_heuristic_damping=state_dict["use_heuristic_damping"],
-            min_damping=state_dict["min_damping"],
-            use_exact_damping=state_dict["use_exact_damping"],
-            cache=state_dict["cache"],
-            retry_double_precision=state_dict["retry_double_precision"],
-        )
-        inv_kfac.load_state_dict(state_dict)
-        return inv_kfac

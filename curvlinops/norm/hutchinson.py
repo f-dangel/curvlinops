@@ -1,7 +1,5 @@
 """Hutchinson-style matrix norm estimation."""
 
-from typing import Union
-
 from torch import Tensor, column_stack
 
 from curvlinops._torch_base import PyTorchLinearOperator
@@ -9,7 +7,7 @@ from curvlinops.sampling import random_vector
 
 
 def hutchinson_squared_fro(
-    A: Union[Tensor, PyTorchLinearOperator],
+    A: Tensor | PyTorchLinearOperator,
     num_matvecs: int,
     distribution: str = "rademacher",
 ) -> Tensor:
@@ -68,11 +66,8 @@ def hutchinson_squared_fro(
     if A.shape[1] > A.shape[0]:
         A = A.T
 
-    G = column_stack(
-        [
-            random_vector(dim, distribution, A.device, A.dtype)
-            for _ in range(num_matvecs)
-        ]
-    )
+    G = column_stack([
+        random_vector(dim, distribution, A.device, A.dtype) for _ in range(num_matvecs)
+    ])
     AG = A @ G
     return (AG**2 / num_matvecs).sum()

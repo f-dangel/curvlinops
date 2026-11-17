@@ -7,7 +7,6 @@ From Papyan, 2020:
 """
 
 from math import log, sqrt
-from typing import List, Tuple, Union
 
 from scipy.linalg import eigh_tridiagonal
 from scipy.sparse.linalg import eigsh
@@ -32,12 +31,12 @@ def lanczos_approximate_spectrum(
     num_points: int = 1024,
     num_repeats: int = 1,
     kappa: float = 3.0,
-    boundaries: Union[
-        Tuple[float, float], Tuple[float, None], Tuple[None, float], None
-    ] = None,
+    boundaries: (
+        tuple[float, float] | tuple[float, None] | tuple[None, float] | None
+    ) = None,
     margin: float = 0.05,
     boundaries_tol: float = 1e-2,
-) -> Tuple[Tensor, Tensor]:
+) -> tuple[Tensor, Tensor]:
     """Approximate the spectral density p(λ) = 1/d ∑ᵢ δ(λ - λᵢ) of A ∈ Rᵈˣᵈ.
 
     Implements algorithm 2 (:code:`LanczosApproxSpec`) of Papyan, 2020
@@ -83,12 +82,12 @@ def lanczos_approximate_spectrum(
 
 
 def lanczos_approximate_spectrum_from_iter(
-    lanczos_iter: Tuple[Tensor, Tensor],
-    boundaries: Tuple[float, float],
+    lanczos_iter: tuple[Tensor, Tensor],
+    boundaries: tuple[float, float],
     num_points: int,
     kappa: float,
     margin: float,
-) -> Tuple[Tensor, Tensor]:
+) -> tuple[Tensor, Tensor]:
     """Compute a spectrum approximation from a Lanczos iteration.
 
     Args:
@@ -148,9 +147,9 @@ class _LanczosSpectrumCached:
         """
         self._A = A
         self._ncv = ncv
-        self._lanczos_iters: List[Tuple[Tensor, Tensor]] = []
+        self._lanczos_iters: list[tuple[Tensor, Tensor]] = []
 
-    def _get_lanczos_iters(self, num_iters: int) -> List[Tuple[Tensor, Tensor]]:
+    def _get_lanczos_iters(self, num_iters: int) -> list[tuple[Tensor, Tensor]]:
         while len(self._lanczos_iters) < num_iters:
             self._lanczos_iters.append(fast_lanczos(self._A, self._ncv))
 
@@ -168,9 +167,9 @@ class LanczosApproximateSpectrumCached(_LanczosSpectrumCached):
         self,
         A: PyTorchLinearOperator,
         ncv: int,
-        boundaries: Union[
-            Tuple[float, float], Tuple[float, None], Tuple[None, float], None
-        ] = None,
+        boundaries: (
+            tuple[float, float] | tuple[float, None] | tuple[None, float] | None
+        ) = None,
         boundaries_tol: float = 1e-2,
     ):
         """Initialize.
@@ -196,7 +195,7 @@ class LanczosApproximateSpectrumCached(_LanczosSpectrumCached):
         num_points: int = 1024,
         kappa: float = 3.0,
         margin: float = 0.05,
-    ) -> Tuple[Tensor, Tensor]:
+    ) -> tuple[Tensor, Tensor]:
         """Approximate the spectal density of A.
 
         Args:
@@ -229,13 +228,13 @@ def lanczos_approximate_log_spectrum(
     num_points: int = 1024,
     num_repeats: int = 1,
     kappa: float = 1.04,
-    boundaries: Union[
-        Tuple[float, float], Tuple[float, None], Tuple[None, float], None
-    ] = None,
+    boundaries: (
+        tuple[float, float] | tuple[float, None] | tuple[None, float] | None
+    ) = None,
     margin: float = 0.05,
     boundaries_tol: float = 1e-2,
     epsilon: float = 1e-5,
-) -> Tuple[Tensor, Tensor]:
+) -> tuple[Tensor, Tensor]:
     """Approximate the spectral density ``p(λ) = 1/d ∑ᵢ δ(λ - λᵢ)`` of ``log(|A| + εI) ∈ Rᵈˣᵈ``.
 
     Follows the idea of Section C.7 in Papyan, 2020
@@ -288,13 +287,13 @@ def lanczos_approximate_log_spectrum(
 
 
 def lanczos_approximate_log_spectrum_from_iter(
-    lanczos_iter: Tuple[Tensor, Tensor],
-    boundaries: Tuple[float, float],
+    lanczos_iter: tuple[Tensor, Tensor],
+    boundaries: tuple[float, float],
     num_points: int,
     kappa: float,
     margin: float,
     epsilon: float,
-) -> Tuple[Tensor, Tensor]:
+) -> tuple[Tensor, Tensor]:
     """Compute a log-spectrum approximation from a Lanczos iteration.
 
     Args:
@@ -353,9 +352,9 @@ class LanczosApproximateLogSpectrumCached(_LanczosSpectrumCached):
         self,
         A: PyTorchLinearOperator,
         ncv: int,
-        boundaries: Union[
-            Tuple[float, float], Tuple[float, None], Tuple[None, float], None
-        ] = None,
+        boundaries: (
+            tuple[float, float] | tuple[float, None] | tuple[None, float] | None
+        ) = None,
         boundaries_tol: float = 1e-2,
     ):
         """Initialize.
@@ -382,7 +381,7 @@ class LanczosApproximateLogSpectrumCached(_LanczosSpectrumCached):
         kappa: float = 3.0,
         margin: float = 0.05,
         epsilon: float = 1e-5,
-    ) -> Tuple[Tensor, Tensor]:
+    ) -> tuple[Tensor, Tensor]:
         """Approximate the spectal density of A.
 
         Args:
@@ -413,7 +412,7 @@ class LanczosApproximateLogSpectrumCached(_LanczosSpectrumCached):
 
 def fast_lanczos(
     A: PyTorchLinearOperator, ncv: int, use_eigh_tridiagonal: bool = False
-) -> Tuple[Tensor, Tensor]:
+) -> tuple[Tensor, Tensor]:
     """Lanczos iterations for large-scale problems (no reorthogonalization step).
 
     Implements algorithm 2 of Papyan, 2020 (https://jmlr.org/papers/v21/20-933.html).
@@ -478,10 +477,10 @@ def fast_lanczos(
 def approximate_boundaries(
     A: PyTorchLinearOperator,
     tol: float = 1e-2,
-    boundaries: Union[
-        Tuple[float, float], Tuple[float, None], Tuple[None, float], None
-    ] = None,
-) -> Tuple[float, float]:
+    boundaries: (
+        tuple[float, float] | tuple[float, None] | tuple[None, float] | None
+    ) = None,
+) -> tuple[float, float]:
     """Approximate λₘᵢₙ(A) and λₘₐₓ(A) using SciPy's ``eigsh``.
 
     Args:
@@ -514,10 +513,10 @@ def approximate_boundaries(
 def approximate_boundaries_abs(
     A: PyTorchLinearOperator,
     tol: float = 1e-2,
-    boundaries: Union[
-        Tuple[float, float], Tuple[float, None], Tuple[None, float], None
-    ] = None,
-) -> Tuple[float, float]:
+    boundaries: (
+        tuple[float, float] | tuple[float, None] | tuple[None, float] | None
+    ) = None,
+) -> tuple[float, float]:
     """Approximate λₘᵢₙ(|A|) and λₘₐₓ(|A|) using SciPy's ``eigsh``.
 
     Args:

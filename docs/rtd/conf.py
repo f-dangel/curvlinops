@@ -1,3 +1,5 @@
+"""Sphinx configuration for Curvlinops documentation."""
+
 # Configuration file for the Sphinx documentation builder.
 #
 # This file only contains a selection of the most common options. For a full
@@ -66,7 +68,7 @@ sphinx_gallery_conf = {
     "default_thumb_file": "assets/logo.png",
     "filename_pattern": "example",
     "matplotlib_animations": True,
-    "ignore_pattern": "memory_benchmark.py|benchmark_utils.py|nanogpt_model.py",
+    "ignore_pattern": "benchmark_execute.py|benchmark_utils.py|nanogpt_model.py",
 }
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ["_templates"]

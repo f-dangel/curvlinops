@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
-from typing import List
-
 from torch import Tensor, device, dtype, zeros
 
 from curvlinops._torch_base import PyTorchLinearOperator
 
 
 class SubmatrixLinearOperator(PyTorchLinearOperator):
-    """Class for sub-matrices of linear operators."""
+    """Class for sub-matrices of linear operators.
+
+    .. note::
+        This operator is not compiler-friendly (:func:`torch.compile`). Its matrix-vector
+        product dispatches through the wrapped operator's ``__matmul__``, and Dynamo
+        cannot proxy a user-defined linear operator as an argument, which causes graph
+        breaks.
+    """
 
     def __init__(
-        self, A: PyTorchLinearOperator, row_idxs: List[int], col_idxs: List[int]
+        self, A: PyTorchLinearOperator, row_idxs: list[int], col_idxs: list[int]
     ):
         """Store the linear operator and indices of its sub-matrix.
 
@@ -45,7 +50,7 @@ class SubmatrixLinearOperator(PyTorchLinearOperator):
         """
         return self._A.device
 
-    def set_submatrix(self, row_idxs: List[int], col_idxs: List[int]):
+    def set_submatrix(self, row_idxs: list[int], col_idxs: list[int]):
         """Define the sub-matrix.
 
         Internally sets the linear operator's shape.
@@ -74,7 +79,7 @@ class SubmatrixLinearOperator(PyTorchLinearOperator):
         self._row_idxs = row_idxs
         self._col_idxs = col_idxs
 
-    def _matmat(self, X: List[Tensor]) -> List[Tensor]:
+    def _matmat(self, X: list[Tensor]) -> list[Tensor]:
         """Matrix-matrix multiplication.
 
         Args:

@@ -1,152 +1,86 @@
-"""Utility functions related to KFAC."""
+"""Utility functions specific to KFAC (patch extraction, canonical space converters).
 
-from math import sqrt
-from typing import Tuple, Union
+Also defines ``FisherType`` and ``KFACType`` enums used across the KFAC codebase.
+"""
+
+from __future__ import annotations
+
+from enum import Enum, EnumMeta
 
 from einconv import index_pattern
 from einconv.utils import get_conv_paddings
 from einops import einsum, rearrange, reduce
-from torch import Tensor, diag, eye
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
+from torch import Size, Tensor, cat, device, dtype
 from torch.nn.functional import unfold
 from torch.nn.modules.utils import _pair
 
+from curvlinops._torch_base import PyTorchLinearOperator
 
-def loss_hessian_matrix_sqrt(
-    output_one_datum: Tensor,
-    target_one_datum: Tensor,
-    loss_func: Union[MSELoss, CrossEntropyLoss, BCEWithLogitsLoss],
-) -> Tensor:
-    r"""Compute the loss function's matrix square root for a sample's output.
 
-    Args:
-        output_one_datum: The model's prediction on a single datum. Has shape
-            ``[1, C]`` where ``C`` is the number of classes (outputs of the neural
-            network).
-        target_one_datum: The label of the single datum.
-        loss_func: The loss function.
+class MetaEnum(EnumMeta):
+    """Metaclass for the Enum class for desired behavior of the ``in`` operator."""
 
-    Returns:
-        The matrix square root
-        :math:`\mathbf{S}` of the Hessian. Has shape
-        ``[C, C]`` and satisfies the relation
+    def __contains__(cls, item):
+        """Return whether ``item`` is a valid Enum value.
 
-        .. math::
-            \mathbf{S} \mathbf{S}^\top
-            =
-            \nabla^2_{\mathbf{f}} \ell(\mathbf{f}, \mathbf{y})
-            \in \mathbb{R}^{C \times C}
+        Args:
+            item: Candidate value.
 
-        where :math:`\mathbf{f} := f(\mathbf{x}) \in \mathbb{R}^C` is the model's
-        prediction on a single datum :math:`\mathbf{x}` and :math:`\mathbf{y}` is
-        the label.
+        Returns:
+            ``True`` if ``item`` is a valid Enum value.
+        """
+        try:
+            cls(item)
+        except ValueError:
+            return False
+        return True
 
-    Note:
-        For :class:`torch.nn.MSELoss` (with :math:`c = 1` for ``reduction='sum'``
-        and :math:`c = 1/C` for ``reduction='mean'``), we have:
 
-        .. math::
-            \ell(\mathbf{f}) &= c \sum_{i=1}^C (f_i - y_i)^2
-            \\
-            \nabla^2_{\mathbf{f}} \ell(\mathbf{f}, \mathbf{y}) &= 2 c \mathbf{I}_C
-            \\
-            \mathbf{S} &= \sqrt{2 c} \mathbf{I}_C
+class FisherType(str, Enum, metaclass=MetaEnum):
+    """Enum for the Fisher type.
 
-    Note:
-        For :class:`torch.nn.CrossEntropyLoss` (with :math:`c = 1` irrespective of the
-        reduction, :math:`\mathbf{p}:=\mathrm{softmax}(\mathbf{f}) \in \mathbb{R}^C`,
-        and the element-wise natural logarithm :math:`\log`) we have:
-
-        .. math::
-            \ell(\mathbf{f}, y) = - c \log(\mathbf{p})^\top \mathrm{onehot}(y)
-            \\
-            \nabla^2_{\mathbf{f}} \ell(\mathbf{f}, y)
-            =
-            c \left(
-            \mathrm{diag}(\mathbf{p}) - \mathbf{p} \mathbf{p}^\top
-            \right)
-            \\
-            \mathbf{S} = \sqrt{c} \left(
-            \mathrm{diag}(\sqrt{\mathbf{p}}) - \sqrt{\mathbf{p}} \mathbf{p}^\top
-            \right)\,,
-
-       where the square root is applied element-wise. See for instance Example 5.1 of
-       `this thesis <https://d-nb.info/1280233206/34>`_ or equations (5) and (6) of
-       `this paper <https://arxiv.org/abs/1901.08244>`_.
-
-    Note:
-        For :class:`torch.nn.BCEWithLogitsLoss` (with :math:`c = 1` for ``reduction='sum'``
-        and :math:`c = 1/C` for ``reduction='mean'``) we have (:math:`\sigma` is the sigmoid
-        function, and assuming binary labels):
-
-        .. math::
-            \ell(\mathbf{f})
-            &=
-            c \sum_{i=1}^C - y_i \log(\sigma(f_i)) - (1 - y_i) \log(1 - \sigma(f_i))
-            \\
-            \nabla^2_{\mathbf{f}} \ell(\mathbf{f}, \mathbf{y})
-            &=
-            c \mathrm{diag}( \sigma(f_i) \odot (1 - \sigma(f_i)) )
-            \\
-            \mathbf{S}
-            &=
-            \sqrt{c} \mathrm{diag}(\sqrt{\sigma(f_i) \odot (1 - \sigma(f_i))})\,,
-
-        where the square root is applied element-wise.
-
-    Raises:
-        ValueError: If the batch size is not one, or the output is not 2d.
-        NotImplementedError: If the loss function is not supported.
-        NotImplementedError: If the loss function is ``BCEWithLogitsLoss`` but the
-            target is not binary.
+    Attributes:
+        TYPE2 (str): ``'type-2'`` - Type-2 Fisher, i.e. the exact Hessian of the
+            loss w.r.t. the model outputs is used. This requires as many backward
+            passes as the output dimension, i.e. the number of classes for
+            classification.
+        MC (str): ``'mc'`` - Monte-Carlo approximation of the expectation by sampling
+            ``mc_samples`` labels from the model's predictive distribution.
+        EMPIRICAL (str): ``'empirical'`` - Empirical gradients are used which
+            corresponds to the uncentered gradient covariance, or the empirical Fisher.
+        FORWARD_ONLY (str): ``'forward-only'`` - The gradient covariances will be
+            identity matrices, see the FOOF method in
+            `Benzing, 2022 <https://arxiv.org/abs/2201.12250>`_ or ISAAC in
+            `Petersen et al., 2023 <https://arxiv.org/abs/2305.00604>`_.
     """
-    if output_one_datum.ndim != 2 or output_one_datum.shape[0] != 1:
-        raise ValueError(
-            f"Expected 'output_one_datum' to be 2d with shape [1, C], got "
-            f"{output_one_datum.shape}"
-        )
-    if target_one_datum.shape[0] != 1:  # targets for 2d predictions are sometimes 1d
-        raise ValueError(
-            "Expected 'target_one_datum' to have batch_size 1."
-            + f" Got {target_one_datum.shape}."
-        )
-    output = output_one_datum.squeeze(0)
-    output_dim = output.numel()
 
-    if isinstance(loss_func, MSELoss):
-        c = {"sum": 1.0, "mean": 1.0 / output_dim}[loss_func.reduction]
-        return eye(output_dim, device=output.device, dtype=output.dtype).mul_(
-            sqrt(2 * c)
-        )
+    TYPE2 = "type-2"
+    MC = "mc"
+    EMPIRICAL = "empirical"
+    FORWARD_ONLY = "forward-only"
 
-    elif isinstance(loss_func, CrossEntropyLoss):
-        c = 1.0
-        p = output_one_datum.softmax(dim=1).squeeze()
-        p_sqrt = p.sqrt()
-        return (diag(p_sqrt) - einsum(p, p_sqrt, "i, j -> i j")).mul_(sqrt(c))
 
-    elif isinstance(loss_func, BCEWithLogitsLoss):
-        unique = set(target_one_datum.unique().flatten().tolist())
-        if not unique.issubset({0, 1}):
-            raise NotImplementedError(
-                "Only binary targets (0, 1) are currently supported with"
-                + f"BCEWithLogitsLoss. Got {unique}."
-            )
+class KFACType(str, Enum, metaclass=MetaEnum):
+    """Enum for the KFAC approximation type.
 
-        c = {"sum": 1.0, "mean": 1.0 / output_dim}[loss_func.reduction]
-        p = output_one_datum.sigmoid().squeeze(0)
-        hess_diag = sqrt(c) * (p * (1 - p)).sqrt()
-        return hess_diag.diag()
-    else:
-        raise NotImplementedError(f"Loss function {loss_func} not supported.")
+    KFAC-expand and KFAC-reduce are defined in
+    `Eschenhagen et al., 2023 <https://arxiv.org/abs/2311.00636>`_.
+
+    Attributes:
+        EXPAND (str): ``'expand'`` - KFAC-expand approximation.
+        REDUCE (str): ``'reduce'`` - KFAC-reduce approximation.
+    """
+
+    EXPAND = "expand"
+    REDUCE = "reduce"
 
 
 def extract_patches(
     x: Tensor,
-    kernel_size: Union[Tuple[int, int], int],
-    stride: Union[Tuple[int, int], int],
-    padding: Union[Tuple[int, int], int, str],
-    dilation: Union[Tuple[int, int], int],
+    kernel_size: tuple[int, int] | int,
+    stride: tuple[int, int] | int,
+    padding: tuple[int, int] | int | str,
+    dilation: tuple[int, int] | int,
     groups: int,
 ) -> Tensor:
     """Extract patches from the input of a 2d-convolution.
@@ -189,10 +123,10 @@ def extract_patches(
 
 def extract_averaged_patches(
     x: Tensor,
-    kernel_size: Union[Tuple[int, int], int],
-    stride: Union[Tuple[int, int], int],
-    padding: Union[Tuple[int, int], int, str],
-    dilation: Union[Tuple[int, int], int],
+    kernel_size: tuple[int, int] | int,
+    stride: tuple[int, int] | int,
+    padding: tuple[int, int] | int | str,
+    dilation: tuple[int, int] | int,
     groups: int,
 ) -> Tensor:
     """Extract averaged patches from the input of a 2d-convolution.
@@ -244,3 +178,221 @@ def extract_averaged_patches(
 
     x = einsum(x, *patterns, "b c_in i1 i2, k1 i1, k2 i2 -> b c_in k1 k2")
     return rearrange(x, "b c_in k1 k2 -> b (c_in k1 k2)")
+
+
+class _CanonicalizationLinearOperator(PyTorchLinearOperator):
+    """Base class for canonical form transformation operators."""
+
+    def __init__(
+        self,
+        param_shapes: dict[str, Size],
+        param_groups: list[dict[str, str]],
+        device: device,
+        dtype: dtype,
+    ):
+        """Initialize the canonical form transformation operator.
+
+        Args:
+            param_shapes: Dictionary mapping full parameter names to their shapes.
+            param_groups: List of parameter group dictionaries mapping roles
+                (``'W'`` for weight, ``'b'`` for bias) to full qualified parameter
+                names. Each group is one KFAC block: ``{"W": ..., "b": ...}``
+                for joint treatment, or ``{"W": ...}`` / ``{"b": ...}`` for
+                separate treatment.
+            device: Device of the parameters.
+            dtype: Data type of the parameters.
+        """
+        self._param_shapes = param_shapes
+        self._device = device
+        self._dtype = dtype
+        self._param_groups = param_groups
+
+        # Precompute name → list-position mapping for _matmat
+        self._name_to_idx = {name: i for i, name in enumerate(param_shapes)}
+
+        in_shape, out_shape = self._compute_shapes()
+        super().__init__(in_shape, out_shape)
+
+    def _compute_shapes(self) -> tuple[list[tuple[int, ...]], list[tuple[int, ...]]]:
+        """Compute input and output shapes for the transformation.
+
+        Returns:
+            Tuple of (in_shape, out_shape) where each is a list of parameter shapes.
+        """
+        raise NotImplementedError("Subclasses must implement _compute_shapes")
+
+    def _compute_canonical_shapes(self) -> list[tuple[int, ...]]:
+        """Compute the shapes in KFAC's canonical basis.
+
+        Returns:
+            List of shapes after canonical transformation.
+        """
+        canonical_shapes = []
+
+        for param_group in self._param_groups:
+            if "W" in param_group and "b" in param_group:
+                w_name = param_group["W"]
+                w_shape = self._param_shapes[w_name]
+                total_params = w_shape.numel() + w_shape[0]  # weight + bias
+                canonical_shapes.append((total_params,))
+            else:
+                for full_name in param_group.values():
+                    canonical_shapes.append((self._param_shapes[full_name].numel(),))
+
+        return canonical_shapes
+
+    @property
+    def device(self):
+        """The stored device.
+
+        Returns:
+            The device of the parameters.
+        """
+        return self._device
+
+    @property
+    def dtype(self):
+        """The stored dtype.
+
+        Returns:
+            The dtype of the parameters.
+        """
+        return self._dtype
+
+
+class ToCanonicalLinearOperator(_CanonicalizationLinearOperator):
+    """Linear operator that transforms parameters from original to canonical form.
+
+    Canonical form orders parameters by layer, with proper grouping and flattening.
+    This is the adjoint of FromCanonicalLinearOperator.
+    """
+
+    def _compute_shapes(self) -> tuple[list[tuple[int, ...]], list[tuple[int, ...]]]:
+        """Compute input and output shapes for the transformation.
+
+        Returns:
+            Tuple of (in_shape, out_shape) for original to canonical transformation.
+        """
+        in_shape = [tuple(shape) for shape in self._param_shapes.values()]
+        out_shape = self._compute_canonical_shapes()
+        return in_shape, out_shape
+
+    def _matmat(self, M: list[Tensor]) -> list[Tensor]:
+        """Transform parameter tensors to canonical form.
+
+        Args:
+            M: Parameter tensors in original order.
+
+        Returns:
+            Parameter tensors in canonical form (flattened and reordered).
+        """
+        canonical_M = []
+
+        for param_group in self._param_groups:
+            if "W" in param_group and "b" in param_group:
+                w_name, b_name = param_group["W"], param_group["b"]
+                w_idx, b_idx = self._name_to_idx[w_name], self._name_to_idx[b_name]
+                # Flatten weight tensor into matrix and concatenate bias
+                w_flat = M[w_idx].flatten(start_dim=1, end_dim=-2)
+                # Add bias as additional row
+                combined = cat([w_flat, M[b_idx].unsqueeze(1)], dim=1)
+                # Flatten parameter space dimension
+                canonical_M.append(combined.flatten(end_dim=-2))
+            else:
+                for full_name in param_group.values():
+                    idx = self._name_to_idx[full_name]
+                    canonical_M.append(M[idx].flatten(end_dim=-2))
+
+        return canonical_M
+
+    def _adjoint(self) -> FromCanonicalLinearOperator:
+        """Return the adjoint transformation operator.
+
+        Returns:
+            Linear operator that transforms from canonical to parameter form.
+        """
+        return FromCanonicalLinearOperator(
+            self._param_shapes,
+            self._param_groups,
+            self._device,
+            self._dtype,
+        )
+
+
+class FromCanonicalLinearOperator(_CanonicalizationLinearOperator):
+    """Linear operator that transforms parameters from canonical to original form.
+
+    This is the adjoint of ToCanonicalLinearOperator.
+    """
+
+    def _compute_shapes(self) -> tuple[list[tuple[int, ...]], list[tuple[int, ...]]]:
+        """Compute input and output shapes for the transformation.
+
+        Returns:
+            Tuple of (in_shape, out_shape) for canonical to original transformation.
+        """
+        out_shape = [tuple(shape) for shape in self._param_shapes.values()]
+        in_shape = self._compute_canonical_shapes()
+        return in_shape, out_shape
+
+    def _matmat(self, M: list[Tensor]) -> list[Tensor]:
+        """Transform parameter tensors from canonical form back to original order.
+
+        Args:
+            M: Parameter tensors in canonical form.
+
+        Returns:
+            Parameter tensors in original order with proper shapes.
+
+        Raises:
+            RuntimeError: If parameters were incorrectly processed, likely due
+                to an erroneous ``self._param_groups``.
+        """
+        original_M = [None] * len(self._param_shapes)
+        (num_columns,) = {m.shape[-1] for m in M}
+        processed = 0
+
+        for param_group in self._param_groups:
+            if "W" in param_group and "b" in param_group:
+                w_name, b_name = param_group["W"], param_group["b"]
+                w_idx, b_idx = self._name_to_idx[w_name], self._name_to_idx[b_name]
+                combined = M[processed]
+
+                # Get original weight shape
+                w_shape = self._param_shapes[w_name]
+                w_rows = w_shape[0]
+                w_cols = w_shape.numel() // w_rows
+
+                # Reshape combined tensor back to (weight + bias) matrix
+                combined = combined.reshape(w_rows, w_cols + 1, num_columns)
+                w_part, b_part = combined.split([w_cols, 1], dim=1)
+
+                # Reshape into parameter shape
+                original_M[w_idx] = w_part.reshape(*w_shape, num_columns)
+                original_M[b_idx] = b_part.reshape(w_rows, num_columns)
+                processed += 1
+            else:
+                for full_name in param_group.values():
+                    idx = self._name_to_idx[full_name]
+                    original_M[idx] = M[processed].reshape(
+                        *self._param_shapes[full_name], num_columns
+                    )
+                    processed += 1
+
+        if any(m is None for m in original_M) or processed != len(M):
+            raise RuntimeError("Mismatch in number of processed parameters.")
+
+        return original_M
+
+    def _adjoint(self) -> ToCanonicalLinearOperator:
+        """Return the adjoint transformation operator.
+
+        Returns:
+            Linear operator that transforms from parameter to canonical form.
+        """
+        return ToCanonicalLinearOperator(
+            self._param_shapes,
+            self._param_groups,
+            self._device,
+            self._dtype,
+        )

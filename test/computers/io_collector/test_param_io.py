@@ -1,0 +1,454 @@
+"""Tests for with_param_io: collecting parameter in- and output relationships."""
+
+from typing import Any
+
+from pytest import mark, raises
+from torch import Tensor, arange, manual_seed, rand, zeros, zeros_like
+from torch.func import functional_call
+from torch.nn import Conv2d, Linear
+from torch.nn.functional import conv2d, linear
+
+from curvlinops.computers.io_collector import with_param_io
+from curvlinops.computers.io_collector._base import NOT_A_PARAM
+from curvlinops.computers.io_collector.conv import CONV_STR
+from curvlinops.computers.io_collector.linear import LINEAR_STR
+from curvlinops.utils import allclose_report
+
+
+def compare_io(
+    info: tuple[tuple[str | Tensor | None | dict[str, Any], ...], ...],
+    info_true: tuple[tuple[str | Tensor | None | dict[str, Any], ...], ...],
+) -> None:
+    """Compare two layer info tuple collections for equality.
+
+    Args:
+        info: Info tuples from with_param_io output.
+        info_true: Expected info tuples (ground truth).
+    """
+    assert len(info) == len(info_true), (
+        f"Length mismatch: {len(info)} vs {len(info_true)}"
+    )
+    for layer_info, layer_info_true in zip(info, info_true):
+        assert len(layer_info) == len(layer_info_true), (
+            f"Layer info length mismatch: {len(layer_info)} vs {len(layer_info_true)}"
+        )
+        for item, item_true in zip(layer_info, layer_info_true):
+            if isinstance(item, Tensor) and isinstance(item_true, Tensor):
+                assert allclose_report(item, item_true)
+            elif isinstance(item, dict) and isinstance(item_true, dict):
+                assert item == item_true, f"Dict mismatch: {item} vs {item_true}"
+            else:
+                assert item == item_true, f"Value mismatch: {item} vs {item_true}"
+
+
+def _verify_io(
+    f,
+    x: Tensor,
+    params: dict[str, Tensor],
+    io_true: tuple[tuple[str | Tensor | None | dict[str, Any], ...], ...],
+) -> None:
+    """Verify that with_param_io produces correct outputs and IO information.
+
+    Args:
+        f: Function to test, with signature f(params, x) -> output.
+        x: Input tensor to the function.
+        params: Dictionary mapping parameter names to parameter tensors.
+        io_true: Expected tuple of layer information tuples.
+    """
+    y_true = f(params, x)
+
+    dummy_x = zeros_like(x)
+    dummy_params = {n: zeros_like(p) for n, p in params.items()}
+    f_with_io = with_param_io(f, dummy_x, dummy_params)
+
+    out = f_with_io(params, x)
+    y, io = out[0], out[1:]
+
+    assert allclose_report(y, y_true)
+    compare_io(io, io_true)
+
+
+def test_fully_connected():
+    """Test with_param_io on a simple linear layer."""
+    manual_seed(0)
+    N, D_in, D_out = 2, 3, 4
+
+    # 1) Both weight and bias as free parameters
+    def f(params: dict, x: Tensor) -> Tensor:
+        return linear(x, params["weight"], bias=params["bias"])
+
+    x, params = rand(N, D_in), {"weight": rand(D_out, D_in), "bias": rand(D_out)}
+    io_true = ((LINEAR_STR, f(params, x), x, "weight", "bias", {}),)
+    _verify_io(f, x, params, io_true)
+
+    # 2) Only weight as free parameter (frozen bias)
+    def f(params: dict, x: Tensor) -> Tensor:
+        bias = arange(D_out, dtype=x.dtype)
+        return linear(x, params["weight"], bias=bias)
+
+    x, params = rand(N, D_in), {"weight": rand(D_out, D_in)}
+    io_true = ((LINEAR_STR, f(params, x), x, "weight", NOT_A_PARAM, {}),)
+    _verify_io(f, x, params, io_true)
+
+    # 3) Only bias as free parameter (frozen weight)
+    def f(params: dict, x: Tensor) -> Tensor:
+        weight = arange(D_out * D_in, dtype=x.dtype).reshape(D_out, D_in)
+        return linear(x, weight, params["bias"])
+
+    x, params = rand(N, D_in), {"bias": rand(D_out)}
+    io_true = ((LINEAR_STR, f(params, x), x, NOT_A_PARAM, "bias", {}),)
+    _verify_io(f, x, params, io_true)
+
+    # 4) Without bias
+    def f(params: dict, x: Tensor) -> Tensor:
+        return linear(x, params["weight"])
+
+    x, params = rand(N, D_in), {"weight": rand(D_out, D_in)}
+    io_true = ((LINEAR_STR, f(params, x), x, "weight", None, {}),)
+    _verify_io(f, x, params, io_true)
+
+    # 5) Use torch.nn
+    fc = Linear(D_in, D_out, bias=True)
+
+    def f(params: dict, x: Tensor) -> Tensor:
+        return functional_call(fc, params, x)
+
+    x, params = rand(N, D_in), {"weight": rand(D_out, D_in), "bias": rand(D_out)}
+    io_true = ((LINEAR_STR, f(params, x), x, "weight", "bias", {}),)
+    _verify_io(f, x, params, io_true)
+
+
+CONV2D_DEFAULT_PARAMS = {
+    "stride": [1, 1],
+    "padding": [0, 0],
+    "dilation": [1, 1],
+    "transposed": False,
+    "output_padding": [0, 0],
+    "groups": 1,
+}
+
+
+def test_convolution():
+    """Test that convolution patterns are detected correctly."""
+    manual_seed(0)
+    N, C_out, C_in, K1, K2, I1, I2 = 2, 3, 4, 5, 6, 10, 11
+
+    # 1) Standard convolution with weight and bias
+    def f(params: dict, x: Tensor) -> Tensor:
+        return conv2d(x, params["weight"], bias=params["bias"])
+
+    x = rand(N, C_in, I1, I2)
+    params = {"weight": rand(C_out, C_in, K1, K2), "bias": rand(C_out)}
+    hparams = {**CONV2D_DEFAULT_PARAMS, "kernel_size": [K1, K2]}
+    io_true = ((CONV_STR, f(params, x), x, "weight", "bias", hparams),)
+    _verify_io(f, x, params, io_true)
+
+    # 2) Non-standard convolution with weight and bias
+    def f(params: dict, x: Tensor) -> Tensor:
+        stride = 2
+        # NOTE Supply padding as keyword arg and bias and strides
+        # as positional to attempt to confuse fx
+        return conv2d(x, params["weight"], params["bias"], stride, padding=1)
+
+    x = rand(N, C_in, I1, I2)
+    params = {"weight": rand(C_out, C_in, K1, K2), "bias": rand(C_out)}
+    hyperparams_true = {
+        **CONV2D_DEFAULT_PARAMS,
+        "kernel_size": [K1, K2],
+        "stride": [2, 2],
+        "padding": [1, 1],
+    }
+    io_true = ((CONV_STR, f(params, x), x, "weight", "bias", hyperparams_true),)
+    _verify_io(f, x, params, io_true)
+
+    # 3) Standard convolution with weight only
+    def f(params: dict, x: Tensor) -> Tensor:
+        return conv2d(x, params["weight"])
+
+    x = rand(N, C_in, I1, I2)
+    params = {"weight": rand(C_out, C_in, K1, K2)}
+    hparams = {**CONV2D_DEFAULT_PARAMS, "kernel_size": [K1, K2]}
+    io_true = ((CONV_STR, f(params, x), x, "weight", None, hparams),)
+    _verify_io(f, x, params, io_true)
+
+    # 4) Use torch.nn nn
+    conv = Conv2d(C_in, C_out, (K1, K2), stride=(2, 1), bias=False)
+
+    def f(params: dict, x: Tensor) -> Tensor:
+        return functional_call(conv, params, x)
+
+    hyperparams_true = {
+        **CONV2D_DEFAULT_PARAMS,
+        "kernel_size": [K1, K2],
+        "stride": [2, 1],
+    }
+    x, params = (rand(N, C_in, I1, I2), {"weight": rand(C_out, C_in, K1, K2)})
+    io_true = ((CONV_STR, f(params, x), x, "weight", None, hyperparams_true),)
+    _verify_io(f, x, params, io_true)
+
+
+def test_reshape_altering_last_dim_not_matched():
+    """Test that reshapes altering the feature dimension are not matched.
+
+    ``Linear(6, 4, bias=False) → reshape(batch, 2, 2) → add(bias)`` should NOT
+    be detected as a single linear layer, because the reshape changes the last
+    dimension from 4 to 2.
+    """
+    manual_seed(0)
+
+    def f(params: dict, x: Tensor) -> Tensor:
+        out = linear(x, params["weight"])
+        out = out.reshape(x.shape[0], 2, 2)
+        return out + params["bias"]
+
+    x_dummy = zeros(3, 6)
+    params_dummy = {"weight": zeros(4, 6), "bias": zeros(2)}
+
+    with raises(ValueError, match="Some parameters are used in unsupported patterns."):
+        _ = with_param_io(f, x_dummy, params_dummy)
+
+
+def test_model_view_after_linear_not_absorbed():
+    """Test that a model view after a 2D linear is not absorbed into the linear.
+
+    ``Linear(3, 4) → view(batch, 2, 4)`` should detect the linear with its
+    original 2D output ``[batch, 4]``, not the reshaped ``[batch, 2, 4]``.
+    The view preserves the last dimension, so without the paired-view guard
+    it could be mistaken for F.linear's output view.
+    """
+    manual_seed(0)
+    N, D_in, D_out = 2, 3, 4
+
+    def f(params: dict, x: Tensor) -> Tensor:
+        out = linear(x, params["weight"], params["bias"])
+        return out.view(x.shape[0], 1, D_out)
+
+    x = rand(N, D_in)
+    params = {"weight": rand(D_out, D_in), "bias": rand(D_out)}
+    # Output should be the addmm result (2D), not the view (3D)
+    expected_out = linear(x, params["weight"], params["bias"])
+    io_true = ((LINEAR_STR, expected_out, x, "weight", "bias", {}),)
+    _verify_io(f, x, params, io_true)
+
+
+def test_unsupported_patterns():
+    """Test that unsupported patterns raise ValueError."""
+    manual_seed(0)
+    N, D_in, D_out = 2, 3, 4
+
+    # NOTE Although mathematically equivalent, these patterns are not implemented
+    # and can therefore not be detected.
+    # Unsupported: Using .T (calls aten.permute.default)
+    # Unsupported: Using + (calls aten.add.Tensor)
+    def f(params: dict, x: Tensor) -> Tensor:
+        return x @ params["weight"].T + params["bias"]
+
+    x_dummy = zeros(N, D_in)
+    params_dummy = {"weight": zeros(D_out, D_in), "bias": zeros(D_out)}
+
+    with raises(ValueError, match="Some parameters are used in unsupported patterns."):
+        _ = with_param_io(f, x_dummy, params_dummy)
+
+
+def test_multiple_parameter_usages():
+    """Test multiple usages of the same parameter (recurrent structure)."""
+    manual_seed(0)
+    N, D = 2, 3
+
+    def f(params: dict, x: Tensor) -> Tensor:
+        xW = linear(x, params["weight"], bias=params["bias"])
+        return linear(xW, params["weight"])
+
+    x, params = rand(N, D), {"weight": rand(D, D), "bias": rand(D)}
+    xW = linear(x, params["weight"], bias=params["bias"])
+    io_true = (
+        (LINEAR_STR, xW, x, "weight", "bias", {}),
+        (LINEAR_STR, f(params, x), xW, "weight", None, {}),
+    )
+    _verify_io(f, x, params, io_true)
+
+
+def test_undetected_parameter_paths():
+    """Test case where not all parameter usage paths are detected."""
+    manual_seed(0)
+    N, D_in, D_out = 2, 3, 4
+
+    def f(params: dict, x: Tensor) -> Tensor:
+        W = params["weight"]
+        return linear(x, W, bias=W.sum(1))
+
+    x_dummy = zeros(N, D_in)
+    params_dummy = {"weight": zeros(D_out, D_in)}
+
+    with raises(ValueError, match="Some parameters are used in unsupported patterns."):
+        _ = with_param_io(f, x_dummy, params_dummy)
+
+
+def test_supports_multiple_batch_sizes():
+    """Test with_param_io supports batch sizes other than the one used for tracing."""
+    manual_seed(0)
+    N1, N2, D_in, D_out = 2, 3, 4, 5
+
+    def f(params: dict, x: Tensor) -> Tensor:
+        return linear(x, params["weight"], bias=params["bias"])
+
+    x1, x2 = rand(N1, D_in), rand(N2, D_in)
+    params = {"weight": rand(D_out, D_in), "bias": rand(D_out)}
+
+    # Use x1 for tracing
+    f_with_io = with_param_io(f, x1, params)
+
+    # Check IO for batch sizes N1 and N2
+    for x in [x1, x2]:
+        io_true = ((LINEAR_STR, f(params, x), x, "weight", "bias", {}),)
+        io = f_with_io(params, x)[1:]
+        compare_io(io, io_true)
+
+
+@mark.parametrize(
+    "reshape",
+    [
+        lambda y, N, D_out: y.unsqueeze(1).squeeze(1),  # rank-preserving: (N, D_out)
+        lambda y, N, D_out: y.reshape(
+            N, 1, 1, D_out
+        ),  # rank-changing: (N, 1, 1, D_out)
+    ],
+    ids=["rank_preserving", "rank_changing"],
+)
+def test_bias_add_through_transparent_reshapes(reshape):
+    """Detect a Linear whose bias is added after transparent reshapes.
+
+    The traversal is driven purely by the last-dim invariant, so it must match the
+    bias-add whether the transparent reshapes preserve the rank (``unsqueeze.squeeze``)
+    or change it (``reshape`` to more axes), as long as the last dim ``D_out`` stays
+    put. The recorded output is the reshaped tensor, so input and output may differ
+    in rank.
+
+    Args:
+        reshape: Last-dim-preserving reshape applied between the matmul and the bias.
+    """
+    manual_seed(0)
+    N, D_in, D_out = 3, 4, 5
+
+    def f(params: dict, x: Tensor) -> Tensor:
+        y = x @ params["weight"].t()  # mm
+        y = reshape(y, N, D_out)  # transparent: last dim D_out preserved
+        return y + params["bias"]
+
+    x = rand(N, D_in)
+    params = {"weight": rand(D_out, D_in), "bias": rand(D_out)}
+    y = reshape(linear(x, params["weight"], params["bias"]), N, D_out)
+    io_true = ((LINEAR_STR, y, x, "weight", "bias", {}),)
+    _verify_io(f, x, params, io_true)
+
+
+def test_weight_reused_across_reshape_wrapped_matmuls():
+    """Detect one weight reused across matmuls of uneven reshape depth (Taylor mode)."""
+    manual_seed(0)
+    N, D_in, D_out = 3, 4, 5
+
+    def f(params: dict, x: Tensor) -> Tensor:
+        W, b = params["weight"], params["bias"]
+        c0, c1, c2 = x, 2.0 * x, 3.0 * x
+        y0 = (c0 @ W.t()).unsqueeze(1).squeeze(1) + b  # forward: reshape-wrapped bias
+        y1 = c1 @ W.t()  # 1st-order coefficient: no bias, reshape depth 0
+        y2 = (c2 @ W.t()).reshape(N, D_out)  # 2nd-order coefficient: no bias, depth 1
+        return y0 + y1 + y2
+
+    x = rand(N, D_in)
+    params = {"weight": rand(D_out, D_in), "bias": rand(D_out)}
+    c0, c1, c2 = x, 2.0 * x, 3.0 * x
+    W = params["weight"]
+    io_true = (
+        (LINEAR_STR, linear(c0, W, params["bias"]), c0, "weight", "bias", {}),
+        (LINEAR_STR, linear(c1, W), c1, "weight", None, {}),
+        (LINEAR_STR, linear(c2, W), c2, "weight", None, {}),
+    )
+    _verify_io(f, x, params, io_true)
+
+
+def test_bias_after_last_dim_altering_reshape_not_matched():
+    """Transparent-bias traversal must stop at a reshape that alters the last dim.
+
+    ``mm → squeeze (transparent) → reshape (alters last dim) → add(bias)`` must NOT
+    absorb the bias: the reshape changes the feature dimension, so the ``add`` no
+    longer belongs to the matmul. The bias usage is then undetected and rejected. This
+    guards the extended matcher against over-matching through non-transparent shape
+    ops.
+    """
+    manual_seed(0)
+    N, D_in, D_out = 3, 8, 4
+
+    def f(params: dict, x: Tensor) -> Tensor:
+        y = x @ params["weight"].t()  # (N, 4)
+        y = y.unsqueeze(1).squeeze(1)  # transparent (last dim 4 preserved)
+        y = y.reshape(N, 2, 2)  # alters last dim 4 -> 2 (not transparent)
+        return y + params["bias"]
+
+    x_dummy = zeros(N, D_in)
+    params_dummy = {"weight": zeros(D_out, D_in), "bias": zeros(2)}
+
+    with raises(ValueError, match="Some parameters are used in unsupported patterns."):
+        _ = with_param_io(f, x_dummy, params_dummy)
+
+
+def test_bias_through_reused_transparent_node_not_matched():
+    """A transparent node between matmul and bias-add must be private to the bias-add.
+
+    ``mm → unsqueeze → squeeze → add(bias)`` with the intermediate ``unsqueeze``
+    also consumed elsewhere is not a clean linear layer. The forward (weight) walk
+    already stops at the reused node; the backward (bias) walk must stop there too,
+    so the bias fails to match and the usage is rejected. Without the symmetric
+    single-user guard the bias side would reach the matmul, producing an
+    inconsistent match that slips past verification (a silent failure).
+    """
+    manual_seed(0)
+    N, D_in, D_out = 3, 4, 5
+
+    def f(params: dict, x: Tensor) -> Tensor:
+        W, b = params["weight"], params["bias"]
+        t1 = (x @ W.t()).unsqueeze(1)  # transparent node, reused below
+        y = t1.squeeze(1) + b  # bias-add reached past the reused node
+        return y + t1.sum()  # extra consumer of t1
+
+    x_dummy = zeros(N, D_in)
+    params_dummy = {"weight": zeros(D_out, D_in), "bias": zeros(D_out)}
+
+    with raises(ValueError, match="Some parameters are used in unsupported patterns."):
+        _ = with_param_io(f, x_dummy, params_dummy)
+
+
+@mark.parametrize("bias", [True, False], ids=["bias", "no_bias"])
+@mark.parametrize(
+    "x_shape",
+    [(2, 8, 5), (2, 4, 8, 5)],
+    ids=["3D", "4D"],
+)
+def test_fully_connected_higher_dim_input(x_shape: tuple[int, ...], bias: bool):
+    """Test with_param_io preserves original input shape for >2D Linear inputs.
+
+    For 3D inputs, PyTorch decomposes ``F.linear`` as ``view → addmm → view``;
+    for 4D+ inputs it uses ``view → mm → _unsafe_view → add(bias)``. The IO
+    collector must resolve these paired reshapes to capture the original
+    (unflattened) input and output tensors.
+
+    Args:
+        x_shape: Shape of the input tensor (must be >2D).
+        bias: Whether the linear layer has a bias.
+    """
+    manual_seed(0)
+    D_in, D_out = x_shape[-1], 4
+
+    fc = Linear(D_in, D_out, bias=bias)
+
+    def f(params: dict, x: Tensor) -> Tensor:
+        return functional_call(fc, params, x)
+
+    params = {"weight": rand(D_out, D_in)}
+    if bias:
+        params["bias"] = rand(D_out)
+
+    x = rand(*x_shape)
+    bias_name = "bias" if bias else None
+    io_true = ((LINEAR_STR, f(params, x), x, "weight", bias_name, {}),)
+    _verify_io(f, x, params, io_true)

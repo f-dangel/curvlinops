@@ -3,7 +3,7 @@
 from collections import UserDict
 from collections.abc import MutableMapping
 
-from torch import rand, rand_like
+from torch import Tensor, rand, rand_like
 from torch.nn import (
     BatchNorm1d,
     BCEWithLogitsLoss,
@@ -18,12 +18,12 @@ from torch.nn import (
     ReLU,
     Sequential,
 )
+from torch.nn.functional import linear, relu
 from torch.utils.data import DataLoader, TensorDataset
 
-from curvlinops.kfac import KFACType
+from curvlinops.kfac_utils import KFACType
 from test.utils import (
     WeightShareModel,
-    binary_classification_targets,
     classification_targets,
     get_available_devices,
     regression_targets,
@@ -34,11 +34,27 @@ DEVICES_IDS = [f"dev={d}" for d in DEVICES]
 
 
 class ModelWithDictInput(Module):
+    """Simple model that consumes a dict-like input."""
+
     def __init__(self, num_classes=2, nonlin=ReLU):
+        """Initialize the model.
+
+        Args:
+            num_classes: Number of output classes.
+            nonlin: Nonlinear activation constructor.
+        """
         super().__init__()
         self.net = Sequential(Linear(10, 5), nonlin(), Linear(5, num_classes))
 
     def forward(self, data: MutableMapping):
+        """Run the model on dict-like input data.
+
+        Args:
+            data: Mapping containing the input tensor under the ``"x"`` key.
+
+        Returns:
+            Model outputs.
+        """
         device = next(self.parameters()).device
         x = data["x"].to(device)
         return self.net(x)
@@ -69,33 +85,33 @@ INV_CASES_NO_DEVICE = [
         ],
         "seed": 0,
     },
-    # binary softmax cross-entropy loss, one output
+    # BCE loss, one output, soft labels in [0, 1]
     {
         "model_func": lambda: Sequential(Linear(10, 5), ReLU(), Linear(5, 1)),
         "loss_func": lambda: BCEWithLogitsLoss(reduction="mean"),
         "data": lambda: [
-            (rand(3, 10), binary_classification_targets((3, 1))),
-            (rand(4, 10), binary_classification_targets((4, 1))),
+            (rand(3, 10), rand(3, 1)),
+            (rand(4, 10), rand(4, 1)),
         ],
         "seed": 0,
     },
-    # binary softmax cross-entropy loss, multiple outputs (tests the reduction factor)
+    # BCE loss, multiple outputs, soft labels (tests the reduction factor)
     {
         "model_func": lambda: Sequential(Linear(10, 5), ReLU(), Linear(5, 2)),
         "loss_func": lambda: BCEWithLogitsLoss(reduction="mean"),
         "data": lambda: [
-            (rand(3, 10), binary_classification_targets((3, 2))),
-            (rand(4, 10), binary_classification_targets((4, 2))),
+            (rand(3, 10), rand(3, 2)),
+            (rand(4, 10), rand(4, 2)),
         ],
         "seed": 0,
     },
-    # binary softmax cross-entropy loss, multiple outputs and sum reduction
+    # BCE loss, multiple outputs, sum reduction, soft labels
     {
         "model_func": lambda: Sequential(Linear(10, 5), ReLU(), Linear(5, 2)),
         "loss_func": lambda: BCEWithLogitsLoss(reduction="sum"),
         "data": lambda: [
-            (rand(3, 10), binary_classification_targets((3, 2))),
-            (rand(4, 10), binary_classification_targets((4, 2))),
+            (rand(3, 10), rand(3, 2)),
+            (rand(4, 10), rand(4, 2)),
         ],
         "seed": 0,
     },
@@ -134,13 +150,13 @@ INV_CASES_NO_DEVICE = [
         ],
         "seed": 0,
     },
-    # BCE
+    # BCE with soft labels
     {
         "model_func": lambda: ModelWithDictInput(num_classes=1),
         "loss_func": lambda: BCEWithLogitsLoss(reduction="mean"),
         "data": lambda: [
-            (UserDict({"x": rand(3, 10)}), binary_classification_targets((3, 1))),
-            ({"x": rand(4, 10)}, binary_classification_targets((4, 1))),
+            (UserDict({"x": rand(3, 10)}), rand(3, 1)),
+            ({"x": rand(4, 10)}, rand(4, 1)),
         ],
         "seed": 0,
     },
@@ -166,11 +182,13 @@ for case in INV_CASES_NO_DEVICE:
 # add test cases here
 CASES_NO_DEVICE = INV_CASES_NO_DEVICE + [
     # softmax cross-entropy loss with additional input/output dimension
+    # Sequential output shape: (batch, seq=5, classes=3) -> num_output_feature_dims=2
     {
         "model_func": lambda: WeightShareModel(
             Sequential(Linear(10, 5), ReLU(), Linear(5, 3)),
             setting=KFACType.EXPAND,
             loss="CE",
+            num_output_feature_dims=2,
         ),
         "loss_func": lambda: CrossEntropyLoss(reduction="mean"),
         "data": lambda: [
@@ -185,6 +203,7 @@ CASES_NO_DEVICE = INV_CASES_NO_DEVICE + [
             Sequential(Linear(10, 5), ReLU(), Linear(5, 3)),
             setting=KFACType.EXPAND,
             loss="CE",
+            num_output_feature_dims=2,
         ),
         "loss_func": lambda: CrossEntropyLoss(reduction="sum"),
         "data": lambda: [
@@ -193,25 +212,25 @@ CASES_NO_DEVICE = INV_CASES_NO_DEVICE + [
         ],
         "seed": 0,
     },
-    # binary softmax cross-entropy loss, multiple outputs, additional input/output
-    # dimension, and mean reduction (tests the reduction factor)
+    # BCE loss, multiple outputs, additional input/output dimension, soft labels,
+    # mean reduction (tests the reduction factor)
     {
         "model_func": lambda: Sequential(Linear(10, 5), ReLU(), Linear(5, 2)),
         "loss_func": lambda: BCEWithLogitsLoss(reduction="mean"),
         "data": lambda: [
-            (rand(3, 5, 10), binary_classification_targets((3, 5, 2))),
-            (rand(4, 5, 10), binary_classification_targets((4, 5, 2))),
+            (rand(3, 5, 10), rand(3, 5, 2)),
+            (rand(4, 5, 10), rand(4, 5, 2)),
         ],
         "seed": 0,
     },
-    # binary softmax cross-entropy loss, multiple outputs, additional input/output
-    # dimension, and sum reduction
+    # BCE loss, multiple outputs, additional input/output dimension, soft labels,
+    # sum reduction
     {
         "model_func": lambda: Sequential(Linear(10, 5), ReLU(), Linear(5, 2)),
         "loss_func": lambda: BCEWithLogitsLoss(reduction="sum"),
         "data": lambda: [
-            (rand(3, 5, 10), binary_classification_targets((3, 5, 2))),
-            (rand(4, 5, 10), binary_classification_targets((4, 5, 2))),
+            (rand(3, 5, 10), rand(3, 5, 2)),
+            (rand(4, 5, 10), rand(4, 5, 2)),
         ],
         "seed": 0,
     },
@@ -237,8 +256,48 @@ CASES_NO_DEVICE = INV_CASES_NO_DEVICE + [
     },
 ]
 
+###############################################################################
+#                    CALLABLE MODEL_FUNC (non-Module)                         #
+###############################################################################
+
+
+def _make_callable_case():
+    """Create a test case with a callable model_func (no nn.Module).
+
+    Uses ``F.linear`` so the FX graph contains patterns recognizable by the
+    KFAC IO collector.
+
+    Returns:
+        Dictionary with model_func as a callable, separate params, and data.
+    """
+    D_in, D_hidden, D_out = 10, 5, 3
+    params = {
+        "W1": rand(D_hidden, D_in),
+        "b1": rand(D_hidden),
+        "W2": rand(D_out, D_hidden),
+        "b2": rand(D_out),
+    }
+
+    def model_func(p: dict[str, Tensor], X: Tensor) -> Tensor:
+        h = relu(linear(X, p["W1"], p["b1"]))
+        return linear(h, p["W2"], p["b2"])
+
+    return {
+        "model_func": lambda: model_func,
+        "params": lambda: params,
+        "loss_func": lambda: MSELoss(reduction="mean"),
+        "data": lambda: [
+            (rand(3, D_in), regression_targets((3, D_out))),
+            (rand(4, D_in), regression_targets((4, D_out))),
+        ],
+        "seed": 0,
+    }
+
+
+CALLABLE_CASES_NO_DEVICE = [_make_callable_case()]
+
 CASES = []
-for case in CASES_NO_DEVICE:
+for case in CASES_NO_DEVICE + CALLABLE_CASES_NO_DEVICE:
     for device in DEVICES:
         case_with_device = {**case, "device": device}
         CASES.append(case_with_device)
@@ -248,19 +307,19 @@ for case in CASES_NO_DEVICE:
 CNN_CASES_NO_DEVICE = [
     {
         "model_func": lambda: Sequential(
-            Conv2d(1, 6, 5),
+            Conv2d(1, 3, 5),
             ReLU(),
             MaxPool2d(2),
-            Conv2d(6, 16, 5),
+            Conv2d(3, 6, 5),
             ReLU(),
             MaxPool2d(2),
             Flatten(),
-            Linear(16 * 4 * 4, 10),
+            Linear(6 * 4, 10),
         ),
-        "loss_func": lambda: CrossEntropyLoss(),
+        "loss_func": CrossEntropyLoss,
         "data": lambda: [
-            (rand(5, 1, 28, 28), classification_targets((5,), 10)),
-            (rand(5, 1, 28, 28), classification_targets((5,), 10)),
+            (rand(5, 1, 20, 20), classification_targets((5,), 10)),
+            (rand(5, 1, 20, 20), classification_targets((5,), 10)),
         ],
         "seed": 0,
     },
@@ -276,7 +335,11 @@ NON_DETERMINISTIC_CASES_NO_DEVICE = []
 
 
 def _non_deterministic_case_dropout():
-    """Non-deterministic case due to dropout in the model."""
+    """Build a non-deterministic case due to dropout in the model.
+
+    Returns:
+        A case dictionary for dropout-based non-determinism.
+    """
     N, D_in, H, C = 3, 10, 5, 2
     num_batches = 4
     num_samples = N * num_batches
@@ -305,7 +368,11 @@ NON_DETERMINISTIC_CASES_NO_DEVICE += [_non_deterministic_case_dropout()]
 
 
 def _non_deterministic_case_batchnorm():
-    """Non-deterministic case due to Batchnorm in the model and shuffled batches."""
+    """Build a non-deterministic case due to Batchnorm and shuffled batches.
+
+    Returns:
+        A case dictionary for batchnorm-based non-determinism.
+    """
     N, D_in, H, C = 3, 10, 5, 2
     num_batches = 4
     num_samples = N * num_batches
@@ -337,7 +404,11 @@ NON_DETERMINISTIC_CASES_NO_DEVICE += [_non_deterministic_case_batchnorm()]
 
 
 def _non_deterministic_case_drop_last():
-    """Non-deterministic case due discarded samples if last batch is smaller than N."""
+    """Build a non-deterministic case due to dropping the last batch.
+
+    Returns:
+        A case dictionary for drop-last-based non-determinism.
+    """
     N, D_in, H, C = 3, 10, 5, 2
     num_batches = 4
     num_samples = N * num_batches
@@ -369,18 +440,3 @@ for case in NON_DETERMINISTIC_CASES_NO_DEVICE:
     for device in DEVICES:
         case_with_device = {**case, "device": device}
         NON_DETERMINISTIC_CASES.append(case_with_device)
-
-ADJOINT_CASES = [False, True]
-ADJOINT_IDS = ["", "adjoint"]
-
-IS_VECS = [False, True]
-IS_VEC_IDS = ["matvec", "matmat"]
-
-
-BLOCK_SIZES_FNS = {
-    "full": lambda params: None,
-    "per-parameter-blocks": lambda params: [1 for _ in range(len(params))],
-    "two-blocks": lambda params: (
-        [1] if len(params) == 1 else [len(params) // 2, len(params) - len(params) // 2]
-    ),
-}

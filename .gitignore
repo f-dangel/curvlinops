@@ -6,3 +6,4 @@ src/
 .coverage
 .eggs
 **.DS_Store
+**.pdf-view-restore

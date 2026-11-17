@@ -1,18 +1,19 @@
 """``curvlinops`` library API."""
 
 from curvlinops.ekfac import EKFACLinearOperator
-from curvlinops.fisher import FisherMCLinearOperator
 from curvlinops.ggn import GGNLinearOperator
+from curvlinops.ggn_diagonal import GGNDiagonalLinearOperator
 from curvlinops.gradient_moments import EFLinearOperator
 from curvlinops.hessian import HessianLinearOperator
 from curvlinops.inverse import (
     CGInverseLinearOperator,
-    KFACInverseLinearOperator,
     LSMRInverseLinearOperator,
     NeumannInverseLinearOperator,
 )
 from curvlinops.jacobian import JacobianLinearOperator, TransposedJacobianLinearOperator
-from curvlinops.kfac import FisherType, KFACLinearOperator, KFACType
+from curvlinops.kfac import KFACLinearOperator
+from curvlinops.kfac_utils import FisherType, KFACType
+from curvlinops.kfoc import KFOCLinearOperator
 from curvlinops.norm.hutchinson import hutchinson_squared_fro
 from curvlinops.papyan2020traces.spectrum import (
     LanczosApproximateLogSpectrumCached,
@@ -26,10 +27,11 @@ __all__ = [
     # linear operators
     "HessianLinearOperator",
     "GGNLinearOperator",
+    "GGNDiagonalLinearOperator",
     "EFLinearOperator",
-    "FisherMCLinearOperator",
     "KFACLinearOperator",
     "EKFACLinearOperator",
+    "KFOCLinearOperator",
     "JacobianLinearOperator",
     "TransposedJacobianLinearOperator",
     # Enums
@@ -39,7 +41,6 @@ __all__ = [
     "CGInverseLinearOperator",
     "LSMRInverseLinearOperator",
     "NeumannInverseLinearOperator",
-    "KFACInverseLinearOperator",
     # slicing
     "SubmatrixLinearOperator",
     # spectral properties

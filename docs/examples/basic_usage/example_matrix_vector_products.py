@@ -1,5 +1,4 @@
-r"""
-Matrix-vector products
+r"""Matrix-vector products
 ======================
 
 This tutorial contains a basic demonstration how to set up ``LinearOperators``
@@ -40,7 +39,7 @@ model = nn.Sequential(
     nn.Sigmoid(),
     nn.Linear(D_hidden, D_out),
 ).to(DEVICE)
-params = [p for p in model.parameters() if p.requires_grad]
+params = {n: p for n, p in model.named_parameters() if p.requires_grad}
 
 loss_function = nn.MSELoss(reduction="mean").to(DEVICE)
 
@@ -131,11 +130,11 @@ plt.colorbar()
 num_columns = 3
 
 print(f"Total network parameters: {D}")
-print(f"Parameter shapes: {[p.shape for p in params]}")
+print(f"Parameter shapes: {[p.shape for p in params.values()]}")
 print(f"Number of columns: {num_columns}")
 
 # Matrix in tensor list format
-M_list = [rand(*p.shape, num_columns, device=DEVICE) for p in params]
+M_list = [rand(*p.shape, num_columns, device=DEVICE) for p in params.values()]
 print(f"[Tensor list format] Matrix: {[m.shape for m in M_list]}")
 
 # Matrix in flattened format (what we have been using before)

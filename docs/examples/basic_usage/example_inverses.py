@@ -33,7 +33,7 @@ from curvlinops import (
     GGNLinearOperator,
     NeumannInverseLinearOperator,
 )
-from curvlinops.examples import IdentityLinearOperator
+from curvlinops.examples import IdentityLinearOperator, gradient_and_loss
 from curvlinops.examples.functorch import functorch_ggn, functorch_gradient_and_loss
 from curvlinops.utils import allclose_report
 
@@ -66,7 +66,7 @@ model = Sequential(
     Sigmoid(),
     Linear(D_hidden, D_out),
 ).to(DEVICE, DTYPE)
-params = [p for p in model.parameters() if p.requires_grad]
+params = {n: p for n, p in model.named_parameters() if p.requires_grad}
 
 loss_function = MSELoss(reduction="mean").to(DEVICE, DTYPE)
 
@@ -82,7 +82,7 @@ loss_function = MSELoss(reduction="mean").to(DEVICE, DTYPE)
 
 data = [(X1, y1), (X2, y2)]
 GGN = GGNLinearOperator(model, loss_function, params, data)
-shapes = [p.shape for p in params]
+shapes = [p.shape for p in params.values()]
 delta = 1e-2
 damping = delta * IdentityLinearOperator(shapes, GGN.device, DTYPE)
 damped_GGN = GGN + damping
@@ -104,9 +104,9 @@ inverse_damped_GGN = CGInverseLinearOperator(
 # Gradient
 # --------
 #
-# We can obtain the gradient via a convenience function of :code:`GGNLinearOperator`:
+# We can obtain the gradient via a convenience function from :code:`curvlinops.examples`:
 
-gradient, _ = GGN.gradient_and_loss()
+gradient, _ = gradient_and_loss(model, loss_function, params, data)
 # flatten and concatenate
 gradient = parameters_to_vector(gradient).detach()
 

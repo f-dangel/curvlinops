@@ -1,25 +1,25 @@
 """Contains linear operator implementation of gradient moment matrices."""
 
-from collections.abc import MutableMapping
-from functools import cached_property, partial
-from typing import Callable, List, Tuple, Union
+from collections.abc import Callable, MutableMapping
 
 from einops import einsum
-from torch import Tensor, vmap
+from torch import Tensor
 from torch.func import grad
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, Module, MSELoss, Parameter
+from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, Module, MSELoss
 
 from curvlinops._torch_base import CurvatureLinearOperator
 from curvlinops.ggn import make_ggn_vector_product
 from curvlinops.utils import make_functional_flattened_model_and_loss
 
 
-def make_batch_ef_matrix_product(
-    model_func: Module, loss_func: Module, params: Tuple[Parameter, ...]
+def make_batch_ef_vector_product(
+    f: Callable[[dict[str, Tensor], Tensor | MutableMapping], Tensor],
+    loss_func: Module,
 ) -> Callable[
-    [Union[Tensor, MutableMapping], Tensor, Tuple[Tensor, ...]], Tuple[Tensor, ...]
+    [dict[str, Tensor], Tensor | MutableMapping, tuple, dict[str, Tensor]],
+    dict[str, Tensor],
 ]:
-    r"""Set up function that multiplies the mini-batch empirical Fisher onto a matrix.
+    r"""Set up function that multiplies the mini-batch empirical Fisher onto a vector.
 
     The empirical Fisher is computed as the GGN of a pseudo-loss that is quadratic
     in the gradients of the original loss. Specifically, for loss gradients
@@ -32,23 +32,20 @@ def make_batch_ef_matrix_product(
     The GGN of this pseudo-loss equals the empirical Fisher of the original loss.
 
     Args:
-        model_func: The neural network :math:`f_{\mathbf{\theta}}`.
+        f: Functional model with signature ``(params_dict, X) -> prediction``.
         loss_func: The loss function :math:`\ell`.
-        params: A tuple of parameters w.r.t. which the empirical Fisher is computed.
-            All parameters must be part of ``model_func.parameters()``.
 
     Returns:
-        A function that takes inputs ``X``, ``y``, and a matrix ``M`` in list
-        format, and returns the mini-batch empirical Fisher applied to ``M`` in
-        list format.
+        A function ``(params_dict, X, loss_args, v_dict) -> EFv`` that takes
+        parameters as a dict, model input ``X``, loss arguments
+        ``loss_args = (y,)``, and a vector ``v`` as a dict, and returns the
+        mini-batch empirical Fisher applied to ``v`` as a dict.
     """
-    f_flat, c_flat = make_functional_flattened_model_and_loss(
-        model_func, loss_func, params
-    )
+    f_flat, c_flat = make_functional_flattened_model_and_loss(f, loss_func)
     # function that computes gradients of the loss w.r.t. the flattened outputs
     c_flat_grad = grad(c_flat, argnums=0)
 
-    def c_pseudo_flat(output_flat: Tensor, y: Tensor) -> Tensor:
+    def c_pseudo_flat(output_flat: Tensor, loss_args: tuple) -> Tensor:
         """Compute pseudo-loss: L' = 0.5 / c * sum_n <f_n, g_n>^2.
 
         This pseudo-loss L' := 0.5 / c ∑ₙ fₙᵀ (gₙ gₙᵀ) fₙ where gₙ = ∂ℓₙ/∂fₙ
@@ -59,13 +56,15 @@ def make_batch_ef_matrix_product(
 
         Args:
             output_flat: Flattened model outputs for the mini-batch.
-            y: Un-flattened labels for the mini-batch.
+            loss_args: Tuple of ``(y,)`` with un-flattened labels for the mini-batch.
 
         Returns:
             The pseudo-loss whose GGN is the empirical Fisher on the batch.
         """
+        (y,) = loss_args
+
         # Compute ∂ℓₙ/∂fₙ without reduction factor of L (detached)
-        grad_output_flat = c_flat_grad(output_flat.detach(), y)
+        grad_output_flat = c_flat_grad(output_flat.detach(), (y,))
 
         # Adjust the scale depending on the loss reduction used
         num_loss_terms, C = output_flat.shape
@@ -84,22 +83,8 @@ def make_batch_ef_matrix_product(
         return 0.5 / reduction_factor * (inner_products**2).sum()
 
     # Create the functional EF-vector product using GGN of pseudo-loss
-    ef_vp = make_ggn_vector_product(f_flat, c_pseudo_flat)
-
-    # Freeze parameter values
-    efvp = partial(ef_vp, params)  # X, y, *v -> *EFv
-
-    # Parallelize over vectors to multiply onto a matrix in list format
-    list_format_vmap_dims = tuple(p.ndim for p in params)  # last axis
-    return vmap(
-        efvp,
-        # No vmap in X, y, assume last axis is vmapped in the matrix list
-        in_dims=(None, None, *list_format_vmap_dims),
-        # Vmapped output axis is last
-        out_dims=list_format_vmap_dims,
-        # We want each vector to be multiplied with the same mini-batch EF
-        randomness="same",
-    )
+    # (params_dict, X, loss_args, v) -> EFv
+    return make_ggn_vector_product(f_flat, c_pseudo_flat)
 
 
 class EFLinearOperator(CurvatureLinearOperator):
@@ -137,19 +122,8 @@ class EFLinearOperator(CurvatureLinearOperator):
     SUPPORTED_LOSSES = (MSELoss, CrossEntropyLoss, BCEWithLogitsLoss)
     SELF_ADJOINT: bool = True
 
-    @cached_property
-    def _mp(
-        self,
-    ) -> Callable[
-        [Union[Tensor, MutableMapping], Tensor, Tuple[Tensor, ...]], Tuple[Tensor, ...]
-    ]:
-        """Lazy initialization of the batch empirical Fisher matrix product function.
-
-        Returns:
-            Function that computes mini-batch EF-vector products, given inputs ``X``,
-            labels ``y``, and the entries ``v1, v2, ...`` of the vector in list format.
-            Produces a list of tensors with the same shape as the input vector that re-
-            presents the result of the batch-EF multiplication.
+    def _init_mp(self):
+        """Set up the batch empirical Fisher vector product function, then build vmap.
 
         Raises:
             NotImplementedError: If the loss function is not supported.
@@ -158,25 +132,20 @@ class EFLinearOperator(CurvatureLinearOperator):
             raise NotImplementedError(
                 f"Loss must be one of {self.SUPPORTED_LOSSES}. Got: {self._loss_func}."
             )
-        return make_batch_ef_matrix_product(
-            self._model_func, self._loss_func, tuple(self._params)
-        )
+        self._vp = make_batch_ef_vector_product(self._model_func, self._loss_func)
+        super()._init_mp()
 
-    def _matmat_batch(
-        self, X: Union[Tensor, MutableMapping], y: Tensor, M: List[Tensor]
-    ) -> List[Tensor]:
-        """Apply the mini-batch empirical Fisher to a matrix in tensor list format.
+    def _matvec_batch(
+        self, X: Tensor | MutableMapping, y: Tensor, v: dict[str, Tensor]
+    ) -> dict[str, Tensor]:
+        """Apply the mini-batch empirical Fisher to a vector.
 
         Args:
             X: Input to the DNN.
             y: Ground truth.
-            M: Matrix to be multiplied with in tensor list format.
-                Tensors have same shape as trainable model parameters, and an
-                additional trailing axis for the matrix columns.
+            v: Vector as a dict keyed by parameter names.
 
         Returns:
-            Result of EF multiplication in tensor list format. Has the same shape as
-            ``M``, i.e. each tensor in the list has the shape of a parameter and a
-            trailing dimension of matrix columns.
+            Result of EF-vector multiplication as a dict.
         """
-        return list(self._mp(X, y, *M))
+        return self._vp(self._params, X, (y,), v)
