@@ -77,7 +77,7 @@ class TensorLinearOperator(PyTorchLinearOperator):
             raise ValueError(f"Input tensor must be 2D. Got {A.ndim}D.")
         super().__init__([(A.shape[1],)], [(A.shape[0],)])
         self._A = A
-        self.SELF_ADJOINT = A.shape == A.T.shape and A.allclose(A.conj().T)
+        self.SELF_ADJOINT = A.shape == A.T.shape and A.allclose(A.adjoint())
 
     @property
     def device(self) -> device:

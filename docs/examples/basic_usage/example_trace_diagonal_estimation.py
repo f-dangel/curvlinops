@@ -1,10 +1,9 @@
-"""
-Trace and diagonal estimation
+"""Trace and diagonal estimation
 =============================
 
 In this example we will explore randomized estimators for the trace and diagonal
 of a matrix using functionality from the `skerch <https://github.com/andres-fr/skerch>`_
-library. This will also showcase the interoperability between Curvlinops and other
+library. This will also showcase the interoperability between Curvlinops and
 other linop-based libraries.
 
 We will investigate three different methods to compute the trace and diagonal:
@@ -18,7 +17,7 @@ corresponding ``skerch`` functionality:
 """
 
 from os import getenv
-from typing import Dict, Tuple
+from shutil import which
 
 import matplotlib.pyplot as plt
 import torch
@@ -31,6 +30,7 @@ from torch import (
     float64,
     int32,
     linspace,
+    manual_seed,
     median,
     quantile,
     randn,
@@ -39,17 +39,17 @@ from torch import (
 from torch.linalg import qr
 from tueplots import bundles
 
+from curvlinops._torch_base import PyTorchLinearOperator
 from curvlinops.examples import TensorLinearOperator
 
-# LaTeX is not available on RTD and we also want to analyze smaller matrices
-# to reduce build time
+# We want to analyze smaller matrices on RTD to reduce build time
 RTD = getenv("READTHEDOCS")
+# Use LaTeX if available
+USETEX = which("latex") is not None
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DTYPE = torch.float64
 
-PLOT_CONFIG = bundles.icml2024(
-    column="full" if RTD else "half", usetex=not RTD, nrows=2
-)
+PLOT_CONFIG = bundles.icml2024(column="full" if RTD else "half", usetex=USETEX, nrows=2)
 
 # Dimension of the matrices whose traces we will estimate
 DIM = 200 if RTD else 1000
@@ -63,27 +63,69 @@ NUM_MATVECS_HUTCH = linspace(1, 100, NUM_PLOT_POINTS, dtype=int32).unique()
 NUM_MATVECS_HUTCHPP = (NUM_MATVECS_HUTCH + (3 - NUM_MATVECS_HUTCH % 3)).unique()
 NUM_MATVECS_X = (NUM_MATVECS_HUTCH + (2 - NUM_MATVECS_HUTCH % 2)).unique()
 
-
-def hutch(lop, lop_device, lop_dtype, num_meas, seed):
-    """Girard-Hutchinson estimator."""
-    return _hutch(lop, lop_device, lop_dtype, num_meas, seed)
+manual_seed(0)  # make deterministic
 
 
-def hutchpp(lop, lop_device, lop_dtype, num_meas, seed):
-    """Girard-Hutchinson with rank-deflation."""
+def hutch(lop: PyTorchLinearOperator, num_meas: int, seed: int) -> dict[str, Tensor]:
+    """Estimate trace and diagonal with the Girard-Hutchinson estimator.
+
+    Args:
+        lop: Square linear operator whose trace and diagonal are estimated.
+        num_meas: Number of matrix-vector products.
+        seed: Random seed for the test vectors.
+
+    Returns:
+        Dictionary with the trace estimate (``"tr"``) and the diagonal
+        estimate (``"diag"``).
+    """
+    return _hutch(lop, lop.device, lop.dtype, num_meas, seed)
+
+
+def hutchpp(lop: PyTorchLinearOperator, num_meas: int, seed: int) -> dict[str, Tensor]:
+    """Estimate trace and diagonal with Hutch++.
+
+    Hutch++ is the Girard-Hutchinson estimator with rank deflation: One third of
+    the matrix-vector products builds a basis ``Q`` for the top space of the
+    matrix, one third computes the part inside that space exactly, and one third
+    estimates the remainder with Girard-Hutchinson.
+
+    Args:
+        lop: Square linear operator whose trace and diagonal are estimated.
+        num_meas: Number of matrix-vector products. Must be divisible by 3.
+        seed: Random seed for the test vectors.
+
+    Returns:
+        Dictionary with the trace estimate (``"tr"``) and the diagonal
+        estimate (``"diag"``).
+    """
     assert num_meas % 3 == 0, "num_meas must be a multiple of 3"
     # from xhutchpp we just use the deflation matrix Q here (num_meas // 3)
-    Q = _xhutchpp(lop, lop_device, lop_dtype, num_meas // 3, 0, seed - num_meas)["Q"]
-    result = _hutch(lop, lop_device, lop_dtype, num_meas // 3, seed, defl_Q=Q)
+    Q = _xhutchpp(lop, lop.device, lop.dtype, num_meas // 3, 0, seed - num_meas)["Q"]
+    result = _hutch(lop, lop.device, lop.dtype, num_meas // 3, seed, defl_Q=Q)
     result["diag"] += (Q.T * (Q.H @ lop)).sum(0)  # here another num_meas // 3
     result["tr"] = result["diag"].sum()
     return result
 
 
-def xdiagtrace(lop, lop_device, lop_dtype, num_meas, seed):
-    """XDiag/XTrace estimator."""
+def xdiagtrace(
+    lop: PyTorchLinearOperator, num_meas: int, seed: int
+) -> dict[str, Tensor]:
+    """Estimate trace and diagonal with XTrace/XDiag.
+
+    Like Hutch++, but the matrix-vector products that build the basis are re-used
+    for the estimate of the remainder (exchangeability).
+
+    Args:
+        lop: Square linear operator whose trace and diagonal are estimated.
+        num_meas: Number of matrix-vector products. Must be even.
+        seed: Random seed for the test vectors.
+
+    Returns:
+        Dictionary with the trace estimate (``"tr"``) and the diagonal
+        estimate (``"diag"``), plus the intermediate matrices of the algorithm.
+    """
     assert num_meas % 2 == 0, "num_meas must be even"
-    return _xhutchpp(lop, lop_device, lop_dtype, num_meas // 2, 0, seed)
+    return _xhutchpp(lop, lop.device, lop.dtype, num_meas // 2, 0, seed)
 
 
 # %%
@@ -109,18 +151,19 @@ def create_power_law_matrix(
     Args:
         dim: Matrix dimension.
         c: Power law constant. Default is ``1.0``.
+        dtype: Data type of the matrix. Default is ``float64``.
 
     Returns:
         A sample matrix with a power law spectrum.
     """
     # Create the diagonal matrix Λ with Λii = i^(-c)
-    L = arange(1, dim + 1, dtype=dtype) ** (-c)
+    L = (arange(1, dim + 1, dtype=dtype) ** (-c)).diag()
 
     # Generate a random Gaussian matrix and orthogonalize it to get Q
     Q, _ = qr(randn(dim, dim, dtype=dtype))
 
     # Construct the matrix A = Q^H Λ Q
-    return (Q.H * L) @ Q
+    return Q.H @ L @ Q
 
 
 # %%
@@ -148,9 +191,7 @@ exact_trace = Y_mat.trace()
 num_matvecs = 5
 
 # Generate estimates, repeat process multiple times so we have error bars.
-estimates = stack(
-    [hutch(Y, Y.device, Y.dtype, num_matvecs, seed)["tr"] for seed in SEEDS]
-)
+estimates = stack([hutch(Y, num_matvecs, seed)["tr"] for seed in SEEDS])
 
 # Calculate the median and quartiles (error bars) of the estimates
 med = median(estimates)
@@ -194,7 +235,7 @@ def relative_diag_error(est: Tensor, exact: Tensor) -> Tensor:
 
 
 # Generate estimates, repeat process multiple times so we have error bars.
-estimates = [hutch(Y, Y.device, Y.dtype, num_matvecs, seed)["diag"] for seed in SEEDS]
+estimates = [hutch(Y, num_matvecs, seed)["diag"] for seed in SEEDS]
 errors = stack([relative_diag_error(e, exact_diag) for e in estimates])
 
 # Calculate the median and quartiles (error bars) of the estimates
@@ -242,7 +283,7 @@ print(f"\t- Third quartile (75%): {quartile3:.3f}")
 
 def compute_relative_errors(
     Y_mat: Tensor,
-) -> Tuple[Dict[str, Dict[str, Tensor]], Dict[str, Dict[str, Tensor]]]:
+) -> tuple[dict[str, dict[str, Tensor]], dict[str, dict[str, Tensor]]]:
     """Compute the relative errors for Hutchinson, Hutch++, and XTrace.
 
     Args:
@@ -275,7 +316,7 @@ def compute_relative_errors(
         for n in num_matvecs_method:
             tr_errors, diag_errors = [], []
             for seed in SEEDS:
-                est = method(Y, Y.device, Y.dtype, int(n), seed)
+                est = method(Y, int(n), seed)
                 tr_errors.append((est["tr"] - exact_trace).abs() / abs(exact_trace))
                 diag_errors.append(relative_diag_error(est["diag"], exact_diag))
             tr_errors, diag_errors = as_tensor(tr_errors), as_tensor(diag_errors)
@@ -303,7 +344,7 @@ tr_results_slow, diag_results_slow = compute_relative_errors(Y_mat_slow)
 
 
 def plot_estimation_results(
-    results: Dict[str, Dict[str, Tensor]], ax: plt.Axes, target: str = "trace"
+    results: dict[str, dict[str, Tensor]], ax: plt.Axes, target: str = "trace"
 ) -> None:
     """Plot the trace estimation results on the given Axes.
 
