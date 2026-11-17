@@ -12,8 +12,7 @@ We will compare their performances on synthetic matrices with different spectral
 decays, observing that rank-deflation is most effective for rapidly decaying spectra,
 and that exchangeability allows us to save 1 out of 3 measurements.
 
-We begin with the imports, globals and defining the estimators by wrapping the
-corresponding ``skerch`` functionality:
+We begin with the imports and globals:
 """
 
 from os import getenv
@@ -65,6 +64,17 @@ NUM_MATVECS_HUTCHPP = (NUM_MATVECS_HUTCH + (3 - NUM_MATVECS_HUTCH % 3)).unique()
 NUM_MATVECS_X = (NUM_MATVECS_HUTCH + (2 - NUM_MATVECS_HUTCH % 2)).unique()
 
 manual_seed(0)  # make deterministic
+
+# %%
+#
+# Estimators
+# ----------
+#
+# These are the three estimators we will compare. Each wraps ``skerch``
+# functionality, uses ``num_meas`` matrix-vector products, and returns a
+# dictionary with the trace (``"tr"``) and diagonal (``"diag"``) estimates.
+# ``skerch`` has no ready-made Hutch++ function, so we assemble it from
+# ``hutch`` with a deflation matrix:
 
 
 def hutch(lop: PyTorchLinearOperator, num_meas: int, seed: int) -> dict[str, Tensor]:
