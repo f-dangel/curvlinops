@@ -107,6 +107,11 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
 
 ### Internal
 
+- Fix compile tests that fail with newer PyTorch: let compiled code use eager
+  mode's random numbers, and accept both ways PyTorch reports the graph break
+  caused by `fork_rng`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/314))
+
 - Add `LayerIO`, a reusable abstraction for KFAC-style operators to obtain
   per-batch layer inputs and output gradients without re-deriving the IO
   collection plumbing. Migrate the FX KFAC backend to use it; `KFAC`'s
