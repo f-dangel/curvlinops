@@ -381,9 +381,9 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
 - Make `_ChainPyTorchLinearOperator` support more than two operators
   ([PR](https://github.com/f-dangel/curvlinops/pull/246))
 
-- Rewrite the trace and diagonal estimation example with
-  [`skerch`](https://github.com/andres-fr/skerch) to show the interoperability
-  with other linear operator libraries, and add `skerch` to the `docs` dependencies
+- Use [`skerch`](https://github.com/andres-fr/skerch) for the estimators in the
+  trace and diagonal estimation example to show the interoperability with other
+  linear operator libraries, and add `skerch` to the `docs` dependencies
   ([PR](https://github.com/f-dangel/curvlinops/pull/221))
 
 ## [3.0.1] - 2026-01-14
