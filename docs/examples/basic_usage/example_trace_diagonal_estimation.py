@@ -21,6 +21,7 @@ from shutil import which
 
 import matplotlib.pyplot as plt
 import torch
+from skerch.algorithms import SketchedAlgorithmDispatcher
 from skerch.algorithms import hutch as _hutch
 from skerch.algorithms import xhutchpp as _xhutchpp
 from torch import (
@@ -99,10 +100,16 @@ def hutchpp(lop: PyTorchLinearOperator, num_meas: int, seed: int) -> dict[str, T
         estimate (``"diag"``).
     """
     assert num_meas % 3 == 0, "num_meas must be a multiple of 3"
-    # from xhutchpp we just use the deflation matrix Q here (num_meas // 3)
-    Q = _xhutchpp(lop, lop.device, lop.dtype, num_meas // 3, 0, seed - num_meas)["Q"]
-    result = _hutch(lop, lop.device, lop.dtype, num_meas // 3, seed, defl_Q=Q)
-    result["diag"] += (Q.T * (Q.H @ lop)).sum(0)  # here another num_meas // 3
+    k = num_meas // 3
+    # the deflation matrix Q spans the products with k random vectors (k products)
+    noise = SketchedAlgorithmDispatcher.mop(
+        "rademacher", (lop.shape[1], k), seed - num_meas, lop.dtype, k
+    ).to_matrix(lop.dtype, lop.device)
+    Q, _ = qr(lop @ noise)
+    # Girard-Hutchinson on the deflated matrix (k products)
+    result = _hutch(lop, lop.device, lop.dtype, k, seed, defl_Q=Q)
+    # exact part inside the space spanned by Q (k products)
+    result["diag"] += (Q.T * (Q.H @ lop)).sum(0)
     result["tr"] = result["diag"].sum()
     return result
 
