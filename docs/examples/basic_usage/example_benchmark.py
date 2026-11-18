@@ -62,6 +62,9 @@ SKIP_EXISTING = True
 # Supported problems (use only the small MLP on RTD)
 PROBLEM_STRS = ["synthetic_mnist_mlp"] if ON_RTD else ALL_PROBLEM_STRS
 
+# Number of repeats for run time measurements (fewer on RTD to reduce build time)
+NUM_REPEATS = 5 if ON_RTD else 10
+
 
 save_environment_info(RESULTDIR)
 
@@ -77,7 +80,9 @@ save_environment_info(RESULTDIR)
 # avoid allocation artifacts.
 
 for problem_str, device_str in product(PROBLEM_STRS, DEVICE_STRS):
-    bench = Benchmark(problem_str, device_str, skip_existing=SKIP_EXISTING)
+    bench = Benchmark(
+        problem_str, device_str, skip_existing=SKIP_EXISTING, num_repeats=NUM_REPEATS
+    )
     bench.run_reference()
     for linop_str in LINOP_STRS:
         bench.run_operator(linop_str)
