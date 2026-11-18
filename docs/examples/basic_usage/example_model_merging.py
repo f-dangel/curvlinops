@@ -36,10 +36,9 @@ corresponds to the special case where the Fisher is the identity.
 Let's start with the imports.
 """
 
-from backpack.utils.convert_parameters import vector_to_parameter_list
 from torch import cuda, device, manual_seed, rand
 from torch.nn import Linear, MSELoss, ReLU, Sequential, Sigmoid
-from torch.nn.utils import parameters_to_vector
+from torch.nn.utils import parameters_to_vector, vector_to_parameters
 from torch.optim import SGD
 from torch.utils.data import DataLoader, TensorDataset
 
@@ -238,11 +237,8 @@ for key in per_task_fishers:
 merged_models = {}
 for key, params_vec in merged_params.items():
     model = make_architecture()
-    params = {n: p for n, p in model.named_parameters() if p.requires_grad}
-    for theta, param in zip(
-        vector_to_parameter_list(params_vec, params.values()), params.values()
-    ):
-        param.data = theta.to(param.device, param.dtype).data
+    params = [p for p in model.parameters() if p.requires_grad]
+    vector_to_parameters(params_vec.to(params[0].device, params[0].dtype), params)
     merged_models[key] = model
 
 # %%

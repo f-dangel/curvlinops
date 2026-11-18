@@ -47,7 +47,6 @@ maximum_signature_line_length = 200
 
 intersphinx_mapping = {
     "torch": ("https://docs.pytorch.org/docs/stable/", None),
-    "backpack": ("https://docs.backpack.pt/en/master", None),
     "scipy": ("https://docs.scipy.org/doc/scipy", None),
     "numpy": ("https://numpy.org/doc/stable/", None),
     "matplotlib": ("https://matplotlib.org/stable/", None),
