@@ -13,7 +13,7 @@ Main features:
 
 - **Broad support of curvature matrices.** `curvlinops` supports many common curvature matrices and approximations thereof, such as the Hessian, Fisher, generalized Gauss-Newton, and K-FAC ([overview](https://curvlinops.readthedocs.io/en/latest/linops.html#linear-operators), [visual tour](https://curvlinops.readthedocs.io/en/latest/basic_usage/example_visual_tour.html#visualization)).
 
-- **Unified interface.** All linear operators share the same interface, making it easy to switch between curvature matrices.
+- **Unified interface.** All linear operators share the same interface, making it easy to switch between curvature matrices. The linear operator interface also allows for seamless integration with other linop-based libraries, such as [`skerch`](https://github.com/andres-fr/skerch) ([example](https://curvlinops.readthedocs.io/en/latest/basic_usage/example_trace_diagonal_estimation.html)).
 
 - **Purely PyTorch.** All computations can run on a GPU.
 
