@@ -123,6 +123,8 @@ class Benchmark:
         device_str: The device string (e.g. ``"cpu"``, ``"cuda"``).
         skip_existing: Whether to skip measurements whose results already exist.
         num_repeats: Number of repeats for timing. Uses the minimum.
+        measure_compiled: Whether to also measure with ``torch.compile``. If
+            ``False``, only eager mode is measured.
     """
 
     def __init__(
@@ -131,6 +133,7 @@ class Benchmark:
         device_str: str,
         skip_existing: bool = True,
         num_repeats: int = 10,
+        measure_compiled: bool = True,
     ):
         """Set up the benchmark.
 
@@ -139,12 +142,14 @@ class Benchmark:
             device_str: The device string.
             skip_existing: Whether to skip measurements whose results exist.
             num_repeats: Number of repeats for timing. Uses the minimum.
+            measure_compiled: Whether to also measure with ``torch.compile``.
         """
         self.problem_str = problem_str
         self.device_str = device_str
         self.is_cuda = "cuda" in device_str
         self.skip_existing = skip_existing
         self.num_repeats = num_repeats
+        self.measure_compiled = measure_compiled
 
     def setup_problem(self, linop_str: str):
         """Seed RNG, create device, and set up the problem.
@@ -403,7 +408,7 @@ class Benchmark:
         label = f"Reference on {self.problem_str} and {self.device_str}"
         model, loss_function, params, data = self.setup_problem("Hessian")
 
-        for category, compiled in [("eager", False), ("compiled", True)]:
+        for category, compiled in self._categories():
             existing = self._has_result(savepath, category, "time")
             if existing is not None:
                 print(f"[Time] Skipping {label} ({category}): {existing:.4f} s")
@@ -429,7 +434,7 @@ class Benchmark:
         v = rand(linop.shape[1], device=linop.device)
         ctx = partial(attention_context, linop, model)
 
-        for category, compiled in [("eager", False), ("compiled", True)]:
+        for category, compiled in self._categories():
             existing = self._has_result(savepath, category, "matvec")
             if existing is not None:
                 print(
@@ -474,7 +479,7 @@ class Benchmark:
         savepath = reference_benchpath(self.problem_str, self.device_str)
         label = f"reference on {self.problem_str} and {self.device_str}"
 
-        for category, compiled in [("eager", False), ("compiled", True)]:
+        for category, compiled in self._categories():
             existing = self._has_result(savepath, category, "peakmem")
             if existing is not None:
                 print(f"[Memory] Skipping {label} ({category}): {existing:.2f} GiB")
@@ -489,7 +494,7 @@ class Benchmark:
         savepath = benchpath(linop_str, self.problem_str, self.device_str)
         label = f"{linop_str} on {self.problem_str}"
 
-        for category, compiled in [("eager", False), ("compiled", True)]:
+        for category, compiled in self._categories():
             existing = self._has_result(savepath, category, "peakmem")
             if existing is not None:
                 print(f"[Memory] Skipping {label} ({category}): {existing:.2f} GiB")
@@ -508,6 +513,18 @@ class Benchmark:
             if self._read_result(savepath, category, "peakmem") is None:
                 print(f"[Memory] FAILED {label} ({category}), storing NaN")
                 _merge_json(savepath, category, "peakmem", float(nan))
+
+    def _categories(self) -> list[tuple[str, bool]]:
+        """Return the measurement categories and whether they are compiled.
+
+        Returns:
+            ``("eager", False)``, followed by ``("compiled", True)`` if compiled
+            measurements are enabled.
+        """
+        categories = [("eager", False)]
+        if self.measure_compiled:
+            categories.append(("compiled", True))
+        return categories
 
     @staticmethod
     def _compiled_flag(compiled: bool) -> tuple[str, ...]:

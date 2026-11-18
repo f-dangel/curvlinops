@@ -62,6 +62,10 @@ SKIP_EXISTING = True
 # Supported problems (use only the small MLP on RTD)
 PROBLEM_STRS = ["synthetic_mnist_mlp"] if ON_RTD else ALL_PROBLEM_STRS
 
+# Whether to also measure with ``torch.compile`` (skipped on RTD, where compilation
+# would dominate the time to build the documentation)
+MEASURE_COMPILED = not ON_RTD
+
 
 save_environment_info(RESULTDIR)
 
@@ -74,10 +78,17 @@ save_environment_info(RESULTDIR)
 # For each problem and device, we measure a reference gradient computation
 # and then each linear operator. Run time is measured in-process (minimum over
 # multiple repeats), while peak memory is measured in isolated subprocesses to
-# avoid allocation artifacts.
+# avoid allocation artifacts. Each measurement can be done in eager mode and with
+# ``torch.compile``. To keep the documentation build fast, we skip the compiled
+# measurements there; the pre-computed GPU results at the end include them.
 
 for problem_str, device_str in product(PROBLEM_STRS, DEVICE_STRS):
-    bench = Benchmark(problem_str, device_str, skip_existing=SKIP_EXISTING)
+    bench = Benchmark(
+        problem_str,
+        device_str,
+        skip_existing=SKIP_EXISTING,
+        measure_compiled=MEASURE_COMPILED,
+    )
     bench.run_reference()
     for linop_str in LINOP_STRS:
         bench.run_operator(linop_str)
@@ -193,6 +204,7 @@ def visualize_precompute_benchmark(
         "tracing": "FX tracing",
     }
     labels_shown = set()
+    has_compiled = False
 
     bar_height = 0.3
     bar_offset = 0.15
@@ -203,7 +215,10 @@ def visualize_precompute_benchmark(
         operator_data = bench.load_operator(name)
 
         for category, y_off, is_compiled in categories:
-            cat_data = operator_data.get(category, {})
+            if category not in operator_data:
+                continue
+            has_compiled = has_compiled or is_compiled
+            cat_data = operator_data[category]
             left = 0.0
             for op in sub_ops:
                 if op == "tracing":
@@ -232,8 +247,9 @@ def visualize_precompute_benchmark(
     add_gradient_reference(ax, reference)
 
     handles, legend_labels = ax.get_legend_handles_labels()
-    handles.append(Patch(facecolor="black", alpha=0.5))
-    legend_labels.append("Compiled")
+    if has_compiled:
+        handles.append(Patch(facecolor="black", alpha=0.5))
+        legend_labels.append("Compiled")
     fig.legend(
         handles,
         legend_labels,

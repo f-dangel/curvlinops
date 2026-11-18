@@ -107,6 +107,10 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
 
 ### Internal
 
+- Skip the `torch.compile` measurements of the benchmark tutorial when building
+  the documentation on Read the Docs, to stay below its build time limit
+  ([PR](https://github.com/f-dangel/curvlinops/pull/315))
+
 - Fix compile tests that fail with newer PyTorch: let compiled code use eager
   mode's random numbers, and accept both ways PyTorch reports the graph break
   caused by `fork_rng`
