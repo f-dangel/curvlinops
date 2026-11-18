@@ -151,10 +151,32 @@ def block_diagonal(
         **(optional_linop_args or {}),
     )
     linop_mat = linop @ eye_like(linop)
+    return block_diagonal_of(linop_mat, model, params, separate_weight_and_bias)
+
+
+def block_diagonal_of(
+    mat: Tensor,
+    model: Module,
+    params: dict[str, Tensor],
+    separate_weight_and_bias: bool = True,
+) -> Tensor:
+    """Zero out the off-diagonal parameter blocks of a dense matrix.
+
+    Args:
+        mat: Dense matrix of shape ``[D, D]``, with ``D`` the total number of
+            parameters in ``params``.
+        model: The neural network.
+        params: The parameters that index the rows and columns of ``mat``.
+        separate_weight_and_bias: Whether to treat weight and bias of a layer as
+            separate blocks in the block-diagonal. Default: ``True``.
+
+    Returns:
+        The block-diagonal matrix.
+    """
     sizes = [p.numel() for p in params.values()]
     # matrix_blocks[i, j] corresponds to the block of (params[i], params[j])
     matrix_blocks = [
-        list(block.split(sizes, dim=1)) for block in linop_mat.split(sizes, dim=0)
+        list(block.split(sizes, dim=1)) for block in mat.clone().split(sizes, dim=0)
     ]
 
     # find out which blocks to keep

@@ -7,3 +7,4 @@ src/
 .eggs
 **.DS_Store
 **.pdf-view-restore
+uv.lock
