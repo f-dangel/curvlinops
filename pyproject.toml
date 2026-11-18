@@ -35,7 +35,6 @@ classifiers = [
 dynamic = ["version"]
 # Dependencies of the project:
 dependencies = [
-  "backpack-for-pytorch>=1.6.0",
   "torch>=2.0", # introduces torch.func
   "scipy>=1.0.0", # introduces LSMR
   "numpy>=1.21.0", # compatible with modern Python versions
@@ -81,6 +80,8 @@ docs = [
   "sphinx-gallery",
   "sphinx-rtd-theme",
   "tueplots",
+  "skerch>=1.2.0",
+  "torchvision",
 ]
 
 ###############################################################################

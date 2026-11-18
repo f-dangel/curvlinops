@@ -2,8 +2,9 @@
 =============================
 
 In this example we will explore estimators for the trace and diagonal of a matrix.
-:code:`curvlinops` implements different methods, and we will reproduce the results
-from their original papers, using toy matrices with a power law spectrum.
+The `skerch <https://github.com/andres-fr/skerch>`_ library implements different
+methods that work with :code:`curvlinops`' linear operators, and we will reproduce
+the results from their original papers, using toy matrices with a power law spectrum.
 
 Here are the imports:
 """
@@ -12,6 +13,7 @@ from os import getenv
 from shutil import which
 
 import matplotlib.pyplot as plt
+from skerch.algorithms import SketchedAlgorithmDispatcher, hutch, xhutchpp
 from torch import (
     Tensor,
     arange,
@@ -22,13 +24,14 @@ from torch import (
     manual_seed,
     median,
     quantile,
+    randint,
     randn,
     stack,
 )
 from torch.linalg import qr
 from tueplots import bundles
 
-from curvlinops import hutchinson_diag, hutchinson_trace, hutchpp_trace, xdiag, xtrace
+from curvlinops._torch_base import PyTorchLinearOperator
 from curvlinops.examples import TensorLinearOperator
 
 # We want to analyze smaller matrices on RTD to reduce build time
@@ -80,6 +83,100 @@ def create_power_law_matrix(dim: int = DIM, c: float = 1.0) -> Tensor:
 
     # Construct the matrix A = Q^T Λ Q
     return Q.T @ L @ Q
+
+
+# %%
+#
+# Estimators
+# ----------
+#
+# These are the estimators we will compare. Each wraps :code:`skerch` functionality
+# and uses :code:`num_matvecs` matrix-vector products. :code:`skerch` has no
+# ready-made Hutch++ function, so we assemble it from :code:`hutch` with a deflation
+# matrix:
+
+
+def draw_seed() -> int:
+    """Draw a seed for ``skerch`` from PyTorch's random number generator.
+
+    Returns:
+        The seed.
+    """
+    return int(randint(2**20, 2**31, (1,)))
+
+
+def hutchinson(A: PyTorchLinearOperator, num_matvecs: int) -> dict[str, Tensor]:
+    """Estimate trace and diagonal with Hutchinson's method.
+
+    Args:
+        A: Square linear operator.
+        num_matvecs: Number of matrix-vector products.
+
+    Returns:
+        Dictionary with the trace (``"tr"``) and diagonal (``"diag"``) estimates.
+    """
+    return hutch(A, A.device, A.dtype, int(num_matvecs), draw_seed())
+
+
+def hutchpp(A: PyTorchLinearOperator, num_matvecs: int) -> dict[str, Tensor]:
+    """Estimate trace and diagonal with Hutch++.
+
+    Args:
+        A: Square linear operator.
+        num_matvecs: Number of matrix-vector products. Must be divisible by 3.
+
+    Returns:
+        Dictionary with the trace (``"tr"``) and diagonal (``"diag"``) estimates.
+    """
+    k = int(num_matvecs) // 3
+    # the deflation matrix Q spans the products with k random vectors (k products)
+    noise = SketchedAlgorithmDispatcher.mop(
+        "rademacher", (A.shape[1], k), draw_seed(), A.dtype, k
+    ).to_matrix(A.dtype, A.device)
+    Q, _ = qr(A @ noise)
+    # Hutchinson's method on the deflated matrix (k products)
+    result = hutch(A, A.device, A.dtype, k, draw_seed(), defl_Q=Q)
+    # exact part inside the space spanned by Q (k products)
+    result["diag"] += (Q.T * (Q.H @ A)).sum(0)
+    result["tr"] = result["diag"].sum()
+    return result
+
+
+def xtrace_xdiag(A: PyTorchLinearOperator, num_matvecs: int) -> dict[str, Tensor]:
+    """Estimate trace and diagonal with XTrace and XDiag.
+
+    Args:
+        A: Square linear operator.
+        num_matvecs: Number of matrix-vector products. Must be even.
+
+    Returns:
+        Dictionary with the trace (``"tr"``) and diagonal (``"diag"``) estimates.
+    """
+    return xhutchpp(A, A.device, A.dtype, int(num_matvecs) // 2, 0, draw_seed())
+
+
+def hutchinson_trace(A: PyTorchLinearOperator, num_matvecs: int) -> Tensor:  # noqa: D103
+    return hutchinson(A, num_matvecs)["tr"]
+
+
+def hutchinson_diag(A: PyTorchLinearOperator, num_matvecs: int) -> Tensor:  # noqa: D103
+    return hutchinson(A, num_matvecs)["diag"]
+
+
+def hutchpp_trace(A: PyTorchLinearOperator, num_matvecs: int) -> Tensor:  # noqa: D103
+    return hutchpp(A, num_matvecs)["tr"]
+
+
+def hutchpp_diag(A: PyTorchLinearOperator, num_matvecs: int) -> Tensor:  # noqa: D103
+    return hutchpp(A, num_matvecs)["diag"]
+
+
+def xtrace(A: PyTorchLinearOperator, num_matvecs: int) -> Tensor:  # noqa: D103
+    return xtrace_xdiag(A, num_matvecs)["tr"]
+
+
+def xdiag(A: PyTorchLinearOperator, num_matvecs: int) -> Tensor:  # noqa: D103
+    return xtrace_xdiag(A, num_matvecs)["diag"]
 
 
 # %%
@@ -284,7 +381,7 @@ def plot_estimation_results(
 # decay.
 
 # Compute results for matrices with different spectral decay rates
-Y_mat_fast = create_power_law_matrix()  # Fast spectral decay with c=2
+Y_mat_fast = create_power_law_matrix(c=2.0)  # Fast spectral decay with c=2
 results_fast = compute_relative_trace_errors(Y_mat_fast)
 
 Y_mat_slow = create_power_law_matrix(c=0.5)  # Slow spectral decay with c=0.5
@@ -380,18 +477,20 @@ print(f"\t- Third quartile (75%): {quartile3:.3f}")
 # Comparison
 # ^^^^^^^^^^
 #
-# We will compare Hutchinson's method for diagonal estimation with the XDiag method
-# on a matrices with fast and slow spectral decay.
+# We will compare Hutchinson's method for diagonal estimation with Hutch++ and the
+# XDiag method on matrices with fast and slow spectral decay.
 #
 # Here is a function that computes these relative diagonal errors for a given matrix:
 
 NUM_MATVECS_HUTCH = linspace(1, 100, 50, dtype=int32).unique()
-# XTrace requires matrix-vector products divisible by 2
+# Hutch++ requires matrix-vector products divisible by 3
+NUM_MATVECS_HUTCHPP = (NUM_MATVECS_HUTCH + (3 - NUM_MATVECS_HUTCH % 3)).unique()
+# XDiag requires matrix-vector products divisible by 2
 NUM_MATVECS_XDIAG = (NUM_MATVECS_HUTCH + (2 - NUM_MATVECS_HUTCH % 2)).unique()
 
 
 def compute_relative_diagonal_errors(Y_mat: Tensor) -> dict[str, dict[str, Tensor]]:
-    """Compute the relative diagonal errors for Hutchinson's method and XDiag.
+    """Compute the relative diagonal errors for Hutchinson's method, Hutch++, and XDiag.
 
     Args:
         Y_mat: Matrix to estimate the diagonal of.
@@ -405,9 +504,10 @@ def compute_relative_diagonal_errors(Y_mat: Tensor) -> dict[str, dict[str, Tenso
     # compute median and quartiles for Hutchinson's method
     estimators = {
         "Hutchinson": hutchinson_diag,
+        "Hutch++": hutchpp_diag,
         "XDiag": xdiag,
     }
-    num_matvecs = [NUM_MATVECS_HUTCH, NUM_MATVECS_XDIAG]
+    num_matvecs = [NUM_MATVECS_HUTCH, NUM_MATVECS_HUTCHPP, NUM_MATVECS_XDIAG]
 
     results = {}
     for (name, method), num_matvecs_method in zip(estimators.items(), num_matvecs):
@@ -438,7 +538,7 @@ def compute_relative_diagonal_errors(Y_mat: Tensor) -> dict[str, dict[str, Tenso
 # estimation results:
 
 # Compute results for matrices with different spectral decay rates
-Y_mat_fast = create_power_law_matrix()  # Fast spectral decay with c=2
+Y_mat_fast = create_power_law_matrix(c=2.0)  # Fast spectral decay with c=2
 results_fast = compute_relative_diagonal_errors(Y_mat_fast)
 
 Y_mat_slow = create_power_law_matrix(c=0.5)  # Slow spectral decay with c=0.5
@@ -460,7 +560,7 @@ with plt.rc_context(PLOT_CONFIG):
 
 # %%
 #
-# For fast spectral decay, XDiag yields more accurate diagonal estimates than
-# vanilla Hutchinson. For slow spectral decay, its benefits disappear.
+# For fast spectral decay, Hutch++ and XDiag yield more accurate diagonal estimates
+# than vanilla Hutchinson. For slow spectral decay, their benefits disappear.
 #
 # That's all for now.

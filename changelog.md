@@ -101,11 +101,37 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
 - **Backward-incompatible:** Remove `(E)KFACLinearOperator`'s `state_dict` and `from_state_dict` methods, use `torch.save(K, path)` and `torch.load(path)` instead
   ([PR](https://github.com/f-dangel/curvlinops/pull/249))
 
+- Remove `backpack-for-pytorch` from the dependencies; the library does not use it
+  ([PR](https://github.com/f-dangel/curvlinops/pull/317))
+
 - Remove `_check_binary_if_BCEWithLogitsLoss` safeguard; BCE targets are no longer
   restricted to binary values
   ([PR](https://github.com/f-dangel/curvlinops/pull/257))
 
+- **Backward-incompatible:** Remove the trace, diagonal and squared Frobenius
+  norm estimators (`hutchinson_trace`, `hutchpp_trace`, `xtrace`,
+  `hutchinson_diag`, `xdiag`, `hutchinson_squared_fro`). Use
+  [`skerch`](https://github.com/andres-fr/skerch) instead, which works with
+  `curvlinops` linear operators
+  ([example](https://curvlinops.readthedocs.io/en/latest/basic_usage/example_trace_diagonal_estimation.html)).
+  The squared Frobenius norm of `A` is the trace of `A.adjoint() @ A`.
+  ([PR](https://github.com/f-dangel/curvlinops/pull/316))
+
 ### Internal
+
+- Skip the `torch.compile` measurements of the benchmark tutorial when building
+  the documentation on Read the Docs, to stay below its build time limit
+  ([PR](https://github.com/f-dangel/curvlinops/pull/315))
+
+- Fix compile tests that fail with newer PyTorch: let compiled code use eager
+  mode's random numbers, and accept both ways PyTorch reports the graph break
+  caused by `fork_rng`
+  ([PR](https://github.com/f-dangel/curvlinops/pull/314))
+
+- Use [`skerch`](https://github.com/andres-fr/skerch) for the estimators in the
+  trace and diagonal estimation example to show the interoperability with other
+  linear operator libraries, and add `skerch` to the `docs` dependencies
+  ([PR](https://github.com/f-dangel/curvlinops/pull/221))
 
 - Add `LayerIO`, a reusable abstraction for KFAC-style operators to obtain
   per-batch layer inputs and output gradients without re-deriving the IO

@@ -137,10 +137,12 @@ def test_ggn_mc_matvec_compiles_correctly(setup_fn):
     )
     v = rand(G.shape[1])
     with _dynamo_explain(lambda op, vec: op @ vec, G, v) as result:
-        # Newer torch versions report the op inside ``fork_rng`` that breaks the
-        # graph, so look for ``fork_rng`` in the stack rather than the reason.
+        # PyTorch 2.14 names ``fork_rng`` in the reason of the graph break.
+        # PyTorch 2.15 reports the op inside ``fork_rng`` that breaks the graph,
+        # so ``fork_rng`` only shows up in the stack.
         assert all(
-            any(frame.name == "fork_rng" for frame in br.user_stack)
+            "fork_rng" in str(br.reason)
+            or any(frame.name == "fork_rng" for frame in br.user_stack)
             for br in result.break_reasons
         )
 

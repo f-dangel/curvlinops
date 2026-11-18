@@ -1,1 +1,0 @@
-"""Test ``curvlinops.norm``."""
