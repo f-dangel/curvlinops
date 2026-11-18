@@ -1,7 +1,5 @@
 """``curvlinops`` library API."""
 
-from curvlinops.diagonal.epperly2024xtrace import xdiag
-from curvlinops.diagonal.hutchinson import hutchinson_diag
 from curvlinops.ekfac import EKFACLinearOperator
 from curvlinops.ggn import GGNLinearOperator
 from curvlinops.ggn_diagonal import GGNDiagonalLinearOperator
@@ -16,7 +14,6 @@ from curvlinops.jacobian import JacobianLinearOperator, TransposedJacobianLinear
 from curvlinops.kfac import KFACLinearOperator
 from curvlinops.kfac_utils import FisherType, KFACType
 from curvlinops.kfoc import KFOCLinearOperator
-from curvlinops.norm.hutchinson import hutchinson_squared_fro
 from curvlinops.papyan2020traces.spectrum import (
     LanczosApproximateLogSpectrumCached,
     LanczosApproximateSpectrumCached,
@@ -24,9 +21,6 @@ from curvlinops.papyan2020traces.spectrum import (
     lanczos_approximate_spectrum,
 )
 from curvlinops.submatrix import SubmatrixLinearOperator
-from curvlinops.trace.epperly2024xtrace import xtrace
-from curvlinops.trace.hutchinson import hutchinson_trace
-from curvlinops.trace.meyer2020hutch import hutchpp_trace
 
 __all__ = [
     # linear operators
@@ -53,13 +47,4 @@ __all__ = [
     "lanczos_approximate_log_spectrum",
     "LanczosApproximateSpectrumCached",
     "LanczosApproximateLogSpectrumCached",
-    # trace estimation
-    "hutchinson_trace",
-    "hutchpp_trace",
-    "xtrace",
-    # diagonal estimation
-    "hutchinson_diag",
-    "xdiag",
-    # norm estimation
-    "hutchinson_squared_fro",
 ]

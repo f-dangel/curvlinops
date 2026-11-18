@@ -23,8 +23,8 @@ Main features:
 [`scipy.sparse.linalg.eigsh`](https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.linalg.eigsh.html) that lets you compute a subset of eigen-pairs ([example](https://curvlinops.readthedocs.io/en/latest/basic_usage/example_eigenvalues.html)).
 
 - **Randomized estimation algorithms.** `curvlinops` offers functionality to estimate properties the matrix represented by a linear operators, like its spectral density ([example](https://curvlinops.readthedocs.io/en/latest/basic_usage/example_verification_spectral_density.html)),
-  inverse ([example](https://curvlinops.readthedocs.io/en/latest/basic_usage/example_inverses.html)),
-  trace & diagonal ([example](https://curvlinops.readthedocs.io/en/latest/basic_usage/example_trace_diagonal_estimation.html)).
+  and inverse ([example](https://curvlinops.readthedocs.io/en/latest/basic_usage/example_inverses.html)).
+  For trace and diagonal estimation, use [`skerch`](https://github.com/andres-fr/skerch) ([example](https://curvlinops.readthedocs.io/en/latest/basic_usage/example_trace_diagonal_estimation.html)).
 
 ## Installation
 

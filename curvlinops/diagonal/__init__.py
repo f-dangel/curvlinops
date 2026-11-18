@@ -1,1 +1,0 @@
-"""Matrix diagonal estimation methods."""

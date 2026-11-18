@@ -772,66 +772,6 @@ def eye_like(A: Tensor | PyTorchLinearOperator) -> Tensor:
     return eye(dim, dtype=A.dtype, device=A.device)
 
 
-def check_estimator_convergence(
-    estimator: Callable[[], Tensor],
-    num_matvecs: int,
-    truth: Tensor,
-    max_total_matvecs: int = 100_000,
-    check_every: int = 100,
-    target_rel_error: float = 1e-3,
-):
-    """Test whether an estimator converges to the true value.
-
-    Args:
-        estimator: The estimator as function that accepts the number of matrix-vector
-            products.
-        num_matvecs: Number of matrix-vector products used per estimate.
-        truth: True property of the linear operator.
-        max_total_matvecs: Maximum number of matrix-vector products to perform.
-            Default: ``100_000``. If convergence has not been reached by then, the test
-            will fail.
-        check_every: Check for convergence every ``check_every`` estimates.
-            Default: ``100``.
-        target_rel_error: Relative error for considering the estimator converged.
-            Default: ``1e-3``.
-    """
-    used_matvecs, converged = 0, False
-
-    def relative_l_inf_error(a_true: Tensor, a: Tensor) -> Tensor:
-        """Compute the relative infinity norm error.
-
-        For scalars, this is simply | a - a_true | / | a_true |, the metric used by
-        most trace estimation papers.
-
-        For vector-/tensor-valued objects, this is the maximum relative error
-        max(| a - a_true |) / max(| a_true |) where | . | denotes the element-wise
-        absolute value. This metric is used by the XDiag paper to assess the
-        quality of a diagonal estimator.
-
-        Args:
-            a_true: The true value.
-            a: The estimated value.
-
-        Returns:
-            Relative infinity norm error.
-        """
-        assert a.shape == a_true.shape
-        return (a - a_true).abs().max() / a_true.abs().max()
-
-    estimates = []
-    while used_matvecs < max_total_matvecs and not converged:
-        estimates.append(estimator())
-        used_matvecs += num_matvecs
-
-        num_estimates = len(estimates)
-        if num_estimates % check_every == 0:
-            rel_error = relative_l_inf_error(truth, sum(estimates) / len(estimates))
-            print(f"Relative error after {used_matvecs} matvecs: {rel_error:.5f}.")
-            converged = rel_error < target_rel_error
-
-    assert converged
-
-
 def _test_inplace_activations(
     linop_cls: type[KFACLinearOperator | EKFACLinearOperator],
     dev: device,
