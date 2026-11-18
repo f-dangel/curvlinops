@@ -117,6 +117,10 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
   linear operator libraries, and add `skerch` to the `docs` dependencies
   ([PR](https://github.com/f-dangel/curvlinops/pull/221))
 
+- Use 5 instead of 10 timing repeats in the benchmark tutorial on Read the Docs
+  to reduce the documentation build time
+  ([PR](https://github.com/f-dangel/curvlinops/pull/221))
+
 - Add `LayerIO`, a reusable abstraction for KFAC-style operators to obtain
   per-batch layer inputs and output gradients without re-deriving the IO
   collection plumbing. Migrate the FX KFAC backend to use it; `KFAC`'s
