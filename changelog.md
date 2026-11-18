@@ -101,6 +101,9 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
 - **Backward-incompatible:** Remove `(E)KFACLinearOperator`'s `state_dict` and `from_state_dict` methods, use `torch.save(K, path)` and `torch.load(path)` instead
   ([PR](https://github.com/f-dangel/curvlinops/pull/249))
 
+- Remove `backpack-for-pytorch` from the dependencies; the library does not use it
+  ([PR](https://github.com/f-dangel/curvlinops/pull/317))
+
 - Remove `_check_binary_if_BCEWithLogitsLoss` safeguard; BCE targets are no longer
   restricted to binary values
   ([PR](https://github.com/f-dangel/curvlinops/pull/257))
