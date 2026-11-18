@@ -112,9 +112,6 @@ See [PR #283](https://github.com/f-dangel/curvlinops/pull/283) for details.
   `curvlinops` linear operators
   ([example](https://curvlinops.readthedocs.io/en/latest/basic_usage/example_trace_diagonal_estimation.html)).
   The squared Frobenius norm of `A` is the trace of `A.adjoint() @ A`.
-  Also remove the helpers only the estimators used: `curvlinops.sampling`, and
-  `assert_is_square`, `assert_matvecs_subseed_dim`, `assert_divisible_by` from
-  `curvlinops.utils`
   ([PR](https://github.com/f-dangel/curvlinops/pull/316))
 
 ### Internal
